@@ -100,14 +100,13 @@ function clearPid() {
     return;
   }
   if (isPidFileOwnedByRoot()) {
-    console.log('  PID 文件由 root 创建，需要管理员权限删除');
     try {
       execSync('sudo rm -f "' + config.PATHS.pidFile + '" 2>/dev/null', {
         stdio: 'inherit',
         timeout: 10000,
       });
     } catch (e) {
-      console.log('  提示: 请手动运行 "sudo rm ' + config.PATHS.pidFile + '"');
+      // 忽略失败，后续操作可能会检测到问题
     }
   } else {
     try {
@@ -186,14 +185,10 @@ function cleanupAll(forceSudo) {
   let failedPids = [];
 
   if (needsSudo) {
-    console.log('  发现 ' + pids.length + ' 个 mihomo 进程（部分需要 root 权限）');
-    console.log('  正在请求管理员权限终止进程...');
     const success = killAllMihomo(true);
     if (success) {
       killedCount = pids.length;
     } else {
-      console.log('  部分进程可能需要手动清理');
-      console.log('  手动清理命令: sudo pkill -9 mihomo');
       failedPids = pids;
     }
   } else {
@@ -246,8 +241,8 @@ function createTunLaunchScript() {
     'sleep 0.2\n' +
     'rm -f "${PID_FILE}" 2>/dev/null || true\n' +
     '\n' +
-    '# 清空日志\n' +
-    'echo "=== TUN 启动: $(date) ===" > "${LOG_FILE}"\n' +
+    '# 写入启动标记\n' +
+    'echo "=== TUN 启动: $(date) ===" >> "${LOG_FILE}"\n' +
     '\n' +
     '# 启动\n' +
     'cd /tmp\n' +
@@ -259,7 +254,6 @@ function createTunLaunchScript() {
     'for i in 1 2 3 4 5; do\n' +
     '  sleep 0.4\n' +
     '  if kill -0 ${NEW_PID} 2>/dev/null; then\n' +
-    '    echo "TUN 启动成功, PID ${NEW_PID}"\n' +
     '    exit 0\n' +
     '  fi\n' +
     'done\n' +
@@ -353,6 +347,7 @@ async function startMixedMode(staleState) {
   }
 
   config.ensureDirs();
+  rotateAndCleanupLogs();
 
   const binary = config.PATHS.mihomoBinary;
   if (!fs.existsSync(binary)) {
@@ -406,6 +401,7 @@ async function startMixedMode(staleState) {
 
 async function startTunMode(staleState) {
   config.ensureDirs();
+  rotateAndCleanupLogs();
 
   const binary = config.PATHS.mihomoBinary;
   if (!fs.existsSync(binary)) {
@@ -474,8 +470,150 @@ function stop(wasTunMode) {
   return { success: true, killed: result.killed };
 }
 
+function rotateAndCleanupLogs() {
+  rotateLog();
+  cleanupOldLogs(7);
+}
+
 function getLogPath() {
   return config.PATHS.logFile;
+}
+
+function rotateLog() {
+  const logFile = config.PATHS.logFile;
+  if (!fs.existsSync(logFile)) {
+    return null;
+  }
+
+  const stat = fs.statSync(logFile);
+  if (stat.size === 0) {
+    return null;
+  }
+
+  const timestamp = new Date().toISOString()
+    .replace(/T/, '_')
+    .replace(/:/g, '-')
+    .replace(/\..+/, '');
+
+  const rotatedName = `mihomo.${timestamp}.log`;
+  const rotatedPath = path.join(config.DIRS.logs, rotatedName);
+
+  fs.renameSync(logFile, rotatedPath);
+  return rotatedPath;
+}
+
+function cleanupOldLogs(maxAgeDays) {
+  if (maxAgeDays === undefined) maxAgeDays = 7;
+  const logsDir = config.DIRS.logs;
+
+  if (!fs.existsSync(logsDir)) {
+    return { deleted: 0, errors: 0 };
+  }
+
+  const files = fs.readdirSync(logsDir);
+  const now = Date.now();
+  const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+
+  let deleted = 0;
+  let errors = 0;
+
+  for (const file of files) {
+    if (!file.match(/^mihomo\.\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.log$/)) {
+      continue;
+    }
+
+    try {
+      const filePath = path.join(logsDir, file);
+      const stat = fs.statSync(filePath);
+      const ageMs = now - stat.mtimeMs;
+
+      if (ageMs > maxAgeMs) {
+        fs.unlinkSync(filePath);
+        deleted++;
+      }
+    } catch (e) {
+      errors++;
+    }
+  }
+
+  return { deleted, errors };
+}
+
+function listLogs() {
+  const logsDir = config.DIRS.logs;
+  const result = {
+    current: null,
+    archives: [],
+  };
+
+  if (fs.existsSync(config.PATHS.logFile)) {
+    const stat = fs.statSync(config.PATHS.logFile);
+    result.current = {
+      name: 'mihomo.log (当前)',
+      path: config.PATHS.logFile,
+      size: stat.size,
+      mtime: stat.mtime,
+      isCurrent: true,
+    };
+  }
+
+  if (!fs.existsSync(logsDir)) {
+    return result;
+  }
+
+  const files = fs.readdirSync(logsDir);
+  for (const file of files) {
+    const match = file.match(/^mihomo\.(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})\.log$/);
+    if (!match) continue;
+
+    try {
+      const filePath = path.join(logsDir, file);
+      const stat = fs.statSync(filePath);
+      result.archives.push({
+        name: file,
+        timestamp: match[1],
+        path: filePath,
+        size: stat.size,
+        mtime: stat.mtime,
+        isCurrent: false,
+      });
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  result.archives.sort((a, b) => b.mtime - a.mtime);
+  return result;
+}
+
+function getLogPathByName(name) {
+  const logsDir = config.DIRS.logs;
+
+  // 处理部分匹配（用户只输入时间戳部分）
+  let targetName = name;
+  if (!name.endsWith('.log')) {
+    targetName = 'mihomo.' + name + '.log';
+  }
+  if (!targetName.startsWith('mihomo.')) {
+    targetName = 'mihomo.' + targetName;
+  }
+
+  const filePath = path.join(logsDir, targetName);
+  if (fs.existsSync(filePath)) {
+    return filePath;
+  }
+
+  // 尝试模糊匹配
+  if (fs.existsSync(logsDir)) {
+    const files = fs.readdirSync(logsDir);
+    for (const file of files) {
+      if (file.includes(name)) {
+        return path.join(logsDir, file);
+      }
+    }
+  }
+
+  return null;
 }
 
 function readLog(lines) {
@@ -528,5 +666,9 @@ module.exports = {
   getLogPath,
   readLog,
   clearLog,
+  rotateLog,
+  cleanupOldLogs,
+  listLogs,
+  getLogPathByName,
   openUrl,
 };
