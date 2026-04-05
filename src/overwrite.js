@@ -247,12 +247,8 @@ function listOverwriteFiles() {
 }
 
 module.exports = {
-  parseOverrideKey,
-  deepMergeWithOverrides,
-  getOverwritesDir,
   isOverwriteEnabled,
   setOverwriteEnabled,
-  loadOverwriteFiles,
   applyOverwrites,
   listOverwriteFiles,
 };

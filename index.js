@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+const path = require('path');
 const { spawn } = require('child_process');
 
 const config = require('./src/config');
@@ -60,7 +61,7 @@ function printShortHelp() {
     '  subscription update      更新订阅\n' +
     '  subscription use <name>  切换默认订阅\n' +
     '  overwrite [on|off]       覆写配置（别名 ow）\n' +
-    '  directories              数据目录（别名 dir）\n' +
+    '  directory                数据目录（别名 dir）\n' +
     '  kernel                   更新内核\n' +
     '  reset                    重置配置\n' +
     '  version                  版本信息\n');
@@ -72,7 +73,7 @@ function printHelp() {
     '命令别名: mihomo, mmc, mh\n' +
     '\n' +
     '用法:\n' +
-    '  mihomo-cli <命令> [选项]\n' +
+    '  mihomo <命令> [选项]\n' +
     '\n' +
     '控制:\n' +
     '  start [tun|mixed]            启动/切换代理 (默认 mixed)\n' +
@@ -92,7 +93,7 @@ function printHelp() {
     '\n' +
     '配置:\n' +
     '  overwrite [on|off]           覆写配置（别名 ow）\n' +
-    '  directories [open]           数据目录（别名 dir）\n' +
+    '  directory [open]             数据目录（别名 dir）\n' +
     '\n' +
     '系统:\n' +
     '  kernel [镜像|--no-mirror]    更新内核\n' +
@@ -101,10 +102,10 @@ function printHelp() {
     '  version, -v                  显示版本\n' +
     '\n' +
     '示例:\n' +
-    '  mihomo-cli start              # 启动/重启 Mixed 模式\n' +
-    '  mihomo-cli start tun          # 切换到 TUN 透明代理模式\n' +
-    '  mihomo-cli sub add <url>      # 添加订阅 (sub 是 subscription 别名)\n' +
-    '  mihomo-cli ui                 # 打开 Web UI\n' +
+    '  mihomo start              # 启动/重启 Mixed 模式\n' +
+    '  mihomo start tun          # 切换到 TUN 透明代理模式\n' +
+    '  mihomo sub add <url>      # 添加订阅 (sub 是 subscription 别名)\n' +
+    '  mihomo ui                 # 打开 Web UI\n' +
     '\n' +
     '模式说明:\n' +
     '  mixed  HTTP + SOCKS5 混合端口 (默认)\n' +
@@ -189,7 +190,7 @@ function getActiveSubscription() {
   return subs[0];
 }
 
-function findSubsFuzzy(subs, pattern) {
+function findSubscriptionFuzzy(subs, pattern) {
   const lowerPattern = pattern.toLowerCase();
   let exact = [];
   let prefix = [];
@@ -211,7 +212,7 @@ function findSubsFuzzy(subs, pattern) {
   return includes;
 }
 
-function pickSingleSub(subs, pattern, actionName) {
+function pickSingleSubscription(subs, pattern, actionName) {
   if (subs.length === 0) {
     console.error('错误: 未找到匹配 "' + pattern + '" 的订阅');
     process.exit(1);
@@ -297,7 +298,7 @@ function viewLogWithTail(logPath, options) {
 
 async function cmdStart(args) {
   if (!config.hasKernel()) {
-    console.error('错误: 未找到内核，请运行 \'mihomo-cli kernel\'');
+    console.error('错误: 未找到内核，请运行 "mihomo kernel"');
     process.exit(1);
   }
 
@@ -422,7 +423,7 @@ function cmdLogs(args) {
 
     if (!logPath) {
       console.error('错误: 未找到日志 "' + targetName + '"');
-      console.log('使用 "mihomo-cli logs" 查看可用日志列表');
+      console.log('使用 "mihomo logs" 查看可用日志列表');
       process.exit(1);
     }
 
@@ -461,16 +462,16 @@ function cmdLogs(args) {
     console.log(' ' + num + '. ' + name);
     console.log('    时间: ' + time + '  大小: ' + size);
     if (!log.isCurrent) {
-      console.log('    查看: mihomo-cli logs ' + idx + '  或  mihomo-cli logs -o ' + idx);
+      console.log('    查看: mihomo logs ' + idx + '  或  mihomo logs -o ' + idx);
     }
     console.log('');
   });
 
   console.log('用法:');
-  console.log('  mihomo-cli logs 0          # 查看当前日志 (最后 100 行)');
-  console.log('  mihomo-cli logs 1          # 查看第 1 个归档日志');
-  console.log('  mihomo-cli logs 1 -n 200   # 查看 200 行');
-  console.log('  mihomo-cli logs 1 -o        # 用系统默认程序打开');
+  console.log('  mihomo logs 0          # 查看当前日志 (最后 100 行)');
+  console.log('  mihomo logs 1          # 查看第 1 个归档日志');
+  console.log('  mihomo logs 1 -n 200   # 查看 200 行');
+  console.log('  mihomo logs 1 -o        # 用系统默认程序打开');
   console.log('');
 }
 
@@ -549,10 +550,10 @@ async function cmdKernel(args) {
   });
 
   console.log('\n用法:');
-  console.log('  mihomo-cli kernel                    # 使用默认镜像');
-  console.log('  mihomo-cli kernel hk.gh-proxy.org    # 使用指定镜像');
-  console.log('  mihomo-cli kernel --mirror hk.gh-proxy.org');
-  console.log('  mihomo-cli kernel --no-mirror         # 直连，不使用镜像');
+  console.log('  mihomo kernel                    # 使用默认镜像');
+  console.log('  mihomo kernel hk.gh-proxy.org    # 使用指定镜像');
+  console.log('  mihomo kernel --mirror hk.gh-proxy.org');
+  console.log('  mihomo kernel --no-mirror         # 直连，不使用镜像');
   console.log('');
 
   try {
@@ -576,7 +577,7 @@ async function cmdKernel(args) {
   }
 }
 
-async function printSubList() {
+async function printSubscriptionList() {
   const updateResult = await subscription.autoUpdateStaleSubscriptions();
   if (updateResult.total > 0) {
     console.log('');
@@ -586,7 +587,7 @@ async function printSubList() {
   if (subs.length === 0) {
     console.log('没有订阅');
     console.log('');
-    console.log('添加订阅: mihomo-cli sub add <url> [name]');
+    console.log('添加订阅: mihomo sub add <url> [name]');
     console.log('');
     return;
   }
@@ -620,17 +621,17 @@ async function printSubList() {
     }
   });
   console.log('');
-  console.log('切换默认: sub use <name>');
-  console.log('更新订阅: sub update [name]');
-  console.log('打开页面: sub web [name]');
+  console.log('切换默认: mihomo sub use <name>');
+  console.log('更新订阅: mihomo sub update [name]');
+  console.log('打开页面: mihomo sub web [name]');
   console.log('');
 }
 
-async function cmdSub(args) {
+async function cmdSubscription(args) {
   const action = args[1];
 
   if (!action || action === 'list') {
-    await printSubList();
+    await printSubscriptionList();
     return;
   }
 
@@ -656,7 +657,7 @@ async function cmdSub(args) {
       process.exit(1);
     }
     console.log('');
-    await printSubList();
+    await printSubscriptionList();
     return;
   }
 
@@ -686,12 +687,12 @@ async function cmdSub(args) {
       });
       if (ok === 0) process.exit(1);
       console.log('');
-      await printSubList();
+      await printSubscriptionList();
       return;
     }
 
-    const matches = findSubsFuzzy(subs, name);
-    const target = pickSingleSub(matches, name, '更新');
+    const matches = findSubscriptionFuzzy(subs, name);
+    const target = pickSingleSubscription(matches, name, '更新');
 
     console.log('更新订阅: ' + target.name);
     try {
@@ -705,7 +706,7 @@ async function cmdSub(args) {
       process.exit(1);
     }
     console.log('');
-    await printSubList();
+    await printSubscriptionList();
     return;
   }
 
@@ -722,8 +723,24 @@ async function cmdSub(args) {
       process.exit(1);
     }
 
-    const matches = findSubsFuzzy(subs, name);
-    const target = pickSingleSub(matches, name, '切换');
+    const matches = findSubscriptionFuzzy(subs, name);
+    const target = pickSingleSubscription(matches, name, '切换');
+
+    // 检查是否已是当前默认订阅
+    const currentDefault = getActiveSubscription();
+    const isAlreadyDefault = currentDefault && currentDefault.name === target.name;
+
+    if (isAlreadyDefault) {
+      console.log('"' + target.name + '" 已是当前默认订阅');
+      console.log('');
+      await printSubscriptionList();
+      return;
+    }
+
+    // 检查当前运行状态和模式
+    const status = processMgr.getStatus();
+    const cfgInfo = config.getConfigInfo();
+    const currentMode = cfgInfo && cfgInfo.tun ? 'tun' : 'mixed';
 
     const success = config.setDefaultSubscription(target.name);
     if (success) {
@@ -732,8 +749,16 @@ async function cmdSub(args) {
       console.error('错误: 未找到订阅 "' + name + '"');
       process.exit(1);
     }
+
+    // 如果正在运行，自动重启
+    if (status.running) {
+      console.log('');
+      await cmdStart(['start', currentMode]);
+      return;
+    }
+
     console.log('');
-    await printSubList();
+    await printSubscriptionList();
     return;
   }
 
@@ -748,8 +773,8 @@ async function cmdSub(args) {
 
     let target;
     if (name) {
-      const matches = findSubsFuzzy(subs, name);
-      target = pickSingleSub(matches, name, '打开');
+      const matches = findSubscriptionFuzzy(subs, name);
+      target = pickSingleSubscription(matches, name, '打开');
     } else {
       target = subs[0];
     }
@@ -782,7 +807,7 @@ async function cmdSub(args) {
   }
 
   console.error('错误: 未知的订阅命令');
-  console.log('用法: mihomo-cli sub [list|add|update|use|web]');
+  console.log('用法: mihomo sub [list|add|update|use|web]');
   process.exit(1);
 }
 
@@ -849,25 +874,62 @@ function printOverwriteList() {
     });
     console.log('');
   }
-  console.log('启用覆写: ow on');
-  console.log('禁用覆写: ow off');
+  console.log('启用覆写: mihomo ow on');
+  console.log('禁用覆写: mihomo ow off');
   console.log('');
 }
 
-function cmdOverwrite(args) {
+async function cmdOverwrite(args) {
   const action = args && args[1];
 
+  // 检查当前运行状态和模式
+  const status = processMgr.getStatus();
+  const cfgInfo = config.getConfigInfo();
+  const currentMode = cfgInfo && cfgInfo.tun ? 'tun' : 'mixed';
+
   if (action === 'on' || action === 'enable') {
+    // 如果已经启用，提示后直接返回
+    if (overwrite.isOverwriteEnabled()) {
+      console.log('覆写配置已是启用状态');
+      console.log('');
+      printOverwriteList();
+      return;
+    }
+
     overwrite.setOverwriteEnabled(true);
     console.log('已启用覆写配置');
+
+    // 如果正在运行，自动重启
+    if (status.running) {
+      console.log('');
+      await cmdStart(['start', currentMode]);
+      return;
+    }
+
     console.log('');
     printOverwriteList();
     return;
   }
 
   if (action === 'off' || action === 'disable') {
+    // 如果已经禁用，提示后直接返回
+    if (!overwrite.isOverwriteEnabled()) {
+      console.log('覆写配置已是禁用状态');
+      console.log('');
+      printOverwriteList();
+      return;
+    }
+
     overwrite.setOverwriteEnabled(false);
     console.log('已禁用覆写配置');
+
+    // 如果正在运行，自动重启
+    if (status.running) {
+      console.log('');
+      await cmdStart(['start', currentMode]);
+      return;
+    }
+
     console.log('');
     printOverwriteList();
     return;
@@ -878,10 +940,21 @@ function cmdOverwrite(args) {
   printOverwriteList();
 }
 
-function cmdDirs(args) {
+// 目录目标映射（精确匹配）
+const DIRECTORY_TARGETS = {
+  'root': { path: null, label: '根目录' },
+  'subs': { path: config.DIRS.subscriptions, label: '订阅目录' },
+  'logs': { path: config.DIRS.logs, label: '日志目录' },
+  'data': { path: config.DIRS.data, label: 'mihomo 数据目录' },
+  'runtime': { path: config.DIRS.runtime, label: '运行时目录' },
+  'overwrites': { path: config.DIRS.overwrites, label: '覆写目录' },
+  'settings': { path: config.PATHS.settingsFile, label: '设置文件' },
+  'kernel': { path: config.DIRS.core, label: '内核目录' },
+};
+
+function cmdDirectory(args) {
   const action = args && args[1];
 
-  // dirs open [root|subs|logs|data|runtime|config|kernel]
   if (action === 'open') {
     const target = args[2];
 
@@ -890,23 +963,10 @@ function cmdDirs(args) {
       return;
     }
 
-    const dirMap = {
-      'subs': { path: config.DIRS.subscriptions, label: '订阅目录' },
-      'subscriptions': { path: config.DIRS.subscriptions, label: '订阅目录' },
-      'logs': { path: config.DIRS.logs, label: '日志目录' },
-      'data': { path: config.DIRS.data, label: 'mihomo 数据目录' },
-      'runtime': { path: config.DIRS.runtime, label: '运行时目录' },
-    };
-
-    const fileMap = {
-      'config': { path: config.PATHS.settingsFile, label: '设置文件' },
-      'settings': { path: config.PATHS.settingsFile, label: '设置文件' },
-      'kernel': { path: config.DIRS.core, label: '内核目录' },
-    };
-
-    const targetInfo = dirMap[target] || fileMap[target];
+    const targetInfo = DIRECTORY_TARGETS[target.toLowerCase()];
     if (targetInfo) {
-      openDir(targetInfo.path, targetInfo.label);
+      const path = targetInfo.path || config.USER_DATA_DIR;
+      openDir(path, targetInfo.label);
       return;
     }
 
@@ -918,7 +978,8 @@ function cmdDirs(args) {
     console.log('  logs          日志目录');
     console.log('  data          mihomo 数据目录');
     console.log('  runtime       运行时目录');
-    console.log('  config        设置文件 (settings.json)');
+    console.log('  overwrites    覆写目录');
+    console.log('  settings      设置文件 (settings.json)');
     console.log('  kernel        内核目录');
     console.log('');
     process.exit(1);
@@ -941,10 +1002,13 @@ function cmdDirs(args) {
   console.log('    - cache.db, Geo*.dat 等 (mihomo 自行管理)');
   console.log('');
   console.log('打开目录:');
-  console.log('  mihomo-cli dirs open               打开根目录');
-  console.log('  mihomo-cli dirs open subscriptions 打开订阅目录');
-  console.log('  mihomo-cli dirs open logs          打开日志目录');
-  console.log('  mihomo-cli dirs open config        打开设置文件');
+  console.log('  mihomo dir open                打开根目录');
+  console.log('  mihomo dir open subs           打开订阅目录');
+  console.log('  mihomo dir open logs           打开日志目录');
+  console.log('  mihomo dir open runtime        打开运行时目录');
+  console.log('  mihomo dir open overwrites     打开覆写目录');
+  console.log('  mihomo dir open settings       打开设置文件');
+  console.log('  mihomo dir open kernel         打开内核目录');
   console.log('');
   console.log('环境变量:');
   console.log('  MIHOMO_CLI_DIR: 自定义根目录位置');
@@ -998,24 +1062,24 @@ async function main() {
     case 'sub':
     case 'subscription':
     case 'subscriptions':
-      await cmdSub(args);
+      await cmdSubscription(args);
       break;
     case 'dir':
     case 'dirs':
     case 'directory':
     case 'directories':
-      cmdDirs(args);
+      cmdDirectory(args);
       break;
     case 'reset':
       await cmdReset(args);
       break;
-    case 'overwrite':
     case 'ow':
-      cmdOverwrite(args);
+    case 'overwrite':
+      await cmdOverwrite(args);
       break;
     default:
       console.error('未知命令: ' + cmd);
-      console.error('使用 "mihomo-cli help" 查看帮助');
+      console.error('使用 "mihomo help" 查看帮助');
       process.exit(1);
   }
 }
