@@ -83,8 +83,8 @@ mihomo ui yacd     # YACD
 | `mihomo stop` | 停止代理 |
 | `mihomo status` | 查看运行状态 |
 | `mihomo log` | 实时查看日志 (`-o` 用系统编辑器打开) |
-| `mihomo logs` | 列出历史日志归档 |
-| `mihomo logs <编号>` | 查看指定归档日志 (`-n N` 指定行数, `-o` 打开) |
+| `mihomo logs` | 列出所有日志（当前 + 历史归档） |
+| `mihomo logs <编号>` | 查看指定日志（`0`=当前日志，`1+`=归档日志，支持 `-n N` 指定行数、`-o` 打开） |
 
 ### 订阅管理
 
@@ -160,22 +160,23 @@ mihomo kernel --no-mirror
 用户数据存储位置（与安装位置分离，更新不丢失）：
 
 ```
-~/Library/Application Support/mihomo-cli/
-├── config/
-│   ├── config.yaml      # 当前运行配置
-│   ├── settings.json    # 用户设置（订阅列表、内核版本）
-│   └── subs-cache.json  # 订阅动态缓存（流量、到期时间等）
-├── runtime/
-│   ├── pid              # 进程 PID
-│   └── config.yaml      # mihomo 运行时配置
+~/.mihomo-cli/
+├── settings.json        # 用户设置（订阅列表、内核版本）
+├── subs-cache.json      # 订阅动态缓存（流量、到期时间等）
+├── core/
+│   └── mihomo           # mihomo 内核二进制
+├── subs/
+│   └── <name>.yaml      # 订阅原始配置
 ├── logs/
 │   ├── mihomo.log       # 当前日志
 │   └── mihomo.YYYY-MM-DD_HH-MM-SS.log  # 归档日志
-├── subs/
-│   └── <name>.yaml      # 订阅原始配置
-└── core/
-    └── mihomo           # mihomo 内核二进制
+├── data/                # mihomo 运行数据（GeoIP 等，由内核自行管理）
+└── .runtime/            # 运行时临时文件（stop 自动清除）
+    ├── pid              # 进程 PID
+    └── config.yaml      # 运行时生成的配置
 ```
+
+可通过环境变量 `MIHOMO_CLI_DIR` 自定义数据目录位置。
 
 ## Web UI
 

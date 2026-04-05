@@ -52,8 +52,8 @@ function printShortHelp() {
     '  start [tun|mixed]  启动/切换代理（重复执行可切换模式）\n' +
     '  stop               停止代理\n' +
     '  status             查看状态\n' +
-    '  log                实时日志\n' +
-    '  logs               历史日志\n' +
+    '  log                实时日志（-o 打开文件）\n' +
+    '  logs               日志列表（当前 + 历史归档）\n' +
     '  ui [zash|dash|yacd]  Web 界面\n' +
     '  kernel             更新内核\n' +
     '  sub add <url> [name]   添加订阅\n' +
@@ -78,10 +78,10 @@ function printHelp() {
     '  start [tun|mixed]  启动/切换代理 (默认 mixed, 重复执行可重启/切换模式)\n' +
     '  stop               停止代理\n' +
     '  status             查看状态\n' +
-    '  log                实时日志\n' +
-    '  logs [name] [-n N]  列出/查看历史日志 (默认 100 行)\n' +
+    '  log [-o]           实时日志（-o 用系统编辑器打开）\n' +
+    '  logs [编号] [-n N] [-o]  列出/查看日志（0=当前，1+=归档，-n 指定行数，-o 打开）\n' +
     '  ui [zash|dash|yacd]  打开 Web UI (默认 zash)\n' +
-    '  kernel [镜像]       更新内核 (可指定镜像: hk.gh-proxy.org 或 --no-mirror)\n' +
+    '  kernel [镜像|--no-mirror]  更新内核（指定镜像或 --no-mirror 直连）\n' +
     '  sub add <url> [name]   添加订阅\n' +
     '  sub update [name]      更新订阅 (无参更新所有)\n' +
     '  sub use <name>         设置默认订阅 (支持模糊匹配)\n' +
