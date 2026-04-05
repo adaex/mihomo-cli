@@ -1,6 +1,6 @@
 # mihomo-cli
 
-一个基于命令行的 mihomo (Clash.Meta) 客户端，专为 macOS 设计。
+一个基于命令行的 mihomo (Clash.Meta) 客户端，专为 macOS 设计。Windows / Linux 正在适配中，敬请期待。
 
 ## 功能特性
 
