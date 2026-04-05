@@ -7,6 +7,8 @@
 - 🌐 **订阅管理** - 添加/更新订阅，支持流量统计和到期时间显示
 - 🔄 **自动更新** - 启动时自动检查并更新过期订阅
 - 🔍 **模糊匹配** - `sub use` / `sub web` 支持订阅名称模糊匹配
+- 📝 **覆写配置** - 在订阅基础上进行自定义覆写，支持强制覆盖、数组合并
+- 🔄 **智能重启** - `sub use` 切换订阅、`ow on/off` 切换覆写后自动重启
 - 🚀 **进程管理** - 启动/停止/切换模式，自动清理残留进程
 - 🔄 **双模式支持** - Mixed 模式和 TUN 透明代理模式
 - 📊 **状态监控** - 查看运行状态、内存占用
@@ -94,8 +96,16 @@ mihomo ui yacd     # YACD
 | `mihomo sub add <url> [name]` | 添加订阅 |
 | `mihomo sub update` | 更新所有订阅 |
 | `mihomo sub update <name>` | 更新指定订阅（支持模糊匹配） |
-| `mihomo sub use <name>` | 设置默认订阅（支持模糊匹配） |
+| `mihomo sub use <name>` | 设置默认订阅（支持模糊匹配，自动重启） |
 | `mihomo sub web [name]` | 打开订阅页面（无参打开默认） |
+
+### 覆写配置
+
+| 命令 | 说明 |
+|------|------|
+| `mihomo ow` / `mihomo ow list` | 查看覆写配置状态和文件列表 |
+| `mihomo ow on` | 启用覆写配置（自动重启） |
+| `mihomo ow off` | 禁用覆写配置（自动重启） |
 
 ### 其他命令
 
@@ -103,7 +113,8 @@ mihomo ui yacd     # YACD
 |------|------|
 | `mihomo kernel [镜像\|--no-mirror]` | 更新内核 |
 | `mihomo ui [zash\|dash\|yacd]` | 打开 Web UI |
-| `mihomo dirs` | 显示数据目录位置 |
+| `mihomo dir` | 显示数据目录位置 |
+| `mihomo dir open [target]` | 打开指定目录（`root`, `subs`, `logs`, `overwrites` 等） |
 | `mihomo reset [--full]` | 重置用户数据 (--full 同时删除内核) |
 | `mihomo version` | 显示版本信息 |
 | `mihomo help` | 显示帮助信息 |
@@ -165,6 +176,7 @@ mihomo kernel --no-mirror
 ├── subscriptions/
 │   ├── cache.json        # 订阅动态缓存（更新时间、流量、到期时间等）
 │   └── <name>.yaml       # 订阅原始配置
+├── overwrites/           # 覆写配置（按文件名排序加载）
 ├── core/
 │   └── mihomo            # mihomo 内核二进制
 ├── logs/
@@ -177,6 +189,44 @@ mihomo kernel --no-mirror
 ```
 
 可通过环境变量 `MIHOMO_CLI_DIR` 自定义数据目录位置。
+
+## 覆写配置
+
+覆写配置允许你在订阅配置基础上进行自定义修改，而不会影响订阅本身。
+
+### 使用方法
+
+1. 在 `~/.mihomo-cli/overwrites/` 目录下创建 `.yaml` 或 `.yml` 文件
+2. 文件按**文件名顺序**加载，后面的文件会覆盖前面的配置
+3. 使用 `mihomo ow on` 启用覆写配置（会自动重启）
+
+### 特殊语法
+
+覆写配置支持以下特殊操作符：
+
+| 语法 | 作用 | 示例 |
+|------|------|------|
+| `key!` | 强制覆盖整个对象（不深度合并） | `dns!`: { ... } |
+| `+key` | 数组前置插入 | `+proxies`: [...] |
+| `key+` | 数组追加 | `rules+`: [...] |
+| `<+key>` | 键名以 `+` 开头时转义 | `<+.google.cn>`: ... |
+
+### 示例
+
+```yaml
+# ~/.mihomo-cli/overwrites/01-custom.yaml
+
+# 强制覆盖 dns 配置
+dns!:
+  enable: true
+  enhanced-mode: fake-ip
+  nameserver:
+    - 223.5.5.5
+
+# 追加规则
+rules+:
+  - "DOMAIN-SUFFIX,example.com,DIRECT"
+```
 
 ## Web UI
 
