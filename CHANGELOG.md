@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.2.0] - 2026-04-05
+
+### 新增功能
+
+#### 配置变更自动重启
+- **sub use 自动重启**：切换默认订阅后，如果 mihomo 正在运行则自动重启
+- **ow on/off 自动重启**：启用/禁用覆写配置后，如果 mihomo 正在运行则自动重启
+- **状态检查**：操作前检查是否已是目标状态，避免重复操作
+
+### 重构
+
+#### 命名规范统一
+- **函数重命名**：统一使用全称单数
+  - `findSubsFuzzy` → `findSubscriptionFuzzy`
+  - `pickSingleSub` → `pickSingleSubscription`
+  - `printSubList` → `printSubscriptionList`
+  - `cmdSub` → `cmdSubscription`
+  - `cmdDirs` → `cmdDirectory`
+  - `DIR_TARGETS` → `DIRECTORY_TARGETS`
+- **帮助文档统一**：
+  - 示例统一使用 `mihomo` 而非 `mihomo-cli`
+  - 命令列表使用全称单数 `directory` 而非 `directories`
+  - 提示语中的命令示例添加 `mihomo` 前缀
+
+### 修复
+
+- 修复缺失的 `path` 模块导入
+- 统一引号风格（命令示例使用双引号）
+
 ## [1.1.0] - 2026-04-05
 
 ### 新增功能
