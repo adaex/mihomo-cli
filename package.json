@@ -4,10 +4,10 @@
   "description": "A terminal-based mihomo (Clash.Meta) client for macOS",
   "main": "index.js",
   "bin": {
-    "mihomo-cli": "./index.js",
-    "mihomo": "./index.js",
-    "mmc": "./index.js",
-    "mh": "./index.js"
+    "mihomo-cli": "index.js",
+    "mihomo": "index.js",
+    "mmc": "index.js",
+    "mh": "index.js"
   },
   "files": [
     "index.js",
@@ -30,8 +30,13 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "os": ["darwin"],
-  "cpu": ["x64", "arm64"],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
   "dependencies": {
     "axios": "^1.6.0",
     "compare-versions": "^6.1.0",
