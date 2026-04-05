@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const yaml = require('js-yaml');
 const { execSync } = require('child_process');
 
 const IS_PKG = typeof process.pkg !== 'undefined';
@@ -36,6 +37,7 @@ const PATHS = {
   userDataDir: USER_DATA_DIR,
   mihomoBinary: path.join(DIRS.core, 'mihomo'),
   settingsFile: path.join(USER_DATA_DIR, 'settings.json'),
+  subsCacheFile: path.join(USER_DATA_DIR, 'subs-cache.json'),
   configFile: path.join(DIRS.runtime, 'config.yaml'),
   logFile: path.join(DIRS.logs, 'mihomo.log'),
   pidFile: path.join(DIRS.runtime, 'pid'),
@@ -95,9 +97,94 @@ function writeSettings(settings) {
   return merged;
 }
 
+// GitHub 镜像配置
+const DEFAULT_GITHUB_MIRROR = 'https://v6.gh-proxy.org/';
+const AVAILABLE_MIRRORS = [
+  'v6.gh-proxy.org',
+  'gh-proxy.org',
+  'hk.gh-proxy.org',
+  'cdn.gh-proxy.org',
+  'edgeone.gh-proxy.org',
+];
+
+function getGitHubMirror() {
+  const settings = readSettings();
+  // 空字符串或 false 表示禁用镜像
+  if (settings.githubMirror === '' || settings.githubMirror === false) {
+    return null;
+  }
+  return settings.githubMirror || DEFAULT_GITHUB_MIRROR;
+}
+
+function setGitHubMirror(mirror) {
+  // mirror 取值:
+  // - 完整 URL: 'https://hk.gh-proxy.org/'
+  // - 短域名: 'hk.gh-proxy.org'
+  // - '' 或 false: 禁用镜像
+  // - null 或 undefined: 恢复默认
+
+  if (mirror === null || mirror === undefined) {
+    const settings = readSettings();
+    delete settings.githubMirror;
+    writeSettings(settings);
+    return DEFAULT_GITHUB_MIRROR;
+  }
+
+  if (mirror === '' || mirror === false) {
+    writeSettings({ githubMirror: '' });
+    return null;
+  }
+
+  let mirrorUrl = mirror;
+  if (!mirrorUrl.startsWith('http')) {
+    mirrorUrl = 'https://' + mirrorUrl;
+  }
+  if (!mirrorUrl.endsWith('/')) {
+    mirrorUrl += '/';
+  }
+
+  writeSettings({ githubMirror: mirrorUrl });
+  return mirrorUrl;
+}
+
+// 订阅缓存读写（动态数据：流量、用户名等）
+function readSubsCache() {
+  ensureDirs();
+  if (fs.existsSync(PATHS.subsCacheFile)) {
+    try {
+      const content = fs.readFileSync(PATHS.subsCacheFile, 'utf8');
+      return JSON.parse(content);
+    } catch (e) {
+      return {};
+    }
+  }
+  return {};
+}
+
+function writeSubsCache(cache) {
+  ensureDirs();
+  fs.writeFileSync(PATHS.subsCacheFile, JSON.stringify(cache, null, 2), { mode: 0o600 });
+}
+
+function saveSubCache(subName, data) {
+  const cache = readSubsCache();
+  cache[subName] = { ...cache[subName], ...data };
+  writeSubsCache(cache);
+}
+
 function getSubscriptions() {
   const settings = readSettings();
   return settings.subscriptions || [];
+}
+
+// 获取合并了缓存数据的订阅列表
+function getSubscriptionsWithCache() {
+  const subs = getSubscriptions();
+  const cache = readSubsCache();
+  return subs.map(s => ({
+    ...s,
+    ...(cache[s.name] || {}),
+  }));
 }
 
 function addSubscription(url, name) {
@@ -111,6 +198,22 @@ function addSubscription(url, name) {
     subs.push({ name, url, updatedAt: null });
   }
   writeSettings({ subscriptions: subs });
+}
+
+function setDefaultSubscription(name) {
+  const settings = readSettings();
+  const subs = settings.subscriptions || [];
+  const idx = subs.findIndex(s => s.name === name);
+  if (idx < 0) {
+    return false;
+  }
+  if (idx === 0) {
+    return true; // 已经是第一个
+  }
+  const [sub] = subs.splice(idx, 1);
+  subs.unshift(sub);
+  writeSettings({ subscriptions: subs });
+  return true;
 }
 
 function getSubRawConfigPath(subName) {
@@ -180,19 +283,23 @@ const BASE_CONFIG = {
   },
 };
 
-function buildConfig(subRawContent, mode) {
-  const yaml = require('js-yaml');
-
-  let baseConfig;
-  try {
-    baseConfig = yaml.load(subRawContent);
-  } catch (e) {
-    try {
-      baseConfig = JSON.parse(subRawContent);
-    } catch (e2) {
-      throw new Error('订阅内容格式错误，无法解析为 YAML 或 JSON');
-    }
+function parseYamlOrJson(content, errorMsg) {
+  if (!content || !content.trim()) {
+    throw new Error((errorMsg || '内容') + '为空');
   }
+  try {
+    const result = yaml.load(content);
+    if (result !== undefined) return result;
+  } catch (e) {}
+  try {
+    return JSON.parse(content);
+  } catch (e2) {
+    throw new Error((errorMsg || '内容') + '格式错误，无法解析为 YAML 或 JSON');
+  }
+}
+
+function buildConfig(subRawContent, mode) {
+  const baseConfig = parseYamlOrJson(subRawContent, '订阅内容');
 
   if (!baseConfig) {
     throw new Error('订阅内容为空');
@@ -216,7 +323,6 @@ function buildConfig(subRawContent, mode) {
 }
 
 function writeMihomoConfig(configObj) {
-  const yaml = require('js-yaml');
   ensureDirs();
   const content = yaml.dump(configObj, {
     indent: 2,
@@ -236,7 +342,6 @@ function getConfigInfo() {
   }
 
   try {
-    const yaml = require('js-yaml');
     const content = fs.readFileSync(PATHS.configFile, 'utf8');
     const cfg = yaml.load(content);
 
@@ -255,17 +360,7 @@ function getConfigInfo() {
 }
 
 function rmrf(dir) {
-  if (!fs.existsSync(dir)) return;
-  const stat = fs.statSync(dir);
-  if (stat.isDirectory()) {
-    const files = fs.readdirSync(dir);
-    for (const f of files) {
-      rmrf(path.join(dir, f));
-    }
-    fs.rmdirSync(dir);
-  } else {
-    fs.unlinkSync(dir);
-  }
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 function resetUserData(options) {
@@ -309,16 +404,26 @@ module.exports = {
   ensureDirs,
   readSettings,
   writeSettings,
+  readSubsCache,
+  writeSubsCache,
+  saveSubCache,
   maskUrl,
   getSubscriptions,
+  getSubscriptionsWithCache,
   addSubscription,
+  setDefaultSubscription,
   getSubRawConfigPath,
   saveSubRawConfig,
   readSubRawConfig,
   hasKernel,
   getKernelVersion,
+  getGitHubMirror,
+  setGitHubMirror,
+  DEFAULT_GITHUB_MIRROR,
+  AVAILABLE_MIRRORS,
   TUN_CONFIG,
   BASE_CONFIG,
+  parseYamlOrJson,
   buildConfig,
   writeMihomoConfig,
   hasConfig,
