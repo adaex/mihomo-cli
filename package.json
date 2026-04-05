@@ -1,0 +1,37 @@
+{
+  "name": "mihomo-cli",
+  "version": "1.0.0-alpha.1",
+  "description": "A terminal-based mihomo (Clash.Meta) client for macOS",
+  "main": "index.js",
+  "bin": {
+    "mihomo-cli": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "src/**/*.js"
+  ],
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "mihomo",
+    "clash",
+    "clash-meta",
+    "proxy",
+    "vpn",
+    "cli",
+    "macos"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "os": ["darwin"],
+  "cpu": ["x64", "arm64"],
+  "dependencies": {
+    "axios": "^1.6.0",
+    "compare-versions": "^6.1.0",
+    "js-yaml": "^4.1.0"
+  }
+}
