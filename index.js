@@ -57,9 +57,7 @@ function printShortHelp() {
     '  ui [zash|dash|yacd]      Web 界面\n' +
     '  log                      实时日志\n' +
     '  logs                     日志列表\n' +
-    '  subscription add <url>   添加订阅（别名 sub）\n' +
-    '  subscription update      更新订阅\n' +
-    '  subscription use <name>  切换默认订阅\n' +
+    '  subscription             订阅管理（别名 sub）\n' +
     '  overwrite [on|off]       覆写配置（别名 ow）\n' +
     '  directory                数据目录（别名 dir）\n' +
     '  kernel                   更新内核\n' +
@@ -86,11 +84,17 @@ function printHelp() {
     '  logs [编号] [-n N] [-o]      日志列表（0=当前，1+=归档）\n' +
     '\n' +
     '订阅:\n' +
-    '  subscription [add|update|use|web]  订阅管理（别名 sub）\n' +
+    '  subscription                列出所有订阅（别名 sub）\n' +
+    '  subscription add <url> [name]  添加订阅\n' +
+    '  subscription update [name]     更新订阅（无参更新所有）\n' +
+    '  subscription use <name>        切换默认订阅\n' +
+    '  subscription web [name]        打开订阅页面\n' +
     '\n' +
     '配置:\n' +
-    '  overwrite [on|off]           覆写配置（别名 ow）\n' +
-    '  directory [open]             数据目录（别名 dir）\n' +
+    '  overwrite                   查看覆写状态（别名 ow）\n' +
+    '  overwrite on|off            启用/禁用覆写配置\n' +
+    '  directory                   显示数据目录位置（别名 dir）\n' +
+    '  directory open [target]     打开目录: root|subs|logs|overwrites|...\n' +
     '\n' +
     '系统:\n' +
     '  kernel [镜像|--no-mirror]    更新内核\n' +
