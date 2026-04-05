@@ -171,3 +171,71 @@ node index.js start    # 启动代理
 ## Git 提交
 
 本仓库不需要添加 `Co-Authored-By` 行。
+
+---
+
+## 发布流程
+
+### 版本号规则
+
+遵循 [语义化版本](https://semver.org/lang/zh-CN/)：`主版本号.次版本号.修订号`
+
+- **主版本号**：不兼容的 API 改动
+- **次版本号**：向下兼容的功能性新增
+- **修订号**：向下兼容的问题修正
+
+### 发布步骤
+
+发布前确保工作区干净（`git status` 无未提交更改）。
+
+#### 1. 更新版本号
+
+修改 `package.json` 中的 `version` 字段。
+
+#### 2. 更新 CHANGELOG.md
+
+在文件顶部添加新版本区块，格式：
+
+```markdown
+## [X.Y.Z] - YYYY-MM-DD
+
+### 新增功能
+- 描述...
+
+### 修复
+- 描述...
+```
+
+按类别组织：`新增功能`、`优化`、`重构`、`修复`、`文档`。
+
+#### 3. 提交变更
+
+```bash
+git add package.json CHANGELOG.md
+git commit -m "chore: 发布 vX.Y.Z"
+```
+
+#### 4. 发布到 npm
+
+```bash
+npm publish --otp=<6位验证码>
+```
+
+需要 npm 账户的 OTP 二次验证码。
+
+#### 5. 推送到远程
+
+```bash
+git push
+```
+
+### 完整示例
+
+```bash
+# 1. 编辑 package.json: 1.1.0 -> 1.2.0
+# 2. 编辑 CHANGELOG.md，添加新版本记录
+git add package.json CHANGELOG.md
+git commit -m "chore: 发布 v1.2.0"
+npm publish --otp=123456
+git push
+```
