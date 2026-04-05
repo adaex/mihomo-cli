@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.3] - 2026-04-05
+
+### 文档修复
+
+- **数据目录路径**：修正 README 中的用户数据存储位置
+  - `~/Library/Application Support/mihomo-cli/` → `~/.mihomo-cli/`
+  - 修正目录结构：`runtime/` → `.runtime/`，删除不存在的 `config/` 子目录
+- **CLI 帮助文档**：修正 `log`、`logs`、`kernel` 命令的语法和描述
+  - `logs` 命令明确 `0`=当前日志，`1+`=归档日志
+  - 补充 `-o` 选项说明
+
 ## [1.0.2] - 2026-04-05
 
 ### 修复
