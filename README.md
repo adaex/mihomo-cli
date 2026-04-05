@@ -9,7 +9,7 @@
 - 🔍 **模糊匹配** - `sub use` / `sub web` 支持订阅名称模糊匹配
 - 🚀 **进程管理** - 启动/停止/切换模式，自动清理残留进程
 - 🔄 **双模式支持** - Mixed 模式和 TUN 透明代理模式
-- 📊 **状态监控** - 查看运行状态、内存、CPU 占用
+- 📊 **状态监控** - 查看运行状态、内存占用
 - 📝 **日志管理** - 实时日志 + 历史日志归档（自动轮转，保留7天）
 - 🎨 **Web UI** - 一键打开 Web 控制面板 (zash/metacubexd/yacd)
 - 🔄 **内核更新** - 自动检查更新，支持 GitHub 镜像加速
@@ -161,19 +161,19 @@ mihomo kernel --no-mirror
 
 ```
 ~/.mihomo-cli/
-├── settings.json        # 用户设置（订阅列表、内核版本）
-├── subs-cache.json      # 订阅动态缓存（流量、到期时间等）
+├── settings.json         # 用户设置（订阅列表等）
+├── subscriptions/
+│   ├── cache.json        # 订阅动态缓存（更新时间、流量、到期时间等）
+│   └── <name>.yaml       # 订阅原始配置
 ├── core/
-│   └── mihomo           # mihomo 内核二进制
-├── subs/
-│   └── <name>.yaml      # 订阅原始配置
+│   └── mihomo            # mihomo 内核二进制
 ├── logs/
-│   ├── mihomo.log       # 当前日志
+│   ├── mihomo.log        # 当前日志
 │   └── mihomo.YYYY-MM-DD_HH-MM-SS.log  # 归档日志
-├── data/                # mihomo 运行数据（GeoIP 等，由内核自行管理）
-└── .runtime/            # 运行时临时文件（stop 自动清除）
-    ├── pid              # 进程 PID
-    └── config.yaml      # 运行时生成的配置
+├── data/                 # mihomo 运行数据（GeoIP 等，由内核自行管理）
+└── .runtime/             # 运行时临时文件（stop 自动清除）
+    ├── pid               # 进程 PID
+    └── config.yaml       # 运行时生成的配置
 ```
 
 可通过环境变量 `MIHOMO_CLI_DIR` 自定义数据目录位置。

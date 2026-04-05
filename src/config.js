@@ -25,10 +25,11 @@ const USER_DATA_DIR = getUserDataDir();
 const DIRS = {
   root: PROJECT_ROOT,
   core: path.join(USER_DATA_DIR, 'core'),
-  subs: path.join(USER_DATA_DIR, 'subs'),
+  subscriptions: path.join(USER_DATA_DIR, 'subscriptions'),
   logs: path.join(USER_DATA_DIR, 'logs'),
   data: path.join(USER_DATA_DIR, 'data'),
   runtime: path.join(USER_DATA_DIR, '.runtime'),
+  overwrites: path.join(USER_DATA_DIR, 'overwrites'),
 };
 
 const PATHS = {
@@ -37,7 +38,7 @@ const PATHS = {
   userDataDir: USER_DATA_DIR,
   mihomoBinary: path.join(DIRS.core, 'mihomo'),
   settingsFile: path.join(USER_DATA_DIR, 'settings.json'),
-  subsCacheFile: path.join(USER_DATA_DIR, 'subs-cache.json'),
+  subscriptionsCacheFile: path.join(DIRS.subscriptions, 'cache.json'),
   configFile: path.join(DIRS.runtime, 'config.yaml'),
   logFile: path.join(DIRS.logs, 'mihomo.log'),
   pidFile: path.join(DIRS.runtime, 'pid'),
@@ -110,10 +111,10 @@ const AVAILABLE_MIRRORS = [
 function getGitHubMirror() {
   const settings = readSettings();
   // 空字符串或 false 表示禁用镜像
-  if (settings.githubMirror === '' || settings.githubMirror === false) {
+  if (settings.github_mirror === '' || settings.github_mirror === false) {
     return null;
   }
-  return settings.githubMirror || DEFAULT_GITHUB_MIRROR;
+  return settings.github_mirror || DEFAULT_GITHUB_MIRROR;
 }
 
 function setGitHubMirror(mirror) {
@@ -125,13 +126,13 @@ function setGitHubMirror(mirror) {
 
   if (mirror === null || mirror === undefined) {
     const settings = readSettings();
-    delete settings.githubMirror;
+    delete settings.github_mirror;
     writeSettings(settings);
     return DEFAULT_GITHUB_MIRROR;
   }
 
   if (mirror === '' || mirror === false) {
-    writeSettings({ githubMirror: '' });
+    writeSettings({ github_mirror: '' });
     return null;
   }
 
@@ -143,16 +144,16 @@ function setGitHubMirror(mirror) {
     mirrorUrl += '/';
   }
 
-  writeSettings({ githubMirror: mirrorUrl });
+  writeSettings({ github_mirror: mirrorUrl });
   return mirrorUrl;
 }
 
-// 订阅缓存读写（动态数据：流量、用户名等）
-function readSubsCache() {
+// 订阅缓存读写（动态数据：流量、用户名、更新时间等）
+function readSubscriptionsCache() {
   ensureDirs();
-  if (fs.existsSync(PATHS.subsCacheFile)) {
+  if (fs.existsSync(PATHS.subscriptionsCacheFile)) {
     try {
-      const content = fs.readFileSync(PATHS.subsCacheFile, 'utf8');
+      const content = fs.readFileSync(PATHS.subscriptionsCacheFile, 'utf8');
       return JSON.parse(content);
     } catch (e) {
       return {};
@@ -161,15 +162,15 @@ function readSubsCache() {
   return {};
 }
 
-function writeSubsCache(cache) {
+function writeSubscriptionsCache(cache) {
   ensureDirs();
-  fs.writeFileSync(PATHS.subsCacheFile, JSON.stringify(cache, null, 2), { mode: 0o600 });
+  fs.writeFileSync(PATHS.subscriptionsCacheFile, JSON.stringify(cache, null, 2), { mode: 0o600 });
 }
 
-function saveSubCache(subName, data) {
-  const cache = readSubsCache();
+function saveSubscriptionCache(subName, data) {
+  const cache = readSubscriptionsCache();
   cache[subName] = { ...cache[subName], ...data };
-  writeSubsCache(cache);
+  writeSubscriptionsCache(cache);
 }
 
 function getSubscriptions() {
@@ -180,7 +181,7 @@ function getSubscriptions() {
 // 获取合并了缓存数据的订阅列表
 function getSubscriptionsWithCache() {
   const subs = getSubscriptions();
-  const cache = readSubsCache();
+  const cache = readSubscriptionsCache();
   return subs.map(s => ({
     ...s,
     ...(cache[s.name] || {}),
@@ -193,9 +194,9 @@ function addSubscription(url, name) {
   const subs = settings.subscriptions || [];
   const existingIndex = subs.findIndex(s => s.name === name);
   if (existingIndex >= 0) {
-    subs[existingIndex] = { name, url, updatedAt: new Date().toISOString() };
+    subs[existingIndex] = { name, url };
   } else {
-    subs.push({ name, url, updatedAt: null });
+    subs.push({ name, url });
   }
   writeSettings({ subscriptions: subs });
 }
@@ -217,7 +218,7 @@ function setDefaultSubscription(name) {
 }
 
 function getSubRawConfigPath(subName) {
-  return path.join(DIRS.subs, subName + '.yaml');
+  return path.join(DIRS.subscriptions, subName + '.yaml');
 }
 
 function saveSubRawConfig(subName, content) {
@@ -305,7 +306,14 @@ function buildConfig(subRawContent, mode) {
     throw new Error('订阅内容为空');
   }
 
-  const merged = { ...baseConfig, ...BASE_CONFIG };
+  // 延迟加载以避免循环依赖
+  const overwrite = require('./overwrite');
+
+  // 应用覆写配置
+  const withOverwrites = overwrite.applyOverwrites(baseConfig);
+
+  // 合并 BASE_CONFIG（优先级高于覆写）
+  const merged = { ...withOverwrites, ...BASE_CONFIG };
 
   if (mode === 'tun') {
     // 合并 TUN 配置
@@ -351,7 +359,9 @@ function getConfigInfo() {
       proxies: cfg.proxies ? cfg.proxies.length : 0,
       proxyGroups: cfg['proxy-groups'] ? cfg['proxy-groups'].length : 0,
       mode: cfg.mode || 'rule',
-      port: cfg.port || cfg['mixed-port'] || '未知',
+      mixedPort: cfg['mixed-port'] || null,
+      httpPort: cfg.port || null,
+      socksPort: cfg['socks-port'] || null,
       tun: cfg.tun ? cfg.tun.enable : false,
     };
   } catch (e) {
@@ -369,7 +379,7 @@ function resetUserData(options) {
 
   const itemsToRemove = [
     PATHS.settingsFile,
-    DIRS.subs,
+    DIRS.subscriptions,
     DIRS.logs,
     DIRS.data,
     DIRS.runtime,
@@ -404,9 +414,9 @@ module.exports = {
   ensureDirs,
   readSettings,
   writeSettings,
-  readSubsCache,
-  writeSubsCache,
-  saveSubCache,
+  readSubscriptionsCache,
+  writeSubscriptionsCache,
+  saveSubscriptionCache,
   maskUrl,
   getSubscriptions,
   getSubscriptionsWithCache,

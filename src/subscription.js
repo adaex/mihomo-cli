@@ -104,23 +104,11 @@ async function downloadSubscription(url, subName) {
   const webPageUrl = headers['profile-web-page-url'] || null;
   const username = parseUsernameFromContentDisposition(headers['content-disposition']);
 
-  // 1. updatedAt 保存到 settings.json（元数据，用于判断更新间隔）
-  // 同时清理旧的动态字段（迁移到缓存文件）
-  const subs = config.getSubscriptions();
-  const subIndex = subs.findIndex(s => s.name === subName);
-  if (subIndex >= 0) {
-    // 只保留核心配置字段，动态字段已迁移到缓存
-    const cleanedSub = {
-      name: subs[subIndex].name,
-      url: subs[subIndex].url,
-      updatedAt: new Date().toISOString(),
-    };
-    subs[subIndex] = cleanedSub;
-    config.writeSettings({ subscriptions: subs });
-  }
+  // 2. 动态数据 + updated_at 保存到缓存文件（settings 只存 name/url）
 
-  // 2. 动态数据保存到缓存文件
-  const cacheData = {};
+  const cacheData = {
+    updated_at: new Date().toISOString(),
+  };
   if (userInfo) {
     cacheData.upload = userInfo.upload;
     cacheData.download = userInfo.download;
@@ -128,15 +116,15 @@ async function downloadSubscription(url, subName) {
     cacheData.expire = userInfo.expire;
   }
   if (updateInterval) {
-    cacheData.updateInterval = updateInterval;
+    cacheData.update_interval = updateInterval;
   }
   if (webPageUrl) {
-    cacheData.webPageUrl = webPageUrl;
+    cacheData.web_page_url = webPageUrl;
   }
   if (username) {
     cacheData.username = username;
   }
-  config.saveSubCache(subName, cacheData);
+  config.saveSubscriptionCache(subName, cacheData);
 
   return {
     proxies: parsed.proxies ? parsed.proxies.length : 0,
@@ -166,10 +154,10 @@ function prepareConfigForStart(mode, subName) {
 }
 
 function needsAutoUpdate(sub) {
-  if (!sub.updatedAt) return true;
-  const lastUpdate = new Date(sub.updatedAt).getTime();
+  if (!sub.updated_at) return true;
+  const lastUpdate = new Date(sub.updated_at).getTime();
   if (isNaN(lastUpdate)) return true;
-  const intervalHours = sub.updateInterval || DEFAULT_UPDATE_INTERVAL_HOURS;
+  const intervalHours = sub.update_interval || DEFAULT_UPDATE_INTERVAL_HOURS;
   const intervalMs = intervalHours * 60 * 60 * 1000;
   return (Date.now() - lastUpdate) > intervalMs;
 }
@@ -177,7 +165,7 @@ function needsAutoUpdate(sub) {
 async function tryUpdateOne(sub) {
   try {
     const info = await downloadSubscription(sub.url, sub.name);
-    return { name: sub.name, success: true, proxies: info.proxies };
+    return { name: sub.name, success: true, proxies: info.proxies, proxyGroups: info.proxyGroups };
   } catch (e) {
     return { name: sub.name, success: false, error: e.message };
   }
@@ -193,10 +181,10 @@ async function autoUpdateStaleSubscriptions() {
 
   if (staleSubs.length === 1) {
     const sub = staleSubs[0];
-    const interval = sub.updateInterval || DEFAULT_UPDATE_INTERVAL_HOURS;
-    console.log('  订阅 "' + sub.name + '" 超过 ' + interval + ' 小时未更新，正在更新...');
+    const interval = sub.update_interval || DEFAULT_UPDATE_INTERVAL_HOURS;
+    console.log('订阅 "' + sub.name + '" 超过 ' + interval + ' 小时未更新，正在更新...');
   } else {
-    console.log('  检查到 ' + staleSubs.length + ' 个订阅需要更新，正在并行更新...');
+    console.log('检查到 ' + staleSubs.length + ' 个订阅需要更新，正在并行更新...');
   }
 
   const results = await Promise.all(staleSubs.map(tryUpdateOne));
@@ -205,10 +193,12 @@ async function autoUpdateStaleSubscriptions() {
   results.forEach(r => {
     if (r.success) {
       updatedCount++;
-      console.log('  ✓ ' + r.name + ': 已更新 (' + r.proxies + ' 节点)');
+      const parts = [];
+      if (r.proxyGroups && r.proxyGroups > 0) parts.push(r.proxyGroups + ' 组');
+      parts.push(r.proxies + ' 节点');
+      console.log('✓ ' + r.name + ': 已更新 (' + parts.join(', ') + ')');
     } else {
-      console.log('  ✗ ' + r.name + ': 更新失败，使用本地缓存');
-      console.log('    原因: ' + r.error.split('\n')[0]);
+      console.log('✗ ' + r.name + ': 失败 (' + r.error.split('\n')[0] + ')');
     }
   });
 

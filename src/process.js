@@ -329,15 +329,15 @@ async function start(mode) {
 async function startMixedMode(staleState) {
   if (staleState.needsCleanup) {
     if (staleState.needsSudo) {
-      console.log('\n  发现需要 root 权限清理的残留进程/文件');
-      console.log('  请先手动清理: sudo pkill -9 mihomo');
-      console.log('  或者切换到 TUN 模式，启动时会自动清理');
+      console.log('\n发现需要 root 权限清理的残留进程/文件');
+      console.log('请先手动清理: sudo pkill -9 mihomo');
+      console.log('或者切换到 TUN 模式，启动时会自动清理');
       throw new Error('存在需要 root 权限清理的残留');
     }
 
     const cleanupResult = cleanupAll();
     if (cleanupResult.killed > 0) {
-      console.log('  清理了 ' + cleanupResult.killed + ' 个残留进程');
+      console.log('清理了 ' + cleanupResult.killed + ' 个残留进程');
     }
   }
 
@@ -389,7 +389,7 @@ async function startMixedMode(staleState) {
       try {
         const logs = fs.readFileSync(logFile, 'utf8').slice(-3000);
         if (logs.trim()) {
-          errorMsg += '\n  最近的日志:\n' + logs.split('\n').map(l => '    ' + l).join('\n');
+          errorMsg += '\n最近的日志:\n' + logs.split('\n').map(l => '  ' + l).join('\n');
         }
       } catch {}
     }
@@ -417,9 +417,9 @@ async function startTunMode(staleState) {
   const launchScript = createTunLaunchScript();
 
   if (staleState.needsCleanup) {
-    console.log('  清理 ' + staleState.allPids.length + ' 个残留进程...');
+    console.log('清理 ' + staleState.allPids.length + ' 个残留进程...');
   }
-  console.log('  TUN 模式需要 sudo 权限...');
+  console.log('TUN 模式需要 sudo 权限...');
 
   try {
     execSync('sudo "' + launchScript + '"', {
@@ -459,9 +459,9 @@ function stop(wasTunMode) {
   const remaining = getAllMihomoPids();
   if (remaining.length > 0) {
     console.log('');
-    console.log('  仍有进程残留，需要手动清理:');
-    console.log('  进程 PID: ' + remaining.join(', '));
-    console.log('  手动命令: sudo pkill -9 mihomo');
+    console.log('仍有进程残留，需要手动清理:');
+    console.log('进程 PID: ' + remaining.join(', '));
+    console.log('手动命令: sudo pkill -9 mihomo');
     console.log('');
     return { success: true, warning: '部分进程未终止', remaining };
   }
