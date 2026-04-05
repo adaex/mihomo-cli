@@ -7,7 +7,7 @@ const kernel = require('./src/kernel');
 const subscription = require('./src/subscription');
 const processMgr = require('./src/process');
 
-const VERSION = '1.0.0-alpha.1';
+const VERSION = require('./package.json').version;
 
 const UI_URLS = {
   zash: 'https://board.zash.run.place',
