@@ -86,10 +86,7 @@ function printHelp() {
     '  logs [编号] [-n N] [-o]      日志列表（0=当前，1+=归档）\n' +
     '\n' +
     '订阅:\n' +
-    '  subscription add <url> [name]  添加订阅（别名 sub）\n' +
-    '  subscription update [name]     更新订阅（无参更新所有）\n' +
-    '  subscription use <name>        设置默认订阅\n' +
-    '  subscription web [name]        打开订阅页面\n' +
+    '  subscription [add|update|use|web]  订阅管理（别名 sub）\n' +
     '\n' +
     '配置:\n' +
     '  overwrite [on|off]           覆写配置（别名 ow）\n' +
