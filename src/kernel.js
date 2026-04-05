@@ -6,13 +6,11 @@ const { compareVersions } = require('compare-versions');
 const config = require('./config');
 
 const GITHUB_REPO = 'MetaCubeX/mihomo';
-const GEODATA_REPO = 'MetaCubeX/meta-rules-dat';
 
-const GITHUB_DOWNLOAD_MIRROR = 'https://gh-proxy.org/';
-
-function withMirror(url) {
-  if (GITHUB_DOWNLOAD_MIRROR && url.startsWith('https://github.com/')) {
-    return GITHUB_DOWNLOAD_MIRROR + url;
+function withMirror(url, overrideMirror) {
+  const mirror = overrideMirror !== undefined ? overrideMirror : config.getGitHubMirror();
+  if (mirror && url.startsWith('https://github.com/')) {
+    return mirror + url;
   }
   return url;
 }
@@ -22,11 +20,6 @@ const HTTP_CLIENT = axios.create({
   headers: { 'User-Agent': 'mihomo-cli' },
   maxContentLength: 200 * 1024 * 1024,
 });
-
-const GEODATA_FILES = [
-  { name: 'geosite-lite.dat', targetName: 'geosite.dat', url: 'https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite-lite.dat' },
-  { name: 'country-lite.mmdb', targetName: 'Country.mmdb', url: 'https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country-lite.mmdb' },
-];
 
 function getArch() {
   const arch = process.arch;
@@ -88,57 +81,6 @@ async function getLatestRelease(repo) {
   return releases[0];
 }
 
-async function downloadFile(url, destPath, progressCallback) {
-  if (progressCallback) {
-    progressCallback('下载 ' + path.basename(destPath));
-  }
-
-  const response = await HTTP_CLIENT({
-    method: 'get',
-    url: url,
-    responseType: 'stream',
-    timeout: 180000,
-  });
-
-  const writer = fs.createWriteStream(destPath);
-  response.data.pipe(writer);
-
-  await new Promise((resolve, reject) => {
-    writer.on('finish', resolve);
-    writer.on('error', reject);
-  });
-
-  return destPath;
-}
-
-async function downloadGeodata(progressCallback) {
-  config.ensureDirs();
-  const dataDir = config.DIRS.data;
-
-  const results = [];
-  for (const file of GEODATA_FILES) {
-    const destPath = path.join(dataDir, file.name);
-    const targetPath = file.targetName ? path.join(dataDir, file.targetName) : destPath;
-    try {
-      await downloadFile(file.url, destPath, progressCallback);
-
-      if (file.targetName && destPath !== targetPath) {
-        if (fs.existsSync(targetPath)) {
-          fs.unlinkSync(targetPath);
-        }
-        fs.renameSync(destPath, targetPath);
-        results.push({ name: file.targetName, success: true });
-      } else {
-        results.push({ name: file.name, success: true });
-      }
-    } catch (e) {
-      results.push({ name: file.name, success: false, error: e.message });
-    }
-  }
-
-  return results;
-}
-
 async function checkUpdate() {
   const currentVersion = config.getKernelVersion();
   const latest = await getLatestRelease(GITHUB_REPO);
@@ -190,7 +132,7 @@ function findBinaryInDir(dir) {
   return null;
 }
 
-async function downloadKernel(progressCallback) {
+async function downloadKernel(progressCallback, mirror) {
   config.ensureDirs();
 
   const latest = await getLatestRelease(GITHUB_REPO);
@@ -208,7 +150,7 @@ async function downloadKernel(progressCallback) {
     throw new Error('未找到匹配的内核文件\n  平台: ' + platform + ', 架构: ' + arch + hint);
   }
 
-  const downloadUrl = withMirror(asset.browser_download_url);
+  const downloadUrl = withMirror(asset.browser_download_url, mirror);
   const tempPath = path.join(config.DIRS.core, asset.name);
 
   if (progressCallback) {
@@ -293,5 +235,4 @@ module.exports = {
   findMatchingAsset,
   checkUpdate,
   downloadKernel,
-  downloadGeodata,
 };
