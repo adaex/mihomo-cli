@@ -109,10 +109,17 @@ data/                   # mihomo 运行数据
 
 ### 版本号: 主.次.修订 (语义化版本)
 
+### 检查清单（发布前必须完成）
+
+- [ ] 所有新增功能已在 `README.md` 中说明
+- [ ] 命令列表与实际代码一致
+- [ ] `CHANGELOG.md` 已更新
+
 ### 步骤
 
 1. 更新 `package.json` 中的 `version`
 2. 在 `CHANGELOG.md` 顶部添加新版本记录
-3. 提交: `git add package.json CHANGELOG.md && git commit -m "chore: 发布 vX.Y.Z"`
-4. 发布: `npm publish --otp=<6位验证码>`
-5. 推送: `git push`
+3. **检查并更新 `README.md`**（新增功能、命令变更、示例）
+4. 提交: `git add package.json CHANGELOG.md README.md && git commit -m "chore: 发布 vX.Y.Z"`
+5. 发布: `npm publish --otp=<6位验证码>`
+6. 推送: `git push`
