@@ -829,7 +829,6 @@ async function cmdReset(args) {
 
 function printOverwriteList() {
   const info = overwrite.listOverwriteFiles();
-  console.log('');
   console.log('状态: ' + (info.enabled ? '已启用' : '已禁用'));
   console.log('目录: ' + info.dir);
   console.log('');
@@ -875,6 +874,7 @@ function cmdOverwrite(args) {
   }
 
   // 无参数、list、ls 都显示文件列表
+  console.log('');
   printOverwriteList();
 }
 
