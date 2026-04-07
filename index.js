@@ -154,7 +154,7 @@ function printHelp() {
       '                       更新 mihomo-cli (npm install -g)\n' +
       '  ' +
       colors.bold('reset') +
-      ' [--kernel|--overwrites|--full]  重置: --kernel 删内核, --overwrites 删覆写, --full 含内核全部\n' +
+      ' [目标...] [--full]   重置: 留空保留设置/内核/覆写, 指定目标删对应项, --full 删全部\n' +
       '  ' +
       colors.bold('help') +
       ', -h                     显示帮助\n' +
@@ -757,93 +757,156 @@ async function confirmPrompt(question) {
   return answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes';
 }
 
+const RESET_TARGETS = [
+  {
+    id: 'subs',
+    aliases: ['sub', 'subs', 'subscription', 'subscriptions'],
+    label: '订阅',
+    paths: () => [config.DIRS.subscriptions],
+    needsStop: true,
+  },
+  {
+    id: 'logs',
+    aliases: ['log', 'logs'],
+    label: '日志',
+    paths: () => [config.DIRS.logs],
+    needsStop: false,
+  },
+  {
+    id: 'data',
+    aliases: ['data'],
+    label: '运行数据',
+    paths: () => [config.DIRS.data],
+    needsStop: true,
+  },
+  {
+    id: 'runtime',
+    aliases: ['runtime'],
+    label: '运行时',
+    paths: () => [config.DIRS.runtime],
+    needsStop: true,
+  },
+  {
+    id: 'settings',
+    aliases: ['setting', 'settings', 'config'],
+    label: '设置',
+    paths: () => [config.PATHS.settingsFile],
+    needsStop: false,
+  },
+  {
+    id: 'kernel',
+    aliases: ['kernel', 'core'],
+    label: '内核',
+    paths: () => [config.DIRS.core],
+    needsStop: false,
+    onAfter: () => config.clearKernelVersionCache(),
+    checkEmpty: () => !config.hasKernel(),
+    emptyMsg: '内核未安装，无需删除',
+    warnIfRunning: true,
+  },
+  {
+    id: 'overwrites',
+    aliases: ['overwrite', 'overwrites', 'ow'],
+    label: '覆写',
+    paths: () => [config.DIRS.overwrites],
+    needsStop: false,
+  },
+];
+
+function resolveResetTargets(names) {
+  const matched = [];
+  const unmatched = [];
+  for (const name of names) {
+    const t = RESET_TARGETS.find(t => t.aliases.includes(name.toLowerCase()));
+    if (t) {
+      if (!matched.find(m => m.id === t.id)) matched.push(t);
+    } else {
+      unmatched.push(name);
+    }
+  }
+  return { matched, unmatched };
+}
+
 async function cmdReset(args) {
-  const fullReset = args && (args.includes('--full') || args.includes('-f'));
-  const kernelOnly = args && args.includes('--kernel');
-  const overwritesOnly = args && args.includes('--overwrites');
-  const skipConfirm = args && (args.includes('--yes') || args.includes('-y'));
+  const flags = (args || []).filter(a => a.startsWith('-'));
+  const names = (args || []).slice(1).filter(a => !a.startsWith('-'));
+  const fullReset = flags.includes('--full') || flags.includes('-f');
+  const skipConfirm = flags.includes('--yes') || flags.includes('-y');
 
-  if (!fullReset && !kernelOnly && !overwritesOnly && args && args.slice(1).some(a => !a.startsWith('-'))) {
-    console.error('错误: 未知的 reset 选项');
-    console.log('');
-    console.log('用法:');
-    console.log('  mihomo reset               # 重置配置（保留内核和覆写）');
-    console.log('  mihomo reset --kernel      # 只删除内核');
-    console.log('  mihomo reset --overwrites  # 只删除覆写文件');
-    console.log('  mihomo reset --full        # 完整重置（含内核，不含覆写）');
-    console.log('  加 --yes / -y              # 跳过确认');
-    process.exit(1);
+  let targets;
+
+  if (fullReset) {
+    targets = RESET_TARGETS;
+  } else if (names.length > 0) {
+    const { matched, unmatched } = resolveResetTargets(names);
+    if (unmatched.length > 0) {
+      console.error('错误: 未知的重置目标: ' + unmatched.join(', '));
+      console.log('');
+      console.log('可用目标: ' + RESET_TARGETS.map(t => t.aliases[0]).join(', '));
+      console.log('');
+      console.log('示例:');
+      console.log('  mihomo reset sub log      # 删除订阅和日志');
+      console.log('  mihomo reset kernel       # 只删内核');
+      console.log('  mihomo reset --full       # 删除全部');
+      console.log('  mihomo reset              # 删除全部（保留设置、内核、覆写）');
+      process.exit(1);
+    }
+    targets = matched;
+  } else {
+    targets = RESET_TARGETS.filter(t => !['settings', 'kernel', 'overwrites'].includes(t.id));
   }
 
-  if (overwritesOnly) {
-    const owInfo = overwrite.listOverwriteFile();
-    if (owInfo.files.length === 0) {
-      console.log('覆写目录为空，无需删除');
-      return;
+  for (const t of targets) {
+    if (t.checkEmpty && t.checkEmpty()) {
+      if (targets.length === 1) {
+        console.log(t.emptyMsg);
+        return;
+      }
     }
-
-    console.log('将删除覆写目录: ' + owInfo.dir);
-    console.log('包含 ' + owInfo.files.length + ' 个文件: ' + owInfo.files.map(f => f.name).join(', '));
-
-    if (!skipConfirm && !(await confirmPrompt('确认删除覆写文件?'))) {
-      console.log('已取消');
-      return;
-    }
-
-    config.rmrf(config.DIRS.overwrites);
-    config.ensureDirs();
-    console.log(colors.green('已删除覆写文件'));
-    return;
   }
 
-  if (kernelOnly) {
-    if (!config.hasKernel()) {
-      console.log('内核未安装，无需删除');
-      return;
-    }
+  const needsStop = targets.some(t => t.needsStop);
+  const warnRunning = targets.some(t => t.warnIfRunning);
 
-    const kernelVersion = config.getKernelVersion();
-    console.log('将删除内核: ' + config.PATHS.mihomoBinary + (kernelVersion ? ' (' + kernelVersion + ')' : ''));
+  const pids = needsStop || warnRunning ? processManager.getAllMihomoPids() : [];
 
-    const pids = processManager.getAllMihomoPids();
-    if (pids.length > 0) {
-      console.log(colors.yellow('警告: mihomo 正在运行 (PID ' + pids.join(', ') + ')，删除内核后将无法重新启动'));
-    }
-
-    if (!skipConfirm && !(await confirmPrompt('确认删除内核?'))) {
-      console.log('已取消');
-      return;
-    }
-
-    config.resetUserData({ kernelOnly: true });
-    config.clearKernelVersionCache();
-    console.log(colors.green('已删除内核'));
-    return;
-  }
-
-  const pids = processManager.getAllMihomoPids();
-  if (pids.length > 0) {
+  if (needsStop && pids.length > 0) {
     console.log('停止 ' + pids.length + ' 个进程...');
     processManager.cleanupAll(true);
     for (let i = 0; i < processManager.PROCESS_WAIT_ATTEMPTS; i++) {
       if (processManager.getAllMihomoPids().length === 0) break;
       await new Promise(r => setTimeout(r, processManager.PROCESS_WAIT_INTERVAL));
     }
+  } else if (warnRunning && pids.length > 0) {
+    console.log(colors.yellow('警告: mihomo 正在运行 (PID ' + pids.join(', ') + ')，删除内核后将无法重新启动'));
   }
 
-  if (fullReset) {
-    console.log('将删除: 订阅、日志、设置、运行数据、内核（保留覆写）');
-  } else {
-    console.log('将删除: 订阅、日志、设置、运行数据（保留内核和覆写）');
-  }
+  console.log('将删除: ' + targets.map(t => t.label).join('、'));
 
-  if (!skipConfirm && !(await confirmPrompt('确认重置?'))) {
+  if (!skipConfirm && !(await confirmPrompt('确认?'))) {
     console.log('已取消');
     return;
   }
 
-  config.resetUserData({ keepKernel: !fullReset });
-  console.log(colors.green('已重置'));
+  for (const t of targets) {
+    for (const p of t.paths()) {
+      if (config.fsExistsSync(p)) {
+        try {
+          config.rmrf(p);
+        } catch (e) {
+          console.warn('  警告: 无法删除 ' + p + ': ' + e.message);
+        }
+      }
+    }
+    if (t.onAfter) t.onAfter();
+  }
+
+  config.ensureDirs();
+  if (targets.some(t => t.id === 'settings')) {
+    config.invalidateSettingsCache();
+  }
+
+  console.log(colors.green('已重置: ' + targets.map(t => t.label).join('、')));
 }
 
 function printOverwriteList() {

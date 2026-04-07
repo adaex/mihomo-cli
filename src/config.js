@@ -466,5 +466,9 @@ module.exports = {
   hasConfig,
   getConfigInfo,
   resetUserData,
+  invalidateSettingsCache: () => {
+    settingsCache = null;
+  },
+  fsExistsSync: p => fs.existsSync(p),
   rmrf,
 };
