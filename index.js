@@ -437,25 +437,18 @@ async function cmdKernel(args) {
   const mirrorInfo = utils.parseMirrorArg(args);
   const effectiveMirror = mirrorInfo.mirror;
 
-  console.log('检查内核更新...');
-
   if (effectiveMirror) {
-    let mirrorDesc = '';
-    if (mirrorInfo.isOverride) {
-      mirrorDesc = mirrorInfo.type === 'all' ? ' (API和下载均使用镜像)' : ' (下载时使用镜像)';
-    }
+    let mirrorDesc = mirrorInfo.type === 'all' ? ' (API和下载均使用镜像)' : ' (下载时使用镜像)';
     console.log('镜像: ' + effectiveMirror + mirrorDesc);
-  } else {
-    console.log('当前使用直连模式');
   }
 
+  console.log('\n提示: 如果下载速度过慢或直连失败，可使用 --mirror 参数通过镜像下载');
   console.log('\n用法:');
   console.log('  mihomo kernel                    # 直连');
   console.log('  mihomo kernel --mirror           # 下载使用默认镜像 (v6.gh-proxy.org)');
   console.log('  mihomo kernel --mirror hk.gh-proxy.org  # 下载使用指定镜像');
   console.log('  mihomo kernel --mirror-all       # API请求和下载都使用默认镜像');
   console.log('  mihomo kernel --mirror-all hk.gh-proxy.org  # API和下载都使用指定镜像');
-  console.log('\n提示: 如果下载速度过慢或直连失败，可使用 --mirror 参数通过镜像下载');
 
   console.log('\n可用镜像:');
   config.AVAILABLE_MIRRORS.forEach(m => {
@@ -465,8 +458,9 @@ async function cmdKernel(args) {
   });
   console.log('');
 
+  console.log('检查内核更新...');
+
   try {
-    // 仅当镜像类型为all时，API请求使用镜像
     const apiMirror = mirrorInfo.type === 'all' ? effectiveMirror : null;
     const info = await kernel.checkUpdate(apiMirror);
     console.log('当前: ' + info.current);
@@ -474,31 +468,25 @@ async function cmdKernel(args) {
 
     if (!info.needsUpdate) {
       console.log('已是最新版本');
-      return;
+    } else {
+      console.log('\n正在下载...');
+      const result = await kernel.downloadKernel(
+        msg => {
+          console.log(msg);
+        },
+        mirrorInfo.mirror,
+        info.release,
+      );
+      console.log('\n已更新到 ' + result.version);
     }
-
-    console.log('\n正在下载...');
-    const result = await kernel.downloadKernel(
-      msg => {
-        console.log(msg);
-      },
-      mirrorInfo.mirror,
-      info.release,
-    );
-    console.log('已更新到 ' + result.version);
   } catch (e) {
-    console.error('更新失败: ' + e.message);
-    // 展示GitHub API返回的原始错误信息
+    console.error('\n更新失败: ' + e.message);
     if (e.response && e.response.data) {
       if (e.response.data.message) {
         console.error('原因: ' + e.response.data.message);
       }
       if (e.response.data.documentation_url) {
         console.error('文档: ' + e.response.data.documentation_url);
-      }
-      // 针对限流错误额外提供建议
-      if (e.response.data.message && e.response.data.message.includes('API rate limit exceeded')) {
-        console.error('建议: 可尝试使用 --mirror 参数通过镜像下载，或稍后再试');
       }
     }
     process.exit(1);

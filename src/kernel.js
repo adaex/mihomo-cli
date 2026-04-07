@@ -10,20 +10,17 @@ const { compareVersions } = require('compare-versions');
 const config = require('./config');
 const utils = require('./utils');
 
-// 常量定义
 const GITHUB_REPO = 'MetaCubeX/mihomo';
 const KERNEL_HTTP_TIMEOUT = 120000;
 const KERNEL_MAX_CONTENT_LENGTH = 200 * 1024 * 1024;
 const KERNEL_DOWNLOAD_TIMEOUT = 180000;
 
-// GitHub API 专用 HTTP 客户端（仅用于获取版本信息，不用于下载文件）
 const HTTP_CLIENT = utils.createHttpClient({
   timeout: KERNEL_HTTP_TIMEOUT,
   maxContentLength: KERNEL_MAX_CONTENT_LENGTH,
 });
 
-function withMirror(url, overrideMirror) {
-  const mirror = overrideMirror !== undefined ? overrideMirror : config.getGitHubMirror();
+function withMirror(url, mirror) {
   if (mirror && (url.startsWith('https://github.com/') || url.startsWith('https://api.github.com/'))) {
     return mirror + url;
   }
@@ -65,8 +62,8 @@ function findMatchingAsset(assets, platform, arch) {
   return matchingAssets[0];
 }
 
-async function getLatestRelease(repo, overrideMirror) {
-  const url = withMirror('https://api.github.com/repos/' + repo + '/releases', overrideMirror);
+async function getLatestRelease(repo, mirror) {
+  const url = withMirror('https://api.github.com/repos/' + repo + '/releases', mirror);
   const response = await HTTP_CLIENT.get(url);
 
   const releases = response.data;
@@ -90,9 +87,9 @@ async function getLatestRelease(repo, overrideMirror) {
   return releases[0];
 }
 
-async function checkUpdate(overrideMirror) {
+async function checkUpdate(mirror) {
   const currentVersion = config.getKernelVersion();
-  const latest = await getLatestRelease(GITHUB_REPO, overrideMirror);
+  const latest = await getLatestRelease(GITHUB_REPO, mirror);
   const latestVersion = latest.tag_name;
 
   let needsUpdate = false;
@@ -147,7 +144,7 @@ async function downloadKernel(progressCallback, mirror, releaseInfo) {
 
   const latest = releaseInfo || (await getLatestRelease(GITHUB_REPO, mirror));
   const arch = getArch();
-  const platform = 'darwin';
+  const platform = process.platform;
 
   const asset = findMatchingAsset(latest.assets, platform, arch);
 
@@ -248,10 +245,6 @@ async function downloadKernel(progressCallback, mirror, releaseInfo) {
 }
 
 module.exports = {
-  GITHUB_REPO,
-  KERNEL_HTTP_TIMEOUT,
-  KERNEL_MAX_CONTENT_LENGTH,
-  KERNEL_DOWNLOAD_TIMEOUT,
   checkUpdate,
   downloadKernel,
 };

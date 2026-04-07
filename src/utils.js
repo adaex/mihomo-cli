@@ -181,14 +181,7 @@ function parseMirrorArg(args) {
     return { mirror: normalizeMirrorUrl(nextArg), isOverride: true, type: 'download' };
   }
 
-  for (let i = 1; i < args.length; i++) {
-    const arg = args[i];
-    if (!arg.startsWith('-')) {
-      return { mirror: normalizeMirrorUrl(arg), isOverride: true };
-    }
-  }
-
-  return { mirror: null, isOverride: false };
+  return { mirror: null, isOverride: false, type: 'download' };
 }
 
 module.exports = {
