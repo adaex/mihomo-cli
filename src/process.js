@@ -16,6 +16,7 @@ const PROCESS_WAIT_INTERVAL = 100; // ms
 const STARTUP_WAIT_MS = 800; // ms
 const SUDO_TIMEOUT_MS = 60000; // ms
 const TUN_MODE_POST_WAIT_MS = 500; // ms
+const BATCH_KILL_THRESHOLD = 3;
 
 // 日志清理常量
 const DEFAULT_LOG_RETENTION_DAYS = 7;
@@ -187,7 +188,7 @@ function cleanupAll(forceSudo) {
       failedPids = pids;
     }
   } else {
-    if (pids.length > 3) {
+    if (pids.length > BATCH_KILL_THRESHOLD) {
       killAllMihomo(false);
       killedCount = pids.length;
     } else {
