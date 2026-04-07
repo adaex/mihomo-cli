@@ -1,6 +1,8 @@
 const axios = require('axios');
 const config = require('./config');
+const utils = require('./utils');
 
+const { colors } = utils;
 const DEFAULT_UPDATE_INTERVAL_HOURS = 12;
 
 const HTTP_CLIENT = axios.create({
@@ -170,9 +172,9 @@ async function autoUpdateStaleSubscription() {
   results.forEach(r => {
     if (r.success) {
       updatedCount++;
-      console.log('✓ ' + r.name + ': 已更新 (' + formatProxySummary(r) + ')');
+      console.log(colors.green('✓') + ' ' + r.name + ': ' + colors.green('已更新') + ' (' + formatProxySummary(r) + ')');
     } else {
-      console.log('✗ ' + r.name + ': 失败 (' + r.error.split('\n')[0] + ')');
+      console.log(colors.red('✗') + ' ' + r.name + ': ' + colors.red('失败') + ' (' + r.error.split('\n')[0] + ')');
     }
   });
 

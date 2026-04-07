@@ -11,6 +11,7 @@ const overwrite = require('./src/overwrite');
 const utils = require('./src/utils');
 
 const VERSION = require('./package.json').version;
+const { colors } = utils;
 
 const UI_URLS = {
   zash: 'https://board.zash.run.place',
@@ -49,20 +50,20 @@ process.on('unhandledRejection', reason => {
 });
 
 function printShortHelp() {
-  console.log('\nmihomo-cli v' + VERSION + '  (mihomo help 查看完整帮助)\n');
+  console.log('\n' + colors.cyan(colors.bold('mihomo-cli v' + VERSION)) + '  (mihomo help 查看完整帮助)\n');
   console.log(
     '常用命令:\n' +
-      '  start [tun|mixed]    启动/切换代理\n' +
-      '  ui [zash|dash|yacd]  打开 Web UI\n' +
-      '  ow [on|off]          覆写配置\n' +
-      '  sub [use|update]     订阅管理\n',
+      '  ' + colors.bold('start') + ' [tun|mixed]    启动/切换代理\n' +
+      '  ' + colors.bold('ui') + ' [zash|dash|yacd]  打开 Web UI\n' +
+      '  ' + colors.bold('ow') + ' [on|off]          覆写配置\n' +
+      '  ' + colors.bold('sub') + ' [use|update]     订阅管理\n',
   );
 }
 
 function printHelp() {
   console.log(
-    '\nmihomo-cli v' +
-      VERSION +
+    '\n' +
+      colors.cyan(colors.bold('mihomo-cli v' + VERSION)) +
       '\n' +
       '\n' +
       '命令别名: mihomo, mmc, mh\n' +
@@ -70,47 +71,55 @@ function printHelp() {
       '用法:\n' +
       '  mihomo <命令> [选项]\n' +
       '\n' +
-      '控制:\n' +
-      '  start [tun|mixed]            启动/切换代理 (默认 mixed)\n' +
-      '  stop                         停止代理\n' +
-      '  status                       查看状态\n' +
+      colors.cyan('控制:') +
       '\n' +
-      '界面:\n' +
-      '  ui [zash|dash|yacd]          打开 Web UI (默认 zash)\n' +
-      '  log [-o]                     实时日志（-o 打开文件）\n' +
-      '  logs [编号] [-n N] [-o]      日志列表（0=当前，1+=归档）\n' +
+      '  ' + colors.bold('start') + ' [tun|mixed]            启动/切换代理 (默认 mixed)\n' +
+      '  ' + colors.bold('stop') + '                         停止代理\n' +
+      '  ' + colors.bold('status') + '                       查看状态\n' +
       '\n' +
-      '订阅:\n' +
-      '  subscription                 列出所有订阅（别名 sub）\n' +
-      '  subscription add <url> [name]  添加订阅\n' +
-      '  subscription update [name]   更新订阅（无参更新所有）\n' +
-      '  subscription use <name>      切换默认订阅\n' +
-      '  subscription web [name]      打开订阅页面\n' +
+      colors.cyan('界面:') +
       '\n' +
-      '配置:\n' +
-      '  overwrite                   查看覆写状态（别名 ow）\n' +
-      '  overwrite on|off            启用/禁用覆写配置\n' +
-      '  directory                   显示数据目录位置（别名 dir）\n' +
-      '  directory open [target]     打开目录: root|subs|logs|overwrites|...\n' +
+      '  ' + colors.bold('ui') + ' [zash|dash|yacd]          打开 Web UI (默认 zash)\n' +
+      '  ' + colors.bold('log') + ' [-o]                     实时日志（-o 打开文件）\n' +
+      '  ' + colors.bold('logs') + ' [编号] [-n N] [-o]      日志列表（0=当前，1+=归档）\n' +
       '\n' +
-      '系统:\n' +
-      '  kernel [镜像|--no-mirror]    更新内核\n' +
-      '  update                       更新 mihomo-cli (npm install -g)\n' +
-      '  reset [--full]               重置用户数据 (--full 同时删除内核)\n' +
-      '  help, -h                     显示帮助\n' +
-      '  version, -v                  显示版本\n' +
+      colors.cyan('订阅:') +
       '\n' +
-      '示例:\n' +
+      '  ' + colors.bold('subscription') + '                 列出所有订阅（别名 sub）\n' +
+      '  ' + colors.bold('subscription') + ' add <url> [name]  添加订阅\n' +
+      '  ' + colors.bold('subscription') + ' update [name]   更新订阅（无参更新所有）\n' +
+      '  ' + colors.bold('subscription') + ' use <name>      切换默认订阅\n' +
+      '  ' + colors.bold('subscription') + ' web [name]      打开订阅页面\n' +
+      '\n' +
+      colors.cyan('配置:') +
+      '\n' +
+      '  ' + colors.bold('overwrite') + '                   查看覆写状态（别名 ow）\n' +
+      '  ' + colors.bold('overwrite') + ' on|off            启用/禁用覆写配置\n' +
+      '  ' + colors.bold('directory') + '                   显示数据目录位置（别名 dir）\n' +
+      '  ' + colors.bold('directory') + ' open [target]     打开目录: root|subs|logs|overwrites|...\n' +
+      '\n' +
+      colors.cyan('系统:') +
+      '\n' +
+      '  ' + colors.bold('kernel') + ' [镜像|--no-mirror]    更新内核\n' +
+      '  ' + colors.bold('update') + '                       更新 mihomo-cli (npm install -g)\n' +
+      '  ' + colors.bold('reset') + ' [--full]               重置用户数据 (--full 同时删除内核)\n' +
+      '  ' + colors.bold('help') + ', -h                     显示帮助\n' +
+      '  ' + colors.bold('version') + ', -v                  显示版本\n' +
+      '\n' +
+      colors.cyan('示例:') +
+      '\n' +
       '  mihomo start              # 启动/重启 Mixed 模式\n' +
       '  mihomo start tun          # 切换到 TUN 透明代理模式\n' +
       '  mihomo sub add <url>      # 添加订阅 (sub 是 subscription 别名)\n' +
       '  mihomo ui                 # 打开 Web UI\n' +
       '\n' +
-      '模式说明:\n' +
+      colors.cyan('模式说明:') +
+      '\n' +
       '  mixed  HTTP + SOCKS5 混合端口 (默认)\n' +
       '  tun    透明代理，全局自动路由，需要 sudo\n' +
       '\n' +
-      '数据目录:\n' +
+      colors.cyan('数据目录:') +
+      '\n' +
       '  环境变量 MIHOMO_CLI_DIR 可自定义位置\n' +
       '  默认: ' +
       config.USER_DATA_DIR +
@@ -120,9 +129,9 @@ function printHelp() {
 
 function printVersion() {
   const kv = config.getKernelVersion() || '未安装';
-  console.log('mihomo-cli v' + VERSION);
-  console.log('内核: ' + kv);
-  console.log('数据目录: ' + config.USER_DATA_DIR);
+  console.log(colors.cyan(colors.bold('mihomo-cli v' + VERSION)));
+  console.log(colors.gray('内核: ') + kv);
+  console.log(colors.gray('数据目录: ') + config.USER_DATA_DIR);
 }
 
 function printStatus() {
@@ -135,46 +144,47 @@ function printStatus() {
   console.log('');
   let modeLabel = '';
   if (info && status.running) {
-    modeLabel = info.tun ? ' (TUN)' : ' (Mixed)';
+    modeLabel = colors.cyan(info.tun ? ' (TUN)' : ' (Mixed)');
   }
-  console.log('状态: ' + (status.running ? '运行中' : '已停止') + modeLabel);
-  console.log('内核: ' + (status.kernelVersion || '未安装'));
+  const statusText = status.running ? colors.green('运行中') : colors.yellow('已停止');
+  console.log(colors.gray('状态: ') + statusText + modeLabel);
+  console.log(colors.gray('内核: ') + (status.kernelVersion || '未安装'));
 
   if (status.pid) {
-    console.log('PID:  ' + status.pid);
+    console.log(colors.gray('PID:  ') + status.pid);
     if (status.processInfo) {
-      console.log('内存: ' + status.processInfo.memory);
+      console.log(colors.gray('内存: ') + status.processInfo.memory);
     }
   }
 
   if (info) {
     if (info.mixedPort) {
-      console.log('端口: ' + info.mixedPort);
+      console.log(colors.gray('端口: ') + info.mixedPort);
     } else {
       let ports = [];
       if (info.httpPort) ports.push('HTTP:' + info.httpPort);
       if (info.socksPort) ports.push('SOCKS:' + info.socksPort);
-      console.log('端口: ' + (ports.length > 0 ? ports.join(', ') : '未知'));
+      console.log(colors.gray('端口: ') + (ports.length > 0 ? ports.join(', ') : '未知'));
     }
   }
 
   if (activeSub) {
-    let subLine = '订阅: ' + activeSub.name;
+    let subLine = colors.gray('订阅: ') + activeSub.name;
     if (info) {
       subLine += ' (' + subscription.formatProxySummary(info) + ')';
     }
     console.log(subLine);
   } else {
-    console.log('订阅: 未配置');
+    console.log(colors.gray('订阅: ') + '未配置');
   }
 
   if (owEnabled && owFiles.length > 0) {
     const names = owFiles.map(f => f.name).join(', ');
-    console.log('覆写: 已启用 (' + names + ')');
+    console.log(colors.gray('覆写: ') + colors.green('已启用') + ' (' + names + ')');
   } else if (owEnabled) {
-    console.log('覆写: 已启用 (无文件)');
+    console.log(colors.gray('覆写: ') + colors.green('已启用') + ' (无文件)');
   } else {
-    console.log('覆写: 已禁用');
+    console.log(colors.gray('覆写: ') + colors.yellow('已禁用'));
   }
   console.log('');
 }
@@ -296,32 +306,32 @@ async function cmdStart(args) {
   const stopResult = processMgr.stop(true);
 
   if (stopResult.remaining && stopResult.remaining.length > 0) {
-    console.error('部分进程未终止: ' + stopResult.remaining.join(', '));
+    console.error(colors.red('部分进程未终止:') + ' ' + stopResult.remaining.join(', '));
     console.error('请手动运行: sudo pkill -9 mihomo');
     process.exit(1);
   }
 
   if (hasProcess) {
-    console.log('已停止\n');
+    console.log(colors.green('已停止') + '\n');
   }
 
   let cfgInfo;
   try {
     cfgInfo = subscription.prepareConfigForStart(targetMode, sub.name);
   } catch (e) {
-    console.error('配置错误: ' + e.message);
+    console.error(colors.red('配置错误:') + ' ' + e.message);
     process.exit(1);
   }
 
   const modeLabel = targetMode === 'tun' ? 'TUN' : 'Mixed';
-  console.log([modeLabel, sub.name, subscription.formatProxySummary(cfgInfo)].join(' · '));
+  console.log([colors.cyan(modeLabel), sub.name, subscription.formatProxySummary(cfgInfo)].join(' · '));
 
   try {
     const result = await processMgr.start(targetMode);
-    console.log('已启动 (PID ' + result.pid + ')');
+    console.log(colors.green('已启动') + ' (PID ' + result.pid + ')');
     printStatus();
   } catch (e) {
-    console.error('启动失败: ' + e.message.split('\n')[0]);
+    console.error(colors.red('启动失败:') + ' ' + e.message.split('\n')[0]);
     process.exit(1);
   }
 }
@@ -329,7 +339,7 @@ async function cmdStart(args) {
 async function cmdStop() {
   const pids = processMgr.getAllMihomoPids();
   if (pids.length === 0) {
-    console.log('未在运行');
+    console.log(colors.yellow('未在运行'));
     return;
   }
 
@@ -337,11 +347,11 @@ async function cmdStop() {
   const result = processMgr.stop(true);
 
   if (result.remaining && result.remaining.length > 0) {
-    console.error('部分进程未终止: ' + result.remaining.join(', '));
+    console.error(colors.red('部分进程未终止:') + ' ' + result.remaining.join(', '));
     console.error('请手动运行: sudo pkill -9 mihomo');
     process.exit(1);
   }
-  console.log('已停止');
+  console.log(colors.green('已停止'));
 }
 
 function cmdUI(args) {
@@ -575,16 +585,16 @@ async function printSubscriptionList() {
     console.log('');
     return;
   }
-  console.log('订阅列表:');
+  console.log(colors.cyan('订阅列表:'));
   subs.forEach((s, i) => {
     const time = utils.formatDate(s.updated_at);
-    const defaultMark = i === 0 ? ' [默认]' : '';
+    const defaultMark = i === 0 ? colors.green(' [默认]') : '';
     const interval = s.update_interval || subscription.DEFAULT_UPDATE_INTERVAL_HOURS;
     console.log('  ' + (i + 1) + '. ' + s.name + defaultMark);
-    console.log('    更新: ' + time + ' (间隔: ' + interval + 'h)');
+    console.log('    ' + colors.gray('更新:') + ' ' + time + ' (间隔: ' + interval + 'h)');
 
     if (s.username) {
-      console.log('    用户: ' + s.username);
+      console.log('    ' + colors.gray('用户:') + ' ' + s.username);
     }
     if (s.download !== undefined || s.total !== undefined) {
       const used = (s.upload || 0) + (s.download || 0);
@@ -595,13 +605,13 @@ async function printSubscriptionList() {
         const percent = Math.min((used / s.total) * 100, 100);
         percentStr = ' (' + percent.toFixed(1) + '%)';
       }
-      console.log('    流量: ' + usedStr + ' / ' + totalStr + percentStr);
+      console.log('    ' + colors.gray('流量:') + ' ' + usedStr + ' / ' + totalStr + percentStr);
     }
     if (s.expire !== undefined) {
-      console.log('    到期: ' + utils.formatTimestamp(s.expire));
+      console.log('    ' + colors.gray('到期:') + ' ' + utils.formatTimestamp(s.expire));
     }
     if (s.web_page_url) {
-      console.log('    页面: ' + s.web_page_url);
+      console.log('    ' + colors.gray('页面:') + ' ' + s.web_page_url);
     }
   });
   console.log('');
@@ -659,9 +669,9 @@ async function cmdSubscription(args) {
       results.forEach(r => {
         if (r.success) {
           ok++;
-          console.log('✓ ' + r.name + ': 已更新 (' + subscription.formatProxySummary(r) + ')');
+          console.log(colors.green('✓') + ' ' + r.name + ': ' + colors.green('已更新') + ' (' + subscription.formatProxySummary(r) + ')');
         } else {
-          console.log('✗ ' + r.name + ': 失败 (' + r.error.split('\n')[0] + ')');
+          console.log(colors.red('✗') + ' ' + r.name + ': ' + colors.red('失败') + ' (' + r.error.split('\n')[0] + ')');
         }
       });
       if (ok === 0) process.exit(1);
@@ -851,8 +861,9 @@ async function cmdReset(args) {
 
 function printOverwriteList() {
   const info = overwrite.listOverwriteFile();
-  console.log('状态: ' + (info.enabled ? '已启用' : '已禁用'));
-  console.log('目录: ' + info.dir);
+  const statusText = info.enabled ? colors.green('已启用') : colors.yellow('已禁用');
+  console.log(colors.gray('状态:') + ' ' + statusText);
+  console.log(colors.gray('目录:') + ' ' + info.dir);
   console.log('');
   if (info.files.length === 0) {
     console.log('暂无覆写文件');
@@ -860,13 +871,13 @@ function printOverwriteList() {
     console.log('用法示例: 创建文件 ' + path.join(info.dir, '01-custom.yaml'));
     console.log('');
   } else {
-    console.log('覆写文件 (' + info.files.length + ' 个，按顺序加载):');
+    console.log(colors.cyan('覆写文件') + ' (' + info.files.length + ' 个，按顺序加载):');
     console.log('');
     info.files.forEach((f, i) => {
       const num = i < 10 ? ' ' + i : '' + i;
       console.log('  ' + num + '. ' + f.name);
       if (f.keys.length > 0) {
-        console.log('    字段: ' + f.keys.join(', '));
+        console.log('    ' + colors.gray('字段:') + ' ' + f.keys.join(', '));
       }
     });
     console.log('');

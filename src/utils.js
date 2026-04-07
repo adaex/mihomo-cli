@@ -2,6 +2,22 @@ const { execSync } = require('child_process');
 
 const _sleepBuf = new Int32Array(1);
 
+const NO_COLOR = process.env.NO_COLOR !== undefined || !process.stdout.isTTY;
+
+function colorize(code, str) {
+  if (NO_COLOR) return String(str);
+  return code + String(str) + '\x1b[0m';
+}
+
+const colors = {
+  bold: (s) => colorize('\x1b[1m', s),
+  red: (s) => colorize('\x1b[31m', s),
+  green: (s) => colorize('\x1b[32m', s),
+  yellow: (s) => colorize('\x1b[33m', s),
+  cyan: (s) => colorize('\x1b[36m', s),
+  gray: (s) => colorize('\x1b[90m', s),
+};
+
 function sleepSync(ms) {
   Atomics.wait(_sleepBuf, 0, 0, ms);
 }
@@ -98,4 +114,5 @@ module.exports = {
   getNonFlagArg,
   isProcessRunning,
   isProcessRoot,
+  colors,
 };
