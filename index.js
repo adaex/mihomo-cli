@@ -148,7 +148,7 @@ function printHelp() {
       '\n' +
       '  ' +
       colors.bold('kernel') +
-      ' [镜像|--no-mirror]    更新内核\n' +
+      ' [--mirror [镜像]]         更新内核（默认直连，--mirror 使用 v6）\n' +
       '  ' +
       colors.bold('update') +
       '                       更新 mihomo-cli (npm install -g)\n' +
@@ -435,19 +435,14 @@ function cmdLogs(args) {
 
 async function cmdKernel(args) {
   const mirrorInfo = utils.parseMirrorArg(args);
-  const effectiveMirror = mirrorInfo.isOverride ? mirrorInfo.mirror : config.getGitHubMirror();
-  const isDefault = !mirrorInfo.isOverride && effectiveMirror === config.DEFAULT_GITHUB_MIRROR;
+  const effectiveMirror = mirrorInfo.mirror;
 
   console.log('检查内核更新...');
 
-  if (mirrorInfo.isOverride) {
-    if (effectiveMirror === null) {
-      console.log('镜像: 直连（命令行指定 --no-mirror）');
-    } else {
-      console.log('镜像: ' + effectiveMirror + ' (命令行指定)');
-    }
+  if (effectiveMirror) {
+    console.log('镜像: ' + effectiveMirror + (mirrorInfo.isOverride ? ' (命令行指定)' : ''));
   } else {
-    console.log('镜像: ' + (effectiveMirror || '直连（无镜像）') + (isDefault && effectiveMirror ? ' (默认)' : ''));
+    console.log('镜像: 直连');
   }
 
   console.log('\n可用镜像:');
@@ -458,10 +453,10 @@ async function cmdKernel(args) {
   });
 
   console.log('\n用法:');
-  console.log('  mihomo kernel                    # 使用默认镜像');
-  console.log('  mihomo kernel hk.gh-proxy.org    # 使用指定镜像');
-  console.log('  mihomo kernel --mirror hk.gh-proxy.org');
-  console.log('  mihomo kernel --no-mirror         # 直连，不使用镜像');
+  console.log('  mihomo kernel                    # 直连下载（默认）');
+  console.log('  mihomo kernel --mirror           # 使用默认镜像 (v6.gh-proxy.org)');
+  console.log('  mihomo kernel --mirror hk.gh-proxy.org  # 使用指定镜像');
+  console.log('  mihomo kernel hk.gh-proxy.org    # 同上（简写）');
   console.log('');
 
   try {
