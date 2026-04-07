@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
 
 const config = require('./src/config');
 const kernel = require('./src/kernel');
@@ -844,25 +846,45 @@ async function cmdSubscription(args) {
   process.exit(1);
 }
 
-function cmdUpdate() {
-  console.log('更新 mihomo-cli...');
+async function cmdUpdate() {
+  console.log('当前版本: ' + colors.cyan(VERSION));
+  console.log('');
+  console.log('正在更新 mihomo-cli...');
   console.log('');
 
-  const npm = spawn('npm', ['install', '-g', 'mihomo-cli'], { stdio: 'inherit' });
+  await new Promise((resolve, reject) => {
+    const npm = spawn('npm', ['install', '-g', 'mihomo-cli'], { stdio: 'inherit' });
 
-  npm.on('close', code => {
-    if (code === 0) {
-      console.log('');
-      console.log('更新完成');
+    npm.on('close', code => {
+      if (code === 0) {
+        resolve();
+      } else {
+        process.exit(code);
+      }
+    });
+
+    npm.on('error', e => {
+      console.error('执行失败: ' + e.message);
+      process.exit(1);
+    });
+  });
+
+  // 获取更新后的版本
+  try {
+    const { stdout } = await execAsync('npm list -g mihomo-cli --json --depth=0');
+    const result = JSON.parse(stdout);
+    const newVersion = result.dependencies?.['mihomo-cli']?.version;
+
+    console.log('');
+    if (newVersion) {
+      console.log('更新完成，最新版本: ' + colors.green(newVersion));
     } else {
-      process.exit(code);
+      console.log('更新完成');
     }
-  });
-
-  npm.on('error', e => {
-    console.error('执行失败: ' + e.message);
-    process.exit(1);
-  });
+  } catch {
+    console.log('');
+    console.log('更新完成');
+  }
 }
 
 async function cmdReset(args) {
@@ -1117,7 +1139,7 @@ async function main() {
     case 'upd':
     case 'update':
     case 'upgrade':
-      cmdUpdate();
+      await cmdUpdate();
       break;
     case 'sub':
     case 'subscription':
