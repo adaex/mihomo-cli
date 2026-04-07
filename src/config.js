@@ -396,7 +396,7 @@ function resetUserData(options) {
   if (kernelOnly) {
     itemsToRemove = [DIRS.core];
   } else {
-    itemsToRemove = [PATHS.settingsFile, DIRS.subscriptions, DIRS.overwrites, DIRS.logs, DIRS.data, DIRS.runtime];
+    itemsToRemove = [PATHS.settingsFile, DIRS.subscriptions, DIRS.logs, DIRS.data, DIRS.runtime];
     if (!keepKernel) {
       itemsToRemove.push(DIRS.core);
     }

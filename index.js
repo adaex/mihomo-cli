@@ -154,7 +154,7 @@ function printHelp() {
       '                       更新 mihomo-cli (npm install -g)\n' +
       '  ' +
       colors.bold('reset') +
-      ' [--kernel|--full]          重置: --kernel 只删内核, --full 含内核全部重置\n' +
+      ' [--kernel|--overwrites|--full]  重置: --kernel 删内核, --overwrites 删覆写, --full 含内核全部\n' +
       '  ' +
       colors.bold('help') +
       ', -h                     显示帮助\n' +
@@ -760,17 +760,40 @@ async function confirmPrompt(question) {
 async function cmdReset(args) {
   const fullReset = args && (args.includes('--full') || args.includes('-f'));
   const kernelOnly = args && args.includes('--kernel');
+  const overwritesOnly = args && args.includes('--overwrites');
   const skipConfirm = args && (args.includes('--yes') || args.includes('-y'));
 
-  if (!fullReset && !kernelOnly && args && args.slice(1).some(a => !a.startsWith('-'))) {
+  if (!fullReset && !kernelOnly && !overwritesOnly && args && args.slice(1).some(a => !a.startsWith('-'))) {
     console.error('错误: 未知的 reset 选项');
     console.log('');
     console.log('用法:');
-    console.log('  mihomo reset              # 重置配置（保留内核）');
-    console.log('  mihomo reset --kernel     # 只删除内核');
-    console.log('  mihomo reset --full       # 完整重置（含内核）');
-    console.log('  加 --yes / -y             # 跳过确认');
+    console.log('  mihomo reset               # 重置配置（保留内核和覆写）');
+    console.log('  mihomo reset --kernel      # 只删除内核');
+    console.log('  mihomo reset --overwrites  # 只删除覆写文件');
+    console.log('  mihomo reset --full        # 完整重置（含内核，不含覆写）');
+    console.log('  加 --yes / -y              # 跳过确认');
     process.exit(1);
+  }
+
+  if (overwritesOnly) {
+    const owInfo = overwrite.listOverwriteFile();
+    if (owInfo.files.length === 0) {
+      console.log('覆写目录为空，无需删除');
+      return;
+    }
+
+    console.log('将删除覆写目录: ' + owInfo.dir);
+    console.log('包含 ' + owInfo.files.length + ' 个文件: ' + owInfo.files.map(f => f.name).join(', '));
+
+    if (!skipConfirm && !(await confirmPrompt('确认删除覆写文件?'))) {
+      console.log('已取消');
+      return;
+    }
+
+    config.rmrf(config.DIRS.overwrites);
+    config.ensureDirs();
+    console.log(colors.green('已删除覆写文件'));
+    return;
   }
 
   if (kernelOnly) {
@@ -809,9 +832,9 @@ async function cmdReset(args) {
   }
 
   if (fullReset) {
-    console.log('将删除: 订阅、覆写、日志、设置、运行数据、内核');
+    console.log('将删除: 订阅、日志、设置、运行数据、内核（保留覆写）');
   } else {
-    console.log('将删除: 订阅、覆写、日志、设置、运行数据（保留内核）');
+    console.log('将删除: 订阅、日志、设置、运行数据（保留内核和覆写）');
   }
 
   if (!skipConfirm && !(await confirmPrompt('确认重置?'))) {
