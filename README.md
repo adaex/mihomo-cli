@@ -39,14 +39,14 @@ npm link
 ### 1. 下载内核
 
 ```bash
-# 使用默认镜像
+# 默认直连下载
 mihomo kernel
 
-# 或指定镜像
-mihomo kernel hk.gh-proxy.org
+# 国内网络使用镜像加速
+mihomo kernel --mirror
 
-# 或直连（不使用镜像）
-mihomo kernel --no-mirror
+# 或指定镜像
+mihomo kernel --mirror hk.gh-proxy.org
 ```
 
 ### 2. 添加订阅
@@ -109,16 +109,16 @@ mihomo ui yacd     # YACD
 
 ### 其他命令
 
-| 命令                                | 说明                                                    |
-| ----------------------------------- | ------------------------------------------------------- |
-| `mihomo kernel [镜像\|--no-mirror]` | 更新内核                                                |
-| `mihomo update`                     | 更新 mihomo-cli (npm install -g)                        |
-| `mihomo ui [zash\|dash\|yacd]`      | 打开 Web UI                                             |
-| `mihomo dir`                        | 显示数据目录位置                                        |
-| `mihomo dir open [target]`          | 打开指定目录（`root`, `subs`, `logs`, `overwrites` 等） |
-| `mihomo reset [--full]`             | 重置用户数据 (--full 同时删除内核)                      |
-| `mihomo version`                    | 显示版本信息                                            |
-| `mihomo help`                       | 显示帮助信息                                            |
+| 命令                              | 说明                                                                |
+| --------------------------------- | ------------------------------------------------------------------- |
+| `mihomo kernel [--mirror [镜像]]` | 更新内核（默认直连，`--mirror` 使用镜像）                           |
+| `mihomo update`                   | 更新 mihomo-cli (npm install -g)                                    |
+| `mihomo ui [zash\|dash\|yacd]`    | 打开 Web UI                                                         |
+| `mihomo dir`                      | 显示数据目录位置                                                    |
+| `mihomo dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `overwrites` 等）             |
+| `mihomo reset [目标...] [--full]` | 重置用户数据（可用目标：`subs`, `logs`, `kernel`, `overwrites` 等） |
+| `mihomo version`                  | 显示版本信息                                                        |
+| `mihomo help`                     | 显示帮助信息                                                        |
 
 ### 命令别名
 
@@ -148,19 +148,29 @@ mihomo ui yacd     # YACD
 国内网络可使用镜像加速 GitHub 下载：
 
 ```bash
-# 使用指定镜像
-mihomo kernel hk.gh-proxy.org
+# 默认直连（不使用镜像）
+mihomo kernel
 
-# 可用镜像
-v6.gh-proxy.org      # (默认)
-gh-proxy.org
-hk.gh-proxy.org
-cdn.gh-proxy.org
-edgeone.gh-proxy.org
+# 使用默认镜像 (v6.gh-proxy.org)
+mihomo kernel --mirror
 
-# 直连不使用镜像
-mihomo kernel --no-mirror
+# 指定镜像
+mihomo kernel --mirror hk.gh-proxy.org
+
+# API 请求和下载都使用镜像（解决 API 访问受限问题）
+mihomo kernel --mirror-all
+mihomo kernel --mirror-all hk.gh-proxy.org
 ```
+
+**可用镜像：**
+
+| 镜像                   | 说明     |
+| ---------------------- | -------- |
+| `v6.gh-proxy.org`      | 默认镜像 |
+| `gh-proxy.org`         | 官方     |
+| `hk.gh-proxy.org`      | 香港     |
+| `cdn.gh-proxy.org`     | CDN      |
+| `edgeone.gh-proxy.org` | EdgeOne  |
 
 ## 订阅自动更新
 
