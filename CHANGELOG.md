@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.5] - 2026-04-07
+
+### 新增功能
+
+- **update 命令**：新增 `mihomo update` 命令，执行 `npm install -g mihomo-cli` 快速更新 CLI 版本
+  - 支持别名：`update`、`upd`、`upgrade`
+
+---
+
 ## [1.2.4] - 2026-04-07
 
 ### 修复

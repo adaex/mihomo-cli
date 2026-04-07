@@ -95,6 +95,7 @@ function printHelp() {
       '\n' +
       '系统:\n' +
       '  kernel [镜像|--no-mirror]    更新内核\n' +
+      '  update                       更新 mihomo-cli (npm install -g)\n' +
       '  reset [--full]               重置用户数据 (--full 同时删除内核)\n' +
       '  help, -h                     显示帮助\n' +
       '  version, -v                  显示版本\n' +
@@ -786,6 +787,27 @@ async function cmdSubscription(args) {
   process.exit(1);
 }
 
+function cmdUpdate() {
+  console.log('更新 mihomo-cli...');
+  console.log('');
+
+  const npm = spawn('npm', ['install', '-g', 'mihomo-cli'], { stdio: 'inherit' });
+
+  npm.on('close', code => {
+    if (code === 0) {
+      console.log('');
+      console.log('更新完成');
+    } else {
+      process.exit(code);
+    }
+  });
+
+  npm.on('error', e => {
+    console.error('执行失败: ' + e.message);
+    process.exit(1);
+  });
+}
+
 async function cmdReset(args) {
   const fullReset = args && (args.includes('--full') || args.includes('-f'));
   const skipConfirm = args && (args.includes('--yes') || args.includes('-y'));
@@ -1033,6 +1055,11 @@ async function main() {
       break;
     case 'kernel':
       await cmdKernel(args);
+      break;
+    case 'upd':
+    case 'update':
+    case 'upgrade':
+      cmdUpdate();
       break;
     case 'sub':
     case 'subscription':
