@@ -45,9 +45,17 @@ This file provides guidance to Claude Code when working with this repository.
 
 函数/变量使用**全称单数**:
 
-- `findSubscriptionFuzzy` (不用 `findSubsFuzzy`)
-- `cmdSubscription` (不用 `cmdSub`)
-- `DIRECTORY_TARGETS` (不用 `DIR_TARGETS`)
+| 推荐 | 不推荐 |
+|------|--------|
+| `findSubscriptionFuzzy` | `findSubsFuzzy` |
+| `cmdSubscription` | `cmdSub` |
+| `readSubscriptionCache` | `readSubsCache` |
+| `processManager` | `processMgr` |
+| `configInfo` | `cfgInfo` |
+| `overwriteEnabled` | `owEnabled` |
+| `settingsCache` | `_settingsCache` |
+
+常量全大写下划线：`DIRECTORY_TARGETS`, `DIRS`, `PATHS`
 
 ### `dir open` 目标（精确匹配）
 
@@ -55,11 +63,28 @@ This file provides guidance to Claude Code when working with this repository.
 
 ---
 
+## Import 风格
+
+分组顺序：内置模块 → 第三方模块 → 本地模块，组间空一行：
+
+```js
+// 内置模块
+const fs = require('fs');
+const path = require('path');
+
+// 第三方模块
+const yaml = require('js-yaml');
+
+// 本地模块
+const config = require('./config');
+```
+
 ## 开发命令
 
 ```bash
 node index.js          # 运行
 node index.js help     # 帮助
+npm run format         # 格式化代码
 ```
 
 无测试框架、无 lint。
