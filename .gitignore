@@ -34,3 +34,6 @@ coverage/
 *.tmp
 *.temp
 .cache/
+
+# Claude Code
+.claude/
