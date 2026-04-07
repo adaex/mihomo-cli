@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.2.3] - 2026-04-07
+
+### 优化
+
+- **简短帮助**：大幅精简，只列出最常用命令，增加 `mihomo help` 提示
+- **性能**：
+  - settings 读取增加内存缓存，减少重复 JSON 解析
+  - 内核版本增加缓存，避免重复执行 `mihomo -v`
+  - `sleepSync()` 改用 `Atomics.wait` 而非 `execSync('sleep')`，减少子进程开销
+
+### 重构
+
+- 精简模块导出接口，移除不必要的内部函数导出
+- 新增 `formatProxySummary()` 复用函数（消除 3 处重复代码）
+- `pickSingleSubscription()` 移除多余参数
+- 统一代码风格：数组/条件表达式换行风格、`cmdUi` → `cmdUI` 命名一致性
+
+### 文档
+
+- README 修复：GitHub 链接、重复段落、`profile-update-interval` 格式
+
+---
+
 ## [1.2.2] - 2026-04-05
 
 ### 优化

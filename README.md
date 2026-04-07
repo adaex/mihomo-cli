@@ -163,7 +163,7 @@ mihomo kernel --no-mirror
 
 ## 订阅自动更新
 
-- 默认更新间隔：12 小时（或订阅服务端指rofile-update-interval`）
+- 默认更新间隔：12 小时（或订阅服务端指定的 `profile-update-interval`）
 - 触发时机：`start` 命令、`sub list` 命令
 - 更新失败时继续使用本地缓存，不影响使用
 
@@ -260,8 +260,6 @@ sudo pkill -9 mihomo
 - URL 中的 token 等敏感信息会自动脱敏
 
 ### 端口被占用
-
-默认端口（取决于订阅配置）：
 
 默认端口（取决于订阅配置）：
 
