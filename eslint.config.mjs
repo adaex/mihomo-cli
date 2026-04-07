@@ -1,22 +1,13 @@
-// @ts-check
-
 import js from '@eslint/js';
 import globals from 'globals';
 
 export default [
+  js.configs.recommended,
   {
-    name: 'mihomo-cli/base',
-    ...js.configs.recommended,
-  },
-  {
-    name: 'mihomo-cli/node',
-    files: ['**/*.{js,mjs,cjs}'],
+    files: ['**/*.js'],
     languageOptions: {
-      ecmaVersion: 'latest',
       sourceType: 'commonjs',
-      globals: {
-        ...globals.node,
-      },
+      globals: globals.node,
     },
     rules: {
       'no-console': 'off',
@@ -32,6 +23,8 @@ export default [
       'preserve-caught-error': 'off',
       'no-useless-assignment': 'off',
     },
+  },
+  {
     ignores: ['node_modules/', '.claude/', '.husky/', 'eslint.config.mjs'],
   },
 ];
