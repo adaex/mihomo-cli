@@ -322,6 +322,19 @@ async function start(mode) {
   if (mode === undefined) mode = 'mixed';
   const isTunMode = mode === 'tun';
 
+  config.ensureDirs();
+  rotateAndCleanupLogs();
+
+  const binary = config.PATHS.mihomoBinary;
+  if (!fs.existsSync(binary)) {
+    throw new Error('未找到 mihomo 内核，请先下载内核');
+  }
+
+  const configFile = config.PATHS.configFile;
+  if (!fs.existsSync(configFile)) {
+    throw new Error('未找到配置文件，请先添加订阅并启动');
+  }
+
   const staleState = checkStaleState();
 
   if (isTunMode) {
@@ -351,27 +364,15 @@ async function startMixedMode(staleState) {
     return { success: true, pid, alreadyRunning: true };
   }
 
-  config.ensureDirs();
-  rotateAndCleanupLogs();
-
-  const binary = config.PATHS.mihomoBinary;
-  if (!fs.existsSync(binary)) {
-    throw new Error('未找到 mihomo 内核，请先下载内核');
-  }
-
   const configFile = config.PATHS.configFile;
   const logFile = config.PATHS.logFile;
-
-  if (!fs.existsSync(configFile)) {
-    throw new Error('未找到配置文件，请先添加订阅并启动');
-  }
 
   const args = ['-d', config.DIRS.data, '-f', configFile];
 
   const out = fs.openSync(logFile, 'a');
   const err = fs.openSync(logFile, 'a');
 
-  const child = spawn(binary, args, {
+  const child = spawn(config.PATHS.mihomoBinary, args, {
     detached: true,
     stdio: ['ignore', out, err],
     cwd: config.PATHS.root,
@@ -407,20 +408,6 @@ async function startMixedMode(staleState) {
 }
 
 async function startTunMode(staleState) {
-  config.ensureDirs();
-  rotateAndCleanupLogs();
-
-  const binary = config.PATHS.mihomoBinary;
-  if (!fs.existsSync(binary)) {
-    throw new Error('未找到 mihomo 内核，请先下载内核');
-  }
-
-  const configFile = config.PATHS.configFile;
-
-  if (!fs.existsSync(configFile)) {
-    throw new Error('未找到配置文件，请先添加订阅并启动');
-  }
-
   const launchScript = createTunLaunchScript();
 
   if (staleState.needsCleanup) {
