@@ -202,7 +202,7 @@ function printStatus() {
   if (info && status.running) {
     modeLabel = colors.cyan(info.tun ? ' (TUN)' : ' (Mixed)');
   }
-  const statusText = status.running ? colors.green('运行中') : colors.yellow('已停止');
+  const statusText = status.running ? colors.green('● 运行中') : colors.yellow('○ 已停止');
   console.log(colors.gray('状态: ') + statusText + modeLabel);
   console.log(colors.gray('内核: ') + (status.kernelVersion || '未安装'));
 
@@ -280,7 +280,7 @@ async function cmdStart(args) {
   handleStopResult(processManager.stop(true));
 
   if (hasProcess) {
-    console.log(colors.green('已停止') + '\n');
+    console.log(colors.green('已停止进程') + '\n');
   }
 
   let configInfo;
@@ -313,7 +313,7 @@ async function cmdStop() {
 
   console.log('停止 ' + pids.length + ' 个进程...');
   handleStopResult(processManager.stop(true));
-  console.log(colors.green('已停止'));
+  console.log(colors.green('已停止进程'));
 }
 
 function cmdUI(args) {
