@@ -197,7 +197,7 @@ function loadOverwriteFiles() {
         });
       }
     } catch (e) {
-      // 忽略解析错误的文件
+      console.warn('警告: 覆写文件 "' + file + '" 解析失败: ' + e.message);
     }
   }
 

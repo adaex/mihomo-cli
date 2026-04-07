@@ -579,6 +579,12 @@ function listLogs() {
   return result;
 }
 
+function isPathUnderDir(filePath, baseDir) {
+  const resolvedPath = path.resolve(filePath);
+  const resolvedBase = path.resolve(baseDir);
+  return resolvedPath === resolvedBase || resolvedPath.startsWith(resolvedBase + path.sep);
+}
+
 function getLogPathByName(name) {
   const logsDir = config.DIRS.logs;
 
@@ -592,16 +598,19 @@ function getLogPathByName(name) {
   }
 
   const filePath = path.join(logsDir, targetName);
-  if (fs.existsSync(filePath)) {
+  if (fs.existsSync(filePath) && isPathUnderDir(filePath, logsDir)) {
     return filePath;
   }
 
-  // 尝试模糊匹配
+  // 尝试模糊匹配（readdirSync 返回的文件名已是安全的，但为了一致性仍校验）
   if (fs.existsSync(logsDir)) {
     const files = fs.readdirSync(logsDir);
     for (const file of files) {
       if (file.includes(name)) {
-        return path.join(logsDir, file);
+        const candidatePath = path.join(logsDir, file);
+        if (isPathUnderDir(candidatePath, logsDir)) {
+          return candidatePath;
+        }
       }
     }
   }
