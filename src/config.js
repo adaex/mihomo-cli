@@ -34,8 +34,6 @@ const DIRS = {
 
 const PATHS = {
   root: DIRS.root,
-  data: DIRS.data,
-  userDataDir: USER_DATA_DIR,
   mihomoBinary: path.join(DIRS.core, 'mihomo'),
   settingsFile: path.join(USER_DATA_DIR, 'settings.json'),
   subscriptionsCacheFile: path.join(DIRS.subscriptions, 'cache.json'),

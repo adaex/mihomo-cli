@@ -237,9 +237,6 @@ async function downloadKernel(progressCallback, mirror) {
 }
 
 module.exports = {
-  getArch,
-  getLatestRelease,
-  findMatchingAsset,
   checkUpdate,
   downloadKernel,
 };

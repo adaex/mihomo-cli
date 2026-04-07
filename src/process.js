@@ -233,7 +233,7 @@ function createTunLaunchScript() {
   const configFile = config.PATHS.configFile;
   const logFile = config.PATHS.logFile;
   const pidFile = config.PATHS.pidFile;
-  const dataDir = config.PATHS.data;
+  const dataDir = config.DIRS.data;
 
   const scriptContent =
     '#!/bin/bash\n' +
@@ -378,7 +378,7 @@ async function startMixedMode(staleState) {
     throw new Error('未找到配置文件，请先添加订阅并启动');
   }
 
-  const args = ['-d', config.PATHS.data, '-f', configFile];
+  const args = ['-d', config.DIRS.data, '-f', configFile];
 
   const out = fs.openSync(logFile, 'a');
   const err = fs.openSync(logFile, 'a');
@@ -634,33 +634,6 @@ function getLogPathByName(name) {
   }
 
   return null;
-}
-
-function readLog(lines) {
-  if (lines === undefined) lines = 100;
-  if (!fs.existsSync(config.PATHS.logFile)) {
-    return '(暂无日志)';
-  }
-
-  try {
-    const content = fs.readFileSync(config.PATHS.logFile, 'utf8');
-    const allLines = content.split('\n');
-    return allLines.slice(-lines).join('\n');
-  } catch (e) {
-    return '(读取日志失败: ' + e.message + ')';
-  }
-}
-
-function clearLog() {
-  if (fs.existsSync(config.PATHS.logFile)) {
-    try {
-      fs.writeFileSync(config.PATHS.logFile, '');
-      return true;
-    } catch (e) {
-      return false;
-    }
-  }
-  return true;
 }
 
 function openUrl(url) {

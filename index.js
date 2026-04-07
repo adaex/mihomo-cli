@@ -207,7 +207,7 @@ function findSubscriptionFuzzy(subs, pattern) {
   return includes;
 }
 
-function pickSingleSubscription(subs, pattern, actionName) {
+function pickSingleSubscription(subs, pattern) {
   if (subs.length === 0) {
     console.error('错误: 未找到匹配 "' + pattern + '" 的订阅');
     process.exit(1);
@@ -695,7 +695,7 @@ async function cmdSubscription(args) {
     }
 
     const matches = findSubscriptionFuzzy(subs, name);
-    const target = pickSingleSubscription(matches, name, '更新');
+    const target = pickSingleSubscription(matches, name);
 
     console.log('更新订阅: ' + target.name);
     try {
@@ -724,7 +724,7 @@ async function cmdSubscription(args) {
     }
 
     const matches = findSubscriptionFuzzy(subs, name);
-    const target = pickSingleSubscription(matches, name, '切换');
+    const target = pickSingleSubscription(matches, name);
 
     // 检查是否已是当前默认订阅
     const currentDefault = getActiveSubscription();
@@ -774,7 +774,7 @@ async function cmdSubscription(args) {
     let target;
     if (name) {
       const matches = findSubscriptionFuzzy(subs, name);
-      target = pickSingleSubscription(matches, name, '打开');
+      target = pickSingleSubscription(matches, name);
     } else {
       target = subs[0];
     }
