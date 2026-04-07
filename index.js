@@ -68,11 +68,11 @@ function printShortHelp() {
       colors.bold('sub') +
       ' [use|update]     订阅管理\n' +
       '  ' +
-      colors.bold('ui') +
-      ' [zash|dash|yacd]  打开 Web UI\n' +
-      '  ' +
       colors.bold('ow') +
-      ' [on|off]          覆写配置\n',
+      ' [on|off]          覆写配置\n' +
+      '  ' +
+      colors.bold('ui') +
+      ' [zash|dash|yacd]  打开 Web UI\n',
   );
 }
 
