@@ -45,15 +45,15 @@ This file provides guidance to Claude Code when working with this repository.
 
 函数/变量使用**全称单数**:
 
-| 推荐 | 不推荐 |
-|------|--------|
-| `findSubscriptionFuzzy` | `findSubsFuzzy` |
-| `cmdSubscription` | `cmdSub` |
-| `readSubscriptionCache` | `readSubsCache` |
-| `processManager` | `processMgr` |
-| `configInfo` | `cfgInfo` |
-| `overwriteEnabled` | `owEnabled` |
-| `settingsCache` | `_settingsCache` |
+| 推荐                    | 不推荐           |
+| ----------------------- | ---------------- |
+| `findSubscriptionFuzzy` | `findSubsFuzzy`  |
+| `cmdSubscription`       | `cmdSub`         |
+| `readSubscriptionCache` | `readSubsCache`  |
+| `processManager`        | `processMgr`     |
+| `configInfo`            | `cfgInfo`        |
+| `overwriteEnabled`      | `owEnabled`      |
+| `settingsCache`         | `_settingsCache` |
 
 常量全大写下划线：`DIRECTORY_TARGETS`, `DIRS`, `PATHS`
 
