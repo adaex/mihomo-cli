@@ -178,18 +178,6 @@ function parseMirrorArg(args) {
   return { mirror: undefined, isOverride: false };
 }
 
-/**
- * 打开目录/文件/URL（从 index.js 移入）
- */
-function openPath(pathOrUrl, label, processManager) {
-  const displayLabel = label || pathOrUrl;
-  console.log('正在打开: ' + displayLabel);
-  const success = processManager ? processManager.openUrl(pathOrUrl) : false;
-  if (!success) {
-    console.log('请手动打开: ' + pathOrUrl);
-  }
-}
-
 module.exports = {
   VERSION,
   sleepSync,
@@ -205,5 +193,4 @@ module.exports = {
   createHttpClient,
   normalizeMirrorUrl,
   parseMirrorArg,
-  openPath,
 };

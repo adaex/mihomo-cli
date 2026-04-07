@@ -2,7 +2,7 @@
 // （无内置模块依赖）
 
 // 第三方模块
-const axios = require('axios');
+// （无第三方模块依赖，axios 通过 utils.createHttpClient 间接使用）
 
 // 本地模块
 const config = require('./config');
@@ -16,11 +16,6 @@ const HTTP_CLIENT = utils.createHttpClient({
   timeout: 60000,
   maxContentLength: 50 * 1024 * 1024,
 });
-
-// 订阅查找常量（从 index.js 移入）
-const MATCH_EXACT = 'exact';
-const MATCH_PREFIX = 'prefix';
-const MATCH_INCLUDES = 'includes';
 
 function parseUserInfo(header) {
   if (!header) return null;
