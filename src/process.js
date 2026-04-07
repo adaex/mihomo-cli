@@ -1,6 +1,9 @@
+// 内置模块
 const fs = require('fs');
 const path = require('path');
 const { spawn, execSync } = require('child_process');
+
+// 本地模块
 const config = require('./config');
 const utils = require('./utils');
 

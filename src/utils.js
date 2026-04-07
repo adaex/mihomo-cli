@@ -1,6 +1,7 @@
+// 内置模块
 const { execSync } = require('child_process');
 
-const _sleepBuf = new Int32Array(1);
+const sleepBuf = new Int32Array(1);
 
 const NO_COLOR = process.env.NO_COLOR !== undefined || !process.stdout.isTTY;
 
@@ -19,7 +20,7 @@ const colors = {
 };
 
 function sleepSync(ms) {
-  Atomics.wait(_sleepBuf, 0, 0, ms);
+  Atomics.wait(sleepBuf, 0, 0, ms);
 }
 
 function formatBytes(bytes) {

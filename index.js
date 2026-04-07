@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 
+// 内置模块
 const path = require('path');
 const { spawn, exec } = require('child_process');
 const { promisify } = require('util');
-const execAsync = promisify(exec);
+const readline = require('readline');
 
+// 本地模块
 const config = require('./src/config');
 const kernel = require('./src/kernel');
 const subscription = require('./src/subscription');
-const processMgr = require('./src/process');
+const processManager = require('./src/process');
 const overwrite = require('./src/overwrite');
 const utils = require('./src/utils');
 
+const execAsync = promisify(exec);
 const VERSION = require('./package.json').version;
 const { colors } = utils;
 
@@ -185,10 +188,10 @@ function printVersion() {
 }
 
 function printStatus() {
-  const status = processMgr.getStatus();
+  const status = processManager.getStatus();
   const info = config.getConfigInfo();
-  const owEnabled = overwrite.isOverwriteEnabled();
-  const owFiles = overwrite.listOverwriteFile().files;
+  const overwriteEnabled = overwrite.isOverwriteEnabled();
+  const overwriteFiles = overwrite.listOverwriteFile().files;
   const activeSub = getActiveSubscription();
 
   console.log('');
@@ -228,10 +231,10 @@ function printStatus() {
     console.log(colors.gray('订阅: ') + '未配置');
   }
 
-  if (owEnabled && owFiles.length > 0) {
-    const names = owFiles.map(f => f.name).join(', ');
+  if (overwriteEnabled && overwriteFiles.length > 0) {
+    const names = overwriteFiles.map(f => f.name).join(', ');
     console.log(colors.gray('覆写: ') + colors.green('已启用') + ' (' + names + ')');
-  } else if (owEnabled) {
+  } else if (overwriteEnabled) {
     console.log(colors.gray('覆写: ') + colors.green('已启用') + ' (无文件)');
   } else {
     console.log(colors.gray('覆写: ') + colors.yellow('已禁用'));
@@ -286,7 +289,7 @@ function pickSingleSubscription(subs, pattern) {
 function openLogFile(logPath, label) {
   const displayLabel = label || logPath;
   console.log('用系统默认程序打开: ' + displayLabel);
-  const success = processMgr.openUrl(logPath);
+  const success = processManager.openUrl(logPath);
   if (!success) {
     console.log('请手动打开: ' + logPath);
   }
@@ -295,7 +298,7 @@ function openLogFile(logPath, label) {
 function openDir(dirPath, label) {
   const displayLabel = label || dirPath;
   console.log('正在打开: ' + displayLabel);
-  const success = processMgr.openUrl(dirPath);
+  const success = processManager.openUrl(dirPath);
   if (!success) {
     console.log('请手动打开: ' + dirPath);
   }
@@ -343,7 +346,7 @@ async function cmdStart(args) {
   await subscription.autoUpdateStaleSubscription();
 
   // 每次 start 都先确保完全干净的状态（停止进程 + 清理运行时文件）
-  const status = processMgr.getStatus();
+  const status = processManager.getStatus();
   const hasProcess = status.running || status.allProcesses.length > 0;
 
   if (hasProcess) {
@@ -352,7 +355,7 @@ async function cmdStart(args) {
   }
 
   // 总是调用 stop（即使没进程也会清理 PID 文件和运行时目录）
-  const stopResult = processMgr.stop(true);
+  const stopResult = processManager.stop(true);
 
   if (stopResult.remaining && stopResult.remaining.length > 0) {
     console.error(colors.red('部分进程未终止:') + ' ' + stopResult.remaining.join(', '));
@@ -364,19 +367,19 @@ async function cmdStart(args) {
     console.log(colors.green('已停止') + '\n');
   }
 
-  let cfgInfo;
+  let configInfo;
   try {
-    cfgInfo = subscription.prepareConfigForStart(targetMode, sub.name);
+    configInfo = subscription.prepareConfigForStart(targetMode, sub.name);
   } catch (e) {
     console.error(colors.red('配置错误:') + ' ' + e.message);
     process.exit(1);
   }
 
   const modeLabel = targetMode === 'tun' ? 'TUN' : 'Mixed';
-  console.log([colors.cyan(modeLabel), sub.name, subscription.formatProxySummary(cfgInfo)].join(' · '));
+  console.log([colors.cyan(modeLabel), sub.name, subscription.formatProxySummary(configInfo)].join(' · '));
 
   try {
-    const result = await processMgr.start(targetMode);
+    const result = await processManager.start(targetMode);
     console.log(colors.green('已启动') + ' (PID ' + result.pid + ')');
     printStatus();
   } catch (e) {
@@ -386,14 +389,14 @@ async function cmdStart(args) {
 }
 
 async function cmdStop() {
-  const pids = processMgr.getAllMihomoPids();
+  const pids = processManager.getAllMihomoPids();
   if (pids.length === 0) {
     console.log(colors.yellow('未在运行'));
     return;
   }
 
   console.log('停止 ' + pids.length + ' 个进程...');
-  const result = processMgr.stop(true);
+  const result = processManager.stop(true);
 
   if (result.remaining && result.remaining.length > 0) {
     console.error(colors.red('部分进程未终止:') + ' ' + result.remaining.join(', '));
@@ -416,14 +419,14 @@ function cmdUI(args) {
   console.log('打开 Web UI: ' + uiName);
   console.log('地址: ' + url);
 
-  const success = processMgr.openUrl(url);
+  const success = processManager.openUrl(url);
   if (!success) {
     console.log('请手动访问上面的地址');
   }
 }
 
 function cmdLog(args) {
-  const logPath = processMgr.getLogPath();
+  const logPath = processManager.getLogPath();
 
   if (utils.hasFlag(args, '-o', '--open')) {
     openLogFile(logPath);
@@ -442,12 +445,12 @@ function cmdLogs(args) {
     let logPath;
 
     if (targetName === 'current' || targetName === '0') {
-      logPath = processMgr.getLogPath();
+      logPath = processManager.getLogPath();
     } else {
       // 纯数字 1+ 表示归档日志的位置（最新=1）
       const parsedIdx = parseInt(targetName);
       if (!isNaN(parsedIdx) && parsedIdx > 0 && String(parsedIdx) === targetName) {
-        const archiveLogs = processMgr.listLogs();
+        const archiveLogs = processManager.listLogs();
         const archive = archiveLogs.archives[parsedIdx - 1];
         if (!archive) {
           console.error('错误: 未找到日志 "' + targetName + '"');
@@ -456,7 +459,7 @@ function cmdLogs(args) {
         }
         logPath = archive.path;
       } else {
-        logPath = processMgr.getLogPathByName(targetName);
+        logPath = processManager.getLogPathByName(targetName);
       }
     }
 
@@ -475,7 +478,7 @@ function cmdLogs(args) {
     return;
   }
 
-  const logs = processMgr.listLogs();
+  const logs = processManager.listLogs();
   const all = [];
 
   if (logs.current) {
@@ -773,9 +776,9 @@ async function cmdSubscription(args) {
     }
 
     // 检查当前运行状态和模式
-    const status = processMgr.getStatus();
-    const cfgInfo = config.getConfigInfo();
-    const currentMode = cfgInfo && cfgInfo.tun ? 'tun' : 'mixed';
+    const status = processManager.getStatus();
+    const configInfo = config.getConfigInfo();
+    const currentMode = configInfo && configInfo.tun ? 'tun' : 'mixed';
 
     const success = config.setDefaultSubscription(target.name);
     if (success) {
@@ -834,7 +837,7 @@ async function cmdSubscription(args) {
     }
 
     console.log('打开订阅页面: ' + webPageUrl);
-    const opened = processMgr.openUrl(webPageUrl);
+    const opened = processManager.openUrl(webPageUrl);
     if (!opened) {
       console.log('请手动访问上面的地址');
     }
@@ -891,12 +894,12 @@ async function cmdReset(args) {
   const fullReset = args && (args.includes('--full') || args.includes('-f'));
   const skipConfirm = args && (args.includes('--yes') || args.includes('-y'));
 
-  const pids = processMgr.getAllMihomoPids();
+  const pids = processManager.getAllMihomoPids();
   if (pids.length > 0) {
     console.log('停止 ' + pids.length + ' 个进程...');
-    processMgr.cleanupAll(true);
+    processManager.cleanupAll(true);
     for (let i = 0; i < 50; i++) {
-      if (processMgr.getAllMihomoPids().length === 0) break;
+      if (processManager.getAllMihomoPids().length === 0) break;
       await new Promise(r => setTimeout(r, 100));
     }
   }
@@ -905,7 +908,6 @@ async function cmdReset(args) {
   console.log(mode);
 
   if (!skipConfirm) {
-    const readline = require('readline');
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
@@ -960,9 +962,9 @@ async function cmdOverwrite(args) {
   const action = args && args[1];
 
   // 检查当前运行状态和模式
-  const status = processMgr.getStatus();
-  const cfgInfo = config.getConfigInfo();
-  const currentMode = cfgInfo && cfgInfo.tun ? 'tun' : 'mixed';
+  const status = processManager.getStatus();
+  const configInfo = config.getConfigInfo();
+  const currentMode = configInfo && configInfo.tun ? 'tun' : 'mixed';
 
   if (action === 'on' || action === 'enable') {
     // 如果已经启用，提示后直接返回

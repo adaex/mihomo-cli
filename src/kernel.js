@@ -1,8 +1,13 @@
-const axios = require('axios');
+// 内置模块
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+
+// 第三方模块
+const axios = require('axios');
 const { compareVersions } = require('compare-versions');
+
+// 本地模块
 const config = require('./config');
 
 const GITHUB_REPO = 'MetaCubeX/mihomo';

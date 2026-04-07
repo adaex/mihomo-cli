@@ -1,6 +1,11 @@
+// 内置模块
 const fs = require('fs');
 const path = require('path');
+
+// 第三方模块
 const yaml = require('js-yaml');
+
+// 本地模块
 const config = require('./config');
 
 /**

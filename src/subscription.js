@@ -1,4 +1,7 @@
+// 第三方模块
 const axios = require('axios');
+
+// 本地模块
 const config = require('./config');
 const utils = require('./utils');
 
@@ -74,7 +77,7 @@ async function downloadSubscription(url, subName) {
     throw new Error('订阅内容为空');
   }
 
-  config.saveSubRawConfig(subName, content);
+  config.saveSubscriptionRawConfig(subName, content);
 
   // 提取 response headers 中的订阅信息
   const headers = response.headers;
@@ -118,7 +121,7 @@ async function downloadSubscription(url, subName) {
 function prepareConfigForStart(mode, subName) {
   if (subName === undefined) subName = 'default';
 
-  const rawContent = config.readSubRawConfig(subName);
+  const rawContent = config.readSubscriptionRawConfig(subName);
   if (!rawContent) {
     throw new Error('未找到订阅配置 "' + subName + '"，请先添加订阅');
   }

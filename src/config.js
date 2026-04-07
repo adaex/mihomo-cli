@@ -1,8 +1,11 @@
+// 内置模块
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const yaml = require('js-yaml');
 const { execSync } = require('child_process');
+
+// 第三方模块
+const yaml = require('js-yaml');
 
 const IS_PKG = typeof process.pkg !== 'undefined';
 
@@ -75,23 +78,23 @@ function maskUrl(url) {
   }
 }
 
-let _settingsCache = null;
+let settingsCache = null;
 
 function readSettings() {
-  if (_settingsCache !== null) return _settingsCache;
+  if (settingsCache !== null) return settingsCache;
   ensureDirs();
   if (fs.existsSync(PATHS.settingsFile)) {
     try {
       const content = fs.readFileSync(PATHS.settingsFile, 'utf8');
-      _settingsCache = JSON.parse(content);
-      return _settingsCache;
+      settingsCache = JSON.parse(content);
+      return settingsCache;
     } catch (e) {
-      _settingsCache = {};
-      return _settingsCache;
+      settingsCache = {};
+      return settingsCache;
     }
   }
-  _settingsCache = {};
-  return _settingsCache;
+  settingsCache = {};
+  return settingsCache;
 }
 
 function writeSettings(settings) {
@@ -103,7 +106,7 @@ function writeSettings(settings) {
     if (settings[key] === undefined) delete merged[key];
   }
   fs.writeFileSync(PATHS.settingsFile, JSON.stringify(merged, null, 2), { mode: 0o600 });
-  _settingsCache = merged;
+  settingsCache = merged;
   return merged;
 }
 
@@ -150,7 +153,7 @@ function setGitHubMirror(mirror) {
 }
 
 // 订阅缓存读写（动态数据：流量、用户名、更新时间等）
-function readSubscriptionsCache() {
+function readSubscriptionCache() {
   ensureDirs();
   if (fs.existsSync(PATHS.subscriptionsCacheFile)) {
     try {
@@ -163,15 +166,15 @@ function readSubscriptionsCache() {
   return {};
 }
 
-function writeSubscriptionsCache(cache) {
+function writeSubscriptionCache(cache) {
   ensureDirs();
   fs.writeFileSync(PATHS.subscriptionsCacheFile, JSON.stringify(cache, null, 2), { mode: 0o600 });
 }
 
 function saveSubscriptionCache(subName, data) {
-  const cache = readSubscriptionsCache();
+  const cache = readSubscriptionCache();
   cache[subName] = { ...cache[subName], ...data };
-  writeSubscriptionsCache(cache);
+  writeSubscriptionCache(cache);
 }
 
 function getSubscriptions() {
@@ -182,7 +185,7 @@ function getSubscriptions() {
 // 获取合并了缓存数据的订阅列表
 function getSubscriptionsWithCache() {
   const subs = getSubscriptions();
-  const cache = readSubscriptionsCache();
+  const cache = readSubscriptionCache();
   return subs.map(s => ({
     ...s,
     ...(cache[s.name] || {}),
@@ -218,18 +221,18 @@ function setDefaultSubscription(name) {
   return true;
 }
 
-function getSubRawConfigPath(subName) {
+function getSubscriptionRawConfigPath(subName) {
   return path.join(DIRS.subscriptions, subName + '.yaml');
 }
 
-function saveSubRawConfig(subName, content) {
+function saveSubscriptionRawConfig(subName, content) {
   ensureDirs();
-  const filePath = getSubRawConfigPath(subName);
+  const filePath = getSubscriptionRawConfigPath(subName);
   fs.writeFileSync(filePath, content, { mode: 0o600 });
 }
 
-function readSubRawConfig(subName) {
-  const filePath = getSubRawConfigPath(subName);
+function readSubscriptionRawConfig(subName) {
+  const filePath = getSubscriptionRawConfigPath(subName);
   if (!fs.existsSync(filePath)) {
     return null;
   }
@@ -240,28 +243,28 @@ function hasKernel() {
   return fs.existsSync(PATHS.mihomoBinary);
 }
 
-let _kernelVersionCache = undefined;
+let kernelVersionCache = undefined;
 
 function getKernelVersion() {
   if (!hasKernel()) {
-    _kernelVersionCache = undefined;
+    kernelVersionCache = undefined;
     return null;
   }
-  if (_kernelVersionCache !== undefined) return _kernelVersionCache;
+  if (kernelVersionCache !== undefined) return kernelVersionCache;
   try {
     const output = execSync('"' + PATHS.mihomoBinary + '" -v 2>&1 || true', {
       encoding: 'utf8',
     }).trim();
     if (output) {
       const match = output.match(/v?[\d]+\.[\d]+\.[\d]+/);
-      _kernelVersionCache = match ? match[0] : output;
-      return _kernelVersionCache;
+      kernelVersionCache = match ? match[0] : output;
+      return kernelVersionCache;
     }
-    _kernelVersionCache = 'unknown';
-    return _kernelVersionCache;
+    kernelVersionCache = 'unknown';
+    return kernelVersionCache;
   } catch (e) {
-    _kernelVersionCache = 'unknown';
-    return _kernelVersionCache;
+    kernelVersionCache = 'unknown';
+    return kernelVersionCache;
   }
 }
 
@@ -401,7 +404,7 @@ function resetUserData(options) {
   }
 
   ensureDirs();
-  _settingsCache = null;
+  settingsCache = null;
   return removedCount;
 }
 
@@ -412,19 +415,19 @@ module.exports = {
   ensureDirs,
   readSettings,
   writeSettings,
-  readSubscriptionsCache,
+  readSubscriptionCache,
   saveSubscriptionCache,
   maskUrl,
   getSubscriptions,
   getSubscriptionsWithCache,
   addSubscription,
   setDefaultSubscription,
-  saveSubRawConfig,
-  readSubRawConfig,
+  saveSubscriptionRawConfig,
+  readSubscriptionRawConfig,
   hasKernel,
   getKernelVersion,
   clearKernelVersionCache: () => {
-    _kernelVersionCache = undefined;
+    kernelVersionCache = undefined;
   },
   getGitHubMirror,
   setGitHubMirror,
