@@ -552,7 +552,7 @@ async function cmdSubscription(args) {
     const url = args[2];
     const name = args[3] || 'default';
 
-    if (!url || !url.startsWith('http')) {
+    if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
       console.error('错误: 请提供有效的订阅 URL');
       process.exit(1);
     }
