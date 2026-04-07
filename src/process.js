@@ -2,11 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, execSync } = require('child_process');
 const config = require('./config');
-
-const _sharedBuf = new Int32Array(new SharedArrayBuffer(4));
-function sleepSync(ms) {
-  Atomics.wait(_sharedBuf, 0, 0, ms);
-}
+const utils = require('./utils');
 
 function clearRuntime() {
   if (fs.existsSync(config.DIRS.runtime)) {
@@ -27,21 +23,9 @@ function getPid() {
   }
 }
 
-function isProcessRunning(pid) {
-  if (!pid) return false;
-  try {
-    const output = execSync('ps -p ' + pid + ' -o pid= 2>/dev/null || true', {
-      encoding: 'utf8',
-    }).trim();
-    return output.length > 0;
-  } catch (e) {
-    return false;
-  }
-}
-
 function isRunning() {
   const pid = getPid();
-  return pid ? isProcessRunning(pid) : false;
+  return pid ? utils.isProcessRunning(pid) : false;
 }
 
 function getAllMihomoPids() {
@@ -61,17 +45,6 @@ function getAllMihomoPids() {
   }
 }
 
-function isProcessRoot(pid) {
-  try {
-    const uidOutput = execSync('ps -p ' + pid + ' -o uid= 2>/dev/null || true', {
-      encoding: 'utf8',
-    }).trim();
-    return uidOutput === '0';
-  } catch (e) {
-    return false;
-  }
-}
-
 function isPidFileOwnedByRoot() {
   if (!fs.existsSync(config.PATHS.pidFile)) {
     return false;
@@ -86,7 +59,7 @@ function isPidFileOwnedByRoot() {
 
 function checkStaleState() {
   const allPids = getAllMihomoPids();
-  const hasRootProcess = allPids.some(p => isProcessRoot(p));
+  const hasRootProcess = allPids.some(p => utils.isProcessRoot(p));
   const hasRootPidFile = isPidFileOwnedByRoot();
 
   return {
@@ -184,7 +157,7 @@ function cleanupAll(forceSudo) {
     return { killed: 0, failed: 0, remaining: [] };
   }
 
-  const hasRootProcess = pids.some(p => isProcessRoot(p));
+  const hasRootProcess = pids.some(p => utils.isProcessRoot(p));
   const hasRootPidFile = isPidFileOwnedByRoot();
   const needsSudo = hasRootProcess;
   const allowSudo = forceSudo || hasRootProcess || hasRootPidFile;
@@ -216,7 +189,7 @@ function cleanupAll(forceSudo) {
 
   for (let i = 0; i < 50; i++) {
     if (getAllMihomoPids().length === 0) break;
-    sleepSync(100);
+    utils.sleepSync(100);
   }
 
   clearPid();
@@ -306,7 +279,7 @@ function getProcessInfo(pid) {
       pid,
       memory: rss ? (rss / 1024).toFixed(1) + ' MB' : '未知',
       cpu: pcpu ? pcpu.toFixed(1) + '%' : '未知',
-      isRoot: isProcessRoot(pid),
+      isRoot: utils.isProcessRoot(pid),
     };
   } catch (e) {
     return { pid, memory: '未知', cpu: '未知', isRoot: false };

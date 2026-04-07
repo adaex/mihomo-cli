@@ -1,6 +1,7 @@
 const axios = require('axios');
 const yaml = require('js-yaml');
 const config = require('./config');
+const utils = require('./utils');
 
 const DEFAULT_UPDATE_INTERVAL_HOURS = 12;
 
@@ -36,35 +37,6 @@ function parseUsernameFromContentDisposition(header) {
   // 可能是 "glados.one/user@example.com" 格式，取最后一部分
   const parts = filename.split('/');
   return parts[parts.length - 1] || null;
-}
-
-function formatBytes(bytes) {
-  if (bytes === undefined || bytes === null) return '未知';
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
-
-function formatTimestamp(ts) {
-  if (!ts) return '未知';
-  try {
-    return new Date(ts * 1000).toLocaleString('zh-CN');
-  } catch {
-    return '未知';
-  }
-}
-
-function formatDate(dateOrIso) {
-  if (!dateOrIso) return '未知';
-  try {
-    const d = dateOrIso instanceof Date ? dateOrIso : new Date(dateOrIso);
-    if (isNaN(d.getTime())) return '未知';
-    return d.toLocaleString('zh-CN');
-  } catch {
-    return '未知';
-  }
 }
 
 function formatProxySummary(info) {
@@ -217,9 +189,6 @@ module.exports = {
   DEFAULT_UPDATE_INTERVAL_HOURS,
   downloadSubscription,
   prepareConfigForStart,
-  formatBytes,
-  formatTimestamp,
-  formatDate,
   formatProxySummary,
   tryUpdateOne,
   autoUpdateStaleSubscriptions,

@@ -8,6 +8,7 @@ const kernel = require('./src/kernel');
 const subscription = require('./src/subscription');
 const processMgr = require('./src/process');
 const overwrite = require('./src/overwrite');
+const utils = require('./src/utils');
 
 const VERSION = require('./package.json').version;
 
@@ -221,32 +222,6 @@ function pickSingleSubscription(subs, pattern) {
   process.exit(1);
 }
 
-function hasFlag(args, short, long) {
-  return args && (args.includes(short) || args.includes(long));
-}
-
-function parseIntArg(args, short, long, defaultValue) {
-  if (!args) return defaultValue;
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === short || args[i] === long) {
-      if (i + 1 < args.length) {
-        const val = parseInt(args[i + 1]);
-        return isNaN(val) ? defaultValue : val;
-      }
-    }
-  }
-  return defaultValue;
-}
-
-function getNonFlagArg(args, startIdx) {
-  if (!args) return null;
-  for (let i = startIdx; i < args.length; i++) {
-    if (!args[i].startsWith('-')) {
-      return args[i];
-    }
-  }
-  return null;
-}
 
 function openLogFile(logPath, label) {
   const displayLabel = label || logPath;
@@ -390,7 +365,7 @@ function cmdUI(args) {
 function cmdLog(args) {
   const logPath = processMgr.getLogPath();
 
-  if (hasFlag(args, '-o', '--open')) {
+  if (utils.hasFlag(args, '-o', '--open')) {
     openLogFile(logPath);
     return;
   }
@@ -399,9 +374,9 @@ function cmdLog(args) {
 }
 
 function cmdLogs(args) {
-  const targetName = getNonFlagArg(args, 1);
-  const lines = parseIntArg(args, '-n', '--lines', 100);
-  const openInViewer = hasFlag(args, '-o', '--open');
+  const targetName = utils.getNonFlagArg(args, 1);
+  const lines = utils.parseIntArg(args, '-n', '--lines', 100);
+  const openInViewer = utils.hasFlag(args, '-o', '--open');
 
   if (targetName) {
     let logPath;
@@ -466,8 +441,8 @@ function cmdLogs(args) {
       archiveCounter++;
       num = archiveCounter < 10 ? ' ' + archiveCounter : '' + archiveCounter;
     }
-    const time = subscription.formatDate(log.mtime);
-    const size = subscription.formatBytes(log.size);
+    const time = utils.formatDate(log.mtime);
+    const size = utils.formatBytes(log.size);
     const name = log.isCurrent ? 'mihomo.log (当前运行中)' : log.name;
 
     console.log(' ' + num + '. ' + name);
@@ -601,7 +576,7 @@ async function printSubscriptionList() {
   }
   console.log('订阅列表:');
   subs.forEach((s, i) => {
-    const time = subscription.formatDate(s.updated_at);
+    const time = utils.formatDate(s.updated_at);
     const defaultMark = i === 0 ? ' [默认]' : '';
     const interval = s.update_interval || subscription.DEFAULT_UPDATE_INTERVAL_HOURS;
     console.log('  ' + (i + 1) + '. ' + s.name + defaultMark);
@@ -612,8 +587,8 @@ async function printSubscriptionList() {
     }
     if (s.download !== undefined || s.total !== undefined) {
       const used = (s.upload || 0) + (s.download || 0);
-      const usedStr = subscription.formatBytes(used);
-      const totalStr = subscription.formatBytes(s.total);
+      const usedStr = utils.formatBytes(used);
+      const totalStr = utils.formatBytes(s.total);
       let percentStr = '';
       if (s.total && s.total > 0) {
         const percent = Math.min((used / s.total) * 100, 100);
@@ -622,7 +597,7 @@ async function printSubscriptionList() {
       console.log('    流量: ' + usedStr + ' / ' + totalStr + percentStr);
     }
     if (s.expire !== undefined) {
-      console.log('    到期: ' + subscription.formatTimestamp(s.expire));
+      console.log('    到期: ' + utils.formatTimestamp(s.expire));
     }
     if (s.web_page_url) {
       console.log('    页面: ' + s.web_page_url);
