@@ -48,22 +48,13 @@ process.on('unhandledRejection', reason => {
 });
 
 function printShortHelp() {
-  console.log('\nmihomo-cli v' + VERSION);
-  console.log('别名: mihomo, mmc, mh\n');
+  console.log('\nmihomo-cli v' + VERSION + '  (mihomo help 查看完整帮助)\n');
   console.log(
-    '命令:\n' +
-      '  start [tun|mixed]        启动/切换代理\n' +
-      '  stop                     停止代理\n' +
-      '  status                   查看状态\n' +
-      '  ui [zash|dash|yacd]      Web 界面\n' +
-      '  log                      实时日志\n' +
-      '  logs                     日志列表\n' +
-      '  subscription             订阅管理（别名 sub）\n' +
-      '  overwrite [on|off]       覆写配置（别名 ow）\n' +
-      '  directory                数据目录（别名 dir）\n' +
-      '  kernel                   更新内核\n' +
-      '  reset                    重置配置\n' +
-      '  version                  版本信息\n',
+    '常用命令:\n' +
+      '  start [tun|mixed]    启动/切换代理\n' +
+      '  ui [zash|dash|yacd]  打开 Web UI\n' +
+      '  ow [on|off]          覆写配置\n' +
+      '  sub [use|update]     订阅管理\n',
   );
 }
 
@@ -641,6 +632,7 @@ async function printSubscriptionList() {
   console.log('切换默认: mihomo sub use <name>');
   console.log('更新订阅: mihomo sub update [name]');
   console.log('打开页面: mihomo sub web [name]');
+  console.log('新增订阅: mihomo sub add <url> [name]');
   console.log('');
 }
 
