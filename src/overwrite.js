@@ -178,7 +178,8 @@ function loadOverwriteFile() {
     return [];
   }
 
-  const files = fs.readdirSync(dir)
+  const files = fs
+    .readdirSync(dir)
     .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
     .sort();
 

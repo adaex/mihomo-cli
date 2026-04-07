@@ -112,7 +112,7 @@ mihomo ui yacd     # YACD
 | 命令                                | 说明                                                    |
 | ----------------------------------- | ------------------------------------------------------- |
 | `mihomo kernel [镜像\|--no-mirror]` | 更新内核                                                |
-| `mihomo update`                      | 更新 mihomo-cli (npm install -g)                       |
+| `mihomo update`                     | 更新 mihomo-cli (npm install -g)                        |
 | `mihomo ui [zash\|dash\|yacd]`      | 打开 Web UI                                             |
 | `mihomo dir`                        | 显示数据目录位置                                        |
 | `mihomo dir open [target]`          | 打开指定目录（`root`, `subs`, `logs`, `overwrites` 等） |

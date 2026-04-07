@@ -53,10 +53,18 @@ function printShortHelp() {
   console.log('\n' + colors.cyan(colors.bold('mihomo-cli v' + VERSION)) + '  (mihomo help 查看完整帮助)\n');
   console.log(
     '常用命令:\n' +
-      '  ' + colors.bold('start') + ' [tun|mixed]    启动/切换代理\n' +
-      '  ' + colors.bold('sub') + ' [use|update]     订阅管理\n' +
-      '  ' + colors.bold('ui') + ' [zash|dash|yacd]  打开 Web UI\n' +
-      '  ' + colors.bold('ow') + ' [on|off]          覆写配置\n',
+      '  ' +
+      colors.bold('start') +
+      ' [tun|mixed]    启动/切换代理\n' +
+      '  ' +
+      colors.bold('sub') +
+      ' [use|update]     订阅管理\n' +
+      '  ' +
+      colors.bold('ui') +
+      ' [zash|dash|yacd]  打开 Web UI\n' +
+      '  ' +
+      colors.bold('ow') +
+      ' [on|off]          覆写配置\n',
   );
 }
 
@@ -73,38 +81,78 @@ function printHelp() {
       '\n' +
       colors.cyan('控制:') +
       '\n' +
-      '  ' + colors.bold('start') + ' [tun|mixed]            启动/切换代理 (默认 mixed)\n' +
-      '  ' + colors.bold('stop') + '                         停止代理\n' +
-      '  ' + colors.bold('status') + '                       查看状态\n' +
+      '  ' +
+      colors.bold('start') +
+      ' [tun|mixed]            启动/切换代理 (默认 mixed)\n' +
+      '  ' +
+      colors.bold('stop') +
+      '                         停止代理\n' +
+      '  ' +
+      colors.bold('status') +
+      '                       查看状态\n' +
       '\n' +
       colors.cyan('界面:') +
       '\n' +
-      '  ' + colors.bold('ui') + ' [zash|dash|yacd]          打开 Web UI (默认 zash)\n' +
-      '  ' + colors.bold('log') + ' [-o]                     实时日志（-o 打开文件）\n' +
-      '  ' + colors.bold('logs') + ' [编号] [-n N] [-o]      日志列表（0=当前，1+=归档）\n' +
+      '  ' +
+      colors.bold('ui') +
+      ' [zash|dash|yacd]          打开 Web UI (默认 zash)\n' +
+      '  ' +
+      colors.bold('log') +
+      ' [-o]                     实时日志（-o 打开文件）\n' +
+      '  ' +
+      colors.bold('logs') +
+      ' [编号] [-n N] [-o]      日志列表（0=当前，1+=归档）\n' +
       '\n' +
       colors.cyan('订阅:') +
       '\n' +
-      '  ' + colors.bold('subscription') + '                 列出所有订阅（别名 sub）\n' +
-      '  ' + colors.bold('subscription') + ' add <url> [name]  添加订阅\n' +
-      '  ' + colors.bold('subscription') + ' update [name]   更新订阅（无参更新所有）\n' +
-      '  ' + colors.bold('subscription') + ' use <name>      切换默认订阅\n' +
-      '  ' + colors.bold('subscription') + ' web [name]      打开订阅页面\n' +
+      '  ' +
+      colors.bold('subscription') +
+      '                 列出所有订阅（别名 sub）\n' +
+      '  ' +
+      colors.bold('subscription') +
+      ' add <url> [name]  添加订阅\n' +
+      '  ' +
+      colors.bold('subscription') +
+      ' update [name]   更新订阅（无参更新所有）\n' +
+      '  ' +
+      colors.bold('subscription') +
+      ' use <name>      切换默认订阅\n' +
+      '  ' +
+      colors.bold('subscription') +
+      ' web [name]      打开订阅页面\n' +
       '\n' +
       colors.cyan('配置:') +
       '\n' +
-      '  ' + colors.bold('overwrite') + '                   查看覆写状态（别名 ow）\n' +
-      '  ' + colors.bold('overwrite') + ' on|off            启用/禁用覆写配置\n' +
-      '  ' + colors.bold('directory') + '                   显示数据目录位置（别名 dir）\n' +
-      '  ' + colors.bold('directory') + ' open [target]     打开目录: root|subs|logs|overwrites|...\n' +
+      '  ' +
+      colors.bold('overwrite') +
+      '                   查看覆写状态（别名 ow）\n' +
+      '  ' +
+      colors.bold('overwrite') +
+      ' on|off            启用/禁用覆写配置\n' +
+      '  ' +
+      colors.bold('directory') +
+      '                   显示数据目录位置（别名 dir）\n' +
+      '  ' +
+      colors.bold('directory') +
+      ' open [target]     打开目录: root|subs|logs|overwrites|...\n' +
       '\n' +
       colors.cyan('系统:') +
       '\n' +
-      '  ' + colors.bold('kernel') + ' [镜像|--no-mirror]    更新内核\n' +
-      '  ' + colors.bold('update') + '                       更新 mihomo-cli (npm install -g)\n' +
-      '  ' + colors.bold('reset') + ' [--full]               重置用户数据 (--full 同时删除内核)\n' +
-      '  ' + colors.bold('help') + ', -h                     显示帮助\n' +
-      '  ' + colors.bold('version') + ', -v                  显示版本\n' +
+      '  ' +
+      colors.bold('kernel') +
+      ' [镜像|--no-mirror]    更新内核\n' +
+      '  ' +
+      colors.bold('update') +
+      '                       更新 mihomo-cli (npm install -g)\n' +
+      '  ' +
+      colors.bold('reset') +
+      ' [--full]               重置用户数据 (--full 同时删除内核)\n' +
+      '  ' +
+      colors.bold('help') +
+      ', -h                     显示帮助\n' +
+      '  ' +
+      colors.bold('version') +
+      ', -v                  显示版本\n' +
       '\n' +
       colors.cyan('示例:') +
       '\n' +
@@ -232,7 +280,6 @@ function pickSingleSubscription(subs, pattern) {
   subs.forEach(s => console.log('  ' + s.name));
   process.exit(1);
 }
-
 
 function openLogFile(logPath, label) {
   const displayLabel = label || logPath;

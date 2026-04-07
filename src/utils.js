@@ -10,12 +10,12 @@ function colorize(code, str) {
 }
 
 const colors = {
-  bold: (s) => colorize('\x1b[1m', s),
-  red: (s) => colorize('\x1b[31m', s),
-  green: (s) => colorize('\x1b[32m', s),
-  yellow: (s) => colorize('\x1b[33m', s),
-  cyan: (s) => colorize('\x1b[36m', s),
-  gray: (s) => colorize('\x1b[90m', s),
+  bold: s => colorize('\x1b[1m', s),
+  red: s => colorize('\x1b[31m', s),
+  green: s => colorize('\x1b[32m', s),
+  yellow: s => colorize('\x1b[33m', s),
+  cyan: s => colorize('\x1b[36m', s),
+  gray: s => colorize('\x1b[90m', s),
 };
 
 function sleepSync(ms) {

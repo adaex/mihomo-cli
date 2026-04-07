@@ -14,14 +14,14 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## 架构
 
-| 模块 | 职责 |
-|------|------|
-| `index.js` | 命令解析、调度 |
-| `src/config.js` | 路径常量、设置读写、配置构建 |
-| `src/subscription.js` | 订阅下载、流量解析、自动更新 |
-| `src/process.js` | 进程启动/停止、PID 管理、日志轮转 |
-| `src/kernel.js` | GitHub Releases 检查、下载 |
-| `src/overwrite.js` | 高级配置合并 |
+| 模块                  | 职责                              |
+| --------------------- | --------------------------------- |
+| `index.js`            | 命令解析、调度                    |
+| `src/config.js`       | 路径常量、设置读写、配置构建      |
+| `src/subscription.js` | 订阅下载、流量解析、自动更新      |
+| `src/process.js`      | 进程启动/停止、PID 管理、日志轮转 |
+| `src/kernel.js`       | GitHub Releases 检查、下载        |
+| `src/overwrite.js`    | 高级配置合并                      |
 
 ---
 
@@ -36,14 +36,15 @@ This file provides guidance to Claude Code when working with this repository.
 
 ### 展示规则
 
-| 场景 | 规则 | 示例 |
-|------|------|------|
-| 帮助文档命令列表 | 全称单数 | `subscription add <url>` |
-| 示例、提示 | `mihomo` + 简写单数 | `mihomo sub add <url>` |
+| 场景             | 规则                | 示例                     |
+| ---------------- | ------------------- | ------------------------ |
+| 帮助文档命令列表 | 全称单数            | `subscription add <url>` |
+| 示例、提示       | `mihomo` + 简写单数 | `mihomo sub add <url>`   |
 
 ### 内部命名
 
 函数/变量使用**全称单数**:
+
 - `findSubscriptionFuzzy` (不用 `findSubsFuzzy`)
 - `cmdSubscription` (不用 `cmdSub`)
 - `DIRECTORY_TARGETS` (不用 `DIR_TARGETS`)
@@ -68,17 +69,20 @@ node index.js help     # 帮助
 ## 关键流程
 
 ### 启动流程 (cmdStart)
+
 1. 检查内核 → 获取默认订阅 → 更新过期订阅 → 停止进程 → 生成配置 → 启动
 
 ### 配置生成
+
 订阅 YAML → 应用 overwrites → 合并 BASE_CONFIG → TUN 模式合并 TUN_CONFIG → 写入运行时配置
 
 ### 覆写配置语法
-| 语法 | 作用 |
-|------|------|
-| `key!` | 强制覆盖整个对象 |
-| `+key` | 数组前置插入 |
-| `key+` | 数组追加 |
+
+| 语法     | 作用                  |
+| -------- | --------------------- |
+| `key!`   | 强制覆盖整个对象      |
+| `+key`   | 数组前置插入          |
+| `key+`   | 数组追加              |
 | `<+key>` | 键名以 `+` 开头时转义 |
 
 ---
