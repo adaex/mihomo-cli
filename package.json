@@ -2,7 +2,6 @@
   "name": "mihomo-cli",
   "version": "1.2.5",
   "description": "A terminal-based mihomo (Clash.Meta) client for macOS",
-  "main": "index.js",
   "bin": {
     "mihomo-cli": "index.js",
     "mihomo": "index.js",
@@ -15,11 +14,7 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "start": "node index.js",
     "format": "prettier --write \"**/*.{js,json,md}\""
-  },
-  "devDependencies": {
-    "prettier": "^3.0.0"
   },
   "keywords": [
     "mihomo",
@@ -30,21 +25,21 @@
     "cli",
     "macos"
   ],
-  "author": "",
+  "author": "Aex",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/adaex/mihomo-cli.git"
+  },
   "engines": {
     "node": ">=18.0.0"
   },
-  "os": [
-    "darwin"
-  ],
-  "cpu": [
-    "x64",
-    "arm64"
-  ],
   "dependencies": {
     "axios": "^1.6.0",
     "compare-versions": "^6.1.0",
     "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.0.0"
   }
 }
