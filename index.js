@@ -154,7 +154,7 @@ function printHelp() {
       '                       更新 mihomo-cli (npm install -g)\n' +
       '  ' +
       colors.bold('reset') +
-      ' [--full]               重置用户数据 (--full 同时删除内核)\n' +
+      ' [--kernel|--full]          重置: --kernel 只删内核, --full 含内核全部重置\n' +
       '  ' +
       colors.bold('help') +
       ', -h                     显示帮助\n' +
@@ -748,7 +748,37 @@ async function cmdUpdate() {
 
 async function cmdReset(args) {
   const fullReset = args && (args.includes('--full') || args.includes('-f'));
+  const kernelOnly = args && args.includes('--kernel');
   const skipConfirm = args && (args.includes('--yes') || args.includes('-y'));
+
+  if (kernelOnly) {
+    if (!config.hasKernel()) {
+      console.log('内核未安装，无需删除');
+      return;
+    }
+
+    const mode = '删除内核';
+    console.log(mode);
+
+    if (!skipConfirm) {
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await new Promise(resolve => {
+        rl.question('确认? (y/N) ', a => {
+          rl.close();
+          resolve(a);
+        });
+      });
+      if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+        console.log('已取消');
+        return;
+      }
+    }
+
+    config.resetUserData({ kernelOnly: true });
+    config.clearKernelVersionCache();
+    console.log('已删除内核');
+    return;
+  }
 
   const pids = processManager.getAllMihomoPids();
   if (pids.length > 0) {

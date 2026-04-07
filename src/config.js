@@ -390,11 +390,16 @@ function rmrf(dir) {
 function resetUserData(options) {
   if (options === undefined) options = {};
   const keepKernel = options.keepKernel !== false;
+  const kernelOnly = options.kernelOnly === true;
 
-  const itemsToRemove = [PATHS.settingsFile, DIRS.subscriptions, DIRS.logs, DIRS.data, DIRS.runtime];
-
-  if (!keepKernel) {
-    itemsToRemove.push(DIRS.core);
+  let itemsToRemove;
+  if (kernelOnly) {
+    itemsToRemove = [DIRS.core];
+  } else {
+    itemsToRemove = [PATHS.settingsFile, DIRS.subscriptions, DIRS.logs, DIRS.data, DIRS.runtime];
+    if (!keepKernel) {
+      itemsToRemove.push(DIRS.core);
+    }
   }
 
   let removedCount = 0;
@@ -409,8 +414,10 @@ function resetUserData(options) {
     }
   }
 
-  ensureDirs();
-  settingsCache = null;
+  if (!kernelOnly) {
+    ensureDirs();
+    settingsCache = null;
+  }
   return removedCount;
 }
 
