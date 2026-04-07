@@ -33,7 +33,7 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-process.on('uncaughtException', (e) => {
+process.on('uncaughtException', e => {
   console.error('\n未捕获的异常: ' + e.message);
   if (e.stack) {
     console.error(e.stack.split('\n').slice(1).join('\n'));
@@ -41,7 +41,7 @@ process.on('uncaughtException', (e) => {
   process.exit(1);
 });
 
-process.on('unhandledRejection', (reason) => {
+process.on('unhandledRejection', reason => {
   const msg = reason instanceof Error ? reason.message : String(reason);
   console.error('\n未处理的 Promise 拒绝: ' + msg);
   process.exit(1);
@@ -50,71 +50,79 @@ process.on('unhandledRejection', (reason) => {
 function printShortHelp() {
   console.log('\nmihomo-cli v' + VERSION);
   console.log('别名: mihomo, mmc, mh\n');
-  console.log('命令:\n' +
-    '  start [tun|mixed]        启动/切换代理\n' +
-    '  stop                     停止代理\n' +
-    '  status                   查看状态\n' +
-    '  ui [zash|dash|yacd]      Web 界面\n' +
-    '  log                      实时日志\n' +
-    '  logs                     日志列表\n' +
-    '  subscription             订阅管理（别名 sub）\n' +
-    '  overwrite [on|off]       覆写配置（别名 ow）\n' +
-    '  directory                数据目录（别名 dir）\n' +
-    '  kernel                   更新内核\n' +
-    '  reset                    重置配置\n' +
-    '  version                  版本信息\n');
+  console.log(
+    '命令:\n' +
+      '  start [tun|mixed]        启动/切换代理\n' +
+      '  stop                     停止代理\n' +
+      '  status                   查看状态\n' +
+      '  ui [zash|dash|yacd]      Web 界面\n' +
+      '  log                      实时日志\n' +
+      '  logs                     日志列表\n' +
+      '  subscription             订阅管理（别名 sub）\n' +
+      '  overwrite [on|off]       覆写配置（别名 ow）\n' +
+      '  directory                数据目录（别名 dir）\n' +
+      '  kernel                   更新内核\n' +
+      '  reset                    重置配置\n' +
+      '  version                  版本信息\n',
+  );
 }
 
 function printHelp() {
-  console.log('\nmihomo-cli v' + VERSION + '\n' +
-    '\n' +
-    '命令别名: mihomo, mmc, mh\n' +
-    '\n' +
-    '用法:\n' +
-    '  mihomo <命令> [选项]\n' +
-    '\n' +
-    '控制:\n' +
-    '  start [tun|mixed]            启动/切换代理 (默认 mixed)\n' +
-    '  stop                         停止代理\n' +
-    '  status                       查看状态\n' +
-    '\n' +
-    '界面:\n' +
-    '  ui [zash|dash|yacd]          打开 Web UI (默认 zash)\n' +
-    '  log [-o]                     实时日志（-o 打开文件）\n' +
-    '  logs [编号] [-n N] [-o]      日志列表（0=当前，1+=归档）\n' +
-    '\n' +
-    '订阅:\n' +
-    '  subscription                列出所有订阅（别名 sub）\n' +
-    '  subscription add <url> [name]  添加订阅\n' +
-    '  subscription update [name]     更新订阅（无参更新所有）\n' +
-    '  subscription use <name>        切换默认订阅\n' +
-    '  subscription web [name]        打开订阅页面\n' +
-    '\n' +
-    '配置:\n' +
-    '  overwrite                   查看覆写状态（别名 ow）\n' +
-    '  overwrite on|off            启用/禁用覆写配置\n' +
-    '  directory                   显示数据目录位置（别名 dir）\n' +
-    '  directory open [target]     打开目录: root|subs|logs|overwrites|...\n' +
-    '\n' +
-    '系统:\n' +
-    '  kernel [镜像|--no-mirror]    更新内核\n' +
-    '  reset [--full]               重置用户数据 (--full 同时删除内核)\n' +
-    '  help, -h                     显示帮助\n' +
-    '  version, -v                  显示版本\n' +
-    '\n' +
-    '示例:\n' +
-    '  mihomo start              # 启动/重启 Mixed 模式\n' +
-    '  mihomo start tun          # 切换到 TUN 透明代理模式\n' +
-    '  mihomo sub add <url>      # 添加订阅 (sub 是 subscription 别名)\n' +
-    '  mihomo ui                 # 打开 Web UI\n' +
-    '\n' +
-    '模式说明:\n' +
-    '  mixed  HTTP + SOCKS5 混合端口 (默认)\n' +
-    '  tun    透明代理，全局自动路由，需要 sudo\n' +
-    '\n' +
-    '数据目录:\n' +
-    '  环境变量 MIHOMO_CLI_DIR 可自定义位置\n' +
-    '  默认: ' + config.USER_DATA_DIR + '\n');
+  console.log(
+    '\nmihomo-cli v' +
+      VERSION +
+      '\n' +
+      '\n' +
+      '命令别名: mihomo, mmc, mh\n' +
+      '\n' +
+      '用法:\n' +
+      '  mihomo <命令> [选项]\n' +
+      '\n' +
+      '控制:\n' +
+      '  start [tun|mixed]            启动/切换代理 (默认 mixed)\n' +
+      '  stop                         停止代理\n' +
+      '  status                       查看状态\n' +
+      '\n' +
+      '界面:\n' +
+      '  ui [zash|dash|yacd]          打开 Web UI (默认 zash)\n' +
+      '  log [-o]                     实时日志（-o 打开文件）\n' +
+      '  logs [编号] [-n N] [-o]      日志列表（0=当前，1+=归档）\n' +
+      '\n' +
+      '订阅:\n' +
+      '  subscription                列出所有订阅（别名 sub）\n' +
+      '  subscription add <url> [name]  添加订阅\n' +
+      '  subscription update [name]     更新订阅（无参更新所有）\n' +
+      '  subscription use <name>        切换默认订阅\n' +
+      '  subscription web [name]        打开订阅页面\n' +
+      '\n' +
+      '配置:\n' +
+      '  overwrite                   查看覆写状态（别名 ow）\n' +
+      '  overwrite on|off            启用/禁用覆写配置\n' +
+      '  directory                   显示数据目录位置（别名 dir）\n' +
+      '  directory open [target]     打开目录: root|subs|logs|overwrites|...\n' +
+      '\n' +
+      '系统:\n' +
+      '  kernel [镜像|--no-mirror]    更新内核\n' +
+      '  reset [--full]               重置用户数据 (--full 同时删除内核)\n' +
+      '  help, -h                     显示帮助\n' +
+      '  version, -v                  显示版本\n' +
+      '\n' +
+      '示例:\n' +
+      '  mihomo start              # 启动/重启 Mixed 模式\n' +
+      '  mihomo start tun          # 切换到 TUN 透明代理模式\n' +
+      '  mihomo sub add <url>      # 添加订阅 (sub 是 subscription 别名)\n' +
+      '  mihomo ui                 # 打开 Web UI\n' +
+      '\n' +
+      '模式说明:\n' +
+      '  mixed  HTTP + SOCKS5 混合端口 (默认)\n' +
+      '  tun    透明代理，全局自动路由，需要 sudo\n' +
+      '\n' +
+      '数据目录:\n' +
+      '  环境变量 MIHOMO_CLI_DIR 可自定义位置\n' +
+      '  默认: ' +
+      config.USER_DATA_DIR +
+      '\n',
+  );
 }
 
 function printVersion() {
@@ -126,7 +134,7 @@ function printVersion() {
 
 function printStatus() {
   const status = processMgr.getStatus();
-  const info = subscription.getConfigInfo();
+  const info = config.getConfigInfo();
   const owEnabled = overwrite.isOverwriteEnabled();
   const owFiles = overwrite.listOverwriteFiles().files;
   const activeSub = getActiveSubscription();
@@ -160,12 +168,7 @@ function printStatus() {
   if (activeSub) {
     let subLine = '订阅: ' + activeSub.name;
     if (info) {
-      let parts = [];
-      if (info.proxyGroups && info.proxyGroups > 0) {
-        parts.push(info.proxyGroups + ' 组');
-      }
-      parts.push(info.proxies + ' 节点');
-      subLine += ' (' + parts.join(', ') + ')';
+      subLine += ' (' + subscription.formatProxySummary(info) + ')';
     }
     console.log(subLine);
   } else {
@@ -291,7 +294,7 @@ function viewLogWithTail(logPath, options) {
   const tail = spawn('tail', tailArgs, { stdio: 'inherit' });
 
   tail.on('close', () => process.exit(0));
-  tail.on('error', (e) => {
+  tail.on('error', e => {
     console.error('无法读取日志: ' + e.message);
     process.exit(1);
   });
@@ -344,10 +347,7 @@ async function cmdStart(args) {
   }
 
   const modeLabel = targetMode === 'tun' ? 'TUN' : 'Mixed';
-  const parts = [];
-  if (cfgInfo.proxyGroups && cfgInfo.proxyGroups > 0) parts.push(cfgInfo.proxyGroups + ' 组');
-  parts.push(cfgInfo.proxies + ' 节点');
-  console.log([modeLabel, sub.name, parts.join(', ')].join(' · '));
+  console.log([modeLabel, sub.name, subscription.formatProxySummary(cfgInfo)].join(' · '));
 
   try {
     const result = await processMgr.start(targetMode);
@@ -395,7 +395,6 @@ function cmdUi(args) {
     console.log('请手动访问上面的地址');
   }
 }
-
 
 function cmdLog(args) {
   const logPath = processMgr.getLogPath();
@@ -455,7 +454,7 @@ function cmdLogs(args) {
   console.log('');
 
   all.forEach((log, idx) => {
-    const num = log.isCurrent ? ' 0' : (idx < 10 ? ' ' + idx : '' + idx);
+    const num = log.isCurrent ? ' 0' : idx < 10 ? ' ' + idx : '' + idx;
     const time = subscription.formatDate(log.mtime);
     const size = subscription.formatBytes(log.size);
     const name = log.isCurrent ? 'mihomo.log (当前运行中)' : log.name;
@@ -542,11 +541,8 @@ async function cmdKernel(args) {
 
   console.log('\n可用镜像:');
   config.AVAILABLE_MIRRORS.forEach(m => {
-    const isCurrent = effectiveMirror && (
-      effectiveMirror.includes('//' + m + '/') ||
-      effectiveMirror.includes('//' + m + ':') ||
-      effectiveMirror.endsWith('//' + m)
-    );
+    const isCurrent =
+      effectiveMirror && (effectiveMirror.includes('//' + m + '/') || effectiveMirror.includes('//' + m + ':') || effectiveMirror.endsWith('//' + m));
     console.log('  ' + m + (isCurrent ? ' (当前)' : ''));
   });
 
@@ -568,9 +564,9 @@ async function cmdKernel(args) {
     }
 
     console.log('\n正在下载...');
-    const result = await kernel.downloadKernel((msg) => {
+    const result = await kernel.downloadKernel(msg => {
       console.log(msg);
-    }, mirrorInfo.mirror);  // 传递镜像参数（undefined = 用配置，null = 禁用）
+    }, mirrorInfo.mirror); // 传递镜像参数（undefined = 用配置，null = 禁用）
     console.log('已更新到 ' + result.version);
   } catch (e) {
     console.error('更新失败: ' + e.message);
@@ -649,10 +645,7 @@ async function cmdSubscription(args) {
     try {
       config.addSubscription(url, name);
       const info = await subscription.downloadSubscription(url, name);
-      const parts = [];
-      if (info.proxyGroups && info.proxyGroups > 0) parts.push(info.proxyGroups + ' 组');
-      parts.push(info.proxies + ' 节点');
-      console.log('已添加 (' + parts.join(', ') + ')');
+      console.log('已添加 (' + subscription.formatProxySummary(info) + ')');
     } catch (e) {
       console.error('添加失败: ' + e.message);
       process.exit(1);
@@ -678,10 +671,7 @@ async function cmdSubscription(args) {
       results.forEach(r => {
         if (r.success) {
           ok++;
-          const parts = [];
-          if (r.proxyGroups && r.proxyGroups > 0) parts.push(r.proxyGroups + ' 组');
-          parts.push(r.proxies + ' 节点');
-          console.log('✓ ' + r.name + ': 已更新 (' + parts.join(', ') + ')');
+          console.log('✓ ' + r.name + ': 已更新 (' + subscription.formatProxySummary(r) + ')');
         } else {
           console.log('✗ ' + r.name + ': 失败 (' + r.error.split('\n')[0] + ')');
         }
@@ -698,10 +688,7 @@ async function cmdSubscription(args) {
     console.log('更新订阅: ' + target.name);
     try {
       const info = await subscription.downloadSubscription(target.url, target.name);
-      const parts = [];
-      if (info.proxyGroups && info.proxyGroups > 0) parts.push(info.proxyGroups + ' 组');
-      parts.push(info.proxies + ' 节点');
-      console.log('已更新 (' + parts.join(', ') + ')');
+      console.log('已更新 (' + subscription.formatProxySummary(info) + ')');
     } catch (e) {
       console.error('更新失败: ' + e.message);
       process.exit(1);
@@ -833,11 +820,11 @@ async function cmdReset(args) {
     const readline = require('readline');
     const rl = readline.createInterface({
       input: process.stdin,
-      output: process.stdout
+      output: process.stdout,
     });
 
     const answer = await new Promise(resolve => {
-      rl.question('确认? (y/N) ', (a) => {
+      rl.question('确认? (y/N) ', a => {
         rl.close();
         resolve(a);
       });
@@ -943,14 +930,14 @@ async function cmdOverwrite(args) {
 
 // 目录目标映射（精确匹配）
 const DIRECTORY_TARGETS = {
-  'root': { path: null, label: '根目录' },
-  'subs': { path: config.DIRS.subscriptions, label: '订阅目录' },
-  'logs': { path: config.DIRS.logs, label: '日志目录' },
-  'data': { path: config.DIRS.data, label: 'mihomo 数据目录' },
-  'runtime': { path: config.DIRS.runtime, label: '运行时目录' },
-  'overwrites': { path: config.DIRS.overwrites, label: '覆写目录' },
-  'settings': { path: config.PATHS.settingsFile, label: '设置文件' },
-  'kernel': { path: config.DIRS.core, label: '内核目录' },
+  root: { path: null, label: '根目录' },
+  subs: { path: config.DIRS.subscriptions, label: '订阅目录' },
+  logs: { path: config.DIRS.logs, label: '日志目录' },
+  data: { path: config.DIRS.data, label: 'mihomo 数据目录' },
+  runtime: { path: config.DIRS.runtime, label: '运行时目录' },
+  overwrites: { path: config.DIRS.overwrites, label: '覆写目录' },
+  settings: { path: config.PATHS.settingsFile, label: '设置文件' },
+  kernel: { path: config.DIRS.core, label: '内核目录' },
 };
 
 function cmdDirectory(args) {

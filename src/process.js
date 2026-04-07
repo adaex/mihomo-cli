@@ -3,6 +3,11 @@ const path = require('path');
 const { spawn, execSync } = require('child_process');
 const config = require('./config');
 
+const _sharedBuf = new Int32Array(new SharedArrayBuffer(4));
+function sleepSync(ms) {
+  Atomics.wait(_sharedBuf, 0, 0, ms);
+}
+
 function clearRuntime() {
   if (fs.existsSync(config.DIRS.runtime)) {
     config.rmrf(config.DIRS.runtime);
@@ -47,7 +52,10 @@ function getAllMihomoPids() {
       encoding: 'utf8',
     }).trim();
     if (!output) return [];
-    return output.split('\n').filter(Boolean).map(p => parseInt(p));
+    return output
+      .split('\n')
+      .filter(Boolean)
+      .map(p => parseInt(p));
   } catch {
     return [];
   }
@@ -208,9 +216,7 @@ function cleanupAll(forceSudo) {
 
   for (let i = 0; i < 50; i++) {
     if (getAllMihomoPids().length === 0) break;
-    try {
-      execSync('sleep 0.1', { stdio: 'ignore' });
-    } catch (e) {}
+    sleepSync(100);
   }
 
   clearPid();
@@ -229,12 +235,23 @@ function createTunLaunchScript() {
   const pidFile = config.PATHS.pidFile;
   const dataDir = config.PATHS.data;
 
-  const scriptContent = '#!/bin/bash\n' +
-    'BINARY="' + binary + '"\n' +
-    'CONFIG_FILE="' + configFile + '"\n' +
-    'LOG_FILE="' + logFile + '"\n' +
-    'PID_FILE="' + pidFile + '"\n' +
-    'DATA_DIR="' + dataDir + '"\n' +
+  const scriptContent =
+    '#!/bin/bash\n' +
+    'BINARY="' +
+    binary +
+    '"\n' +
+    'CONFIG_FILE="' +
+    configFile +
+    '"\n' +
+    'LOG_FILE="' +
+    logFile +
+    '"\n' +
+    'PID_FILE="' +
+    pidFile +
+    '"\n' +
+    'DATA_DIR="' +
+    dataDir +
+    '"\n' +
     '\n' +
     '# 终止旧进程\n' +
     'pkill -9 -f "${BINARY}" 2>/dev/null || true\n' +
@@ -361,10 +378,7 @@ async function startMixedMode(staleState) {
     throw new Error('未找到配置文件，请先添加订阅并启动');
   }
 
-  const args = [
-    '-d', config.PATHS.data,
-    '-f', configFile,
-  ];
+  const args = ['-d', config.PATHS.data, '-f', configFile];
 
   const out = fs.openSync(logFile, 'a');
   const err = fs.openSync(logFile, 'a');
@@ -389,7 +403,12 @@ async function startMixedMode(staleState) {
       try {
         const logs = fs.readFileSync(logFile, 'utf8').slice(-3000);
         if (logs.trim()) {
-          errorMsg += '\n最近的日志:\n' + logs.split('\n').map(l => '  ' + l).join('\n');
+          errorMsg +=
+            '\n最近的日志:\n' +
+            logs
+              .split('\n')
+              .map(l => '  ' + l)
+              .join('\n');
         }
       } catch {}
     }
@@ -427,14 +446,18 @@ async function startTunMode(staleState) {
       timeout: 60000,
     });
   } catch (e) {
-    try { fs.unlinkSync(launchScript); } catch (e2) {}
+    try {
+      fs.unlinkSync(launchScript);
+    } catch (e2) {}
     if (e.status === 1) {
       throw new Error('密码错误或取消');
     }
     throw new Error(e.message);
   }
 
-  try { fs.unlinkSync(launchScript); } catch (e) {}
+  try {
+    fs.unlinkSync(launchScript);
+  } catch (e) {}
 
   await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -490,10 +513,7 @@ function rotateLog() {
     return null;
   }
 
-  const timestamp = new Date().toISOString()
-    .replace(/T/, '_')
-    .replace(/:/g, '-')
-    .replace(/\..+/, '');
+  const timestamp = new Date().toISOString().replace(/T/, '_').replace(/:/g, '-').replace(/\..+/, '');
 
   const rotatedName = `mihomo.${timestamp}.log`;
   const rotatedPath = path.join(config.DIRS.logs, rotatedName);

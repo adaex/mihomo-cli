@@ -77,17 +77,23 @@ function maskUrl(url) {
   }
 }
 
+let _settingsCache = null;
+
 function readSettings() {
+  if (_settingsCache !== null) return _settingsCache;
   ensureDirs();
   if (fs.existsSync(PATHS.settingsFile)) {
     try {
       const content = fs.readFileSync(PATHS.settingsFile, 'utf8');
-      return JSON.parse(content);
+      _settingsCache = JSON.parse(content);
+      return _settingsCache;
     } catch (e) {
-      return {};
+      _settingsCache = {};
+      return _settingsCache;
     }
   }
-  return {};
+  _settingsCache = {};
+  return _settingsCache;
 }
 
 function writeSettings(settings) {
@@ -95,18 +101,13 @@ function writeSettings(settings) {
   const existing = readSettings();
   const merged = { ...existing, ...settings };
   fs.writeFileSync(PATHS.settingsFile, JSON.stringify(merged, null, 2), { mode: 0o600 });
+  _settingsCache = merged;
   return merged;
 }
 
 // GitHub 镜像配置
 const DEFAULT_GITHUB_MIRROR = 'https://v6.gh-proxy.org/';
-const AVAILABLE_MIRRORS = [
-  'v6.gh-proxy.org',
-  'gh-proxy.org',
-  'hk.gh-proxy.org',
-  'cdn.gh-proxy.org',
-  'edgeone.gh-proxy.org',
-];
+const AVAILABLE_MIRRORS = ['v6.gh-proxy.org', 'gh-proxy.org', 'hk.gh-proxy.org', 'cdn.gh-proxy.org', 'edgeone.gh-proxy.org'];
 
 function getGitHubMirror() {
   const settings = readSettings();
@@ -239,24 +240,28 @@ function hasKernel() {
   return fs.existsSync(PATHS.mihomoBinary);
 }
 
+let _kernelVersionCache = undefined;
+
 function getKernelVersion() {
   if (!hasKernel()) {
+    _kernelVersionCache = undefined;
     return null;
   }
+  if (_kernelVersionCache !== undefined) return _kernelVersionCache;
   try {
     const output = execSync('"' + PATHS.mihomoBinary + '" -v 2>&1 || true', {
       encoding: 'utf8',
     }).trim();
     if (output) {
       const match = output.match(/v?[\d]+\.[\d]+\.[\d]+/);
-      if (match) {
-        return match[0];
-      }
-      return output;
+      _kernelVersionCache = match ? match[0] : output;
+      return _kernelVersionCache;
     }
-    return 'unknown';
+    _kernelVersionCache = 'unknown';
+    return _kernelVersionCache;
   } catch (e) {
-    return 'unknown';
+    _kernelVersionCache = 'unknown';
+    return _kernelVersionCache;
   }
 }
 
@@ -377,13 +382,7 @@ function resetUserData(options) {
   if (options === undefined) options = {};
   const keepKernel = options.keepKernel !== false;
 
-  const itemsToRemove = [
-    PATHS.settingsFile,
-    DIRS.subscriptions,
-    DIRS.logs,
-    DIRS.data,
-    DIRS.runtime,
-  ];
+  const itemsToRemove = [PATHS.settingsFile, DIRS.subscriptions, DIRS.logs, DIRS.data, DIRS.runtime];
 
   if (!keepKernel) {
     itemsToRemove.push(DIRS.core);
@@ -402,6 +401,7 @@ function resetUserData(options) {
   }
 
   ensureDirs();
+  _settingsCache = null;
   return removedCount;
 }
 
@@ -427,6 +427,9 @@ module.exports = {
   readSubRawConfig,
   hasKernel,
   getKernelVersion,
+  clearKernelVersionCache: () => {
+    _kernelVersionCache = undefined;
+  },
   getGitHubMirror,
   setGitHubMirror,
   DEFAULT_GITHUB_MIRROR,

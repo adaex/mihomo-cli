@@ -31,8 +31,7 @@ function getArch() {
 function findMatchingAsset(assets, platform, arch) {
   const prefix = 'mihomo-' + platform + '-' + arch;
   const matchingAssets = assets.filter(a => {
-    return (a.name.startsWith(prefix) && a.name.endsWith('.gz')) ||
-           (a.name.startsWith(prefix + '-') && a.name.endsWith('.gz'));
+    return (a.name.startsWith(prefix) && a.name.endsWith('.gz')) || (a.name.startsWith(prefix + '-') && a.name.endsWith('.gz'));
   });
 
   if (matchingAssets.length === 0) {
@@ -67,11 +66,12 @@ async function getLatestRelease(repo) {
     throw new Error('无法获取版本信息');
   }
 
-  const stableReleases = releases.filter(r =>
-    !r.prerelease &&
-    !r.tag_name.toLowerCase().includes('alpha') &&
-    !r.tag_name.toLowerCase().includes('beta') &&
-    !r.tag_name.toLowerCase().includes('prerelease')
+  const stableReleases = releases.filter(
+    r =>
+      !r.prerelease &&
+      !r.tag_name.toLowerCase().includes('alpha') &&
+      !r.tag_name.toLowerCase().includes('beta') &&
+      !r.tag_name.toLowerCase().includes('prerelease'),
   );
 
   if (stableReleases.length > 0) {
@@ -194,14 +194,18 @@ async function downloadKernel(progressCallback, mirror) {
       extractedBinary = outputPath;
     }
   } catch (e) {
-    try { fs.unlinkSync(tempPath); } catch {}
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {}
     throw new Error('解压失败: ' + e.message);
   }
 
   const foundBinary = extractedBinary || findBinaryInDir(extractPath);
 
   if (!foundBinary) {
-    try { fs.unlinkSync(tempPath); } catch {}
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {}
     throw new Error('解压后未找到可执行文件');
   }
 
@@ -222,6 +226,9 @@ async function downloadKernel(progressCallback, mirror) {
   try {
     fs.unlinkSync(tempPath);
   } catch (e) {}
+
+  // 内核已更新，清除版本缓存
+  config.clearKernelVersionCache();
 
   return {
     version: latest.tag_name,

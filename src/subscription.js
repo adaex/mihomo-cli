@@ -67,6 +67,13 @@ function formatDate(dateOrIso) {
   }
 }
 
+function formatProxySummary(info) {
+  const parts = [];
+  if (info && info.proxyGroups > 0) parts.push(info.proxyGroups + ' 组');
+  parts.push(((info && info.proxies) || 0) + ' 节点');
+  return parts.join(', ');
+}
+
 async function downloadSubscription(url, subName) {
   if (subName === undefined) subName = 'default';
 
@@ -159,7 +166,7 @@ function needsAutoUpdate(sub) {
   if (isNaN(lastUpdate)) return true;
   const intervalHours = sub.update_interval || DEFAULT_UPDATE_INTERVAL_HOURS;
   const intervalMs = intervalHours * 60 * 60 * 1000;
-  return (Date.now() - lastUpdate) > intervalMs;
+  return Date.now() - lastUpdate > intervalMs;
 }
 
 async function tryUpdateOne(sub) {
@@ -193,10 +200,7 @@ async function autoUpdateStaleSubscriptions() {
   results.forEach(r => {
     if (r.success) {
       updatedCount++;
-      const parts = [];
-      if (r.proxyGroups && r.proxyGroups > 0) parts.push(r.proxyGroups + ' 组');
-      parts.push(r.proxies + ' 节点');
-      console.log('✓ ' + r.name + ': 已更新 (' + parts.join(', ') + ')');
+      console.log('✓ ' + r.name + ': 已更新 (' + formatProxySummary(r) + ')');
     } else {
       console.log('✗ ' + r.name + ': 失败 (' + r.error.split('\n')[0] + ')');
     }
@@ -213,11 +217,10 @@ module.exports = {
   DEFAULT_UPDATE_INTERVAL_HOURS,
   downloadSubscription,
   prepareConfigForStart,
-  hasConfig: config.hasConfig,
-  getConfigInfo: config.getConfigInfo,
   formatBytes,
   formatTimestamp,
   formatDate,
+  formatProxySummary,
   tryUpdateOne,
   autoUpdateStaleSubscriptions,
 };
