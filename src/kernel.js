@@ -180,6 +180,7 @@ async function downloadKernel(progressCallback, mirror) {
   await new Promise((resolve, reject) => {
     writer.on('finish', resolve);
     writer.on('error', reject);
+    response.data.on('error', reject);
   });
 
   if (progressCallback) {
