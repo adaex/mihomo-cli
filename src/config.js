@@ -100,6 +100,10 @@ function writeSettings(settings) {
   ensureDirs();
   const existing = readSettings();
   const merged = { ...existing, ...settings };
+  // undefined 值表示删除该键
+  for (const key of Object.keys(settings)) {
+    if (settings[key] === undefined) delete merged[key];
+  }
   fs.writeFileSync(PATHS.settingsFile, JSON.stringify(merged, null, 2), { mode: 0o600 });
   _settingsCache = merged;
   return merged;
@@ -126,9 +130,7 @@ function setGitHubMirror(mirror) {
   // - null 或 undefined: 恢复默认
 
   if (mirror === null || mirror === undefined) {
-    const settings = readSettings();
-    delete settings.github_mirror;
-    writeSettings(settings);
+    writeSettings({ github_mirror: undefined });
     return DEFAULT_GITHUB_MIRROR;
   }
 
@@ -408,21 +410,17 @@ function resetUserData(options) {
 module.exports = {
   PATHS,
   DIRS,
-  PROJECT_ROOT,
   USER_DATA_DIR,
-  IS_PKG,
   ensureDirs,
   readSettings,
   writeSettings,
   readSubscriptionsCache,
-  writeSubscriptionsCache,
   saveSubscriptionCache,
   maskUrl,
   getSubscriptions,
   getSubscriptionsWithCache,
   addSubscription,
   setDefaultSubscription,
-  getSubRawConfigPath,
   saveSubRawConfig,
   readSubRawConfig,
   hasKernel,
@@ -434,8 +432,6 @@ module.exports = {
   setGitHubMirror,
   DEFAULT_GITHUB_MIRROR,
   AVAILABLE_MIRRORS,
-  TUN_CONFIG,
-  BASE_CONFIG,
   parseYamlOrJson,
   buildConfig,
   writeMihomoConfig,

@@ -673,21 +673,12 @@ function openUrl(url) {
 }
 
 module.exports = {
-  getPid,
-  isRunning,
-  isProcessRunning,
   getAllMihomoPids,
-  isProcessRoot,
-  checkStaleState,
   cleanupAll,
   getStatus,
   start,
   stop,
   getLogPath,
-  readLog,
-  clearLog,
-  rotateLog,
-  cleanupOldLogs,
   listLogs,
   getLogPathByName,
   openUrl,
