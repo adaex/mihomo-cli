@@ -4,13 +4,23 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 // 第三方模块
-const axios = require('axios');
 const { compareVersions } = require('compare-versions');
 
 // 本地模块
 const config = require('./config');
+const utils = require('./utils');
 
+// 常量定义
 const GITHUB_REPO = 'MetaCubeX/mihomo';
+const KERNEL_HTTP_TIMEOUT = 120000;
+const KERNEL_MAX_CONTENT_LENGTH = 200 * 1024 * 1024;
+const KERNEL_DOWNLOAD_TIMEOUT = 180000;
+
+// 内核专用 HTTP 客户端（超时和容量较大，适合下载大文件）
+const HTTP_CLIENT = utils.createHttpClient({
+  timeout: KERNEL_HTTP_TIMEOUT,
+  maxContentLength: KERNEL_MAX_CONTENT_LENGTH,
+});
 
 function withMirror(url, overrideMirror) {
   const mirror = overrideMirror !== undefined ? overrideMirror : config.getGitHubMirror();
@@ -19,12 +29,6 @@ function withMirror(url, overrideMirror) {
   }
   return url;
 }
-
-const HTTP_CLIENT = axios.create({
-  timeout: 120000,
-  headers: { 'User-Agent': 'mihomo-cli' },
-  maxContentLength: 200 * 1024 * 1024,
-});
 
 function getArch() {
   const arch = process.arch;
@@ -167,7 +171,7 @@ async function downloadKernel(progressCallback, mirror) {
     method: 'get',
     url: downloadUrl,
     responseType: 'stream',
-    timeout: 180000,
+    timeout: KERNEL_DOWNLOAD_TIMEOUT,
   });
 
   const writer = fs.createWriteStream(tempPath);
@@ -232,7 +236,6 @@ async function downloadKernel(progressCallback, mirror) {
     fs.unlinkSync(tempPath);
   } catch (e) {}
 
-  // 内核已更新，清除版本缓存
   config.clearKernelVersionCache();
 
   return {
@@ -242,6 +245,10 @@ async function downloadKernel(progressCallback, mirror) {
 }
 
 module.exports = {
+  GITHUB_REPO,
+  KERNEL_HTTP_TIMEOUT,
+  KERNEL_MAX_CONTENT_LENGTH,
+  KERNEL_DOWNLOAD_TIMEOUT,
   checkUpdate,
   downloadKernel,
 };

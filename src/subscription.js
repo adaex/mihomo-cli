@@ -1,3 +1,6 @@
+// 内置模块
+// （无内置模块依赖）
+
 // 第三方模块
 const axios = require('axios');
 
@@ -8,14 +11,16 @@ const utils = require('./utils');
 const { colors } = utils;
 const DEFAULT_UPDATE_INTERVAL_HOURS = 12;
 
-const HTTP_CLIENT = axios.create({
+// 订阅专用 HTTP 客户端（超时较短，适合下载订阅配置）
+const HTTP_CLIENT = utils.createHttpClient({
   timeout: 60000,
-  headers: {
-    'User-Agent': 'mihomo-cli/1.0',
-  },
   maxContentLength: 50 * 1024 * 1024,
-  maxBodyLength: 50 * 1024 * 1024,
 });
+
+// 订阅查找常量（从 index.js 移入）
+const MATCH_EXACT = 'exact';
+const MATCH_PREFIX = 'prefix';
+const MATCH_INCLUDES = 'includes';
 
 function parseUserInfo(header) {
   if (!header) return null;
@@ -33,11 +38,9 @@ function parseUserInfo(header) {
 
 function parseUsernameFromContentDisposition(header) {
   if (!header) return null;
-  // 匹配 filename="..." 或 filename='...'
   const match = header.match(/filename\s*=\s*["']?([^"';\s]+)["']?/i);
   if (!match) return null;
   const filename = match[1];
-  // 可能是 "glados.one/user@example.com" 格式，取最后一部分
   const parts = filename.split('/');
   return parts[parts.length - 1] || null;
 }
@@ -47,6 +50,60 @@ function formatProxySummary(info) {
   if (info && info.proxyGroups > 0) parts.push(info.proxyGroups + ' 组');
   parts.push(((info && info.proxies) || 0) + ' 节点');
   return parts.join(', ');
+}
+
+/**
+ * 获取当前默认订阅（从 index.js 移入）
+ */
+function getActiveSubscription() {
+  const subs = config.getSubscriptions();
+  if (subs.length === 0) {
+    return null;
+  }
+  return subs[0];
+}
+
+/**
+ * 模糊查找订阅（从 index.js 移入）
+ */
+function findSubscriptionFuzzy(subs, pattern) {
+  const lowerPattern = pattern.toLowerCase();
+  let exact = [];
+  let prefix = [];
+  let includes = [];
+
+  for (const s of subs) {
+    const name = s.name.toLowerCase();
+    if (name === lowerPattern) {
+      exact.push(s);
+    } else if (name.startsWith(lowerPattern)) {
+      prefix.push(s);
+    } else if (name.includes(lowerPattern)) {
+      includes.push(s);
+    }
+  }
+
+  if (exact.length > 0) return exact;
+  if (prefix.length > 0) return prefix;
+  return includes;
+}
+
+/**
+ * 从匹配列表中选择单个订阅（从 index.js 移入）
+ * 如果匹配多个，打印错误并退出进程
+ */
+function pickSingleSubscription(subs, pattern) {
+  if (subs.length === 0) {
+    console.error('错误: 未找到匹配 "' + pattern + '" 的订阅');
+    process.exit(1);
+  }
+  if (subs.length === 1) {
+    return subs[0];
+  }
+  console.error('错误: 匹配到多个订阅，请更精确指定');
+  console.log('\n匹配的订阅:');
+  subs.forEach(s => console.log('  ' + s.name));
+  process.exit(1);
 }
 
 async function downloadSubscription(url, subName) {
@@ -79,14 +136,11 @@ async function downloadSubscription(url, subName) {
 
   config.saveSubscriptionRawConfig(subName, content);
 
-  // 提取 response headers 中的订阅信息
   const headers = response.headers;
   const userInfo = parseUserInfo(headers['subscription-userinfo']);
   const updateInterval = headers['profile-update-interval'] ? parseInt(headers['profile-update-interval']) : null;
   const webPageUrl = headers['profile-web-page-url'] || null;
   const username = parseUsernameFromContentDisposition(headers['content-disposition']);
-
-  // 2. 动态数据 + updated_at 保存到缓存文件（settings 只存 name/url）
 
   const cacheData = {
     updated_at: new Date().toISOString(),
@@ -190,6 +244,9 @@ async function autoUpdateStaleSubscription() {
 
 module.exports = {
   DEFAULT_UPDATE_INTERVAL_HOURS,
+  getActiveSubscription,
+  findSubscriptionFuzzy,
+  pickSingleSubscription,
   downloadSubscription,
   prepareConfigForStart,
   formatProxySummary,

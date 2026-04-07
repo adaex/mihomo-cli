@@ -1,6 +1,14 @@
 // 内置模块
 const { execSync } = require('child_process');
 
+// 第三方模块
+const axios = require('axios');
+
+// 本地模块
+const config = require('./config');
+
+const VERSION = require('../package.json').version;
+
 const sleepBuf = new Int32Array(1);
 
 const NO_COLOR = process.env.NO_COLOR !== undefined || !process.stdout.isTTY;
@@ -105,7 +113,85 @@ function isProcessRoot(pid) {
   }
 }
 
+/**
+ * 创建统一的 HTTP 客户端
+ */
+function createHttpClient(options) {
+  const opts = options || {};
+  const timeout = opts.timeout || 60000;
+  const maxContentLength = opts.maxContentLength || 50 * 1024 * 1024;
+  const userAgent = opts.userAgent || 'mihomo-cli/' + VERSION;
+
+  return axios.create({
+    timeout,
+    headers: { 'User-Agent': userAgent },
+    maxContentLength,
+    maxBodyLength: maxContentLength,
+  });
+}
+
+/**
+ * 规范化镜像 URL（从 index.js 移入）
+ */
+function normalizeMirrorUrl(val) {
+  if (!val) return null;
+  if (val === 'direct' || val === 'no' || val === 'none') return null;
+
+  let url = val;
+  if (!url.startsWith('http')) {
+    url = 'https://' + url;
+  }
+  if (!url.endsWith('/')) {
+    url += '/';
+  }
+  return url;
+}
+
+/**
+ * 解析镜像参数（从 index.js 移入）
+ * 返回: { mirror: 镜像URL|null, isOverride: boolean }
+ * mirror = null 表示禁用镜像
+ * mirror = undefined 表示使用默认/配置
+ */
+function parseMirrorArg(args) {
+  if (!args || args.length < 2) {
+    return { mirror: undefined, isOverride: false };
+  }
+
+  if (args.includes('--no-mirror') || args.includes('--direct')) {
+    return { mirror: null, isOverride: true };
+  }
+
+  const mirrorIdx = args.indexOf('--mirror');
+  if (mirrorIdx >= 0 && mirrorIdx + 1 < args.length) {
+    let mirrorVal = args[mirrorIdx + 1];
+    return { mirror: normalizeMirrorUrl(mirrorVal), isOverride: true };
+  }
+
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg.startsWith('-')) {
+      return { mirror: normalizeMirrorUrl(arg), isOverride: true };
+    }
+  }
+
+  return { mirror: undefined, isOverride: false };
+}
+
+/**
+ * 打开目录/文件/URL（从 index.js 移入）
+ */
+function openPath(pathOrUrl, label, processManager) {
+  const displayLabel = label || pathOrUrl;
+  console.log('正在打开: ' + displayLabel);
+  const success = processManager ? processManager.openUrl(pathOrUrl) : false;
+  if (!success) {
+    console.log('请手动打开: ' + pathOrUrl);
+  }
+}
+
 module.exports = {
+  VERSION,
   sleepSync,
   formatBytes,
   formatTimestamp,
@@ -116,4 +202,8 @@ module.exports = {
   isProcessRunning,
   isProcessRoot,
   colors,
+  createHttpClient,
+  normalizeMirrorUrl,
+  parseMirrorArg,
+  openPath,
 };

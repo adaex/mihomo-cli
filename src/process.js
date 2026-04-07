@@ -3,9 +3,22 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, execSync } = require('child_process');
 
+// 第三方模块
+// （无第三方模块依赖）
+
 // 本地模块
 const config = require('./config');
 const utils = require('./utils');
+
+// 进程等待常量
+const PROCESS_WAIT_ATTEMPTS = 50;
+const PROCESS_WAIT_INTERVAL = 100; // ms
+const STARTUP_WAIT_MS = 800; // ms
+const SUDO_TIMEOUT_MS = 60000; // ms
+const TUN_MODE_POST_WAIT_MS = 500; // ms
+
+// 日志清理常量
+const DEFAULT_LOG_RETENTION_DAYS = 7;
 
 function clearRuntime() {
   if (fs.existsSync(config.DIRS.runtime)) {
@@ -190,9 +203,10 @@ function cleanupAll(forceSudo) {
     }
   }
 
-  for (let i = 0; i < 50; i++) {
+  // 等待进程终止
+  for (let i = 0; i < PROCESS_WAIT_ATTEMPTS; i++) {
     if (getAllMihomoPids().length === 0) break;
-    utils.sleepSync(100);
+    utils.sleepSync(PROCESS_WAIT_INTERVAL);
   }
 
   clearPid();
@@ -370,7 +384,7 @@ async function startMixedMode(staleState) {
   const pid = child.pid;
   savePid(pid);
 
-  await new Promise(resolve => setTimeout(resolve, 800));
+  await new Promise(resolve => setTimeout(resolve, STARTUP_WAIT_MS));
 
   if (!isRunning()) {
     clearPid();
@@ -419,7 +433,7 @@ async function startTunMode(staleState) {
   try {
     execSync('sudo "' + launchScript + '"', {
       stdio: 'inherit',
-      timeout: 60000,
+      timeout: SUDO_TIMEOUT_MS,
     });
   } catch (e) {
     try {
@@ -435,7 +449,7 @@ async function startTunMode(staleState) {
     fs.unlinkSync(launchScript);
   } catch (e) {}
 
-  await new Promise(resolve => setTimeout(resolve, 500));
+  await new Promise(resolve => setTimeout(resolve, TUN_MODE_POST_WAIT_MS));
 
   const finalPid = getPid();
   if (!finalPid) {
@@ -471,7 +485,7 @@ function stop(forceSudo) {
 
 function rotateAndCleanupLogs() {
   rotateLog();
-  cleanupOldLogs(7);
+  cleanupOldLogs(DEFAULT_LOG_RETENTION_DAYS);
 }
 
 function getLogPath() {
@@ -499,7 +513,7 @@ function rotateLog() {
 }
 
 function cleanupOldLogs(maxAgeDays) {
-  if (maxAgeDays === undefined) maxAgeDays = 7;
+  if (maxAgeDays === undefined) maxAgeDays = DEFAULT_LOG_RETENTION_DAYS;
   const logsDir = config.DIRS.logs;
 
   if (!fs.existsSync(logsDir)) {
@@ -591,7 +605,6 @@ function isPathUnderDir(filePath, baseDir) {
 function getLogPathByName(name) {
   const logsDir = config.DIRS.logs;
 
-  // 处理部分匹配（用户只输入时间戳部分）
   let targetName = name;
   if (!name.endsWith('.log')) {
     targetName = 'mihomo.' + name + '.log';
@@ -605,7 +618,6 @@ function getLogPathByName(name) {
     return filePath;
   }
 
-  // 尝试模糊匹配（readdirSync 返回的文件名已是安全的，但为了一致性仍校验）
   if (fs.existsSync(logsDir)) {
     const files = fs.readdirSync(logsDir);
     for (const file of files) {
@@ -630,7 +642,55 @@ function openUrl(url) {
   }
 }
 
+/**
+ * 打开日志文件（从 index.js 移入）
+ */
+function openLogFile(logPath, label) {
+  const displayLabel = label || logPath;
+  console.log('用系统默认程序打开: ' + displayLabel);
+  const success = openUrl(logPath);
+  if (!success) {
+    console.log('请手动打开: ' + logPath);
+  }
+}
+
+/**
+ * 用 tail 查看日志（从 index.js 移入）
+ */
+function viewLogWithTail(logPath, options) {
+  const follow = options && options.follow;
+  const lines = (options && options.lines) || 100;
+
+  console.log('日志: ' + logPath);
+  if (follow) {
+    console.log('按 Ctrl+C 退出\n');
+  } else {
+    console.log('显示最后 ' + lines + ' 行\n');
+  }
+
+  const tailArgs = [];
+  if (follow) tailArgs.push('-f');
+  tailArgs.push('-n', lines.toString());
+  tailArgs.push(logPath);
+
+  const tail = spawn('tail', tailArgs, { stdio: 'inherit' });
+
+  tail.on('close', () => process.exit(0));
+  tail.on('error', e => {
+    console.error('无法读取日志: ' + e.message);
+    process.exit(1);
+  });
+}
+
 module.exports = {
+  // 常量
+  PROCESS_WAIT_ATTEMPTS,
+  PROCESS_WAIT_INTERVAL,
+  STARTUP_WAIT_MS,
+  SUDO_TIMEOUT_MS,
+  TUN_MODE_POST_WAIT_MS,
+  DEFAULT_LOG_RETENTION_DAYS,
+  // 函数
   getAllMihomoPids,
   cleanupAll,
   getStatus,
@@ -640,4 +700,6 @@ module.exports = {
   listLogs,
   getLogPathByName,
   openUrl,
+  openLogFile,
+  viewLogWithTail,
 };

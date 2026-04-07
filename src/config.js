@@ -7,6 +7,9 @@ const { execSync } = require('child_process');
 // 第三方模块
 const yaml = require('js-yaml');
 
+// 本地模块
+// （无额外本地模块，overwrite.js 在 buildConfig 中延迟加载以避免循环依赖）
+
 const IS_PKG = typeof process.pkg !== 'undefined';
 
 let PROJECT_ROOT;
@@ -408,10 +411,23 @@ function resetUserData(options) {
   return removedCount;
 }
 
+// 目录目标映射（从 index.js 移入，精确匹配）
+const DIRECTORY_TARGETS = {
+  root: { path: null, label: '根目录' },
+  subs: { path: DIRS.subscriptions, label: '订阅目录' },
+  logs: { path: DIRS.logs, label: '日志目录' },
+  data: { path: DIRS.data, label: 'mihomo 数据目录' },
+  runtime: { path: DIRS.runtime, label: '运行时目录' },
+  overwrites: { path: DIRS.overwrites, label: '覆写目录' },
+  settings: { path: PATHS.settingsFile, label: '设置文件' },
+  kernel: { path: DIRS.core, label: '内核目录' },
+};
+
 module.exports = {
   PATHS,
   DIRS,
   USER_DATA_DIR,
+  DIRECTORY_TARGETS,
   ensureDirs,
   readSettings,
   writeSettings,

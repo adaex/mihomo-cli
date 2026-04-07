@@ -6,6 +6,9 @@ const { spawn, exec } = require('child_process');
 const { promisify } = require('util');
 const readline = require('readline');
 
+// 第三方模块
+// （无第三方模块依赖）
+
 // 本地模块
 const config = require('./src/config');
 const kernel = require('./src/kernel');
@@ -15,7 +18,7 @@ const overwrite = require('./src/overwrite');
 const utils = require('./src/utils');
 
 const execAsync = promisify(exec);
-const VERSION = require('./package.json').version;
+const VERSION = utils.VERSION;
 const { colors } = utils;
 
 const UI_URLS = {
@@ -192,7 +195,7 @@ function printStatus() {
   const info = config.getConfigInfo();
   const overwriteEnabled = overwrite.isOverwriteEnabled();
   const overwriteFiles = overwrite.listOverwriteFile().files;
-  const activeSub = getActiveSubscription();
+  const activeSub = subscription.getActiveSubscription();
 
   console.log('');
   let modeLabel = '';
@@ -242,93 +245,6 @@ function printStatus() {
   console.log('');
 }
 
-function getActiveSubscription() {
-  const subs = config.getSubscriptions();
-  if (subs.length === 0) {
-    return null;
-  }
-  return subs[0];
-}
-
-function findSubscriptionFuzzy(subs, pattern) {
-  const lowerPattern = pattern.toLowerCase();
-  let exact = [];
-  let prefix = [];
-  let includes = [];
-
-  for (const s of subs) {
-    const name = s.name.toLowerCase();
-    if (name === lowerPattern) {
-      exact.push(s);
-    } else if (name.startsWith(lowerPattern)) {
-      prefix.push(s);
-    } else if (name.includes(lowerPattern)) {
-      includes.push(s);
-    }
-  }
-
-  if (exact.length > 0) return exact;
-  if (prefix.length > 0) return prefix;
-  return includes;
-}
-
-function pickSingleSubscription(subs, pattern) {
-  if (subs.length === 0) {
-    console.error('错误: 未找到匹配 "' + pattern + '" 的订阅');
-    process.exit(1);
-  }
-  if (subs.length === 1) {
-    return subs[0];
-  }
-  console.error('错误: 匹配到多个订阅，请更精确指定');
-  console.log('\n匹配的订阅:');
-  subs.forEach(s => console.log('  ' + s.name));
-  process.exit(1);
-}
-
-function openLogFile(logPath, label) {
-  const displayLabel = label || logPath;
-  console.log('用系统默认程序打开: ' + displayLabel);
-  const success = processManager.openUrl(logPath);
-  if (!success) {
-    console.log('请手动打开: ' + logPath);
-  }
-}
-
-function openDir(dirPath, label) {
-  const displayLabel = label || dirPath;
-  console.log('正在打开: ' + displayLabel);
-  const success = processManager.openUrl(dirPath);
-  if (!success) {
-    console.log('请手动打开: ' + dirPath);
-  }
-}
-
-function viewLogWithTail(logPath, options) {
-  const follow = options && options.follow;
-  const lines = (options && options.lines) || 100;
-
-  console.log('日志: ' + logPath);
-  if (follow) {
-    console.log('按 Ctrl+C 退出\n');
-  } else {
-    console.log('显示最后 ' + lines + ' 行\n');
-  }
-
-  const tailArgs = [];
-  if (follow) tailArgs.push('-f');
-  tailArgs.push('-n', lines.toString());
-  tailArgs.push(logPath);
-
-  const tail = spawn('tail', tailArgs, { stdio: 'inherit' });
-
-  tail.on('close', () => process.exit(0));
-  tail.on('error', e => {
-    console.error('无法读取日志: ' + e.message);
-    process.exit(1);
-  });
-}
-
 async function cmdStart(args) {
   if (!config.hasKernel()) {
     console.error('错误: 未找到内核，请运行 "mihomo kernel"');
@@ -337,7 +253,7 @@ async function cmdStart(args) {
 
   const targetMode = args[1] === 'tun' ? 'tun' : 'mixed';
 
-  const sub = getActiveSubscription();
+  const sub = subscription.getActiveSubscription();
   if (!sub) {
     console.error('错误: 没有订阅，请先添加订阅');
     process.exit(1);
@@ -345,7 +261,6 @@ async function cmdStart(args) {
 
   await subscription.autoUpdateStaleSubscription();
 
-  // 每次 start 都先确保完全干净的状态（停止进程 + 清理运行时文件）
   const status = processManager.getStatus();
   const hasProcess = status.running || status.allProcesses.length > 0;
 
@@ -354,7 +269,6 @@ async function cmdStart(args) {
     console.log('停止 ' + count + ' 个进程...');
   }
 
-  // 总是调用 stop（即使没进程也会清理 PID 文件和运行时目录）
   const stopResult = processManager.stop(true);
 
   if (stopResult.remaining && stopResult.remaining.length > 0) {
@@ -429,11 +343,11 @@ function cmdLog(args) {
   const logPath = processManager.getLogPath();
 
   if (utils.hasFlag(args, '-o', '--open')) {
-    openLogFile(logPath);
+    processManager.openLogFile(logPath);
     return;
   }
 
-  viewLogWithTail(logPath, { follow: true, lines: 50 });
+  processManager.viewLogWithTail(logPath, { follow: true, lines: 50 });
 }
 
 function cmdLogs(args) {
@@ -447,7 +361,6 @@ function cmdLogs(args) {
     if (targetName === 'current' || targetName === '0') {
       logPath = processManager.getLogPath();
     } else {
-      // 纯数字 1+ 表示归档日志的位置（最新=1）
       const parsedIdx = parseInt(targetName);
       if (!isNaN(parsedIdx) && parsedIdx > 0 && String(parsedIdx) === targetName) {
         const archiveLogs = processManager.listLogs();
@@ -470,11 +383,11 @@ function cmdLogs(args) {
     }
 
     if (openInViewer) {
-      openLogFile(logPath);
+      processManager.openLogFile(logPath);
       return;
     }
 
-    viewLogWithTail(logPath, { follow: false, lines });
+    processManager.viewLogWithTail(logPath, { follow: false, lines });
     return;
   }
 
@@ -524,55 +437,8 @@ function cmdLogs(args) {
   console.log('');
 }
 
-// 解析镜像参数
-function parseMirrorArg(args) {
-  // 返回: { mirror: 镜像URL|null, isOverride: boolean }
-  // mirror = null 表示禁用镜像
-  // mirror = undefined 表示使用默认/配置
-
-  if (!args || args.length < 2) {
-    return { mirror: undefined, isOverride: false };
-  }
-
-  // 检查 --no-mirror
-  if (args.includes('--no-mirror') || args.includes('--direct')) {
-    return { mirror: null, isOverride: true };
-  }
-
-  // 检查 --mirror <值>
-  const mirrorIdx = args.indexOf('--mirror');
-  if (mirrorIdx >= 0 && mirrorIdx + 1 < args.length) {
-    let mirrorVal = args[mirrorIdx + 1];
-    return { mirror: normalizeMirrorUrl(mirrorVal), isOverride: true };
-  }
-
-  // 第一个非 flag 参数作为镜像
-  for (let i = 1; i < args.length; i++) {
-    const arg = args[i];
-    if (!arg.startsWith('-')) {
-      return { mirror: normalizeMirrorUrl(arg), isOverride: true };
-    }
-  }
-
-  return { mirror: undefined, isOverride: false };
-}
-
-function normalizeMirrorUrl(val) {
-  if (!val) return null;
-  if (val === 'direct' || val === 'no' || val === 'none') return null;
-
-  let url = val;
-  if (!url.startsWith('http')) {
-    url = 'https://' + url;
-  }
-  if (!url.endsWith('/')) {
-    url += '/';
-  }
-  return url;
-}
-
 async function cmdKernel(args) {
-  const mirrorInfo = parseMirrorArg(args);
+  const mirrorInfo = utils.parseMirrorArg(args);
   const effectiveMirror = mirrorInfo.isOverride ? mirrorInfo.mirror : config.getGitHubMirror();
   const isDefault = !mirrorInfo.isOverride && effectiveMirror === config.DEFAULT_GITHUB_MIRROR;
 
@@ -615,7 +481,7 @@ async function cmdKernel(args) {
     console.log('\n正在下载...');
     const result = await kernel.downloadKernel(msg => {
       console.log(msg);
-    }, mirrorInfo.mirror); // 传递镜像参数（undefined = 用配置，null = 禁用）
+    }, mirrorInfo.mirror);
     console.log('已更新到 ' + result.version);
   } catch (e) {
     console.error('更新失败: ' + e.message);
@@ -732,8 +598,8 @@ async function cmdSubscription(args) {
       return;
     }
 
-    const matches = findSubscriptionFuzzy(subs, name);
-    const target = pickSingleSubscription(matches, name);
+    const matches = subscription.findSubscriptionFuzzy(subs, name);
+    const target = subscription.pickSingleSubscription(matches, name);
 
     console.log('更新订阅: ' + target.name);
     try {
@@ -761,11 +627,10 @@ async function cmdSubscription(args) {
       process.exit(1);
     }
 
-    const matches = findSubscriptionFuzzy(subs, name);
-    const target = pickSingleSubscription(matches, name);
+    const matches = subscription.findSubscriptionFuzzy(subs, name);
+    const target = subscription.pickSingleSubscription(matches, name);
 
-    // 检查是否已是当前默认订阅
-    const currentDefault = getActiveSubscription();
+    const currentDefault = subscription.getActiveSubscription();
     const isAlreadyDefault = currentDefault && currentDefault.name === target.name;
 
     if (isAlreadyDefault) {
@@ -775,7 +640,6 @@ async function cmdSubscription(args) {
       return;
     }
 
-    // 检查当前运行状态和模式
     const status = processManager.getStatus();
     const configInfo = config.getConfigInfo();
     const currentMode = configInfo && configInfo.tun ? 'tun' : 'mixed';
@@ -788,7 +652,6 @@ async function cmdSubscription(args) {
       process.exit(1);
     }
 
-    // 如果正在运行，自动重启
     if (status.running) {
       console.log('');
       await cmdStart(['start', currentMode]);
@@ -811,8 +674,8 @@ async function cmdSubscription(args) {
 
     let target;
     if (name) {
-      const matches = findSubscriptionFuzzy(subs, name);
-      target = pickSingleSubscription(matches, name);
+      const matches = subscription.findSubscriptionFuzzy(subs, name);
+      target = subscription.pickSingleSubscription(matches, name);
     } else {
       target = subs[0];
     }
@@ -822,7 +685,6 @@ async function cmdSubscription(args) {
       console.log('订阅信息中缺少页面地址，正在更新订阅...');
       try {
         const info = await subscription.downloadSubscription(target.url, target.name);
-        // 重新读取缓存获取 web_page_url
         const cache = config.readSubscriptionsCache();
         if (cache[target.name] && cache[target.name].web_page_url) {
           webPageUrl = cache[target.name].web_page_url;
@@ -872,7 +734,6 @@ async function cmdUpdate() {
     });
   });
 
-  // 获取更新后的版本
   try {
     const { stdout } = await execAsync('npm list -g mihomo-cli --json --depth=0');
     const result = JSON.parse(stdout);
@@ -898,9 +759,9 @@ async function cmdReset(args) {
   if (pids.length > 0) {
     console.log('停止 ' + pids.length + ' 个进程...');
     processManager.cleanupAll(true);
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < processManager.PROCESS_WAIT_ATTEMPTS; i++) {
       if (processManager.getAllMihomoPids().length === 0) break;
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise(r => setTimeout(r, processManager.PROCESS_WAIT_INTERVAL));
     }
   }
 
@@ -961,13 +822,11 @@ function printOverwriteList() {
 async function cmdOverwrite(args) {
   const action = args && args[1];
 
-  // 检查当前运行状态和模式
   const status = processManager.getStatus();
   const configInfo = config.getConfigInfo();
   const currentMode = configInfo && configInfo.tun ? 'tun' : 'mixed';
 
   if (action === 'on' || action === 'enable') {
-    // 如果已经启用，提示后直接返回
     if (overwrite.isOverwriteEnabled()) {
       console.log('覆写配置已是启用状态');
       console.log('');
@@ -978,7 +837,6 @@ async function cmdOverwrite(args) {
     overwrite.setOverwriteEnabled(true);
     console.log('已启用覆写配置');
 
-    // 如果正在运行，自动重启
     if (status.running) {
       console.log('');
       await cmdStart(['start', currentMode]);
@@ -991,7 +849,6 @@ async function cmdOverwrite(args) {
   }
 
   if (action === 'off' || action === 'disable') {
-    // 如果已经禁用，提示后直接返回
     if (!overwrite.isOverwriteEnabled()) {
       console.log('覆写配置已是禁用状态');
       console.log('');
@@ -1002,7 +859,6 @@ async function cmdOverwrite(args) {
     overwrite.setOverwriteEnabled(false);
     console.log('已禁用覆写配置');
 
-    // 如果正在运行，自动重启
     if (status.running) {
       console.log('');
       await cmdStart(['start', currentMode]);
@@ -1014,22 +870,9 @@ async function cmdOverwrite(args) {
     return;
   }
 
-  // 无参数、list、ls 都显示文件列表
   console.log('');
   printOverwriteList();
 }
-
-// 目录目标映射（精确匹配）
-const DIRECTORY_TARGETS = {
-  root: { path: null, label: '根目录' },
-  subs: { path: config.DIRS.subscriptions, label: '订阅目录' },
-  logs: { path: config.DIRS.logs, label: '日志目录' },
-  data: { path: config.DIRS.data, label: 'mihomo 数据目录' },
-  runtime: { path: config.DIRS.runtime, label: '运行时目录' },
-  overwrites: { path: config.DIRS.overwrites, label: '覆写目录' },
-  settings: { path: config.PATHS.settingsFile, label: '设置文件' },
-  kernel: { path: config.DIRS.core, label: '内核目录' },
-};
 
 function cmdDirectory(args) {
   const action = args && args[1];
@@ -1038,14 +881,23 @@ function cmdDirectory(args) {
     const target = args[2];
 
     if (!target || target === 'root') {
-      openDir(config.USER_DATA_DIR, '根目录');
+      const displayLabel = '根目录';
+      console.log('正在打开: ' + displayLabel);
+      const success = processManager.openUrl(config.USER_DATA_DIR);
+      if (!success) {
+        console.log('请手动打开: ' + config.USER_DATA_DIR);
+      }
       return;
     }
 
-    const targetInfo = DIRECTORY_TARGETS[target.toLowerCase()];
+    const targetInfo = config.DIRECTORY_TARGETS[target.toLowerCase()];
     if (targetInfo) {
-      const path = targetInfo.path || config.USER_DATA_DIR;
-      openDir(path, targetInfo.label);
+      const targetPath = targetInfo.path || config.USER_DATA_DIR;
+      console.log('正在打开: ' + targetInfo.label);
+      const success = processManager.openUrl(targetPath);
+      if (!success) {
+        console.log('请手动打开: ' + targetPath);
+      }
       return;
     }
 
@@ -1064,7 +916,6 @@ function cmdDirectory(args) {
     process.exit(1);
   }
 
-  // 无参数或未知参数：显示目录列表
   console.log('');
   console.log('数据目录位置:');
   console.log('  根目录: ' + config.USER_DATA_DIR);
