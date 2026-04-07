@@ -809,9 +809,9 @@ async function cmdReset(args) {
   }
 
   if (fullReset) {
-    console.log('将删除: 订阅、日志、设置、运行数据、内核');
+    console.log('将删除: 订阅、覆写、日志、设置、运行数据、内核');
   } else {
-    console.log('将删除: 订阅、日志、设置、运行数据（保留内核）');
+    console.log('将删除: 订阅、覆写、日志、设置、运行数据（保留内核）');
   }
 
   if (!skipConfirm && !(await confirmPrompt('确认重置?'))) {
