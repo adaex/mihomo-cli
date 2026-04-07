@@ -54,9 +54,9 @@ function printShortHelp() {
   console.log(
     '常用命令:\n' +
       '  ' + colors.bold('start') + ' [tun|mixed]    启动/切换代理\n' +
+      '  ' + colors.bold('sub') + ' [use|update]     订阅管理\n' +
       '  ' + colors.bold('ui') + ' [zash|dash|yacd]  打开 Web UI\n' +
-      '  ' + colors.bold('ow') + ' [on|off]          覆写配置\n' +
-      '  ' + colors.bold('sub') + ' [use|update]     订阅管理\n',
+      '  ' + colors.bold('ow') + ' [on|off]          覆写配置\n',
   );
 }
 
