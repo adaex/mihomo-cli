@@ -103,7 +103,7 @@ async function checkUpdate() {
   } else {
     try {
       needsUpdate = compareVersions(latestVersion.replace(/^v/, ''), currentVersion.replace(/^v/, '')) > 0;
-    } catch (e) {
+    } catch (_e) {
       needsUpdate = latestVersion !== currentVersion;
     }
   }
@@ -234,7 +234,7 @@ async function downloadKernel(progressCallback, mirror) {
 
   try {
     fs.unlinkSync(tempPath);
-  } catch (e) {}
+  } catch (_e) {}
 
   config.clearKernelVersionCache();
 

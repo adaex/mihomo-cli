@@ -684,7 +684,7 @@ async function cmdSubscription(args) {
     if (!webPageUrl) {
       console.log('订阅信息中缺少页面地址，正在更新订阅...');
       try {
-        const info = await subscription.downloadSubscription(target.url, target.name);
+        await subscription.downloadSubscription(target.url, target.name);
         const cache = config.readSubscriptionsCache();
         if (cache[target.name] && cache[target.name].web_page_url) {
           webPageUrl = cache[target.name].web_page_url;
@@ -717,7 +717,7 @@ async function cmdUpdate() {
   console.log('正在更新 mihomo-cli...');
   console.log('');
 
-  await new Promise((resolve, reject) => {
+  await new Promise(resolve => {
     const npm = spawn('npm', ['install', '-g', 'mihomo-cli'], { stdio: 'inherit' });
 
     npm.on('close', code => {

@@ -34,7 +34,7 @@ function getPid() {
   try {
     const pid = parseInt(fs.readFileSync(config.PATHS.pidFile, 'utf8').trim());
     return pid > 0 ? pid : null;
-  } catch (e) {
+  } catch (_e) {
     return null;
   }
 }
@@ -68,7 +68,7 @@ function isPidFileOwnedByRoot() {
   try {
     const stat = fs.statSync(config.PATHS.pidFile);
     return stat.uid === 0;
-  } catch (e) {
+  } catch (_e) {
     return false;
   }
 }
@@ -102,13 +102,13 @@ function clearPid() {
         stdio: 'inherit',
         timeout: 10000,
       });
-    } catch (e) {
+    } catch (_e) {
       // 忽略失败，后续操作可能会检测到问题
     }
   } else {
     try {
       fs.unlinkSync(config.PATHS.pidFile);
-    } catch (e) {
+    } catch (_e) {
       // ignore
     }
   }
@@ -124,11 +124,11 @@ function killProcess(pid, needsSudo) {
           timeout: 10000,
         });
         return true;
-      } catch (e) {
+      } catch (_e) {
         try {
           process.kill(pid, 'SIGKILL');
           return true;
-        } catch (e2) {
+        } catch (_e2) {
           return false;
         }
       }
@@ -136,7 +136,7 @@ function killProcess(pid, needsSudo) {
       process.kill(pid, 'SIGKILL');
       return true;
     }
-  } catch (e) {
+  } catch (_e) {
     return false;
   }
 }
@@ -174,9 +174,7 @@ function cleanupAll(forceSudo) {
   }
 
   const hasRootProcess = pids.some(p => utils.isProcessRoot(p));
-  const hasRootPidFile = isPidFileOwnedByRoot();
   const needsSudo = hasRootProcess;
-  const allowSudo = forceSudo || hasRootProcess || hasRootPidFile;
 
   let killedCount = 0;
   let failedPids = [];
@@ -298,7 +296,7 @@ function getProcessInfo(pid) {
       cpu: pcpu ? pcpu.toFixed(1) + '%' : '未知',
       isRoot: utils.isProcessRoot(pid),
     };
-  } catch (e) {
+  } catch (_e) {
     return { pid, memory: '未知', cpu: '未知', isRoot: false };
   }
 }
@@ -438,7 +436,7 @@ async function startTunMode(staleState) {
   } catch (e) {
     try {
       fs.unlinkSync(launchScript);
-    } catch (e2) {}
+    } catch {}
     if (e.status === 1) {
       throw new Error('密码错误或取消');
     }
@@ -447,7 +445,7 @@ async function startTunMode(staleState) {
 
   try {
     fs.unlinkSync(launchScript);
-  } catch (e) {}
+  } catch (_e) {}
 
   await new Promise(resolve => setTimeout(resolve, TUN_MODE_POST_WAIT_MS));
 
@@ -541,7 +539,7 @@ function cleanupOldLogs(maxAgeDays) {
         fs.unlinkSync(filePath);
         deleted++;
       }
-    } catch (e) {
+    } catch (_e) {
       errors++;
     }
   }
@@ -587,7 +585,7 @@ function listLogs() {
         mtime: stat.mtime,
         isCurrent: false,
       });
-    } catch (e) {
+    } catch (_e) {
       // ignore
     }
   }
@@ -637,7 +635,7 @@ function openUrl(url) {
   try {
     spawn('open', [url], { stdio: 'ignore', detached: true });
     return true;
-  } catch (e) {
+  } catch (_e) {
     return false;
   }
 }

@@ -5,7 +5,7 @@ const { execSync } = require('child_process');
 const axios = require('axios');
 
 // 本地模块
-const config = require('./config');
+// （无本地模块依赖）
 
 const VERSION = require('../package.json').version;
 
@@ -96,7 +96,7 @@ function isProcessRunning(pid) {
       encoding: 'utf8',
     }).trim();
     return output.length > 0;
-  } catch (e) {
+  } catch (_e) {
     return false;
   }
 }
@@ -108,7 +108,7 @@ function isProcessRoot(pid) {
       encoding: 'utf8',
     }).trim();
     return uidOutput === '0';
-  } catch (e) {
+  } catch (_e) {
     return false;
   }
 }

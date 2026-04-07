@@ -91,7 +91,7 @@ function readSettings() {
       const content = fs.readFileSync(PATHS.settingsFile, 'utf8');
       settingsCache = JSON.parse(content);
       return settingsCache;
-    } catch (e) {
+    } catch (_e) {
       settingsCache = {};
       return settingsCache;
     }
@@ -162,7 +162,7 @@ function readSubscriptionCache() {
     try {
       const content = fs.readFileSync(PATHS.subscriptionsCacheFile, 'utf8');
       return JSON.parse(content);
-    } catch (e) {
+    } catch (_e) {
       return {};
     }
   }
@@ -265,7 +265,7 @@ function getKernelVersion() {
     }
     kernelVersionCache = 'unknown';
     return kernelVersionCache;
-  } catch (e) {
+  } catch (_e) {
     kernelVersionCache = 'unknown';
     return kernelVersionCache;
   }
@@ -302,10 +302,10 @@ function parseYamlOrJson(content, errorMsg) {
   try {
     const result = yaml.load(content);
     if (result !== undefined) return result;
-  } catch (e) {}
+  } catch (_e) {}
   try {
     return JSON.parse(content);
-  } catch (e2) {
+  } catch (_e2) {
     throw new Error((errorMsg || '内容') + '格式错误，无法解析为 YAML 或 JSON');
   }
 }
@@ -375,7 +375,7 @@ function getConfigInfo() {
       socksPort: cfg['socks-port'] || null,
       tun: cfg.tun ? cfg.tun.enable : false,
     };
-  } catch (e) {
+  } catch (_e) {
     return null;
   }
 }
