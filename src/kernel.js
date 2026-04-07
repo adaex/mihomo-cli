@@ -114,6 +114,7 @@ async function checkUpdate() {
     needsUpdate,
     assets: latest.assets,
     htmlUrl: latest.html_url,
+    release: latest,
   };
 }
 
@@ -141,10 +142,10 @@ function findBinaryInDir(dir) {
   return null;
 }
 
-async function downloadKernel(progressCallback, mirror) {
+async function downloadKernel(progressCallback, mirror, releaseInfo) {
   config.ensureDirs();
 
-  const latest = await getLatestRelease(GITHUB_REPO);
+  const latest = releaseInfo || (await getLatestRelease(GITHUB_REPO));
   const arch = getArch();
   const platform = 'darwin';
 

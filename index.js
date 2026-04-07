@@ -475,9 +475,13 @@ async function cmdKernel(args) {
     }
 
     console.log('\n正在下载...');
-    const result = await kernel.downloadKernel(msg => {
-      console.log(msg);
-    }, mirrorInfo.mirror);
+    const result = await kernel.downloadKernel(
+      msg => {
+        console.log(msg);
+      },
+      mirrorInfo.mirror,
+      info.release,
+    );
     console.log('已更新到 ' + result.version);
   } catch (e) {
     console.error('更新失败: ' + e.message);
