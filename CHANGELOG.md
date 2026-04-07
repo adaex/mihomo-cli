@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.3.0] - 2026-04-07
+
+### 架构重构
+
+- **代码组织优化**：将 `index.js` 中的业务函数迁移到对应模块，职责更清晰
+  - `getActiveSubscription`, `findSubscriptionFuzzy`, `pickSingleSubscription` → `subscription.js`
+  - `parseMirrorArg`, `normalizeMirrorUrl` → `utils.js`
+  - `openLogFile`, `viewLogWithTail` → `process.js`
+  - `DIRECTORY_TARGETS` → `config.js`
+
+### 代码质量
+
+- **统一 HTTP 客户端**：在 `utils.js` 中添加 `createHttpClient()` 函数，统一 `User-Agent` 为 `mihomo-cli/${VERSION}`
+- **常量提取**：将硬编码的超时、等待时间等提取为命名常量
+  - `PROCESS_WAIT_ATTEMPTS`, `PROCESS_WAIT_INTERVAL`
+  - `STARTUP_WAIT_MS`, `SUDO_TIMEOUT_MS`, `TUN_MODE_POST_WAIT_MS`
+  - `DEFAULT_LOG_RETENTION_DAYS`
+  - `KERNEL_HTTP_TIMEOUT`, `KERNEL_MAX_CONTENT_LENGTH`, `KERNEL_DOWNLOAD_TIMEOUT`
+
+### 开发工具链
+
+- **ESLint**：配置 ESLint v10 + `@eslint/js` + `globals`，自动检测未使用变量/导入
+- **Husky**：配置 Git hooks
+- **lint-staged**：提交前自动运行 `eslint --fix` + `prettier --write`
+- **Import 风格统一**：所有文件统一使用「内置模块 → 第三方模块 → 本地模块」的分组顺序和空行
+
+### 清理
+
+- 移除未使用的变量导入
+- 未使用的 catch 错误变量统一使用 `_e` 前缀
+
+---
+
 ## [1.2.5] - 2026-04-07
 
 ### 新增功能
