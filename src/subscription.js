@@ -1,7 +1,5 @@
 const axios = require('axios');
-const yaml = require('js-yaml');
 const config = require('./config');
-const utils = require('./utils');
 
 const DEFAULT_UPDATE_INTERVAL_HOURS = 12;
 
