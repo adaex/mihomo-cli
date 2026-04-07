@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.2.4] - 2026-04-07
+
+### 修复
+
+- **路径安全**：`getLogPathByName()` 增加 `isPathUnderDir()` 校验，防止潜在的路径遍历风险
+- **错误提示**：覆写配置文件解析失败时显示警告日志，不再静默忽略
+
+### 重构
+
+- **代码结构**：工具函数（`sleepSync`、`formatBytes`、`isProcessRunning` 等）提取到 `utils.js` 模块，简化各模块依赖
+- **命名规范**：统一函数命名为全称单数
+  - `autoUpdateStaleSubscriptions` → `autoUpdateStaleSubscription`
+  - `applyOverwrites` → `applyOverwrite`
+  - `loadOverwriteFiles` → `loadOverwriteFile`
+  - `listOverwriteFiles` → `listOverwriteFile`
+
+---
+
 ## [1.2.3] - 2026-04-07
 
 ### 优化
