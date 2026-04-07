@@ -15,7 +15,11 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "format": "prettier --write \"**/*.{js,json,md}\""
+  },
+  "devDependencies": {
+    "prettier": "^3.0.0"
   },
   "keywords": [
     "mihomo",
