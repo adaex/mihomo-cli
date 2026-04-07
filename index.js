@@ -245,6 +245,14 @@ function printStatus() {
   console.log('');
 }
 
+function handleStopResult(result) {
+  if (result.remaining && result.remaining.length > 0) {
+    console.error(colors.red('部分进程未终止:') + ' ' + result.remaining.join(', '));
+    console.error('请手动运行: sudo pkill -9 mihomo');
+    process.exit(1);
+  }
+}
+
 async function cmdStart(args) {
   if (!config.hasKernel()) {
     console.error('错误: 未找到内核，请运行 "mihomo kernel"');
@@ -269,13 +277,7 @@ async function cmdStart(args) {
     console.log('停止 ' + count + ' 个进程...');
   }
 
-  const stopResult = processManager.stop(true);
-
-  if (stopResult.remaining && stopResult.remaining.length > 0) {
-    console.error(colors.red('部分进程未终止:') + ' ' + stopResult.remaining.join(', '));
-    console.error('请手动运行: sudo pkill -9 mihomo');
-    process.exit(1);
-  }
+  handleStopResult(processManager.stop(true));
 
   if (hasProcess) {
     console.log(colors.green('已停止') + '\n');
@@ -310,13 +312,7 @@ async function cmdStop() {
   }
 
   console.log('停止 ' + pids.length + ' 个进程...');
-  const result = processManager.stop(true);
-
-  if (result.remaining && result.remaining.length > 0) {
-    console.error(colors.red('部分进程未终止:') + ' ' + result.remaining.join(', '));
-    console.error('请手动运行: sudo pkill -9 mihomo');
-    process.exit(1);
-  }
+  handleStopResult(processManager.stop(true));
   console.log(colors.green('已停止'));
 }
 
