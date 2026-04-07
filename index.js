@@ -552,7 +552,7 @@ async function cmdSubscription(args) {
     const url = args[2];
     const name = args[3] || 'default';
 
-    if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+    if (!url || !url.startsWith('http')) {
       console.error('错误: 请提供有效的订阅 URL');
       process.exit(1);
     }
@@ -905,13 +905,11 @@ function cmdDirectory(args) {
     console.log('');
     console.log('可用目标:');
     console.log('  root (默认)   根目录');
-    console.log('  subs          订阅目录');
-    console.log('  logs          日志目录');
-    console.log('  data          mihomo 数据目录');
-    console.log('  runtime       运行时目录');
-    console.log('  overwrites    覆写目录');
-    console.log('  settings      设置文件 (settings.json)');
-    console.log('  kernel        内核目录');
+    Object.entries(config.DIRECTORY_TARGETS).forEach(([key, val]) => {
+      if (key !== 'root') {
+        console.log('  ' + key.padEnd(14) + val.label);
+      }
+    });
     console.log('');
     process.exit(1);
   }
