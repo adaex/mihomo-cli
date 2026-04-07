@@ -469,7 +469,7 @@ async function startTunMode(staleState) {
   return { success: true, pid: finalPid, mode: 'tun' };
 }
 
-function stop(wasTunMode) {
+function stop(forceSudo) {
   const allPids = getAllMihomoPids();
   if (allPids.length === 0) {
     clearPid();
@@ -477,7 +477,7 @@ function stop(wasTunMode) {
     return { success: true, notRunning: true };
   }
 
-  const result = cleanupAll(wasTunMode);
+  const result = cleanupAll(forceSudo);
 
   const remaining = getAllMihomoPids();
   if (remaining.length > 0) {

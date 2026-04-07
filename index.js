@@ -368,7 +368,7 @@ async function cmdStop() {
   console.log('已停止');
 }
 
-function cmdUi(args) {
+function cmdUI(args) {
   const uiName = args[1] || 'zash';
   const url = UI_URLS[uiName];
 
@@ -1054,7 +1054,7 @@ async function main() {
       cmdLogs(args);
       break;
     case 'ui':
-      cmdUi(args);
+      cmdUI(args);
       break;
     case 'kernel':
       await cmdKernel(args);
