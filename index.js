@@ -89,11 +89,11 @@ function printHelp() {
       '  logs [编号] [-n N] [-o]      日志列表（0=当前，1+=归档）\n' +
       '\n' +
       '订阅:\n' +
-      '  subscription                列出所有订阅（别名 sub）\n' +
+      '  subscription                 列出所有订阅（别名 sub）\n' +
       '  subscription add <url> [name]  添加订阅\n' +
-      '  subscription update [name]     更新订阅（无参更新所有）\n' +
-      '  subscription use <name>        切换默认订阅\n' +
-      '  subscription web [name]        打开订阅页面\n' +
+      '  subscription update [name]   更新订阅（无参更新所有）\n' +
+      '  subscription use <name>      切换默认订阅\n' +
+      '  subscription web [name]      打开订阅页面\n' +
       '\n' +
       '配置:\n' +
       '  overwrite                   查看覆写状态（别名 ow）\n' +
@@ -418,7 +418,20 @@ function cmdLogs(args) {
     if (targetName === 'current' || targetName === '0') {
       logPath = processMgr.getLogPath();
     } else {
-      logPath = processMgr.getLogPathByName(targetName);
+      // 纯数字 1+ 表示归档日志的位置（最新=1）
+      const parsedIdx = parseInt(targetName);
+      if (!isNaN(parsedIdx) && parsedIdx > 0 && String(parsedIdx) === targetName) {
+        const archiveLogs = processMgr.listLogs();
+        const archive = archiveLogs.archives[parsedIdx - 1];
+        if (!archive) {
+          console.error('错误: 未找到日志 "' + targetName + '"');
+          console.log('使用 "mihomo logs" 查看可用日志列表');
+          process.exit(1);
+        }
+        logPath = archive.path;
+      } else {
+        logPath = processMgr.getLogPathByName(targetName);
+      }
     }
 
     if (!logPath) {
@@ -453,8 +466,15 @@ function cmdLogs(args) {
   console.log('日志列表:');
   console.log('');
 
-  all.forEach((log, idx) => {
-    const num = log.isCurrent ? ' 0' : idx < 10 ? ' ' + idx : '' + idx;
+  let archiveCounter = 0;
+  all.forEach(log => {
+    let num;
+    if (log.isCurrent) {
+      num = ' 0';
+    } else {
+      archiveCounter++;
+      num = archiveCounter < 10 ? ' ' + archiveCounter : '' + archiveCounter;
+    }
     const time = subscription.formatDate(log.mtime);
     const size = subscription.formatBytes(log.size);
     const name = log.isCurrent ? 'mihomo.log (当前运行中)' : log.name;
@@ -462,16 +482,16 @@ function cmdLogs(args) {
     console.log(' ' + num + '. ' + name);
     console.log('    时间: ' + time + '  大小: ' + size);
     if (!log.isCurrent) {
-      console.log('    查看: mihomo logs ' + idx + '  或  mihomo logs -o ' + idx);
+      console.log('    查看: mihomo logs ' + archiveCounter + '  或  mihomo logs ' + archiveCounter + ' -o');
     }
     console.log('');
   });
 
   console.log('用法:');
   console.log('  mihomo logs 0          # 查看当前日志 (最后 100 行)');
-  console.log('  mihomo logs 1          # 查看第 1 个归档日志');
+  console.log('  mihomo logs 1          # 查看第 1 个归档日志（最新）');
   console.log('  mihomo logs 1 -n 200   # 查看 200 行');
-  console.log('  mihomo logs 1 -o        # 用系统默认程序打开');
+  console.log('  mihomo logs 1 -o       # 用系统默认程序打开');
   console.log('');
 }
 
