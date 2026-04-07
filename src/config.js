@@ -92,6 +92,7 @@ function readSettings() {
       settingsCache = JSON.parse(content);
       return settingsCache;
     } catch (_e) {
+      console.warn('警告: settings.json 格式损坏，使用默认设置（原文件已保留）');
       settingsCache = {};
       return settingsCache;
     }
