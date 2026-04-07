@@ -149,26 +149,36 @@ function normalizeMirrorUrl(val) {
 
 /**
  * 解析镜像参数（从 index.js 移入）
- * 返回: { mirror: 镜像URL|null, isOverride: boolean }
+ * 返回: { mirror: 镜像URL|null, isOverride: boolean, type: 'download'|'all' }
  * mirror = null 表示禁用镜像（直连）
  * mirror = undefined 表示使用默认/配置
+ * type: download=仅下载用镜像, all=API和下载都用镜像
  */
 function parseMirrorArg(args) {
   if (!args || args.length < 2) {
-    return { mirror: null, isOverride: false };
+    return { mirror: null, isOverride: false, type: 'download' };
   }
 
   if (args.includes('--no-mirror') || args.includes('--direct')) {
-    return { mirror: null, isOverride: true };
+    return { mirror: null, isOverride: true, type: 'download' };
+  }
+
+  const mirrorAllIdx = args.indexOf('--mirror-all');
+  if (mirrorAllIdx >= 0) {
+    const nextArg = args[mirrorAllIdx + 1];
+    if (!nextArg || nextArg.startsWith('-')) {
+      return { mirror: 'https://v6.gh-proxy.org/', isOverride: true, type: 'all' };
+    }
+    return { mirror: normalizeMirrorUrl(nextArg), isOverride: true, type: 'all' };
   }
 
   const mirrorIdx = args.indexOf('--mirror');
   if (mirrorIdx >= 0) {
     const nextArg = args[mirrorIdx + 1];
     if (!nextArg || nextArg.startsWith('-')) {
-      return { mirror: 'https://v6.gh-proxy.org/', isOverride: true };
+      return { mirror: 'https://v6.gh-proxy.org/', isOverride: true, type: 'download' };
     }
-    return { mirror: normalizeMirrorUrl(nextArg), isOverride: true };
+    return { mirror: normalizeMirrorUrl(nextArg), isOverride: true, type: 'download' };
   }
 
   for (let i = 1; i < args.length; i++) {

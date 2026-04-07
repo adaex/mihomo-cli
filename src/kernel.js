@@ -24,7 +24,7 @@ const HTTP_CLIENT = utils.createHttpClient({
 
 function withMirror(url, overrideMirror) {
   const mirror = overrideMirror !== undefined ? overrideMirror : config.getGitHubMirror();
-  if (mirror && url.startsWith('https://github.com/')) {
+  if (mirror && (url.startsWith('https://github.com/') || url.startsWith('https://api.github.com/'))) {
     return mirror + url;
   }
   return url;
@@ -65,8 +65,8 @@ function findMatchingAsset(assets, platform, arch) {
   return matchingAssets[0];
 }
 
-async function getLatestRelease(repo) {
-  const url = 'https://api.github.com/repos/' + repo + '/releases';
+async function getLatestRelease(repo, overrideMirror) {
+  const url = withMirror('https://api.github.com/repos/' + repo + '/releases', overrideMirror);
   const response = await HTTP_CLIENT.get(url);
 
   const releases = response.data;
@@ -90,9 +90,9 @@ async function getLatestRelease(repo) {
   return releases[0];
 }
 
-async function checkUpdate() {
+async function checkUpdate(overrideMirror) {
   const currentVersion = config.getKernelVersion();
-  const latest = await getLatestRelease(GITHUB_REPO);
+  const latest = await getLatestRelease(GITHUB_REPO, overrideMirror);
   const latestVersion = latest.tag_name;
 
   let needsUpdate = false;
@@ -145,7 +145,7 @@ function findBinaryInDir(dir) {
 async function downloadKernel(progressCallback, mirror, releaseInfo) {
   config.ensureDirs();
 
-  const latest = releaseInfo || (await getLatestRelease(GITHUB_REPO));
+  const latest = releaseInfo || (await getLatestRelease(GITHUB_REPO, mirror));
   const arch = getArch();
   const platform = 'darwin';
 

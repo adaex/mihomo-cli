@@ -116,7 +116,7 @@ function writeSettings(settings) {
 
 // GitHub 镜像配置
 const DEFAULT_GITHUB_MIRROR = 'https://v6.gh-proxy.org/';
-const AVAILABLE_MIRRORS = ['v6.gh-proxy.org', 'gh-proxy.org', 'hk.gh-proxy.org', 'cdn.gh-proxy.org', 'edgeone.gh-proxy.org'];
+const AVAILABLE_MIRRORS = ['gh-proxy.org', 'v6.gh-proxy.org', 'hk.gh-proxy.org', 'cdn.gh-proxy.org'];
 
 function getGitHubMirror() {
   const settings = readSettings();
