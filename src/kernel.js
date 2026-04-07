@@ -1,7 +1,7 @@
 // 内置模块
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 
 // 第三方模块
 const { compareVersions } = require('compare-versions');
@@ -16,7 +16,7 @@ const KERNEL_HTTP_TIMEOUT = 120000;
 const KERNEL_MAX_CONTENT_LENGTH = 200 * 1024 * 1024;
 const KERNEL_DOWNLOAD_TIMEOUT = 180000;
 
-// 内核专用 HTTP 客户端（超时和容量较大，适合下载大文件）
+// GitHub API 专用 HTTP 客户端（仅用于获取版本信息，不用于下载文件）
 const HTTP_CLIENT = utils.createHttpClient({
   timeout: KERNEL_HTTP_TIMEOUT,
   maxContentLength: KERNEL_MAX_CONTENT_LENGTH,
@@ -161,27 +161,28 @@ async function downloadKernel(progressCallback, mirror) {
 
   const downloadUrl = withMirror(asset.browser_download_url, mirror);
   const tempPath = path.join(config.DIRS.core, asset.name);
+  const sizeMB = (asset.size / 1024 / 1024).toFixed(2);
 
   if (progressCallback) {
-    const sizeMB = (asset.size / 1024 / 1024).toFixed(2);
     progressCallback('下载内核: ' + asset.name + ' (' + sizeMB + ' MB)');
   }
 
-  const response = await HTTP_CLIENT({
-    method: 'get',
-    url: downloadUrl,
-    responseType: 'stream',
-    timeout: KERNEL_DOWNLOAD_TIMEOUT,
-  });
+  const curlResult = spawnSync(
+    'curl',
+    ['-L', '--progress-bar', '--connect-timeout', '30', '--max-time', String(Math.floor(KERNEL_DOWNLOAD_TIMEOUT / 1000)), '-o', tempPath, downloadUrl],
+    { stdio: 'inherit' },
+  );
 
-  const writer = fs.createWriteStream(tempPath);
-  response.data.pipe(writer);
+  if (curlResult.status !== 0) {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {}
+    throw new Error('下载失败 (curl 退出码 ' + curlResult.status + ')');
+  }
 
-  await new Promise((resolve, reject) => {
-    writer.on('finish', resolve);
-    writer.on('error', reject);
-    response.data.on('error', reject);
-  });
+  if (!fs.existsSync(tempPath)) {
+    throw new Error('下载失败: 文件未生成');
+  }
 
   if (progressCallback) {
     progressCallback('解压内核...');
