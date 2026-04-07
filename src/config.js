@@ -247,14 +247,16 @@ function hasKernel() {
   return fs.existsSync(PATHS.mihomoBinary);
 }
 
-let kernelVersionCache = undefined;
+let kernelVersionCache = null;
+let kernelVersionCached = false;
 
 function getKernelVersion() {
   if (!hasKernel()) {
-    kernelVersionCache = undefined;
+    kernelVersionCache = null;
+    kernelVersionCached = false;
     return null;
   }
-  if (kernelVersionCache !== undefined) return kernelVersionCache;
+  if (kernelVersionCached) return kernelVersionCache;
   try {
     const output = execSync('"' + PATHS.mihomoBinary + '" -v 2>&1 || true', {
       encoding: 'utf8',
@@ -262,14 +264,14 @@ function getKernelVersion() {
     if (output) {
       const match = output.match(/v?[\d]+\.[\d]+\.[\d]+/);
       kernelVersionCache = match ? match[0] : output;
-      return kernelVersionCache;
+    } else {
+      kernelVersionCache = 'unknown';
     }
-    kernelVersionCache = 'unknown';
-    return kernelVersionCache;
   } catch (_e) {
     kernelVersionCache = 'unknown';
-    return kernelVersionCache;
   }
+  kernelVersionCached = true;
+  return kernelVersionCache;
 }
 
 const TUN_CONFIG = {
@@ -444,7 +446,8 @@ module.exports = {
   hasKernel,
   getKernelVersion,
   clearKernelVersionCache: () => {
-    kernelVersionCache = undefined;
+    kernelVersionCache = null;
+    kernelVersionCached = false;
   },
   getGitHubMirror,
   setGitHubMirror,
