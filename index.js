@@ -746,10 +746,32 @@ async function cmdUpdate() {
   }
 }
 
+async function confirmPrompt(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await new Promise(resolve => {
+    rl.question(question + ' (y/N) ', a => {
+      rl.close();
+      resolve(a);
+    });
+  });
+  return answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes';
+}
+
 async function cmdReset(args) {
   const fullReset = args && (args.includes('--full') || args.includes('-f'));
   const kernelOnly = args && args.includes('--kernel');
   const skipConfirm = args && (args.includes('--yes') || args.includes('-y'));
+
+  if (!fullReset && !kernelOnly && args && args.slice(1).some(a => !a.startsWith('-'))) {
+    console.error('错误: 未知的 reset 选项');
+    console.log('');
+    console.log('用法:');
+    console.log('  mihomo reset              # 重置配置（保留内核）');
+    console.log('  mihomo reset --kernel     # 只删除内核');
+    console.log('  mihomo reset --full       # 完整重置（含内核）');
+    console.log('  加 --yes / -y             # 跳过确认');
+    process.exit(1);
+  }
 
   if (kernelOnly) {
     if (!config.hasKernel()) {
@@ -757,26 +779,22 @@ async function cmdReset(args) {
       return;
     }
 
-    const mode = '删除内核';
-    console.log(mode);
+    const kernelVersion = config.getKernelVersion();
+    console.log('将删除内核: ' + config.PATHS.mihomoBinary + (kernelVersion ? ' (' + kernelVersion + ')' : ''));
 
-    if (!skipConfirm) {
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise(resolve => {
-        rl.question('确认? (y/N) ', a => {
-          rl.close();
-          resolve(a);
-        });
-      });
-      if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
-        console.log('已取消');
-        return;
-      }
+    const pids = processManager.getAllMihomoPids();
+    if (pids.length > 0) {
+      console.log(colors.yellow('警告: mihomo 正在运行 (PID ' + pids.join(', ') + ')，删除内核后将无法重新启动'));
+    }
+
+    if (!skipConfirm && !(await confirmPrompt('确认删除内核?'))) {
+      console.log('已取消');
+      return;
     }
 
     config.resetUserData({ kernelOnly: true });
     config.clearKernelVersionCache();
-    console.log('已删除内核');
+    console.log(colors.green('已删除内核'));
     return;
   }
 
@@ -790,30 +808,19 @@ async function cmdReset(args) {
     }
   }
 
-  const mode = fullReset ? '完整重置 (含内核)' : '重置配置';
-  console.log(mode);
-
-  if (!skipConfirm) {
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-
-    const answer = await new Promise(resolve => {
-      rl.question('确认? (y/N) ', a => {
-        rl.close();
-        resolve(a);
-      });
-    });
-
-    if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
-      console.log('已取消');
-      return;
-    }
+  if (fullReset) {
+    console.log('将删除: 订阅、日志、设置、运行数据、内核');
+  } else {
+    console.log('将删除: 订阅、日志、设置、运行数据（保留内核）');
   }
 
-  const count = config.resetUserData({ keepKernel: !fullReset });
-  console.log('已重置 ' + count + ' 项');
+  if (!skipConfirm && !(await confirmPrompt('确认重置?'))) {
+    console.log('已取消');
+    return;
+  }
+
+  config.resetUserData({ keepKernel: !fullReset });
+  console.log(colors.green('已重置'));
 }
 
 function printOverwriteList() {
