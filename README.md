@@ -28,7 +28,7 @@ npm install -g mihomo-cli
 ### 方式二：源码安装
 
 ```bash
-git clone https://github.com/yourname/mihomo-cli.git
+git clone https://github.com/adaex/mihomo-cli.git
 cd mihomo-cli
 npm install
 npm link
@@ -79,49 +79,50 @@ mihomo ui yacd     # YACD
 
 ### 核心命令
 
-| 命令 | 说明 |
-|------|------|
-| `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式 |
-| `mihomo stop` | 停止代理 |
-| `mihomo status` | 查看运行状态 |
-| `mihomo log` | 实时查看日志 (`-o` 用系统编辑器打开) |
-| `mihomo logs` | 列出所有日志（当前 + 历史归档） |
-| `mihomo logs <编号>` | 查看指定日志（`0`=当前日志，`1+`=归档日志，支持 `-n N` 指定行数、`-o` 打开） |
+| 命令                        | 说明                                                                         |
+| --------------------------- | ---------------------------------------------------------------------------- |
+| `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式                                                       |
+| `mihomo stop`               | 停止代理                                                                     |
+| `mihomo status`             | 查看运行状态                                                                 |
+| `mihomo log`                | 实时查看日志 (`-o` 用系统编辑器打开)                                         |
+| `mihomo logs`               | 列出所有日志（当前 + 历史归档）                                              |
+| `mihomo logs <编号>`        | 查看指定日志（`0`=当前日志，`1+`=归档日志，支持 `-n N` 指定行数、`-o` 打开） |
 
 ### 订阅管理
 
-| 命令 | 说明 |
-|------|------|
-| `mihomo sub list` | 列出所有订阅（含流量、到期时间） |
-| `mihomo sub add <url> [name]` | 添加订阅 |
-| `mihomo sub update` | 更新所有订阅 |
-| `mihomo sub update <name>` | 更新指定订阅（支持模糊匹配） |
-| `mihomo sub use <name>` | 设置默认订阅（支持模糊匹配，自动重启） |
-| `mihomo sub web [name]` | 打开订阅页面（无参打开默认） |
+| 命令                          | 说明                                   |
+| ----------------------------- | -------------------------------------- |
+| `mihomo sub`                  | 列出所有订阅（含流量、到期时间）       |
+| `mihomo sub add <url> [name]` | 添加订阅                               |
+| `mihomo sub update`           | 更新所有订阅                           |
+| `mihomo sub update <name>`    | 更新指定订阅（支持模糊匹配）           |
+| `mihomo sub use <name>`       | 设置默认订阅（支持模糊匹配，自动重启） |
+| `mihomo sub web [name]`       | 打开订阅页面（无参打开默认）           |
 
 ### 覆写配置
 
-| 命令 | 说明 |
-|------|------|
+| 命令                           | 说明                       |
+| ------------------------------ | -------------------------- |
 | `mihomo ow` / `mihomo ow list` | 查看覆写配置状态和文件列表 |
-| `mihomo ow on` | 启用覆写配置（自动重启） |
-| `mihomo ow off` | 禁用覆写配置（自动重启） |
+| `mihomo ow on`                 | 启用覆写配置（自动重启）   |
+| `mihomo ow off`                | 禁用覆写配置（自动重启）   |
 
 ### 其他命令
 
-| 命令 | 说明 |
-|------|------|
-| `mihomo kernel [镜像\|--no-mirror]` | 更新内核 |
-| `mihomo ui [zash\|dash\|yacd]` | 打开 Web UI |
-| `mihomo dir` | 显示数据目录位置 |
-| `mihomo dir open [target]` | 打开指定目录（`root`, `subs`, `logs`, `overwrites` 等） |
-| `mihomo reset [--full]` | 重置用户数据 (--full 同时删除内核) |
-| `mihomo version` | 显示版本信息 |
-| `mihomo help` | 显示帮助信息 |
+| 命令                                | 说明                                                    |
+| ----------------------------------- | ------------------------------------------------------- |
+| `mihomo kernel [镜像\|--no-mirror]` | 更新内核                                                |
+| `mihomo ui [zash\|dash\|yacd]`      | 打开 Web UI                                             |
+| `mihomo dir`                        | 显示数据目录位置                                        |
+| `mihomo dir open [target]`          | 打开指定目录（`root`, `subs`, `logs`, `overwrites` 等） |
+| `mihomo reset [--full]`             | 重置用户数据 (--full 同时删除内核)                      |
+| `mihomo version`                    | 显示版本信息                                            |
+| `mihomo help`                       | 显示帮助信息                                            |
 
 ### 命令别名
 
 以下任意命令等效：
+
 - `mihomo-cli` (原名)
 - `mihomo`
 - `mmc`
@@ -162,7 +163,7 @@ mihomo kernel --no-mirror
 
 ## 订阅自动更新
 
-- 默认更新间隔：12 小时（或订阅服务端指定的 `profile-update-interval`）
+- 默认更新间隔：12 小时（或订阅服务端指rofile-update-interval`）
 - 触发时机：`start` 命令、`sub list` 命令
 - 更新失败时继续使用本地缓存，不影响使用
 
@@ -204,12 +205,12 @@ mihomo kernel --no-mirror
 
 覆写配置支持以下特殊操作符：
 
-| 语法 | 作用 | 示例 |
-|------|------|------|
-| `key!` | 强制覆盖整个对象（不深度合并） | `dns!`: { ... } |
-| `+key` | 数组前置插入 | `+proxies`: [...] |
-| `key+` | 数组追加 | `rules+`: [...] |
-| `<+key>` | 键名以 `+` 开头时转义 | `<+.google.cn>`: ... |
+| 语法     | 作用                           | 示例                 |
+| -------- | ------------------------------ | -------------------- |
+| `key!`   | 强制覆盖整个对象（不深度合并） | `dns!`: { ... }      |
+| `+key`   | 数组前置插入                   | `+proxies`: [...]    |
+| `key+`   | 数组追加                       | `rules+`: [...]      |
+| `<+key>` | 键名以 `+` 开头时转义          | `<+.google.cn>`: ... |
 
 ### 示例
 
@@ -225,18 +226,18 @@ dns!:
 
 # 追加规则
 rules+:
-  - "DOMAIN-SUFFIX,example.com,DIRECT"
+  - 'DOMAIN-SUFFIX,example.com,DIRECT'
 ```
 
 ## Web UI
 
 内置三个常用 Web UI：
 
-| 名称 | 地址 | 说明 |
-|------|------|------|
-| zash | https://board.zash.run.place | 现代简洁界面（默认） |
-| dash | https://metacubex.github.io/metacubexd | MetaCubeX 官方 UI |
-| yacd | https://yacd.metacubex.one | 经典 YACD 界面 |
+| 名称 | 地址                                     | 说明                 |
+| ---- | ---------------------------------------- | -------------------- |
+| zash | <https://board.zash.run.place>           | 现代简洁界面（默认） |
+| dash | <https://metacubex.github.io/metacubexd> | MetaCubeX 官方 UI    |
+| yacd | <https://yacd.metacubex.one>             | 经典 YACD 界面       |
 
 ## 故障排除
 
@@ -261,6 +262,9 @@ sudo pkill -9 mihomo
 ### 端口被占用
 
 默认端口（取决于订阅配置）：
+
+默认端口（取决于订阅配置）：
+
 - Mixed 端口: `7890`
 - 外部控制器: `127.0.0.1:9090`
 
