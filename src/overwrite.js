@@ -171,7 +171,7 @@ function setOverwriteEnabled(enabled) {
  * 读取 overwrites 目录下的所有 yaml 文件
  * 按文件名排序返回
  */
-function loadOverwriteFiles() {
+function loadOverwriteFile() {
   const dir = getOverwritesDir();
 
   if (!fs.existsSync(dir)) {
@@ -207,12 +207,12 @@ function loadOverwriteFiles() {
 /**
  * 应用所有覆写配置到基础配置
  */
-function applyOverwrites(baseConfig) {
+function applyOverwrite(baseConfig) {
   if (!isOverwriteEnabled()) {
     return baseConfig;
   }
 
-  const overwriteFiles = loadOverwriteFiles();
+  const overwriteFiles = loadOverwriteFile();
 
   if (overwriteFiles.length === 0) {
     return baseConfig;
@@ -230,8 +230,8 @@ function applyOverwrites(baseConfig) {
 /**
  * 列出覆写文件信息
  */
-function listOverwriteFiles() {
-  const files = loadOverwriteFiles();
+function listOverwriteFile() {
+  const files = loadOverwriteFile();
   const enabled = isOverwriteEnabled();
   const dir = getOverwritesDir();
 
@@ -249,6 +249,6 @@ function listOverwriteFiles() {
 module.exports = {
   isOverwriteEnabled,
   setOverwriteEnabled,
-  applyOverwrites,
-  listOverwriteFiles,
+  applyOverwrite,
+  listOverwriteFile,
 };

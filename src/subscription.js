@@ -148,7 +148,7 @@ async function tryUpdateOne(sub) {
   }
 }
 
-async function autoUpdateStaleSubscriptions() {
+async function autoUpdateStaleSubscription() {
   const allSubs = config.getSubscriptionsWithCache();
   const staleSubs = allSubs.filter(needsAutoUpdate);
 
@@ -189,5 +189,5 @@ module.exports = {
   prepareConfigForStart,
   formatProxySummary,
   tryUpdateOne,
-  autoUpdateStaleSubscriptions,
+  autoUpdateStaleSubscription,
 };

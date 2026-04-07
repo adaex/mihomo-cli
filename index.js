@@ -128,7 +128,7 @@ function printStatus() {
   const status = processMgr.getStatus();
   const info = config.getConfigInfo();
   const owEnabled = overwrite.isOverwriteEnabled();
-  const owFiles = overwrite.listOverwriteFiles().files;
+  const owFiles = overwrite.listOverwriteFile().files;
   const activeSub = getActiveSubscription();
 
   console.log('');
@@ -280,7 +280,7 @@ async function cmdStart(args) {
     process.exit(1);
   }
 
-  await subscription.autoUpdateStaleSubscriptions();
+  await subscription.autoUpdateStaleSubscription();
 
   // 每次 start 都先确保完全干净的状态（停止进程 + 清理运行时文件）
   const status = processMgr.getStatus();
@@ -561,7 +561,7 @@ async function cmdKernel(args) {
 }
 
 async function printSubscriptionList() {
-  const updateResult = await subscription.autoUpdateStaleSubscriptions();
+  const updateResult = await subscription.autoUpdateStaleSubscription();
   if (updateResult.total > 0) {
     console.log('');
   }
@@ -828,7 +828,7 @@ async function cmdReset(args) {
 }
 
 function printOverwriteList() {
-  const info = overwrite.listOverwriteFiles();
+  const info = overwrite.listOverwriteFile();
   console.log('状态: ' + (info.enabled ? '已启用' : '已禁用'));
   console.log('目录: ' + info.dir);
   console.log('');

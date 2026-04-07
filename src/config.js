@@ -315,7 +315,7 @@ function buildConfig(subRawContent, mode) {
   const overwrite = require('./overwrite');
 
   // 应用覆写配置
-  const withOverwrites = overwrite.applyOverwrites(baseConfig);
+  const withOverwrites = overwrite.applyOverwrite(baseConfig);
 
   // 合并 BASE_CONFIG（优先级高于覆写）
   const merged = { ...withOverwrites, ...BASE_CONFIG };
