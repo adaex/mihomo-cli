@@ -202,7 +202,7 @@ function printStatus() {
   if (info && status.running) {
     modeLabel = colors.cyan(info.tun ? ' (TUN)' : ' (Mixed)');
   }
-  const statusText = status.running ? colors.green('● 运行中') : colors.yellow('○ 已停止');
+  const statusText = status.running ? colors.green('● 运行中') : colors.yellow('不在运行');
   console.log(colors.gray('状态: ') + statusText + modeLabel);
   console.log(colors.gray('内核: ') + (status.kernelVersion || '未安装'));
 
@@ -307,7 +307,7 @@ async function cmdStart(args) {
 async function cmdStop() {
   const pids = processManager.getAllMihomoPids();
   if (pids.length === 0) {
-    console.log(colors.yellow('未在运行'));
+    console.log(colors.yellow('不在运行'));
     return;
   }
 
