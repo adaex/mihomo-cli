@@ -513,10 +513,10 @@ async function printSubscriptionList() {
     const defaultMark = i === 0 ? colors.green(' [默认]') : '';
     const interval = s.update_interval || subscription.DEFAULT_UPDATE_INTERVAL_HOURS;
     console.log('  ' + (i + 1) + '. ' + s.name + defaultMark);
-    console.log('    ' + colors.gray('更新:') + ' ' + time + ' (间隔: ' + interval + 'h)');
+    console.log('    ' + colors.gray('更新: ') + time + ' (间隔: ' + interval + 'h)');
 
     if (s.username) {
-      console.log('    ' + colors.gray('用户:') + ' ' + s.username);
+      console.log('    ' + colors.gray('用户: ') + s.username);
     }
     if (s.download !== undefined || s.total !== undefined) {
       const used = (s.upload || 0) + (s.download || 0);
@@ -527,13 +527,13 @@ async function printSubscriptionList() {
         const percent = Math.min((used / s.total) * 100, 100);
         percentStr = ' (' + percent.toFixed(1) + '%)';
       }
-      console.log('    ' + colors.gray('流量:') + ' ' + usedStr + ' / ' + totalStr + percentStr);
+      console.log('    ' + colors.gray('流量: ') + usedStr + ' / ' + totalStr + percentStr);
     }
     if (s.expire !== undefined) {
-      console.log('    ' + colors.gray('到期:') + ' ' + utils.formatTimestamp(s.expire));
+      console.log('    ' + colors.gray('到期: ') + utils.formatTimestamp(s.expire));
     }
     if (s.web_page_url) {
-      console.log('    ' + colors.gray('页面:') + ' ' + s.web_page_url);
+      console.log('    ' + colors.gray('页面: ') + s.web_page_url);
     }
   });
   console.log('');
@@ -921,8 +921,8 @@ async function cmdReset(args) {
 function printOverwriteList() {
   const info = overwrite.listOverwriteFile();
   const statusText = info.enabled ? colors.green('已启用') : colors.yellow('已禁用');
-  console.log(colors.gray('状态:') + ' ' + statusText);
-  console.log(colors.gray('目录:') + ' ' + info.dir);
+  console.log(colors.gray('状态: ') + statusText);
+  console.log(colors.gray('目录: ') + info.dir);
   console.log('');
   if (info.files.length === 0) {
     console.log('暂无覆写文件');
@@ -936,7 +936,7 @@ function printOverwriteList() {
       const num = i < 10 ? ' ' + i : '' + i;
       console.log('  ' + num + '. ' + f.name);
       if (f.keys.length > 0) {
-        console.log('    ' + colors.gray('字段:') + ' ' + f.keys.join(', '));
+        console.log('    ' + colors.gray('字段: ') + f.keys.join(', '));
       }
     });
     console.log('');
