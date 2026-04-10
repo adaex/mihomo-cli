@@ -690,7 +690,7 @@ async function cmdSubscription(args) {
       console.log('订阅信息中缺少页面地址，正在更新订阅...');
       try {
         await subscription.downloadSubscription(target.url, target.name);
-        const cache = config.readSubscriptionsCache();
+        const cache = config.readSubscriptionCache();
         if (cache[target.name] && cache[target.name].web_page_url) {
           webPageUrl = cache[target.name].web_page_url;
         } else {

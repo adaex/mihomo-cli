@@ -158,7 +158,7 @@ async function downloadKernel(progressCallback, mirror, releaseInfo) {
   }
 
   const downloadUrl = withMirror(asset.browser_download_url, mirror);
-  const tempPath = path.join(config.DIRS.core, asset.name);
+  const tempPath = path.join(config.DIRS.kernel, asset.name);
   const sizeMB = (asset.size / 1024 / 1024).toFixed(2);
 
   if (progressCallback) {
@@ -186,7 +186,7 @@ async function downloadKernel(progressCallback, mirror, releaseInfo) {
     progressCallback('解压内核...');
   }
 
-  const extractPath = config.DIRS.core;
+  const extractPath = config.DIRS.kernel;
   let extractedBinary = null;
 
   try {
