@@ -151,13 +151,6 @@ function deepMergeWithOverrides(target, override) {
 }
 
 /**
- * 获取覆写目录路径
- */
-function getOverwritesDir() {
-  return config.DIRS.overwrites;
-}
-
-/**
  * 检查覆写功能是否启用
  */
 function isOverwriteEnabled() {
@@ -173,11 +166,12 @@ function setOverwriteEnabled(enabled) {
 }
 
 /**
- * 读取 overwrites 目录下的所有 yaml 文件
- * 按文件名排序返回
+ * 读取根目录下的覆写文件
+ * 匹配 overwrite.yaml 和 overwrite.*.yaml，按文件名排序
+ * overwrite.yaml 始终第一
  */
 function loadOverwriteFile() {
-  const dir = getOverwritesDir();
+  const dir = config.USER_DATA_DIR;
 
   if (!fs.existsSync(dir)) {
     return [];
@@ -185,8 +179,12 @@ function loadOverwriteFile() {
 
   const files = fs
     .readdirSync(dir)
-    .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
-    .sort();
+    .filter(f => f === 'overwrite.yaml' || /^overwrite\..+\.ya?ml$/.test(f))
+    .sort((a, b) => {
+      if (a === 'overwrite.yaml') return -1;
+      if (b === 'overwrite.yaml') return 1;
+      return a.localeCompare(b);
+    });
 
   const results = [];
 
@@ -239,11 +237,10 @@ function applyOverwrite(baseConfig) {
 function listOverwriteFile() {
   const files = loadOverwriteFile();
   const enabled = isOverwriteEnabled();
-  const dir = getOverwritesDir();
 
   return {
     enabled,
-    dir,
+    dir: config.USER_DATA_DIR,
     files: files.map(f => ({
       name: f.name,
       path: f.path,
@@ -257,4 +254,5 @@ module.exports = {
   setOverwriteEnabled,
   applyOverwrite,
   listOverwriteFile,
+  loadOverwriteFile,
 };

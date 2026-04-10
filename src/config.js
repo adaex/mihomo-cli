@@ -30,22 +30,24 @@ const USER_DATA_DIR = getUserDataDir();
 
 const DIRS = {
   root: PROJECT_ROOT,
-  core: path.join(USER_DATA_DIR, 'core'),
+  kernel: path.join(USER_DATA_DIR, 'kernel'),
   subscriptions: path.join(USER_DATA_DIR, 'subscriptions'),
   logs: path.join(USER_DATA_DIR, 'logs'),
   data: path.join(USER_DATA_DIR, 'data'),
-  runtime: path.join(USER_DATA_DIR, '.runtime'),
-  overwrites: path.join(USER_DATA_DIR, 'overwrites'),
+  runtime: path.join(USER_DATA_DIR, 'runtime'),
 };
 
 const PATHS = {
   root: DIRS.root,
-  mihomoBinary: path.join(DIRS.core, 'mihomo'),
+  mihomoBinary: path.join(DIRS.kernel, 'mihomo'),
   settingsFile: path.join(USER_DATA_DIR, 'settings.json'),
   subscriptionsCacheFile: path.join(DIRS.subscriptions, 'cache.json'),
   configFile: path.join(DIRS.runtime, 'config.yaml'),
   logFile: path.join(DIRS.logs, 'mihomo.log'),
   pidFile: path.join(DIRS.runtime, 'pid'),
+  configStage1Subscription: path.join(DIRS.runtime, '1.subscription.yaml'),
+  configStage2Overwrite: path.join(DIRS.runtime, '2.overwrite.yaml'),
+  configStage3System: path.join(DIRS.runtime, '3.system.yaml'),
 };
 
 function ensureDirs() {
@@ -206,7 +208,11 @@ function addSubscription(url, name) {
   } else {
     subs.push({ name, url });
   }
-  writeSettings({ subscriptions: subs });
+  const updates = { subscriptions: subs };
+  if (!settings.active_subscription && subs.length === 1) {
+    updates.active_subscription = name;
+  }
+  writeSettings(updates);
 }
 
 function setDefaultSubscription(name) {
@@ -216,12 +222,7 @@ function setDefaultSubscription(name) {
   if (idx < 0) {
     return false;
   }
-  if (idx === 0) {
-    return true; // 已经是第一个
-  }
-  const [sub] = subs.splice(idx, 1);
-  subs.unshift(sub);
-  writeSettings({ subscriptions: subs });
+  writeSettings({ active_subscription: name });
   return true;
 }
 
@@ -283,7 +284,6 @@ const TUN_CONFIG = {
     'auto-detect-interface': true,
     'strict-route': true,
   },
-  ipv6: false,
 };
 
 const BASE_CONFIG = {
@@ -314,9 +314,9 @@ function parseYamlOrJson(content, errorMsg) {
 }
 
 function buildConfig(subRawContent, mode) {
-  const baseConfig = parseYamlOrJson(subRawContent, '订阅内容');
+  const subscriptionConfig = parseYamlOrJson(subRawContent, '订阅内容');
 
-  if (!baseConfig) {
+  if (!subscriptionConfig) {
     throw new Error('订阅内容为空');
   }
 
@@ -324,24 +324,48 @@ function buildConfig(subRawContent, mode) {
   const overwrite = require('./overwrite');
 
   // 应用覆写配置
-  const withOverwrites = overwrite.applyOverwrite(baseConfig);
+  const overwriteEnabled = overwrite.isOverwriteEnabled();
+  const withOverwrites = overwrite.applyOverwrite(subscriptionConfig);
+  const overwriteFiles = overwriteEnabled ? overwrite.loadOverwriteFile() : [];
 
-  // 合并 BASE_CONFIG（优先级高于覆写）
-  const merged = { ...withOverwrites, ...BASE_CONFIG };
-
-  if (mode === 'tun') {
-    // 合并 TUN 配置
-    merged.tun = TUN_CONFIG.tun;
-    merged.ipv6 = TUN_CONFIG.ipv6;
-
-    // 确保 DNS 配置与 TUN 模式兼容（保留订阅的 DNS 服务器）
-    merged.dns = merged.dns || {};
-    merged.dns.enable = true;
-    merged.dns['enhanced-mode'] = 'fake-ip';
-    merged.dns['fake-ip-range'] = merged.dns['fake-ip-range'] || '198.18.0.1/16';
+  // 构建系统覆盖值（BASE_CONFIG + 可选 TUN）
+  // 只补充订阅中缺失的字段，不覆盖已有值
+  const systemConfig = {};
+  for (const [key, value] of Object.entries(BASE_CONFIG)) {
+    if (!(key in withOverwrites)) {
+      systemConfig[key] = value;
+    }
   }
 
-  return merged;
+  if (mode === 'tun') {
+    // tun 块始终由系统控制
+    systemConfig.tun = TUN_CONFIG.tun;
+    // dns 只补充 TUN 必需的字段
+    const subDns = withOverwrites.dns || {};
+    systemConfig.dns = {};
+    if (!subDns.enable) systemConfig.dns.enable = true;
+    if (!subDns['enhanced-mode']) systemConfig.dns['enhanced-mode'] = 'fake-ip';
+    if (!subDns['fake-ip-range']) systemConfig.dns['fake-ip-range'] = '198.18.0.1/16';
+    // 如果没有需要补充的 dns 字段，则不设置
+    if (Object.keys(systemConfig.dns).length === 0) {
+      delete systemConfig.dns;
+    }
+  }
+
+  // 合并：订阅(+overwrite) → 系统补充
+  const merged = { ...withOverwrites, ...systemConfig };
+
+  // dns 需要深度合并：保留订阅的 DNS 服务器，叠加系统补充
+  if (systemConfig.dns) {
+    merged.dns = { ...(withOverwrites.dns || {}), ...systemConfig.dns };
+  }
+
+  return {
+    config: merged,
+    subscriptionConfig,
+    overwriteFiles,
+    systemConfig,
+  };
 }
 
 function writeMihomoConfig(configObj) {
@@ -352,6 +376,25 @@ function writeMihomoConfig(configObj) {
     noCompat: true,
   });
   fs.writeFileSync(PATHS.configFile, content, { mode: 0o600 });
+}
+
+function writeDebugConfig(buildResult) {
+  ensureDirs();
+  const dumpOpts = { indent: 2, lineWidth: -1, noCompat: true };
+
+  // 1. 订阅原始配置
+  fs.writeFileSync(PATHS.configStage1Subscription, yaml.dump(buildResult.subscriptionConfig, dumpOpts), { mode: 0o600 });
+
+  // 2. overwrite 覆写内容（禁用时写空文件）
+  const overwriteMerged = {};
+  for (const f of buildResult.overwriteFiles) {
+    Object.assign(overwriteMerged, f.config);
+  }
+  const overwriteContent = buildResult.overwriteFiles.length > 0 ? yaml.dump(overwriteMerged, dumpOpts) : '# overwrite 已禁用或无覆写文件\n';
+  fs.writeFileSync(PATHS.configStage2Overwrite, overwriteContent, { mode: 0o600 });
+
+  // 3. 系统覆盖值（BASE_CONFIG + TUN_CONFIG）
+  fs.writeFileSync(PATHS.configStage3System, yaml.dump(buildResult.systemConfig, dumpOpts), { mode: 0o600 });
 }
 
 function hasConfig() {
@@ -394,11 +437,11 @@ function resetUserData(options) {
 
   let itemsToRemove;
   if (kernelOnly) {
-    itemsToRemove = [DIRS.core];
+    itemsToRemove = [DIRS.kernel];
   } else {
     itemsToRemove = [PATHS.settingsFile, DIRS.subscriptions, DIRS.logs, DIRS.data, DIRS.runtime];
     if (!keepKernel) {
-      itemsToRemove.push(DIRS.core);
+      itemsToRemove.push(DIRS.kernel);
     }
   }
 
@@ -428,9 +471,7 @@ const DIRECTORY_TARGETS = {
   logs: { path: DIRS.logs, label: '日志目录' },
   data: { path: DIRS.data, label: 'mihomo 数据目录' },
   runtime: { path: DIRS.runtime, label: '运行时目录' },
-  overwrites: { path: DIRS.overwrites, label: '覆写目录' },
-  settings: { path: PATHS.settingsFile, label: '设置文件' },
-  kernel: { path: DIRS.core, label: '内核目录' },
+  kernel: { path: DIRS.kernel, label: '内核目录' },
 };
 
 module.exports = {
@@ -463,6 +504,7 @@ module.exports = {
   parseYamlOrJson,
   buildConfig,
   writeMihomoConfig,
+  writeDebugConfig,
   hasConfig,
   getConfigInfo,
   resetUserData,

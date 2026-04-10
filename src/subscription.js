@@ -48,12 +48,18 @@ function formatProxySummary(info) {
 }
 
 /**
- * 获取当前默认订阅（从 index.js 移入）
+ * 获取当前使用的订阅
  */
 function getActiveSubscription() {
   const subs = config.getSubscriptions();
   if (subs.length === 0) {
     return null;
+  }
+  const settings = config.readSettings();
+  const activeName = settings.active_subscription;
+  if (activeName) {
+    const found = subs.find(s => s.name === activeName);
+    if (found) return found;
   }
   return subs[0];
 }
@@ -175,12 +181,13 @@ function prepareConfigForStart(mode, subName) {
     throw new Error('未找到订阅配置 "' + subName + '"，请先添加订阅');
   }
 
-  const mergedConfig = config.buildConfig(rawContent, mode);
-  config.writeMihomoConfig(mergedConfig);
+  const buildResult = config.buildConfig(rawContent, mode);
+  config.writeMihomoConfig(buildResult.config);
+  config.writeDebugConfig(buildResult);
 
   return {
-    proxies: mergedConfig.proxies ? mergedConfig.proxies.length : 0,
-    proxyGroups: mergedConfig['proxy-groups'] ? mergedConfig['proxy-groups'].length : 0,
+    proxies: buildResult.config.proxies ? buildResult.config.proxies.length : 0,
+    proxyGroups: buildResult.config['proxy-groups'] ? buildResult.config['proxy-groups'].length : 0,
   };
 }
 

@@ -124,7 +124,7 @@ function printHelp() {
       ' update [name]   更新订阅（无参更新所有）\n' +
       '  ' +
       colors.bold('subscription') +
-      ' use <name>      切换默认订阅\n' +
+      ' use <name>      切换当前订阅\n' +
       '  ' +
       colors.bold('subscription') +
       ' web [name]      打开订阅页面\n' +
@@ -142,7 +142,7 @@ function printHelp() {
       '                   显示数据目录位置（别名 dir）\n' +
       '  ' +
       colors.bold('directory') +
-      ' open [target]     打开目录: root|subs|logs|overwrites|...\n' +
+      ' open [target]     打开目录: root|subs|logs|runtime|...\n' +
       '\n' +
       colors.cyan('系统:') +
       '\n' +
@@ -235,7 +235,7 @@ function printStatus() {
   }
 
   if (overwriteEnabled && overwriteFiles.length > 0) {
-    const names = overwriteFiles.map(f => f.name).join(', ');
+    const names = overwriteFiles.map(f => f.name.replace(/^overwrite\.?/, '')).join(', ');
     console.log(colors.gray('覆写: ') + colors.green('已启用') + ' (' + names + ')');
   } else if (overwriteEnabled) {
     console.log(colors.gray('覆写: ') + colors.green('已启用') + ' (无文件)');
@@ -507,10 +507,11 @@ async function printSubscriptionList() {
     console.log('');
     return;
   }
+  const activeSub = subscription.getActiveSubscription();
   console.log(colors.cyan('订阅列表:'));
   subs.forEach((s, i) => {
     const time = utils.formatDate(s.updated_at);
-    const defaultMark = i === 0 ? colors.green(' [默认]') : '';
+    const defaultMark = activeSub && s.name === activeSub.name ? colors.green(' [使用中]') : '';
     const interval = s.update_interval || subscription.DEFAULT_UPDATE_INTERVAL_HOURS;
     console.log('  ' + (i + 1) + '. ' + s.name + defaultMark);
     console.log('    ' + colors.gray('更新: ') + time + ' (间隔: ' + interval + 'h)');
@@ -537,7 +538,7 @@ async function printSubscriptionList() {
     }
   });
   console.log('');
-  console.log('切换默认: mihomo sub use <name>');
+  console.log('切换订阅: mihomo sub use <name>');
   console.log('更新订阅: mihomo sub update [name]');
   console.log('打开页面: mihomo sub web [name]');
   console.log('新增订阅: mihomo sub add <url> [name]');
@@ -638,7 +639,7 @@ async function cmdSubscription(args) {
     const isAlreadyDefault = currentDefault && currentDefault.name === target.name;
 
     if (isAlreadyDefault) {
-      console.log('"' + target.name + '" 已是当前默认订阅');
+      console.log('"' + target.name + '" 已是当前使用的订阅');
       console.log('');
       await printSubscriptionList();
       return;
@@ -650,7 +651,7 @@ async function cmdSubscription(args) {
 
     const success = config.setDefaultSubscription(target.name);
     if (success) {
-      console.log('已设置 "' + target.name + '" 为默认订阅');
+      console.log('已切换到 "' + target.name + '"');
     } else {
       console.error('错误: 未找到订阅 "' + name + '"');
       process.exit(1);
@@ -806,7 +807,7 @@ const RESET_TARGETS = [
     id: 'kernel',
     aliases: ['kernel', 'core'],
     label: '内核',
-    paths: () => [config.DIRS.core],
+    paths: () => [config.DIRS.kernel],
     needsStop: false,
     onAfter: () => config.clearKernelVersionCache(),
     checkEmpty: () => !config.hasKernel(),
@@ -817,7 +818,15 @@ const RESET_TARGETS = [
     id: 'overwrites',
     aliases: ['overwrite', 'overwrites', 'ow'],
     label: '覆写',
-    paths: () => [config.DIRS.overwrites],
+    paths: () => {
+      const fs = require('fs');
+      const dir = config.USER_DATA_DIR;
+      if (!fs.existsSync(dir)) return [];
+      return fs
+        .readdirSync(dir)
+        .filter(f => f === 'overwrite.yaml' || /^overwrite\..+\.ya?ml$/.test(f))
+        .map(f => require('path').join(dir, f));
+    },
     needsStop: false,
   },
 ];
@@ -922,12 +931,13 @@ function printOverwriteList() {
   const info = overwrite.listOverwriteFile();
   const statusText = info.enabled ? colors.green('已启用') : colors.yellow('已禁用');
   console.log(colors.gray('状态: ') + statusText);
-  console.log(colors.gray('目录: ') + info.dir);
+  console.log(colors.gray('位置: ') + info.dir);
   console.log('');
   if (info.files.length === 0) {
     console.log('暂无覆写文件');
     console.log('');
-    console.log('用法示例: 创建文件 ' + path.join(info.dir, '01-custom.yaml'));
+    console.log('用法示例: 创建文件 ' + path.join(info.dir, 'overwrite.yaml'));
+    console.log('         或        ' + path.join(info.dir, 'overwrite.dns.yaml'));
     console.log('');
   } else {
     console.log(colors.cyan('覆写文件') + ' (' + info.files.length + ' 个，按顺序加载):');
@@ -1045,6 +1055,7 @@ function cmdDirectory(args) {
   console.log('数据目录位置:');
   console.log('  根目录: ' + config.USER_DATA_DIR);
   console.log('  全局设置: ' + config.PATHS.settingsFile);
+  console.log('  内核目录: ' + config.DIRS.kernel);
   console.log('  内核文件: ' + config.PATHS.mihomoBinary);
   console.log('  订阅目录: ' + config.DIRS.subscriptions);
   console.log('    - cache.json (订阅缓存：更新时间、流量等)');
@@ -1061,8 +1072,6 @@ function cmdDirectory(args) {
   console.log('  mihomo dir open subs           打开订阅目录');
   console.log('  mihomo dir open logs           打开日志目录');
   console.log('  mihomo dir open runtime        打开运行时目录');
-  console.log('  mihomo dir open overwrites     打开覆写目录');
-  console.log('  mihomo dir open settings       打开设置文件');
   console.log('  mihomo dir open kernel         打开内核目录');
   console.log('');
   console.log('环境变量:');
@@ -1093,9 +1102,14 @@ async function main() {
   }
 
   switch (cmd) {
+    case 'up':
     case 'start':
       await cmdStart(args);
       break;
+    case 'tun':
+      await cmdStart(['start', 'tun']);
+      break;
+    case 'down':
     case 'stop':
       await cmdStop();
       break;
@@ -1108,6 +1122,9 @@ async function main() {
     case 'logs':
       cmdLogs(args);
       break;
+    case 'open':
+      cmdDirectory(['dir', 'open', ...args.slice(1)]);
+      break;
     case 'ui':
       cmdUI(args);
       break;
@@ -1118,6 +1135,9 @@ async function main() {
     case 'update':
     case 'upgrade':
       await cmdUpdate();
+      break;
+    case 'use':
+      await cmdSubscription(['sub', 'use', ...args.slice(1)]);
       break;
     case 'sub':
     case 'subscription':
@@ -1132,6 +1152,12 @@ async function main() {
       break;
     case 'reset':
       await cmdReset(args);
+      break;
+    case 'on':
+      await cmdOverwrite(['ow', 'on']);
+      break;
+    case 'off':
+      await cmdOverwrite(['ow', 'off']);
       break;
     case 'ow':
     case 'overwrite':

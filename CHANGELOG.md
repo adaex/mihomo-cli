@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.5.0] - 2026-04-10
+
+### 新增功能
+
+- **快捷命令**：新增顶层命令快捷方式，减少输入
+  - `mihomo up` = `mihomo start`
+  - `mihomo down` = `mihomo stop`
+  - `mihomo tun` = `mihomo start tun`
+  - `mihomo use <name>` = `mihomo sub use <name>`
+  - `mihomo on` / `mihomo off` = `mihomo ow on` / `mihomo ow off`
+  - `mihomo open <target>` = `mihomo dir open <target>`
+- **订阅选择机制**：使用 `active_subscription` 字段标识当前订阅，不再依赖数组顺序
+- **配置构建调试**：运行时目录生成 3 阶段中间文件，方便排查配置问题
+  - `1.subscription.yaml` — 订阅原始配置
+  - `2.overwrite.yaml` — 覆写合并内容
+  - `3.system.yaml` — 系统补充值（BASE_CONFIG + TUN）
+
+### 重构
+
+- **目录结构调整**：
+  - `core/` → `kernel/`（内核目录）
+  - `.runtime/` → `runtime/`（运行时目录）
+  - `overwrites/` 目录 → 根目录 `overwrite.yaml` + `overwrite.*.yaml`（覆写文件扁平化）
+- **配置合并逻辑**：BASE_CONFIG / TUN_CONFIG 改为只补充订阅中缺失的字段，不再强制覆盖已有值
+- **TUN 模式**：移除 `ipv6: false` 硬编码，交由订阅或覆写控制
+- **`dir open` 目标精简**：移除 `overwrites` 和 `settings`，保留 `root|subs|logs|data|runtime|kernel`
+
+### 优化
+
+- **文案调整**：
+  - "默认订阅" → "当前订阅" / "使用中"
+  - 覆写文件名显示去除 `overwrite.` 前缀
+  - 覆写配置 "目录" → "位置"
+- **dir 信息**：新增显示内核目录路径
+
+---
+
 ## [1.4.1] - 2026-04-08
 
 ### 优化

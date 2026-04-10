@@ -96,7 +96,7 @@ mihomo ui yacd     # YACD
 | `mihomo sub add <url> [name]` | 添加订阅                               |
 | `mihomo sub update`           | 更新所有订阅                           |
 | `mihomo sub update <name>`    | 更新指定订阅（支持模糊匹配）           |
-| `mihomo sub use <name>`       | 设置默认订阅（支持模糊匹配，自动重启） |
+| `mihomo sub use <name>`       | 切换当前订阅（支持模糊匹配，自动重启） |
 | `mihomo sub web [name]`       | 打开订阅页面（无参打开默认）           |
 
 ### 覆写配置
@@ -115,7 +115,7 @@ mihomo ui yacd     # YACD
 | `mihomo update`                   | 更新 mihomo-cli (npm install -g)                                    |
 | `mihomo ui [zash\|dash\|yacd]`    | 打开 Web UI                                                         |
 | `mihomo dir`                      | 显示数据目录位置                                                    |
-| `mihomo dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `overwrites` 等）             |
+| `mihomo dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `kernel` 等）                 |
 | `mihomo reset [目标...] [--full]` | 重置用户数据（可用目标：`subs`, `logs`, `kernel`, `overwrites` 等） |
 | `mihomo version`                  | 显示版本信息                                                        |
 | `mihomo help`                     | 显示帮助信息                                                        |
@@ -128,6 +128,19 @@ mihomo ui yacd     # YACD
 - `mihomo`
 - `mmc`
 - `mh`
+
+### 快捷命令
+
+常用操作的快捷方式：
+
+| 快捷命令               | 等效于                     |
+| ---------------------- | -------------------------- |
+| `mihomo up`            | `mihomo start`             |
+| `mihomo down`          | `mihomo stop`              |
+| `mihomo tun`           | `mihomo start tun`         |
+| `mihomo use <name>`    | `mihomo sub use <name>`    |
+| `mihomo on` / `off`    | `mihomo ow on` / `ow off`  |
+| `mihomo open <target>` | `mihomo dir open <target>` |
 
 ## 模式说明
 
@@ -185,17 +198,18 @@ mihomo kernel --mirror-all hk.gh-proxy.org
 ```
 ~/.mihomo-cli/
 ├── settings.json         # 用户设置（订阅列表等）
+├── overwrite.yaml        # 覆写配置（主文件，可选）
+├── overwrite.*.yaml      # 覆写配置（扩展文件，如 overwrite.dns.yaml）
 ├── subscriptions/
 │   ├── cache.json        # 订阅动态缓存（更新时间、流量、到期时间等）
 │   └── <name>.yaml       # 订阅原始配置
-├── overwrites/           # 覆写配置（按文件名排序加载）
-├── core/
+├── kernel/
 │   └── mihomo            # mihomo 内核二进制
 ├── logs/
 │   ├── mihomo.log        # 当前日志
 │   └── mihomo.YYYY-MM-DD_HH-MM-SS.log  # 归档日志
 ├── data/                 # mihomo 运行数据（GeoIP 等，由内核自行管理）
-└── .runtime/             # 运行时临时文件（stop 自动清除）
+└── runtime/              # 运行时临时文件（stop 自动清除）
     ├── pid               # 进程 PID
     └── config.yaml       # 运行时生成的配置
 ```
@@ -208,8 +222,10 @@ mihomo kernel --mirror-all hk.gh-proxy.org
 
 ### 使用方法
 
-1. 在 `~/.mihomo-cli/overwrites/` 目录下创建 `.yaml` 或 `.yml` 文件
-2. 文件按**文件名顺序**加载，后面的文件会覆盖前面的配置
+1. 在 `~/.mihomo-cli/` 目录下创建覆写文件：
+   - `overwrite.yaml` — 主覆写文件
+   - `overwrite.dns.yaml` — 按功能拆分的扩展文件（`overwrite.*.yaml` 格式）
+2. `overwrite.yaml` 始终最先加载，扩展文件按文件名排序加载
 3. 使用 `mihomo ow on` 启用覆写配置（会自动重启）
 
 ### 特殊语法
@@ -226,7 +242,7 @@ mihomo kernel --mirror-all hk.gh-proxy.org
 ### 示例
 
 ```yaml
-# ~/.mihomo-cli/overwrites/01-custom.yaml
+# ~/.mihomo-cli/overwrite.yaml
 
 # 强制覆盖 dns 配置
 dns!:

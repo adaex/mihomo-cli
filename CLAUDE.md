@@ -59,7 +59,7 @@ This file provides guidance to Claude Code when working with this repository.
 
 ### `dir open` 目标（精确匹配）
 
-`root`, `subs`, `logs`, `data`, `runtime`, `overwrites`, `settings`, `kernel`
+`root`, `subs`, `logs`, `data`, `runtime`, `kernel`
 
 ---
 
@@ -118,12 +118,13 @@ npm run format         # 格式化代码
 
 ```
 settings.json           # 用户设置
+overwrite.yaml          # 覆写配置（主文件，可选）
+overwrite.*.yaml        # 覆写配置（扩展文件，如 overwrite.dns.yaml）
 subscriptions/          # 订阅配置和缓存
-overwrites/             # 覆写配置（按文件名排序加载）
-core/mihomo             # 内核二进制
+kernel/                 # 内核二进制
 logs/                   # 当前日志 + 归档日志
 data/                   # mihomo 运行数据
-.runtime/               # pid, config.yaml
+runtime/                # pid, config.yaml
 ```
 
 ---
