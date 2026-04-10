@@ -6,22 +6,48 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## 项目概述
 
-- **语言**: Node.js (无需编译)
-- **入口**: `index.js`
-- **别名**: `mihomo` (推荐), `mmc`, `mh`, `mihomo-cli`
+- **语言**: TypeScript (ESM)
+- **入口**: `src/index.ts`
+- **构建**: `tsup` → `dist/index.js` (单文件打包)
+- **开发运行**: `tsx src/index.ts`
+- **别名**: `mihomo` (推荐), `mhm`, `mh`, `mihomo-cli`
+- **运行时**: Node.js >= 22
 
 ---
 
 ## 架构
 
-| 模块                  | 职责                              |
-| --------------------- | --------------------------------- |
-| `index.js`            | 命令解析、调度                    |
-| `src/config.js`       | 路径常量、设置读写、配置构建      |
-| `src/subscription.js` | 订阅下载、流量解析、自动更新      |
-| `src/process.js`      | 进程启动/停止、PID 管理、日志轮转 |
-| `src/kernel.js`       | GitHub Releases 检查、下载        |
-| `src/overwrite.js`    | 高级配置合并                      |
+| 模块                       | 职责                              |
+| -------------------------- | --------------------------------- |
+| `src/index.ts`             | 命令路由、信号处理、main()        |
+| `src/types.ts`             | 所有类型定义（集中管理）          |
+| `src/constants.ts`         | 默认配置、UI URLs、镜像列表      |
+| `src/utils.ts`             | 颜色、格式化、flag 解析、HTTP     |
+| `src/paths.ts`             | 路径常量、目录管理                |
+| `src/settings.ts`          | settings.json 读写、订阅缓存     |
+| `src/config.ts`            | 配置构建、YAML 解析、内核版本    |
+| `src/subscription.ts`      | 订阅下载、流量解析、自动更新      |
+| `src/process.ts`           | 进程启动/停止、PID 管理、日志轮转 |
+| `src/kernel.ts`            | GitHub Releases 检查、下载        |
+| `src/overwrite.ts`         | 覆写配置合并                      |
+| `src/commands/*.ts`        | 各命令处理器（每命令一个文件）    |
+
+### 命令处理器
+
+| 文件                          | 命令                           |
+| ----------------------------- | ------------------------------ |
+| `commands/help.ts`            | help, version, 简短帮助       |
+| `commands/status.ts`          | status                         |
+| `commands/start.ts`           | start, tun                     |
+| `commands/stop.ts`            | stop                           |
+| `commands/log.ts`             | log, logs                      |
+| `commands/ui.ts`              | ui                             |
+| `commands/kernel.ts`          | kernel                         |
+| `commands/subscription.ts`    | subscription (add/update/use/list/web) |
+| `commands/overwrite.ts`       | overwrite (on/off/list)        |
+| `commands/directory.ts`       | directory (open/list)          |
+| `commands/reset.ts`           | reset                          |
+| `commands/update.ts`          | update                         |
 
 ---
 
@@ -65,29 +91,43 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## Import 风格
 
-分组顺序：内置模块 → 第三方模块 → 本地模块，组间空一行：
+由 Biome 自动排序。分组顺序：内置模块 → 第三方模块 → 本地模块：
 
-```js
-// 内置模块
-const fs = require('fs');
-const path = require('path');
+```ts
+import fs from 'node:fs';
+import path from 'node:path';
 
-// 第三方模块
-const yaml = require('js-yaml');
+import yaml from 'js-yaml';
 
-// 本地模块
-const config = require('./config');
+import { PATHS } from './paths.js';
 ```
+
+---
+
+## 工具链
+
+| 工具 | 用途 |
+|------|------|
+| TypeScript | 类型检查 |
+| tsup | 构建打包 (esbuild) |
+| tsx | 开发运行 |
+| Biome | Lint + 格式化 |
+| Husky + lint-staged | Git hooks |
+
+---
 
 ## 开发命令
 
 ```bash
-node index.js          # 运行
-node index.js help     # 帮助
+npm run dev            # 用 tsx 直接运行
+npm run build          # 构建到 dist/
+npm run typecheck      # 类型检查
+npm run check          # Biome lint + format 检查
+npm run check:fix      # 自动修复
 npm run format         # 格式化代码
 ```
 
-无测试框架、无 lint。
+无测试框架。
 
 ---
 
@@ -150,6 +190,7 @@ runtime/                # pid, config.yaml
 1. 更新 `package.json` 中的 `version`
 2. 在 `CHANGELOG.md` 顶部添加新版本记录
 3. **检查并更新 `README.md`**（新增功能、命令变更、示例）
-4. 提交: `git add package.json CHANGELOG.md README.md && git commit -m "chore: 发布 vX.Y.Z"`
-5. 发布: `npm publish --otp=<6位验证码>`
-6. 推送: `git push`
+4. 构建: `npm run build`
+5. 提交: `git add . && git commit -m "chore: 发布 vX.Y.Z"`
+6. 发布: `npm publish --otp=<6位验证码>`
+7. 推送: `git push`

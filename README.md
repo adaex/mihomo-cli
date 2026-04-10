@@ -15,7 +15,7 @@
 - 📝 **日志管理** - 实时日志 + 历史日志归档（自动轮转，保留7天）
 - 🎨 **Web UI** - 一键打开 Web 控制面板 (zash/metacubexd/yacd)
 - 🔄 **内核更新** - 自动检查更新，支持 GitHub 镜像加速
-- ⌨️ **命令别名** - `mihomo` / `mmc` / `mh` 均可调用
+- ⌨️ **命令别名** - `mihomo` / `mhm` / `mh` 均可调用
 
 ## 安装
 
@@ -31,6 +31,7 @@ npm install -g mihomo-cli
 git clone https://github.com/adaex/mihomo-cli.git
 cd mihomo-cli
 npm install
+npm run build
 npm link
 ```
 
@@ -126,7 +127,7 @@ mihomo ui yacd     # YACD
 
 - `mihomo-cli` (原名)
 - `mihomo`
-- `mmc`
+- `mhm`
 - `mh`
 
 ### 快捷命令

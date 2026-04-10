@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.0.0] - 2026-04-11
+
+### 架构重写
+
+完整重写为 TypeScript，保持所有功能不变。
+
+- **语言**：JavaScript (CJS) → TypeScript (ESM)
+- **构建**：tsup 单文件打包 (esbuild)，产物 ~170KB
+- **运行时**：Node.js >= 22
+- **工具链**：eslint + prettier → Biome；axios → 原生 fetch
+- **类型系统**：`src/types.ts` 集中管理所有类型定义
+- **模块拆分**：`config.js` (517 行) → `paths.ts` + `settings.ts` + `config.ts`
+- **命令处理器**：从 `index.js` (1177 行) 拆分为 `src/commands/` 下 12 个独立文件
+
+### 变更
+
+- **命令别名**：`mmc` → `mhm`（避免误解）
+- **依赖精简**：移除 axios，运行时仅依赖 js-yaml + compare-versions（已打包进单文件）
+- **开发依赖**：TypeScript 6、tsup 8.5、tsx 4.21、Biome 2.4
+
 ## [1.5.1] - 2026-04-11
 
 ### 修复
