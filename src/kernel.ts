@@ -10,10 +10,9 @@ import { createHttpClient } from './utils.js';
 
 const GITHUB_REPO = 'MetaCubeX/mihomo';
 const KERNEL_HTTP_TIMEOUT = 120_000;
-const KERNEL_MAX_CONTENT_LENGTH = 200 * 1024 * 1024;
 const KERNEL_DOWNLOAD_TIMEOUT = 180_000;
 
-const HTTP_CLIENT = createHttpClient({ timeout: KERNEL_HTTP_TIMEOUT, maxContentLength: KERNEL_MAX_CONTENT_LENGTH });
+const HTTP_CLIENT = createHttpClient({ timeout: KERNEL_HTTP_TIMEOUT });
 
 function withMirror(url: string, mirror: string | null): string {
   if (mirror && (url.startsWith('https://github.com/') || url.startsWith('https://api.github.com/'))) {
@@ -91,7 +90,6 @@ export async function checkUpdate(mirror: string | null): Promise<KernelUpdateIn
     latest: latestVersion,
     needsUpdate,
     assets: latest.assets,
-    htmlUrl: latest.html_url,
     release: latest,
   };
 }

@@ -151,10 +151,10 @@ export function loadOverwriteFile(): OverwriteFileEntry[] {
   return results;
 }
 
-export function applyOverwrite(baseConfig: Record<string, unknown>): Record<string, unknown> {
+export function applyOverwrite(baseConfig: Record<string, unknown>, preloadedFiles?: OverwriteFileEntry[]): Record<string, unknown> {
   if (!isOverwriteEnabled()) return baseConfig;
 
-  const overwriteFiles = loadOverwriteFile();
+  const overwriteFiles = preloadedFiles || loadOverwriteFile();
   if (overwriteFiles.length === 0) return baseConfig;
 
   let result = { ...baseConfig };

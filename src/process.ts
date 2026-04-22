@@ -502,7 +502,6 @@ export function listLogs(): LogList {
       const stat = fs.statSync(filePath);
       result.archives.push({
         name: file,
-        timestamp: match[1],
         path: filePath,
         size: stat.size,
         mtime: stat.mtime,

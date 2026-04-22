@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import { DEFAULT_GITHUB_MIRROR } from './constants.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
 import type { Settings, Subscription, SubscriptionCache, SubscriptionCacheEntry, SubscriptionWithCache } from './types.js';
 
@@ -127,39 +126,6 @@ export function setDefaultSubscription(name: string): boolean {
   return true;
 }
 
-// === GitHub mirror ===
-
-export function getGitHubMirror(): string | null {
-  const settings = readSettings();
-  if (settings.github_mirror === '' || settings.github_mirror === false) {
-    return null;
-  }
-  return (settings.github_mirror as string) || DEFAULT_GITHUB_MIRROR;
-}
-
-export function setGitHubMirror(mirror: string | null | false): string | null {
-  if (mirror === null || mirror === undefined) {
-    writeSettings({ github_mirror: undefined });
-    return DEFAULT_GITHUB_MIRROR;
-  }
-
-  if (mirror === '' || mirror === false) {
-    writeSettings({ github_mirror: '' as unknown as false });
-    return null;
-  }
-
-  let mirrorUrl = mirror as string;
-  if (!mirrorUrl.startsWith('http')) {
-    mirrorUrl = `https://${mirrorUrl}`;
-  }
-  if (!mirrorUrl.endsWith('/')) {
-    mirrorUrl += '/';
-  }
-
-  writeSettings({ github_mirror: mirrorUrl });
-  return mirrorUrl;
-}
-
 // === Subscription raw config ===
 
 function getSubscriptionRawConfigPath(subName: string): string {
@@ -176,39 +142,4 @@ export function readSubscriptionRawConfig(subName: string): string | null {
   const filePath = getSubscriptionRawConfigPath(subName);
   if (!fs.existsSync(filePath)) return null;
   return fs.readFileSync(filePath, 'utf8');
-}
-
-// === Reset ===
-
-export function resetUserData(options: { keepKernel?: boolean; kernelOnly?: boolean } = {}): number {
-  const keepKernel = options.keepKernel !== false;
-  const kernelOnly = options.kernelOnly === true;
-
-  let itemsToRemove: string[];
-  if (kernelOnly) {
-    itemsToRemove = [DIRS.kernel];
-  } else {
-    itemsToRemove = [PATHS.settingsFile, DIRS.subscriptions, DIRS.logs, DIRS.data, DIRS.runtime];
-    if (!keepKernel) {
-      itemsToRemove.push(DIRS.kernel);
-    }
-  }
-
-  let removedCount = 0;
-  for (const item of itemsToRemove) {
-    if (fs.existsSync(item)) {
-      try {
-        fs.rmSync(item, { recursive: true, force: true });
-        removedCount++;
-      } catch (e) {
-        console.warn(`  警告: 无法删除 ${item}: ${(e as Error).message}`);
-      }
-    }
-  }
-
-  if (!kernelOnly) {
-    ensureDirs();
-    settingsCache = null;
-  }
-  return removedCount;
 }

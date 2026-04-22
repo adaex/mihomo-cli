@@ -13,7 +13,7 @@ import { colors, createHttpClient } from './utils.js';
 
 export const DEFAULT_UPDATE_INTERVAL_HOURS = 12;
 
-const HTTP_CLIENT = createHttpClient({ timeout: 60_000, maxContentLength: 50 * 1024 * 1024 });
+const HTTP_CLIENT = createHttpClient({ timeout: 60_000 });
 
 function parseUserInfo(header: string | null): UserInfo | null {
   if (!header) return null;

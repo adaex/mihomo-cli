@@ -32,8 +32,8 @@ export function buildConfig(subRawContent: string, mode: string): BuildConfigRes
   }
 
   const overwriteEnabled = isOverwriteEnabled();
-  const withOverwrites = applyOverwrite(subscriptionConfig);
   const overwriteFiles = overwriteEnabled ? loadOverwriteFile() : [];
+  const withOverwrites = applyOverwrite(subscriptionConfig, overwriteFiles);
 
   const systemConfig: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(BASE_CONFIG)) {
@@ -46,9 +46,9 @@ export function buildConfig(subRawContent: string, mode: string): BuildConfigRes
     systemConfig.tun = TUN_CONFIG.tun;
     const subDns = (withOverwrites.dns || {}) as Record<string, unknown>;
     const dns: Record<string, unknown> = {};
-    if (!subDns.enable) dns.enable = true;
-    if (!subDns['enhanced-mode']) dns['enhanced-mode'] = 'fake-ip';
-    if (!subDns['fake-ip-range']) dns['fake-ip-range'] = '198.18.0.1/16';
+    if (!('enable' in subDns)) dns.enable = true;
+    if (!('enhanced-mode' in subDns)) dns['enhanced-mode'] = 'fake-ip';
+    if (!('fake-ip-range' in subDns)) dns['fake-ip-range'] = '198.18.0.1/16';
     if (Object.keys(dns).length > 0) {
       systemConfig.dns = dns;
     }

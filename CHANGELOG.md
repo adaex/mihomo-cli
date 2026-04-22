@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.0.1] - 2026-04-22
+
+### 修复
+
+- **TUN DNS 默认值**：使用属性存在性检查替代 falsy 检查，避免订阅中 `dns.enable: false` 等值被覆盖
+- **覆写文件名显示**：`overwrite.yaml` 不再显示为 "yaml"，改为 "主文件"
+
+### 优化
+
+- **消除重复文件扫描**：覆写文件加载从每次构建 2 次减少为 1 次
+- **清理死代码**：移除 `resetUserData`、`getGitHubMirror`、`setGitHubMirror`、未使用的类型字段
+
+---
+
 ## [2.0.0] - 2026-04-11
 
 ### 架构重写

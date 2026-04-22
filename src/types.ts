@@ -127,7 +127,6 @@ export interface KernelUpdateInfo {
   latest: string;
   needsUpdate: boolean;
   assets: GitHubAsset[];
-  htmlUrl: string;
   release: GitHubRelease;
 }
 
@@ -168,7 +167,6 @@ export interface LogEntry {
   size: number;
   mtime: Date;
   isCurrent: boolean;
-  timestamp?: string;
 }
 
 export interface LogList {
@@ -221,7 +219,6 @@ export interface DirectoryTarget {
 
 export interface HttpClientOptions {
   timeout?: number;
-  maxContentLength?: number;
 }
 
 export interface HttpResponse {

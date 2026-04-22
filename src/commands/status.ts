@@ -49,7 +49,7 @@ export function printStatus(): void {
   }
 
   if (overwriteEnabled && overwriteFiles.length > 0) {
-    const names = overwriteFiles.map(f => f.name.replace(/^overwrite\.?/, '')).join(', ');
+    const names = overwriteFiles.map(f => f.name.replace(/^overwrite\.?/, '').replace(/\.ya?ml$/, '') || '主文件').join(', ');
     console.log(`${colors.gray('覆写: ')}${colors.green('已启用')} (${names})`);
   } else if (overwriteEnabled) {
     console.log(`${colors.gray('覆写: ')}${colors.green('已启用')} (无文件)`);
