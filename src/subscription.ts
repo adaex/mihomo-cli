@@ -44,6 +44,7 @@ export function loadSubscriptionConfig(subName: string): ParsedSubscription {
 }
 
 function saveSubscriptionConfig(subName: string, parsed: ParsedSubscription): void {
+  shortenProxyNames(parsed);
   parsed.raw.proxies = parsed.proxies;
   parsed.raw['proxy-groups'] = parsed.proxyGroups;
   saveSubscriptionRawConfig(subName, yaml.dump(parsed.raw, YAML_DUMP_OPTS));
@@ -317,7 +318,7 @@ export async function testSubscriptionProxies(
   return { total: results.length, alive, dead: results.length - alive, results };
 }
 
-export function shortenProxyNames(parsed: ParsedSubscription): number {
+function shortenProxyNames(parsed: ParsedSubscription): number {
   const { proxies, proxyGroups } = parsed;
 
   const renameMap = new Map<string, string>();
@@ -391,25 +392,31 @@ export async function autoCleanSubscription(
     concurrency?: number;
     onResult?: (result: ProxyTestResult, index: number, total: number) => void;
   } = {},
-): Promise<{ summary: ProxyTestSummary; removedProxies: number; updatedGroups: number; removedGroups: number }> {
+): Promise<{ summary: ProxyTestSummary; removedProxies: number; updatedGroups: number; removedGroups: number; skipped?: boolean }> {
   const parsed = loadSubscriptionConfig(subName);
-  shortenProxyNames(parsed);
-  saveSubscriptionConfig(subName, parsed);
 
   const summary = await testSubscriptionProxies(subName, { ...options, parsed });
 
   let removedProxies = 0;
   let updatedGroups = 0;
   let removedGroups = 0;
+  let skipped = false;
 
   if (summary.dead > 0) {
-    const deadNames = new Set(summary.results.filter(r => r.delay === null).map(r => r.name));
-    const cleanResult = cleanDeadProxies(parsed, deadNames);
-    removedProxies = cleanResult.removedProxies;
-    updatedGroups = cleanResult.updatedGroups;
-    removedGroups = cleanResult.removedGroups;
+    if (summary.alive === 0 || summary.alive / summary.total < 0.01) {
+      skipped = true;
+    } else {
+      const deadNames = new Set(summary.results.filter(r => r.delay === null).map(r => r.name));
+      const cleanResult = cleanDeadProxies(parsed, deadNames);
+      removedProxies = cleanResult.removedProxies;
+      updatedGroups = cleanResult.updatedGroups;
+      removedGroups = cleanResult.removedGroups;
+    }
+  }
+
+  if (!skipped) {
     saveSubscriptionConfig(subName, parsed);
   }
 
-  return { summary, removedProxies, updatedGroups, removedGroups };
+  return { summary, removedProxies, updatedGroups, removedGroups, skipped };
 }

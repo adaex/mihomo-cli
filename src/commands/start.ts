@@ -77,7 +77,9 @@ export async function cmdStart(args: string[]): Promise<void> {
     console.log('');
     console.log(formatTestSummary(cleanResult.summary));
 
-    if (cleanResult.removedProxies > 0) {
+    if (cleanResult.skipped) {
+      console.log(colors.yellow('存活节点不足 1%，跳过清理。请检查原始订阅是否有效'));
+    } else if (cleanResult.removedProxies > 0) {
       console.log(`${colors.green('已清理')}: ${formatCleanSummary(cleanResult)}`);
 
       console.log('');
