@@ -30,6 +30,10 @@ export function sleepSync(ms: number): void {
   Atomics.wait(sleepBuf, 0, 0, ms);
 }
 
+export function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 export function formatBytes(bytes: unknown): string {
   if (bytes === undefined || bytes === null) return '未知';
   const num = Number(bytes);

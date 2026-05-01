@@ -2,8 +2,11 @@ import { hasKernel } from '../config.js';
 import * as processManager from '../process.js';
 import * as subscription from '../subscription.js';
 import type { StopResult } from '../types.js';
-import { colors } from '../utils.js';
+import { colors, sleep } from '../utils.js';
 import { printStatus } from './status.js';
+import { formatCleanSummary, formatTestSummary, printTestResult } from './subscription.js';
+
+const AUTO_CLEAN_THRESHOLD = 100;
 
 function handleStopResult(result: StopResult): void {
   if (result.remaining && result.remaining.length > 0) {
@@ -57,9 +60,39 @@ export async function cmdStart(args: string[]): Promise<void> {
   try {
     const result = await processManager.start(targetMode);
     console.log(`${colors.green('已启动')} (PID ${result.pid})`);
-    printStatus();
   } catch (e) {
     console.error(`${colors.red('启动失败:')} ${(e as Error).message.split('\n')[0]}`);
     process.exit(1);
   }
+
+  if (configInfo.proxies > AUTO_CLEAN_THRESHOLD) {
+    console.log('');
+    console.log(`节点数 ${configInfo.proxies} 超过 ${AUTO_CLEAN_THRESHOLD}，自动清理...`);
+    console.log('');
+
+    await sleep(1000);
+
+    const cleanResult = await subscription.autoCleanSubscription(sub.name, { onResult: printTestResult });
+
+    console.log('');
+    console.log(formatTestSummary(cleanResult.summary));
+
+    if (cleanResult.removedProxies > 0) {
+      console.log(`${colors.green('已清理')}: ${formatCleanSummary(cleanResult)}`);
+
+      console.log('');
+      console.log('重新加载配置...');
+      handleStopResult(processManager.stop(true));
+      try {
+        configInfo = subscription.prepareConfigForStart(targetMode, sub.name);
+        const result = await processManager.start(targetMode);
+        console.log(`${colors.green('已重启')} (PID ${result.pid}) · ${subscription.formatProxySummary(configInfo)}`);
+      } catch (e) {
+        console.error(`${colors.red('重启失败:')} ${(e as Error).message.split('\n')[0]}`);
+        process.exit(1);
+      }
+    }
+  }
+
+  printStatus();
 }

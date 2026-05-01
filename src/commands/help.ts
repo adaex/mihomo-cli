@@ -39,6 +39,8 @@ export function printHelp(): void {
       `  ${colors.bold('subscription')} update [name]   更新订阅（无参更新所有）\n` +
       `  ${colors.bold('subscription')} remove <name>   删除订阅\n` +
       `  ${colors.bold('subscription')} web [name]      打开订阅页面\n` +
+      `  ${colors.bold('subscription')} test [name]     测试节点连通性\n` +
+      `  ${colors.bold('subscription')} clean [name]    测速并清理失败节点\n` +
       '\n' +
       `${colors.cyan('配置:')}\n` +
       `  ${colors.bold('overwrite')}                   查看覆写状态（别名 ow）\n` +

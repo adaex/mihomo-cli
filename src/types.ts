@@ -215,6 +215,40 @@ export interface DirectoryTarget {
   label: string;
 }
 
+// === Parsed Subscription ===
+
+export interface ParsedProxy {
+  name: string;
+  [k: string]: unknown;
+}
+
+export interface ParsedProxyGroup {
+  name: string;
+  proxies?: string[];
+  [k: string]: unknown;
+}
+
+export interface ParsedSubscription {
+  raw: Record<string, unknown>;
+  proxies: ParsedProxy[];
+  proxyGroups: ParsedProxyGroup[];
+}
+
+// === Proxy Test ===
+
+export interface ProxyTestResult {
+  name: string;
+  delay: number | null;
+  error?: string;
+}
+
+export interface ProxyTestSummary {
+  total: number;
+  alive: number;
+  dead: number;
+  results: ProxyTestResult[];
+}
+
 // === HTTP Client ===
 
 export interface HttpClientOptions {

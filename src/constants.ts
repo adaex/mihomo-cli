@@ -22,6 +22,8 @@ export const TUN_CONFIG = {
 export const BASE_CONFIG: Record<string, unknown> = {
   'allow-lan': false,
   'external-controller': '127.0.0.1:9090',
+  port: 7890,
+  'socks-port': 7891,
   'log-level': 'warning',
   'geodata-mode': true,
   'geo-update-interval': 24,

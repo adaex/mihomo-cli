@@ -9,8 +9,69 @@ import {
   setDefaultSubscription,
 } from '../settings.js';
 import * as subscription from '../subscription.js';
-import { colors, formatBytes, formatDate, formatTimestamp } from '../utils.js';
+import type { ProxyTestResult, Subscription } from '../types.js';
+import { colors, formatBytes, formatDate, formatTimestamp, getNonFlagArg, parseIntArg } from '../utils.js';
 import { cmdStart } from './start.js';
+
+export function printTestResult(result: ProxyTestResult, index: number, total: number): void {
+  const prefix = `[${index + 1}/${total}]`;
+  if (result.delay !== null) {
+    const delayColor = result.delay < 300 ? colors.green : result.delay < 800 ? colors.yellow : colors.red;
+    console.log(`  ${prefix} ${colors.green('✓')} ${result.name} ${delayColor(`${result.delay}ms`)}`);
+  } else {
+    console.log(`  ${prefix} ${colors.red('✗')} ${result.name} ${colors.gray(result.error || 'timeout')}`);
+  }
+}
+
+export function formatCleanSummary(result: { removedProxies: number; removedGroups: number; updatedGroups: number }): string {
+  const parts = [`移除 ${result.removedProxies} 个节点`];
+  if (result.removedGroups > 0) parts.push(`删除 ${result.removedGroups} 个空分组`);
+  if (result.updatedGroups > 0) parts.push(`更新 ${result.updatedGroups} 个分组`);
+  return parts.join(', ');
+}
+
+export function formatTestSummary(summary: { alive: number; dead: number; total: number }): string {
+  return `结果: ${colors.green(`${summary.alive} 存活`)} / ${colors.red(`${summary.dead} 失败`)} / ${summary.total} 总计`;
+}
+
+function resolveActiveTestTarget(args: string[]): { target: Subscription; timeout: number; concurrency: number } {
+  const subs = getSubscriptions();
+  if (subs.length === 0) {
+    console.error('错误: 没有订阅');
+    process.exit(1);
+  }
+
+  const nameArg = getNonFlagArg(args, 2);
+  const timeout = parseIntArg(args, '-t', '--timeout', 2000);
+  const concurrency = parseIntArg(args, '-j', '--concurrency', 100);
+
+  const activeSub = subscription.getActiveSubscription();
+  let target: Subscription;
+  if (nameArg) {
+    const matches = subscription.findSubscriptionFuzzy(subs, nameArg);
+    target = subscription.pickSingleSubscription(matches, nameArg);
+  } else {
+    if (!activeSub) {
+      console.error('错误: 没有活跃订阅');
+      process.exit(1);
+    }
+    target = activeSub;
+  }
+
+  const status = processManager.getStatus();
+  if (!status.running) {
+    console.error('错误: mihomo 未运行，请先启动 (mihomo start)');
+    process.exit(1);
+  }
+
+  if (!activeSub || activeSub.name !== target.name) {
+    console.error(`错误: 当前使用的订阅是 "${activeSub?.name}"，不是 "${target.name}"`);
+    console.log(`请先切换: mihomo sub use ${target.name}`);
+    process.exit(1);
+  }
+
+  return { target, timeout, concurrency };
+}
 
 async function printSubscriptionList(options?: { autoUpdate?: boolean }): Promise<void> {
   if (options?.autoUpdate !== false) {
@@ -60,6 +121,8 @@ async function printSubscriptionList(options?: { autoUpdate?: boolean }): Promis
   console.log('新增订阅: mihomo sub add <url> [name]');
   console.log('更新订阅: mihomo sub update [name]');
   console.log('删除订阅: mihomo sub remove <name>');
+  console.log('测试节点: mihomo sub test [name]');
+  console.log('清理节点: mihomo sub clean [name]');
   console.log('打开页面: mihomo sub web [name]');
   console.log('');
 }
@@ -259,7 +322,51 @@ export async function cmdSubscription(args: string[]): Promise<void> {
     return;
   }
 
+  if (action === 'clean') {
+    const { target, timeout, concurrency } = resolveActiveTestTarget(args);
+
+    console.log(`清理订阅 "${target.name}"...`);
+    console.log(`超时: ${timeout}ms  并发: ${concurrency}`);
+    console.log('');
+
+    const result = await subscription.autoCleanSubscription(target.name, {
+      timeout,
+      concurrency,
+      onResult: printTestResult,
+    });
+
+    console.log('');
+    console.log(formatTestSummary(result.summary));
+
+    if (result.removedProxies > 0) {
+      console.log(`${colors.green('已清理')}: ${formatCleanSummary(result)}`);
+    }
+
+    console.log('');
+    console.log('提示: 需要重启 mihomo 使更改生效 (mihomo start)');
+    return;
+  }
+
+  if (action === 'test') {
+    const { target, timeout, concurrency } = resolveActiveTestTarget(args);
+
+    console.log(`测试订阅 "${target.name}" 的节点连通性...`);
+    console.log(`超时: ${timeout}ms  并发: ${concurrency}`);
+    console.log('');
+
+    const summary = await subscription.testSubscriptionProxies(target.name, {
+      timeout,
+      concurrency,
+      onResult: printTestResult,
+    });
+
+    console.log('');
+    console.log(formatTestSummary(summary));
+
+    return;
+  }
+
   console.error('错误: 未知的订阅命令');
-  console.log('用法: mihomo sub [list|use|add|update|remove|web]');
+  console.log('用法: mihomo sub [list|use|add|update|remove|web|test|clean]');
   process.exit(1);
 }

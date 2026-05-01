@@ -44,6 +44,9 @@ export function buildConfig(subRawContent: string, mode: string): BuildConfigRes
 
   systemConfig['allow-lan'] = false;
   systemConfig['external-controller'] = BASE_CONFIG['external-controller'];
+  systemConfig.port = BASE_CONFIG.port;
+  systemConfig['socks-port'] = BASE_CONFIG['socks-port'];
+  delete withOverwrites['mixed-port'];
   delete withOverwrites['external-ui'];
   delete withOverwrites['external-ui-name'];
   delete withOverwrites['external-ui-url'];
