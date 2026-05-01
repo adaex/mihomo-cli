@@ -98,8 +98,8 @@ mihomo ui yacd     # YACD
 | ----------------------------- | -------------------------------------- |
 | `mihomo sub`                  | 列出所有订阅（含流量、到期时间）       |
 | `mihomo sub use <name>`       | 切换当前订阅（支持模糊匹配，自动重启） |
-| `mihomo sub add <url> [name]` | 添加订阅并自动切换                     |
-| `mihomo sub free <id>`        | 添加内置免费订阅（`sub free` 列出可用源）|
+| `mihomo sub add <url> [name]` | 添加订阅并自动切换（支持逗号分隔多 URL 合并） |
+| `mihomo sub free <id>`        | 添加内置免费订阅（`0`=合并 #1+#2，`sub free` 列出可用源）|
 | `mihomo sub update`           | 更新所有订阅                           |
 | `mihomo sub update <name>`    | 更新指定订阅（支持模糊匹配）           |
 | `mihomo sub remove <name>`    | 删除订阅（支持模糊匹配）               |
