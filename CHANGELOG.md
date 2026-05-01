@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.2.4] - 2026-05-01
+
+### 修复
+
+- **reset 命令误触 sudo**：修复 `reset` 停止进程时强制使用 sudo 的问题，改为自动检测是否需要提权
+
+### 改进
+
+- **重命名 `shortenProxyNames` → `normalizeProxyNamesBeforeSave`**：明确该函数是写入前的预处理步骤，避免误用
+
+---
+
 ## [2.2.3] - 2026-05-01
 
 ### 修复

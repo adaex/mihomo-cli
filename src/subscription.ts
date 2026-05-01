@@ -44,7 +44,7 @@ export function loadSubscriptionConfig(subName: string): ParsedSubscription {
 }
 
 function saveSubscriptionConfig(subName: string, parsed: ParsedSubscription): void {
-  shortenProxyNames(parsed);
+  normalizeProxyNamesBeforeSave(parsed);
   parsed.raw.proxies = parsed.proxies;
   parsed.raw['proxy-groups'] = parsed.proxyGroups;
   saveSubscriptionRawConfig(subName, yaml.dump(parsed.raw, YAML_DUMP_OPTS));
@@ -318,7 +318,7 @@ export async function testSubscriptionProxies(
   return { total: results.length, alive, dead: results.length - alive, results };
 }
 
-function shortenProxyNames(parsed: ParsedSubscription): number {
+function normalizeProxyNamesBeforeSave(parsed: ParsedSubscription): number {
   const { proxies, proxyGroups } = parsed;
 
   const renameMap = new Map<string, string>();

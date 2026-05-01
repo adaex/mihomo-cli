@@ -140,7 +140,7 @@ export async function cmdReset(args: string[]): Promise<void> {
 
   if (needsStop && pids.length > 0) {
     console.log(`停止 ${pids.length} 个进程...`);
-    processManager.cleanupAll(true);
+    processManager.cleanupAll();
     for (let i = 0; i < processManager.PROCESS_WAIT_ATTEMPTS; i++) {
       if (processManager.getAllMihomoPids().length === 0) break;
       await new Promise(r => setTimeout(r, processManager.PROCESS_WAIT_INTERVAL));
