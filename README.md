@@ -7,7 +7,9 @@
 - 🌐 **订阅管理** - 添加/更新订阅，支持流量统计和到期时间显示
 - 🔄 **自动更新** - 启动时自动检查并更新过期订阅
 - 🔍 **模糊匹配** - `sub use` / `sub web` 支持订阅名称模糊匹配
-- 🧹 **节点测速清理** - `sub test` 测试连通性，`sub clean` 自动清理失败节点，启动时超过 100 节点自动清理
+- 🧹 **节点测速清理** - `sub test` 测试连通性，`sub clean` 自动清理失败节点，启动时自动清理
+- 📊 **免费订阅基准测试** - `bench` 命令一键测试 20 个内置免费订阅源质量排名
+- 🆓 **快速添加免费订阅** - `sub free <id>` 一键添加内置免费订阅源
 - 📝 **覆写配置** - 在订阅基础上进行自定义覆写，支持强制覆盖、数组合并
 - 🔄 **智能重启** - `sub use` 切换订阅、`ow on/off` 切换覆写后自动重启
 - 🚀 **进程管理** - 启动/停止/切换模式，自动清理残留进程
@@ -97,6 +99,7 @@ mihomo ui yacd     # YACD
 | `mihomo sub`                  | 列出所有订阅（含流量、到期时间）       |
 | `mihomo sub use <name>`       | 切换当前订阅（支持模糊匹配，自动重启） |
 | `mihomo sub add <url> [name]` | 添加订阅并自动切换                     |
+| `mihomo sub free <id>`        | 添加内置免费订阅（`sub free` 列出可用源）|
 | `mihomo sub update`           | 更新所有订阅                           |
 | `mihomo sub update <name>`    | 更新指定订阅（支持模糊匹配）           |
 | `mihomo sub remove <name>`    | 删除订阅（支持模糊匹配）               |
@@ -116,6 +119,7 @@ mihomo ui yacd     # YACD
 
 | 命令                              | 说明                                                                |
 | --------------------------------- | ------------------------------------------------------------------- |
+| `mihomo bench [name] [-t] [-j]`   | 免费订阅源基准测试（按名过滤，`-t` 超时，`-j` 并发）               |
 | `mihomo kernel [--mirror [镜像]]` | 更新内核（默认直连，`--mirror` 使用镜像）                           |
 | `mihomo update`                   | 更新 mihomo-cli (npm install -g)                                    |
 | `mihomo ui [zash\|dash\|yacd]`    | 打开 Web UI                                                         |
