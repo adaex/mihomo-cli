@@ -249,6 +249,22 @@ export interface ProxyTestSummary {
   results: ProxyTestResult[];
 }
 
+// === Bench ===
+
+export interface BenchSourceResult {
+  name: string;
+  url: string;
+  downloadOk: boolean;
+  downloadError?: string;
+  totalProxies: number;
+  proxyGroups: number;
+  alive: number;
+  dead: number;
+  avgDelay: number;
+  minDelay: number;
+  medianDelay: number;
+}
+
 // === HTTP Client ===
 
 export interface HttpClientOptions {

@@ -19,6 +19,46 @@ export const TUN_CONFIG = {
   },
 };
 
+export function getFreeSubscriptionSources(): Array<{ name: string; url: string }> {
+  return [
+    // 完整配置（DNS + 分组 + rule-provider, 29 组）
+    { name: 'FreeSubsCheck', url: 'https://gh-proxy.org/raw.githubusercontent.com/kooker/FreeSubsCheck/main/mihomo.yaml' },
+    { name: 'shaoyouvip', url: 'https://gh-proxy.org/raw.githubusercontent.com/shaoyouvip/free/main/mihomo.yaml' },
+    { name: 'freeSub', url: 'https://gh-proxy.org/raw.githubusercontent.com/Ruk1ng001/freeSub/main/clash.yaml' },
+    // 完整配置（13 组）
+    { name: 'PuddinCat', url: 'https://gh-proxy.org/raw.githubusercontent.com/PuddinCat/BestClash/refs/heads/main/proxies.yaml' },
+    { name: 'cn-news', url: 'https://gh-proxy.org/raw.githubusercontent.com/hello-world-1989/cn-news/refs/heads/main/clash.yaml' },
+    // 基础分组（10-11 组）
+    { name: 'naidounode', url: 'https://gh-proxy.org/raw.githubusercontent.com/xiaoji235/airport-free/main/clash/naidounode.txt' },
+    { name: 'v2rayshare', url: 'https://gh-proxy.org/raw.githubusercontent.com/xiaoji235/airport-free/main/clash/v2rayshare.txt' },
+    // 简单配置（2 组）
+    { name: 'proxypool', url: 'https://gh-proxy.org/raw.githubusercontent.com/snakem982/proxypool/main/source/clash-meta.yaml' },
+    { name: 'chromego', url: 'https://gh-proxy.org/raw.githubusercontent.com/Misaka-blog/chromego_merge/main/sub/merged_proxies_new.yaml' },
+    // 纯节点列表
+    { name: 'awesome-vpn', url: 'https://gh-proxy.org/raw.githubusercontent.com/awesome-vpn/awesome-vpn/master/clash.yaml' },
+    { name: 'V2RayAggregator', url: 'https://gh-proxy.org/raw.githubusercontent.com/mahdibland/V2RayAggregator/master/Eternity.yml' },
+    { name: 'Pawdroid', url: 'https://gh-proxy.org/raw.githubusercontent.com/Pawdroid/Free-servers/main/sub' },
+    { name: 'ermaozi', url: 'https://gh-proxy.org/raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/clash.yml' },
+    { name: 'v2rayfree', url: 'https://gh-proxy.org/raw.githubusercontent.com/v2raynnodes/v2rayfree/main/nodes/clashmeta.yaml' },
+    { name: 'yudou66', url: 'https://gh-proxy.org/raw.githubusercontent.com/Barabama/FreeNodes/main/nodes/yudou66.yaml' },
+    { name: 'wenode', url: 'https://gh-proxy.org/raw.githubusercontent.com/Barabama/FreeNodes/main/nodes/wenode.yaml' },
+    { name: 'dongtai-sub', url: 'https://gh-proxy.org/raw.githubusercontent.com/wenxig/dongtai-sub/refs/heads/main/data/sub.yaml' },
+    { name: 'kasesm', url: 'https://gh-proxy.org/raw.githubusercontent.com/kasesm/Free-Config/refs/heads/main/all_raw.txt' },
+    { name: 'Au1rxx', url: 'https://gh-proxy.org/raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/clash.yaml' },
+    // 完整配置但需要完整版 GeoSite.dat（geosite-lite 不兼容, 22 组）
+    { name: 'NoMoreWalls', url: 'https://gh-proxy.org/raw.githubusercontent.com/peasoft/NoMoreWalls/master/list.meta.yml' },
+  ];
+}
+
+export const BENCH_CONFIG: Record<string, unknown> = {
+  'allow-lan': false,
+  'external-controller': '127.0.0.1:19090',
+  port: 17890,
+  'socks-port': 17891,
+  'log-level': 'error',
+  'geodata-mode': true,
+};
+
 export const BASE_CONFIG: Record<string, unknown> = {
   'allow-lan': false,
   'external-controller': '127.0.0.1:9090',

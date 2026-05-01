@@ -65,6 +65,32 @@ export function formatDate(dateOrIso: unknown): string {
   }
 }
 
+export function displayWidth(str: string): number {
+  let w = 0;
+  for (const ch of str) {
+    const code = ch.codePointAt(0) as number;
+    if (
+      code >= 0x1100 &&
+      (code <= 0x115f ||
+        code === 0x2329 ||
+        code === 0x232a ||
+        (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
+        (code >= 0xac00 && code <= 0xd7a3) ||
+        (code >= 0xf900 && code <= 0xfaff) ||
+        (code >= 0xfe10 && code <= 0xfe6f) ||
+        (code >= 0xff01 && code <= 0xff60) ||
+        (code >= 0xffe0 && code <= 0xffe6) ||
+        (code >= 0x20000 && code <= 0x2fffd) ||
+        (code >= 0x30000 && code <= 0x3fffd))
+    ) {
+      w += 2;
+    } else {
+      w += 1;
+    }
+  }
+  return w;
+}
+
 export function hasFlag(args: string[] | undefined, short: string, long: string): boolean {
   return !!args && (args.includes(short) || args.includes(long));
 }
