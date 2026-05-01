@@ -30,6 +30,17 @@ const YAML_DUMP_OPTS = { indent: 2, lineWidth: -1, noCompatMode: true };
 
 const HTTP_CLIENT = createHttpClient({ timeout: 60_000 });
 
+export function isMultiUrl(url: string): boolean {
+  return url.includes(',');
+}
+
+export function splitUrls(url: string): string[] {
+  return url
+    .split(',')
+    .map(u => u.trim())
+    .filter(Boolean);
+}
+
 export function loadSubscriptionConfig(subName: string): ParsedSubscription {
   const rawContent = readSubscriptionRawConfig(subName);
   if (!rawContent) {
@@ -183,6 +194,79 @@ export async function downloadSubscription(url: string, subName = 'default'): Pr
   };
 }
 
+export async function downloadMergedSubscription(urls: string[], subName: string): Promise<DownloadResult> {
+  const responses = await Promise.all(
+    urls.map(async (url, index) => {
+      try {
+        const response = await HTTP_CLIENT.get(url, { responseType: 'text' });
+        return { url, index, response, error: null };
+      } catch (e) {
+        return { url, index, response: null, error: e as Error };
+      }
+    }),
+  );
+
+  for (const r of responses) {
+    if (r.error) {
+      const maskedUrl = maskUrl(r.url);
+      throw new Error(`合并订阅第 ${r.index + 1} 个 URL 获取失败: ${r.error.message}\n  URL: ${maskedUrl}`);
+    }
+  }
+
+  const parsed = responses.map((r, i) => {
+    const content = r.response?.data;
+    if (!content?.trim()) throw new Error(`合并订阅第 ${i + 1} 个 URL 内容为空`);
+    return parseYamlOrJson(content, `合并订阅第 ${i + 1} 个`) as Record<string, unknown>;
+  });
+
+  const base = parsed[0];
+  const baseProxies = (base.proxies || []) as Array<{ name: string; [k: string]: unknown }>;
+  const seenNames = new Set(baseProxies.map(p => p.name));
+
+  for (let i = 1; i < parsed.length; i++) {
+    const extraProxies = (parsed[i].proxies || []) as Array<{ name: string; [k: string]: unknown }>;
+    for (const proxy of extraProxies) {
+      if (!seenNames.has(proxy.name)) {
+        baseProxies.push(proxy);
+        seenNames.add(proxy.name);
+      }
+    }
+  }
+  base.proxies = baseProxies;
+
+  const mergedContent = yaml.dump(base, YAML_DUMP_OPTS);
+  saveSubscriptionRawConfig(subName, mergedContent);
+
+  const firstHeaders = responses[0].response?.headers;
+  const userInfo = parseUserInfo(firstHeaders?.get('subscription-userinfo') ?? null);
+  const updateIntervalHeader = firstHeaders?.get('profile-update-interval');
+  const updateInterval = updateIntervalHeader ? parseInt(updateIntervalHeader, 10) : null;
+  const webPageUrl = firstHeaders?.get('profile-web-page-url') || null;
+  const username = parseUsernameFromContentDisposition(firstHeaders?.get('content-disposition') ?? null);
+
+  const cacheData: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (userInfo) {
+    cacheData.upload = userInfo.upload;
+    cacheData.download = userInfo.download;
+    cacheData.total = userInfo.total;
+    cacheData.expire = userInfo.expire;
+  }
+  if (updateInterval) cacheData.update_interval = updateInterval;
+  if (webPageUrl) cacheData.web_page_url = webPageUrl;
+  if (username) cacheData.username = username;
+  saveSubscriptionCache(subName, cacheData);
+
+  const proxyGroups = base['proxy-groups'] as unknown[] | undefined;
+  return {
+    proxies: baseProxies.length,
+    proxyGroups: proxyGroups ? proxyGroups.length : 0,
+    userInfo,
+    updateInterval,
+    webPageUrl,
+    username,
+  };
+}
+
 export function prepareConfigForStart(mode: string, subName = 'default'): { proxies: number; proxyGroups: number } {
   const rawContent = readSubscriptionRawConfig(subName);
   if (!rawContent) {
@@ -213,7 +297,12 @@ function needsAutoUpdate(sub: SubscriptionWithCache): boolean {
 
 export async function tryUpdateOne(sub: Subscription): Promise<TryUpdateResult> {
   try {
-    const info = await downloadSubscription(sub.url, sub.name);
+    let info: DownloadResult;
+    if (isMultiUrl(sub.url)) {
+      info = await downloadMergedSubscription(splitUrls(sub.url), sub.name);
+    } else {
+      info = await downloadSubscription(sub.url, sub.name);
+    }
     return { name: sub.name, success: true, proxies: info.proxies, proxyGroups: info.proxyGroups };
   } catch (e) {
     return { name: sub.name, success: false, error: (e as Error).message };

@@ -40,6 +40,12 @@ export function invalidateSettingsCache(): void {
 
 export function maskUrl(url: string): string {
   if (!url) return url;
+  if (url.includes(',')) {
+    return url
+      .split(',')
+      .map(u => maskUrl(u.trim()))
+      .join(', ');
+  }
   try {
     const parsed = new URL(url);
     const tokenKeys = ['token', 'key', 'secret', 'pass', 'password', 'auth', 'access_token', 'api_key'];

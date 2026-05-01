@@ -99,8 +99,9 @@ async function printSubscriptionList(options?: { autoUpdate?: boolean }): Promis
   subs.forEach((s, i) => {
     const time = formatDate(s.updated_at);
     const defaultMark = activeSub && s.name === activeSub.name ? colors.green(' [使用中]') : '';
+    const mergeBadge = subscription.isMultiUrl(s.url) ? colors.cyan(` [合并 ${subscription.splitUrls(s.url).length} 源]`) : '';
     const interval = s.update_interval || subscription.DEFAULT_UPDATE_INTERVAL_HOURS;
-    console.log(`  ${i + 1}. ${s.name}${defaultMark}`);
+    console.log(`  ${i + 1}. ${s.name}${defaultMark}${mergeBadge}`);
     console.log(`    ${colors.gray('更新: ')}${time} (间隔: ${interval}h)`);
 
     if (s.username) {
@@ -196,22 +197,46 @@ export async function cmdSubscription(args: string[]): Promise<void> {
     const url = args[2];
     const name = args[3] || 'default';
 
-    if (!url?.startsWith('http')) {
+    if (!url) {
       console.error('错误: 请提供有效的订阅 URL');
       process.exit(1);
     }
 
-    console.log(`添加订阅: ${name}`);
-    try {
-      addSubscription(url, name);
-      setDefaultSubscription(name);
-      const info = await subscription.downloadSubscription(url, name);
-      const repoUrl = githubRepoUrl(url);
-      if (repoUrl) saveSubscriptionCache(name, { web_page_url: repoUrl });
-      console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)})`);
-    } catch (e) {
-      console.error(`添加失败: ${(e as Error).message}`);
-      process.exit(1);
+    if (subscription.isMultiUrl(url)) {
+      const urls = subscription.splitUrls(url);
+      for (const u of urls) {
+        if (!u.startsWith('http')) {
+          console.error(`错误: 无效的 URL: ${u}`);
+          process.exit(1);
+        }
+      }
+      console.log(`添加合并订阅: ${name} (${urls.length} 个源)`);
+      try {
+        addSubscription(url, name);
+        setDefaultSubscription(name);
+        const info = await subscription.downloadMergedSubscription(urls, name);
+        console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)}, 合并 ${urls.length} 源)`);
+      } catch (e) {
+        console.error(`添加失败: ${(e as Error).message}`);
+        process.exit(1);
+      }
+    } else {
+      if (!url.startsWith('http')) {
+        console.error('错误: 请提供有效的订阅 URL');
+        process.exit(1);
+      }
+      console.log(`添加订阅: ${name}`);
+      try {
+        addSubscription(url, name);
+        setDefaultSubscription(name);
+        const info = await subscription.downloadSubscription(url, name);
+        const repoUrl = githubRepoUrl(url);
+        if (repoUrl) saveSubscriptionCache(name, { web_page_url: repoUrl });
+        console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)})`);
+      } catch (e) {
+        console.error(`添加失败: ${(e as Error).message}`);
+        process.exit(1);
+      }
     }
     console.log('');
     await printSubscriptionList();
@@ -250,7 +275,13 @@ export async function cmdSubscription(args: string[]): Promise<void> {
 
     console.log(`更新订阅: ${target.name}`);
     try {
-      const info = await subscription.downloadSubscription(target.url, target.name);
+      let info: { proxies?: number; proxyGroups?: number };
+      if (subscription.isMultiUrl(target.url)) {
+        const urls = subscription.splitUrls(target.url);
+        info = await subscription.downloadMergedSubscription(urls, target.name);
+      } else {
+        info = await subscription.downloadSubscription(target.url, target.name);
+      }
       console.log(`已更新 (${subscription.formatProxySummary(info)})`);
     } catch (e) {
       console.error(`更新失败: ${(e as Error).message}`);
