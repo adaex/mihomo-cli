@@ -1,5 +1,29 @@
 # Changelog
 
+## [2.1.0] - 2026-05-01
+
+### 新增
+
+- **删除订阅**：`sub remove <name>` 删除订阅（别名 `rm`/`delete`），同时清理缓存和配置文件
+  - 删除当前使用中的订阅时自动切换到第一个剩余订阅
+- **添加即切换**：`sub add` 添加订阅后自动切换为当前使用的订阅
+
+### 安全
+
+- **强制 `allow-lan: false`**：无论订阅配置如何，始终禁止局域网访问
+- **强制 `external-controller: 127.0.0.1:9090`**：控制面板仅监听本地，防止不可信订阅暴露控制接口
+- **剥离 `external-ui` 相关字段**：构建配置时强制删除 `external-ui`/`external-ui-name`/`external-ui-url`，防止订阅触发额外下载
+
+### 优化
+
+- **TUN DNS 劫持**：`dns-hijack` 从 `['0.0.0.0:53']` 改为 `['any:53', 'tcp://any:53']`，同时劫持 UDP 和 TCP DNS，覆盖 IPv4/IPv6
+- **帮助顺序统一**：订阅子命令统一为 use → add → update → remove → web 顺序
+- **`removeSubscription` 返回切换信息**：返回自动切换到的订阅名，避免调用方重复读取状态
+- **`setDefaultSubscription` 跳过冗余写入**：已是同值时直接返回
+- **删除后跳过自动更新**：`sub remove` 后列出订阅时不触发网络更新
+
+---
+
 ## [2.0.1] - 2026-04-22
 
 ### 修复

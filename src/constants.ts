@@ -12,7 +12,7 @@ export const TUN_CONFIG = {
   tun: {
     enable: true,
     stack: 'mixed',
-    'dns-hijack': ['0.0.0.0:53'],
+    'dns-hijack': ['any:53', 'tcp://any:53'],
     'auto-route': true,
     'auto-detect-interface': true,
     'strict-route': true,
@@ -20,6 +20,8 @@ export const TUN_CONFIG = {
 };
 
 export const BASE_CONFIG: Record<string, unknown> = {
+  'allow-lan': false,
+  'external-controller': '127.0.0.1:9090',
   'log-level': 'warning',
   'geodata-mode': true,
   'geo-update-interval': 24,

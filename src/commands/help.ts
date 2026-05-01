@@ -34,9 +34,10 @@ export function printHelp(): void {
       '\n' +
       `${colors.cyan('订阅:')}\n` +
       `  ${colors.bold('subscription')}                 列出所有订阅（别名 sub）\n` +
+      `  ${colors.bold('subscription')} use <name>      切换当前订阅\n` +
       `  ${colors.bold('subscription')} add <url> [name]  添加订阅\n` +
       `  ${colors.bold('subscription')} update [name]   更新订阅（无参更新所有）\n` +
-      `  ${colors.bold('subscription')} use <name>      切换当前订阅\n` +
+      `  ${colors.bold('subscription')} remove <name>   删除订阅\n` +
       `  ${colors.bold('subscription')} web [name]      打开订阅页面\n` +
       '\n' +
       `${colors.cyan('配置:')}\n` +

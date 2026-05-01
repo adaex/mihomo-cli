@@ -117,11 +117,40 @@ export function addSubscription(url: string, name = 'default'): void {
   writeSettings(updates);
 }
 
+export function removeSubscription(name: string): string | null {
+  const settings = readSettings();
+  const subs = settings.subscriptions || [];
+  const idx = subs.findIndex(s => s.name === name);
+  if (idx < 0) return null;
+
+  subs.splice(idx, 1);
+  const updates: Partial<Settings> = { subscriptions: subs };
+
+  let switchedTo: string | null = null;
+  if (settings.active_subscription === name) {
+    switchedTo = subs.length > 0 ? subs[0].name : null;
+    updates.active_subscription = switchedTo ?? undefined;
+  }
+
+  writeSettings(updates);
+
+  const cache = readSubscriptionCache();
+  if (cache[name]) {
+    delete cache[name];
+    writeSubscriptionCache(cache);
+  }
+
+  fs.rmSync(getSubscriptionRawConfigPath(name), { force: true });
+
+  return switchedTo;
+}
+
 export function setDefaultSubscription(name: string): boolean {
   const settings = readSettings();
   const subs = settings.subscriptions || [];
   const idx = subs.findIndex(s => s.name === name);
   if (idx < 0) return false;
+  if (settings.active_subscription === name) return true;
   writeSettings({ active_subscription: name });
   return true;
 }

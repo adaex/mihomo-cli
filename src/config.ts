@@ -42,6 +42,12 @@ export function buildConfig(subRawContent: string, mode: string): BuildConfigRes
     }
   }
 
+  systemConfig['allow-lan'] = false;
+  systemConfig['external-controller'] = BASE_CONFIG['external-controller'];
+  delete withOverwrites['external-ui'];
+  delete withOverwrites['external-ui-name'];
+  delete withOverwrites['external-ui-url'];
+
   if (mode === 'tun') {
     systemConfig.tun = TUN_CONFIG.tun;
     const subDns = (withOverwrites.dns || {}) as Record<string, unknown>;

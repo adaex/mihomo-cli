@@ -1,14 +1,22 @@
 import { getConfigInfo } from '../config.js';
 import * as processManager from '../process.js';
-import { addSubscription, getSubscriptions, getSubscriptionsWithCache, readSubscriptionCache, setDefaultSubscription } from '../settings.js';
+import {
+  addSubscription,
+  getSubscriptions,
+  getSubscriptionsWithCache,
+  readSubscriptionCache,
+  removeSubscription,
+  setDefaultSubscription,
+} from '../settings.js';
 import * as subscription from '../subscription.js';
 import { colors, formatBytes, formatDate, formatTimestamp } from '../utils.js';
 import { cmdStart } from './start.js';
 
-async function printSubscriptionList(): Promise<void> {
-  const updateResult = await subscription.autoUpdateStaleSubscription();
-  if (updateResult.total > 0) console.log('');
-
+async function printSubscriptionList(options?: { autoUpdate?: boolean }): Promise<void> {
+  if (options?.autoUpdate !== false) {
+    const updateResult = await subscription.autoUpdateStaleSubscription();
+    if (updateResult.total > 0) console.log('');
+  }
   const subs = getSubscriptionsWithCache();
   if (subs.length === 0) {
     console.log('没有订阅');
@@ -49,9 +57,10 @@ async function printSubscriptionList(): Promise<void> {
   });
   console.log('');
   console.log('切换订阅: mihomo sub use <name>');
-  console.log('更新订阅: mihomo sub update [name]');
-  console.log('打开页面: mihomo sub web [name]');
   console.log('新增订阅: mihomo sub add <url> [name]');
+  console.log('更新订阅: mihomo sub update [name]');
+  console.log('删除订阅: mihomo sub remove <name>');
+  console.log('打开页面: mihomo sub web [name]');
   console.log('');
 }
 
@@ -75,8 +84,9 @@ export async function cmdSubscription(args: string[]): Promise<void> {
     console.log(`添加订阅: ${name}`);
     try {
       addSubscription(url, name);
+      setDefaultSubscription(name);
       const info = await subscription.downloadSubscription(url, name);
-      console.log(`已添加 (${subscription.formatProxySummary(info)})`);
+      console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)})`);
     } catch (e) {
       console.error(`添加失败: ${(e as Error).message}`);
       process.exit(1);
@@ -222,7 +232,34 @@ export async function cmdSubscription(args: string[]): Promise<void> {
     return;
   }
 
+  if (action === 'remove' || action === 'rm' || action === 'delete') {
+    const name = args[2];
+    const subs = getSubscriptions();
+
+    if (!name) {
+      console.error('错误: 请指定要删除的订阅名称');
+      if (subs.length > 0) {
+        console.log('\n可用订阅:');
+        for (const s of subs) console.log(`  ${s.name}`);
+      }
+      process.exit(1);
+    }
+
+    const matches = subscription.findSubscriptionFuzzy(subs, name);
+    const target = subscription.pickSingleSubscription(matches, name);
+
+    const switchedTo = removeSubscription(target.name);
+    console.log(`已删除订阅 "${target.name}"`);
+    if (switchedTo) {
+      console.log(`已自动切换到 "${switchedTo}"`);
+    }
+
+    console.log('');
+    await printSubscriptionList({ autoUpdate: false });
+    return;
+  }
+
   console.error('错误: 未知的订阅命令');
-  console.log('用法: mihomo sub [list|add|update|use|web]');
+  console.log('用法: mihomo sub [list|use|add|update|remove|web]');
   process.exit(1);
 }
