@@ -40,7 +40,7 @@ export async function cmdStart(args: string[]): Promise<void> {
     console.log(`停止 ${count} 个进程...`);
   }
 
-  handleStopResult(processManager.stop(true));
+  handleStopResult(processManager.stop());
 
   if (hasProcess) {
     console.log(`${colors.green('已停止进程')}\n`);
@@ -84,7 +84,7 @@ export async function cmdStart(args: string[]): Promise<void> {
 
       console.log('');
       console.log('重新加载配置...');
-      handleStopResult(processManager.stop(true));
+      handleStopResult(processManager.stop());
       try {
         configInfo = subscription.prepareConfigForStart(targetMode, sub.name);
         const result = await processManager.start(targetMode);
