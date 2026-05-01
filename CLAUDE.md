@@ -43,7 +43,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `commands/log.ts`             | log, logs                      |
 | `commands/ui.ts`              | ui                             |
 | `commands/kernel.ts`          | kernel                         |
-| `commands/subscription.ts`    | subscription (add/update/use/list/web) |
+| `commands/subscription.ts`    | subscription (add/update/use/remove/list/test/clean/web) |
 | `commands/overwrite.ts`       | overwrite (on/off/list)        |
 | `commands/directory.ts`       | directory (open/list)          |
 | `commands/reset.ts`           | reset                          |
