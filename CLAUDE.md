@@ -192,5 +192,5 @@ runtime/                # pid, config.yaml
 3. **检查并更新 `README.md`**（新增功能、命令变更、示例）
 4. 构建: `npm run build`
 5. 提交: `git add . && git commit -m "chore: 发布 vX.Y.Z"`
-6. 发布: `npm publish --otp=<6位验证码>`
+6. 发布: `npm publish`
 7. 推送: `git push`
