@@ -61,7 +61,7 @@ function parseUserInfo(header: string | null): UserInfo | null {
       info[key] = Number.isNaN(numVal) ? 0 : numVal;
     }
   }
-  return info as unknown as UserInfo;
+  return info as UserInfo;
 }
 
 function parseUsernameFromContentDisposition(header: string | null): string | null {

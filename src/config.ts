@@ -13,7 +13,7 @@ export function parseYamlOrJson(content: string, errorMsg?: string): Record<stri
   }
   try {
     const result = yaml.load(content);
-    if (result !== undefined) return result as Record<string, unknown>;
+    if (result != null && typeof result === 'object' && !Array.isArray(result)) return result as Record<string, unknown>;
   } catch {
     // fall through to JSON
   }

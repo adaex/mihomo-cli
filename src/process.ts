@@ -138,7 +138,7 @@ function killAllMihomo(forceSudo = false): boolean {
   }
 }
 
-export function cleanupAll(_forceSudo = false): CleanupResult {
+export function cleanupAll(forceSudo = false): CleanupResult {
   const pids = getAllMihomoPids();
   if (pids.length === 0) {
     clearPid();
@@ -146,7 +146,7 @@ export function cleanupAll(_forceSudo = false): CleanupResult {
   }
 
   const hasRootProcess = pids.some(p => isProcessRoot(p));
-  const needsSudo = hasRootProcess;
+  const needsSudo = forceSudo || hasRootProcess;
 
   let killedCount = 0;
   const failedPids: number[] = [];
@@ -319,13 +319,14 @@ async function startMixedMode(staleState: StaleState): Promise<StartResult> {
   const logFile = PATHS.logFile;
   const args = ['-d', DIRS.data, '-f', configFile];
 
-  const out = fs.openSync(logFile, 'a');
-  const err = fs.openSync(logFile, 'a');
+  const logFd = fs.openSync(logFile, 'a');
 
   const child = spawn(PATHS.mihomoBinary, args, {
     detached: true,
-    stdio: ['ignore', out, err],
+    stdio: ['ignore', logFd, logFd],
   });
+
+  fs.closeSync(logFd);
 
   child.unref();
 
@@ -547,7 +548,9 @@ export function getLogPathByName(name: string): string | null {
 
 export function openUrl(url: string): boolean {
   try {
-    spawn('open', [url], { stdio: 'ignore', detached: true });
+    const child = spawn('open', [url], { stdio: 'ignore', detached: true });
+    child.unref();
+    child.on('error', () => {});
     return true;
   } catch {
     return false;

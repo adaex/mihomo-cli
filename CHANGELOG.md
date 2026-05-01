@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.2.2] - 2026-05-01
+
+### 修复
+
+- **文件描述符泄漏**：修复 `startMixedMode` 中 spawn 后未关闭 fd 的问题
+- **forceSudo 参数失效**：修复 `cleanupAll` 忽略调用方传入的强制 sudo 参数
+- **formatBytes 溢出**：修复超大字节值（>1PB）导致显示 `undefined` 单位
+- **YAML 解析类型检查**：`parseYamlOrJson` 现在拒绝非对象类型的 YAML 内容
+- **spawn 错误处理**：`openUrl` 添加 error 事件处理，防止未捕获异常
+- **UserInfo 类型转换**：移除 `parseUserInfo` 中多余的 `as unknown` 双重转换
+
+### 安全
+
+- **订阅名称校验**：新增文件名安全校验，防止路径穿越等不安全名称
+
+---
+
 ## [2.2.1] - 2026-05-01
 
 ### 修复
