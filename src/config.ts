@@ -24,6 +24,42 @@ export function parseYamlOrJson(content: string, errorMsg?: string): Record<stri
   }
 }
 
+function collectOverwriteProxyNames(overwriteFiles: { config: Record<string, unknown> }[]): string[] {
+  const names: string[] = [];
+  for (const file of overwriteFiles) {
+    for (const [key, value] of Object.entries(file.config)) {
+      if ((key === '+proxies' || key === 'proxies+') && Array.isArray(value)) {
+        for (const proxy of value) {
+          if (proxy && typeof proxy === 'object' && 'name' in proxy) {
+            names.push((proxy as { name: string }).name);
+          }
+        }
+      }
+    }
+  }
+  return names;
+}
+
+function excludeOverwriteProxiesFromIncludeAll(config: Record<string, unknown>, overwriteFiles: { config: Record<string, unknown> }[]): void {
+  const injectedNames = collectOverwriteProxyNames(overwriteFiles);
+  if (injectedNames.length === 0) return;
+
+  const groups = config['proxy-groups'] as Array<Record<string, unknown>> | undefined;
+  if (!groups) return;
+
+  const excludePattern = injectedNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+
+  for (const group of groups) {
+    if (!group['include-all'] && !group['include-all-proxies']) continue;
+    const existing = group['exclude-filter'] as string | undefined;
+    if (existing) {
+      group['exclude-filter'] = `${existing}|${excludePattern}`;
+    } else {
+      group['exclude-filter'] = excludePattern;
+    }
+  }
+}
+
 export function buildConfig(subRawContent: string, mode: string): BuildConfigResult {
   const subscriptionConfig = parseYamlOrJson(subRawContent, '订阅内容');
 
@@ -34,6 +70,10 @@ export function buildConfig(subRawContent: string, mode: string): BuildConfigRes
   const overwriteEnabled = isOverwriteEnabled();
   const overwriteFiles = overwriteEnabled ? loadOverwriteFile() : [];
   const withOverwrites = applyOverwrite(subscriptionConfig, overwriteFiles);
+
+  if (overwriteFiles.length > 0) {
+    excludeOverwriteProxiesFromIncludeAll(withOverwrites, overwriteFiles);
+  }
 
   const systemConfig: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(BASE_CONFIG)) {
