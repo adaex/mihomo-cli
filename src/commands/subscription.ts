@@ -1,4 +1,5 @@
 import { getConfigInfo } from '../config.js';
+import { getFreeSubscriptionSources } from '../constants.js';
 import * as processManager from '../process.js';
 import {
   addSubscription,
@@ -6,6 +7,7 @@ import {
   getSubscriptionsWithCache,
   readSubscriptionCache,
   removeSubscription,
+  saveSubscriptionCache,
   setDefaultSubscription,
 } from '../settings.js';
 import * as subscription from '../subscription.js';
@@ -32,6 +34,12 @@ export function formatCleanSummary(result: { removedProxies: number; removedGrou
 
 export function formatTestSummary(summary: { alive: number; dead: number; total: number }): string {
   return `结果: ${colors.green(`${summary.alive} 存活`)} / ${colors.red(`${summary.dead} 失败`)} / ${summary.total} 总计`;
+}
+
+function githubRepoUrl(rawUrl: string): string | null {
+  const match = rawUrl.match(/raw\.githubusercontent\.com\/([^/]+\/[^/]+)/);
+  if (match) return `https://github.com/${match[1]}`;
+  return null;
 }
 
 function resolveActiveTestTarget(args: string[]): { target: Subscription; timeout: number; concurrency: number } {
@@ -127,6 +135,34 @@ async function printSubscriptionList(options?: { autoUpdate?: boolean }): Promis
   console.log('');
 }
 
+async function addFreeSubscription(freeId: number): Promise<void> {
+  const freeSources = getFreeSubscriptionSources();
+  if (freeId < 1 || freeId > freeSources.length) {
+    console.error(`错误: 免费订阅 ID 范围 1-${freeSources.length}`);
+    console.log('\n可用源:');
+    for (let i = 0; i < freeSources.length; i++) {
+      console.log(`  ${String(i + 1).padStart(2, '0')}  ${freeSources[i].name}`);
+    }
+    process.exit(1);
+  }
+  const source = freeSources[freeId - 1];
+  const name = `free${freeId}`;
+  console.log(`添加免费订阅: ${name}`);
+  try {
+    addSubscription(source.url, name);
+    setDefaultSubscription(name);
+    const info = await subscription.downloadSubscription(source.url, name);
+    const repoUrl = githubRepoUrl(source.url);
+    if (repoUrl) saveSubscriptionCache(name, { web_page_url: repoUrl });
+    console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)})`);
+  } catch (e) {
+    console.error(`添加失败: ${(e as Error).message}`);
+    process.exit(1);
+  }
+  console.log('');
+  await printSubscriptionList();
+}
+
 export async function cmdSubscription(args: string[]): Promise<void> {
   const action = args[1];
 
@@ -135,7 +171,28 @@ export async function cmdSubscription(args: string[]): Promise<void> {
     return;
   }
 
+  if (action === 'free') {
+    const id = parseInt(args[2], 10);
+    if (!id || Number.isNaN(id)) {
+      const freeSources = getFreeSubscriptionSources();
+      console.log('用法: mihomo sub free <id>\n');
+      console.log('可用源:');
+      for (let i = 0; i < freeSources.length; i++) {
+        console.log(`  ${String(i + 1).padStart(2, '0')}  ${freeSources[i].name}`);
+      }
+      process.exit(1);
+    }
+    await addFreeSubscription(id);
+    return;
+  }
+
   if (action === 'add') {
+    const freeId = parseIntArg(args, '--free', '--free', -1);
+    if (freeId > 0) {
+      await addFreeSubscription(freeId);
+      return;
+    }
+
     const url = args[2];
     const name = args[3] || 'default';
 
@@ -149,6 +206,8 @@ export async function cmdSubscription(args: string[]): Promise<void> {
       addSubscription(url, name);
       setDefaultSubscription(name);
       const info = await subscription.downloadSubscription(url, name);
+      const repoUrl = githubRepoUrl(url);
+      if (repoUrl) saveSubscriptionCache(name, { web_page_url: repoUrl });
       console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)})`);
     } catch (e) {
       console.error(`添加失败: ${(e as Error).message}`);

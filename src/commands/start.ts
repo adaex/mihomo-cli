@@ -7,6 +7,7 @@ import { printStatus } from './status.js';
 import { formatCleanSummary, formatTestSummary, printTestResult } from './subscription.js';
 
 const AUTO_CLEAN_THRESHOLD = 100;
+const AUTO_CLEAN_THRESHOLD_FREE = 50;
 
 function handleStopResult(result: StopResult): void {
   if (result.remaining && result.remaining.length > 0) {
@@ -61,13 +62,19 @@ export async function cmdStart(args: string[]): Promise<void> {
     const result = await processManager.start(targetMode);
     console.log(`${colors.green('已启动')} (PID ${result.pid})`);
   } catch (e) {
-    console.error(`${colors.red('启动失败:')} ${(e as Error).message.split('\n')[0]}`);
+    const msg = (e as Error).message;
+    const lines = msg.split('\n');
+    console.error(`${colors.red('启动失败:')} ${lines[0]}`);
+    if (lines.length > 1) {
+      for (const line of lines.slice(1)) console.error(line);
+    }
     process.exit(1);
   }
 
-  if (configInfo.proxies > AUTO_CLEAN_THRESHOLD) {
+  const cleanThreshold = sub.name.startsWith('free') ? AUTO_CLEAN_THRESHOLD_FREE : AUTO_CLEAN_THRESHOLD;
+  if (configInfo.proxies > cleanThreshold) {
     console.log('');
-    console.log(`节点数 ${configInfo.proxies} 超过 ${AUTO_CLEAN_THRESHOLD}，自动清理...`);
+    console.log(`节点数 ${configInfo.proxies} 超过 ${cleanThreshold}，自动清理...`);
     console.log('');
 
     await sleep(1000);
