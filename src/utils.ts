@@ -212,3 +212,13 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
 
   return { mirror: null, isOverride: false, type: 'download' };
 }
+
+export function isProxyValid(proxy: { name: string; [k: string]: unknown }): boolean {
+  if (!proxy.name || !proxy.server || !proxy.port) return false;
+  if (!proxy.type) return false;
+  if (proxy.type === 'ss' && typeof proxy.cipher === 'string' && proxy.cipher.startsWith('2022-blake3')) {
+    const pw = String(proxy.password || '');
+    if (!/^[A-Za-z0-9+/]+=*$/.test(pw) || pw.length < 20) return false;
+  }
+  return true;
+}

@@ -8,7 +8,7 @@ import { parseYamlOrJson } from './config.js';
 import { BENCH_CONFIG } from './constants.js';
 import { PATHS, USER_DATA_DIR } from './paths.js';
 import type { BenchSourceResult, ProxyTestResult } from './types.js';
-import { createHttpClient, isProcessRunning, sleep, sleepSync } from './utils.js';
+import { createHttpClient, isProcessRunning, isProxyValid, sleep, sleepSync } from './utils.js';
 
 const BENCH_DIR = path.join(USER_DATA_DIR, 'bench');
 const BENCH_DIRS = {
@@ -185,17 +185,6 @@ export async function downloadAllSources(
   });
 
   return await Promise.all(tasks);
-}
-
-function isProxyValid(proxy: { name: string; [k: string]: unknown }): boolean {
-  if (!proxy.name || !proxy.server || !proxy.port) return false;
-  if (!proxy.type) return false;
-  // 2022-blake3 ciphers 需要严格的 key 格式，容易出错
-  if (proxy.type === 'ss' && typeof proxy.cipher === 'string' && proxy.cipher.startsWith('2022-blake3')) {
-    const pw = String(proxy.password || '');
-    if (!/^[A-Za-z0-9+/]+=*$/.test(pw) || pw.length < 20) return false;
-  }
-  return true;
 }
 
 export function buildMergedBenchConfig(allProxies: Array<{ name: string; [k: string]: unknown }>): number {

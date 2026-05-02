@@ -9,6 +9,7 @@ import { cmdStart } from './commands/start.js';
 import { printStatus } from './commands/status.js';
 import { cmdStop } from './commands/stop.js';
 import { cmdSubscription } from './commands/subscription.js';
+import { cmdClean, cmdTest } from './commands/test.js';
 import { cmdUI } from './commands/ui.js';
 import { cmdUpdate } from './commands/update.js';
 import { ensureDirs } from './paths.js';
@@ -139,6 +140,12 @@ async function main(): Promise<void> {
       break;
     case 'bench':
       await cmdBench(args);
+      break;
+    case 'test':
+      await cmdTest(args);
+      break;
+    case 'clean':
+      await cmdClean(args);
       break;
     default:
       console.error(`未知命令: ${cmd}`);

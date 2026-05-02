@@ -41,6 +41,8 @@ export function printHelp(): void {
       `  ${colors.bold('subscription')} web [name]      打开订阅页面\n` +
       `  ${colors.bold('subscription')} test [name]     测试节点连通性\n` +
       `  ${colors.bold('subscription')} clean [name]    测速并清理失败节点\n` +
+      `  ${colors.bold('test')} [-t ms] [-j N]           快速测试当前节点连通性\n` +
+      `  ${colors.bold('clean')} [-t ms] [-j N]          清理失败节点并自动重启\n` +
       `  ${colors.bold('bench')} [name] [-t ms] [-j N]  测试免费订阅源质量排名\n` +
       '\n' +
       `${colors.cyan('配置:')}\n` +

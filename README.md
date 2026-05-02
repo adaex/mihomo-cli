@@ -7,10 +7,9 @@
 - 🌐 **订阅管理** - 添加/更新订阅，支持流量统计和到期时间显示
 - 🔄 **自动更新** - 启动时自动检查并更新过期订阅
 - 🔍 **模糊匹配** - `sub use` / `sub web` 支持订阅名称模糊匹配
-- 🧹 **节点测速清理** - `sub test` 测试连通性，`sub clean` 自动清理失败节点，启动时自动清理
+- 🧹 **节点测速清理** - `test` 快速测试、`clean` 清理并重启；`sub test/clean` 独立进程测试任意订阅
 - 📊 **免费订阅基准测试** - `bench` 命令一键测试 20 个内置免费订阅源质量排名
 - 🆓 **快速添加免费订阅** - `sub free <id>` 一键添加内置免费订阅源
-- 🏆 **聚合订阅** - `sub best <id>` 一键添加自动更新的聚合订阅（每小时更新、去重、测活）
 - 📝 **覆写配置** - 在订阅基础上进行自定义覆写，支持强制覆盖、数组合并
 - 🔄 **智能重启** - `sub use` 切换订阅、`ow on/off` 切换覆写后自动重启
 - 🚀 **进程管理** - 启动/停止/切换模式，自动清理残留进程
@@ -101,13 +100,14 @@ mihomo ui yacd     # YACD
 | `mihomo sub use <name>`       | 切换当前订阅（支持模糊匹配，自动重启） |
 | `mihomo sub add <url> [name]` | 添加订阅并自动切换（支持逗号分隔多 URL 合并） |
 | `mihomo sub free <id>`        | 添加内置免费订阅（`0`=合并 #1+#2，`sub free` 列出可用源）|
-| `mihomo sub best <id>`        | 添加聚合订阅（`sub best` 列出可用源）|
 | `mihomo sub update`           | 更新所有订阅                           |
 | `mihomo sub update <name>`    | 更新指定订阅（支持模糊匹配）           |
 | `mihomo sub remove <name>`    | 删除订阅（支持模糊匹配）               |
 | `mihomo sub web [name]`       | 打开订阅页面（无参打开默认）           |
 | `mihomo sub test [name]`      | 测试节点连通性（`-t` 超时，`-j` 并发） |
 | `mihomo sub clean [name]`     | 测速并清理失败节点                     |
+| `mihomo test`                 | 快速测试当前节点连通性（`-t` 超时，`-j` 并发） |
+| `mihomo clean`                | 清理失败节点并自动重启（`-t` 超时，`-j` 并发） |
 
 ### 覆写配置
 

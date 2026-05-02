@@ -1,5 +1,5 @@
 import { getConfigInfo } from '../config.js';
-import { getBestSubscriptionSources, getFreeSubscriptionSources } from '../constants.js';
+import { getFreeSubscriptionSources } from '../constants.js';
 import * as processManager from '../process.js';
 import {
   addSubscription,
@@ -11,6 +11,7 @@ import {
   setDefaultSubscription,
 } from '../settings.js';
 import * as subscription from '../subscription.js';
+import { withTestInstance } from '../test-instance.js';
 import type { ProxyTestResult, Subscription } from '../types.js';
 import { colors, formatBytes, formatDate, formatTimestamp, getNonFlagArg, parseIntArg } from '../utils.js';
 import { cmdStart } from './start.js';
@@ -19,9 +20,9 @@ export function printTestResult(result: ProxyTestResult, index: number, total: n
   const prefix = `[${index + 1}/${total}]`;
   if (result.delay !== null) {
     const delayColor = result.delay < 300 ? colors.green : result.delay < 800 ? colors.yellow : colors.red;
-    console.log(`  ${prefix} ${colors.green('✓')} ${result.name} ${delayColor(`${result.delay}ms`)}`);
+    console.log(`${prefix} ${colors.green('✓')} ${result.name} ${delayColor(`${result.delay}ms`)}`);
   } else {
-    console.log(`  ${prefix} ${colors.red('✗')} ${result.name} ${colors.gray(result.error || 'timeout')}`);
+    console.log(`${prefix} ${colors.red('✗')} ${result.name} ${colors.gray(result.error || 'timeout')}`);
   }
 }
 
@@ -42,7 +43,7 @@ function githubRepoUrl(rawUrl: string): string | null {
   return null;
 }
 
-function resolveActiveTestTarget(args: string[]): { target: Subscription; timeout: number; concurrency: number } {
+function resolveTestTarget(args: string[]): { target: Subscription; timeout: number; concurrency: number } {
   const subs = getSubscriptions();
   if (subs.length === 0) {
     console.error('错误: 没有订阅');
@@ -53,29 +54,17 @@ function resolveActiveTestTarget(args: string[]): { target: Subscription; timeou
   const timeout = parseIntArg(args, '-t', '--timeout', 2000);
   const concurrency = parseIntArg(args, '-j', '--concurrency', 100);
 
-  const activeSub = subscription.getActiveSubscription();
   let target: Subscription;
   if (nameArg) {
     const matches = subscription.findSubscriptionFuzzy(subs, nameArg);
     target = subscription.pickSingleSubscription(matches, nameArg);
   } else {
+    const activeSub = subscription.getActiveSubscription();
     if (!activeSub) {
-      console.error('错误: 没有活跃订阅');
+      console.error('错误: 没有活跃订阅，请指定订阅名称');
       process.exit(1);
     }
     target = activeSub;
-  }
-
-  const status = processManager.getStatus();
-  if (!status.running) {
-    console.error('错误: mihomo 未运行，请先启动 (mihomo start)');
-    process.exit(1);
-  }
-
-  if (!activeSub || activeSub.name !== target.name) {
-    console.error(`错误: 当前使用的订阅是 "${activeSub?.name}"，不是 "${target.name}"`);
-    console.log(`请先切换: mihomo sub use ${target.name}`);
-    process.exit(1);
   }
 
   return { target, timeout, concurrency };
@@ -193,39 +182,6 @@ async function addFreeSubscription(freeId: number): Promise<void> {
   await printSubscriptionList();
 }
 
-function printBestSourceList(): void {
-  const bestSources = getBestSubscriptionSources();
-  for (let i = 0; i < bestSources.length; i++) {
-    console.log(`  ${i + 1}  ${bestSources[i].name} — ${bestSources[i].description}`);
-  }
-}
-
-async function addBestSubscription(bestId: number): Promise<void> {
-  const bestSources = getBestSubscriptionSources();
-
-  if (bestId < 1 || bestId > bestSources.length) {
-    console.error(`错误: best 订阅 ID 范围 1-${bestSources.length}`);
-    console.log('\n可用源:');
-    printBestSourceList();
-    process.exit(1);
-  }
-  const source = bestSources[bestId - 1];
-  const name = `best${bestId}`;
-  console.log(`添加 best 订阅: ${name} (${source.description})`);
-  try {
-    addSubscription(source.url, name);
-    const info = await subscription.downloadSubscription(source.url, name);
-    setDefaultSubscription(name);
-    saveSubscriptionCache(name, { web_page_url: 'https://github.com/imaex/mihomo-free-sub' });
-    console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)})`);
-  } catch (e) {
-    console.error(`添加失败: ${(e as Error).message}`);
-    process.exit(1);
-  }
-  console.log('');
-  await printSubscriptionList();
-}
-
 export async function cmdSubscription(args: string[]): Promise<void> {
   const action = args[1];
 
@@ -243,18 +199,6 @@ export async function cmdSubscription(args: string[]): Promise<void> {
       process.exit(1);
     }
     await addFreeSubscription(id);
-    return;
-  }
-
-  if (action === 'best') {
-    const id = parseInt(args[2], 10);
-    if (Number.isNaN(id)) {
-      console.log('用法: mihomo sub best <id>\n');
-      console.log('可用源:');
-      printBestSourceList();
-      process.exit(1);
-    }
-    await addBestSubscription(id);
     return;
   }
 
@@ -484,16 +428,19 @@ export async function cmdSubscription(args: string[]): Promise<void> {
   }
 
   if (action === 'clean') {
-    const { target, timeout, concurrency } = resolveActiveTestTarget(args);
+    const { target, timeout, concurrency } = resolveTestTarget(args);
 
     console.log(`清理订阅 "${target.name}"...`);
     console.log(`超时: ${timeout}ms  并发: ${concurrency}`);
     console.log('');
 
-    const result = await subscription.autoCleanSubscription(target.name, {
-      timeout,
-      concurrency,
-      onResult: printTestResult,
+    const result = await withTestInstance(target.name, async apiBase => {
+      return subscription.autoCleanSubscription(target.name, {
+        timeout,
+        concurrency,
+        apiBase,
+        onResult: printTestResult,
+      });
     });
 
     console.log('');
@@ -504,24 +451,30 @@ export async function cmdSubscription(args: string[]): Promise<void> {
       console.log(colors.yellow('存活节点不足 1%，跳过清理。请检查原始订阅是否有效'));
     } else if (result.removedProxies > 0) {
       console.log(`${colors.green('已清理')}: ${formatCleanSummary(result)}`);
-      console.log('');
-      console.log('提示: 需要重启 mihomo 使更改生效 (mihomo start)');
+      const status = processManager.getStatus();
+      if (status.running) {
+        console.log('');
+        console.log('提示: 需要重启 mihomo 使更改生效 (mihomo start)');
+      }
     }
 
     return;
   }
 
   if (action === 'test') {
-    const { target, timeout, concurrency } = resolveActiveTestTarget(args);
+    const { target, timeout, concurrency } = resolveTestTarget(args);
 
     console.log(`测试订阅 "${target.name}" 的节点连通性...`);
     console.log(`超时: ${timeout}ms  并发: ${concurrency}`);
     console.log('');
 
-    const summary = await subscription.testSubscriptionProxies(target.name, {
-      timeout,
-      concurrency,
-      onResult: printTestResult,
+    const summary = await withTestInstance(target.name, async apiBase => {
+      return subscription.testSubscriptionProxies(target.name, {
+        timeout,
+        concurrency,
+        apiBase,
+        onResult: printTestResult,
+      });
     });
 
     console.log('');

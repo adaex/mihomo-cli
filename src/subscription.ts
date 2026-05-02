@@ -348,9 +348,10 @@ export async function testProxyDelay(
   timeout: number,
   testUrl: string,
   client: ReturnType<typeof createHttpClient>,
+  apiBase = API_BASE,
 ): Promise<ProxyTestResult> {
   const encodedName = encodeURIComponent(proxyName);
-  const url = `${API_BASE}/proxies/${encodedName}/delay?timeout=${timeout}&url=${encodeURIComponent(testUrl)}`;
+  const url = `${apiBase}/proxies/${encodedName}/delay?timeout=${timeout}&url=${encodeURIComponent(testUrl)}`;
 
   try {
     const response = await client.get(url);
@@ -377,11 +378,12 @@ export async function testSubscriptionProxies(
     timeout?: number;
     concurrency?: number;
     testUrl?: string;
+    apiBase?: string;
     onResult?: (result: ProxyTestResult, index: number, total: number) => void;
     parsed?: ParsedSubscription;
   } = {},
 ): Promise<ProxyTestSummary> {
-  const { timeout = 2000, concurrency = 100, testUrl = DEFAULT_TEST_URL, onResult } = options;
+  const { timeout = 2000, concurrency = 100, testUrl = DEFAULT_TEST_URL, apiBase = API_BASE, onResult } = options;
 
   const { proxies } = options.parsed || loadSubscriptionConfig(subName);
 
@@ -395,7 +397,7 @@ export async function testSubscriptionProxies(
 
   for (let i = 0; i < proxies.length; i += concurrency) {
     const batch = proxies.slice(i, i + concurrency);
-    const batchResults = await Promise.all(batch.map(proxy => testProxyDelay(proxy.name, timeout, testUrl, client)));
+    const batchResults = await Promise.all(batch.map(proxy => testProxyDelay(proxy.name, timeout, testUrl, client, apiBase)));
     for (const result of batchResults) {
       results.push(result);
       onResult?.(result, completedCount, proxies.length);
@@ -479,6 +481,7 @@ export async function autoCleanSubscription(
   options: {
     timeout?: number;
     concurrency?: number;
+    apiBase?: string;
     onResult?: (result: ProxyTestResult, index: number, total: number) => void;
   } = {},
 ): Promise<{ summary: ProxyTestSummary; removedProxies: number; updatedGroups: number; removedGroups: number; skipped?: boolean }> {
@@ -503,7 +506,7 @@ export async function autoCleanSubscription(
     }
   }
 
-  if (!skipped) {
+  if (!skipped && removedProxies > 0) {
     saveSubscriptionConfig(subName, parsed);
   }
 
