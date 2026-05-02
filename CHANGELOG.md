@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.4.0] - 2026-05-02
+
+### 新功能
+
+- **sub best** - `sub best <id>` 一键添加聚合订阅（每小时自动更新、去重、测活）
+  - `best 1` 精选 29 组（仅测速源：FreeSubsCheck, shaoyouvip, dalazhi, getnode）
+  - `best 2` ACL4SSR 29 组（全部 7 个源）
+  - `best 3` freeSub 24 组
+- **新增免费源** - yahr601, Auto-Sync, ssrsub, dalazhi, getnode
+
+### 修复
+
+- `setDefaultSubscription` 移到下载成功后再设置，避免下载失败留下无效默认订阅
+
+---
+
 ## [2.3.1] - 2026-05-02
 
 ### 新功能

@@ -10,6 +10,7 @@
 - 🧹 **节点测速清理** - `sub test` 测试连通性，`sub clean` 自动清理失败节点，启动时自动清理
 - 📊 **免费订阅基准测试** - `bench` 命令一键测试 20 个内置免费订阅源质量排名
 - 🆓 **快速添加免费订阅** - `sub free <id>` 一键添加内置免费订阅源
+- 🏆 **聚合订阅** - `sub best <id>` 一键添加自动更新的聚合订阅（每小时更新、去重、测活）
 - 📝 **覆写配置** - 在订阅基础上进行自定义覆写，支持强制覆盖、数组合并
 - 🔄 **智能重启** - `sub use` 切换订阅、`ow on/off` 切换覆写后自动重启
 - 🚀 **进程管理** - 启动/停止/切换模式，自动清理残留进程
@@ -100,6 +101,7 @@ mihomo ui yacd     # YACD
 | `mihomo sub use <name>`       | 切换当前订阅（支持模糊匹配，自动重启） |
 | `mihomo sub add <url> [name]` | 添加订阅并自动切换（支持逗号分隔多 URL 合并） |
 | `mihomo sub free <id>`        | 添加内置免费订阅（`0`=合并 #1+#2，`sub free` 列出可用源）|
+| `mihomo sub best <id>`        | 添加聚合订阅（`sub best` 列出可用源）|
 | `mihomo sub update`           | 更新所有订阅                           |
 | `mihomo sub update <name>`    | 更新指定订阅（支持模糊匹配）           |
 | `mihomo sub remove <name>`    | 删除订阅（支持模糊匹配）               |
