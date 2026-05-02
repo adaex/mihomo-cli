@@ -1,5 +1,5 @@
 import { getConfigInfo } from '../config.js';
-import { getFreeSubscriptionSources } from '../constants.js';
+import { getBestSubscriptionSources, getFreeSubscriptionSources } from '../constants.js';
 import * as processManager from '../process.js';
 import {
   addSubscription,
@@ -193,6 +193,39 @@ async function addFreeSubscription(freeId: number): Promise<void> {
   await printSubscriptionList();
 }
 
+function printBestSourceList(): void {
+  const bestSources = getBestSubscriptionSources();
+  for (let i = 0; i < bestSources.length; i++) {
+    console.log(`  ${i + 1}  ${bestSources[i].name} — ${bestSources[i].description}`);
+  }
+}
+
+async function addBestSubscription(bestId: number): Promise<void> {
+  const bestSources = getBestSubscriptionSources();
+
+  if (bestId < 1 || bestId > bestSources.length) {
+    console.error(`错误: best 订阅 ID 范围 1-${bestSources.length}`);
+    console.log('\n可用源:');
+    printBestSourceList();
+    process.exit(1);
+  }
+  const source = bestSources[bestId - 1];
+  const name = `best${bestId}`;
+  console.log(`添加 best 订阅: ${name} (${source.description})`);
+  try {
+    addSubscription(source.url, name);
+    setDefaultSubscription(name);
+    const info = await subscription.downloadSubscription(source.url, name);
+    saveSubscriptionCache(name, { web_page_url: 'https://github.com/imaex/mihomo-free-sub' });
+    console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)})`);
+  } catch (e) {
+    console.error(`添加失败: ${(e as Error).message}`);
+    process.exit(1);
+  }
+  console.log('');
+  await printSubscriptionList();
+}
+
 export async function cmdSubscription(args: string[]): Promise<void> {
   const action = args[1];
 
@@ -210,6 +243,18 @@ export async function cmdSubscription(args: string[]): Promise<void> {
       process.exit(1);
     }
     await addFreeSubscription(id);
+    return;
+  }
+
+  if (action === 'best') {
+    const id = parseInt(args[2], 10);
+    if (Number.isNaN(id)) {
+      console.log('用法: mihomo sub best <id>\n');
+      console.log('可用源:');
+      printBestSourceList();
+      process.exit(1);
+    }
+    await addBestSubscription(id);
     return;
   }
 

@@ -56,6 +56,16 @@ export function getFreeSubscriptionSources(): Array<{ name: string; url: string 
   ];
 }
 
+const GH_SUB = 'https://gh-proxy.org/raw.githubusercontent.com/imaex/mihomo-free-sub/sub';
+
+export function getBestSubscriptionSources(): Array<{ name: string; url: string; description: string }> {
+  return [
+    { name: 'curated', url: `${GH_SUB}/curated.yaml`, description: '精选 29 组（仅测速源）' },
+    { name: 'acl4ssr', url: `${GH_SUB}/acl4ssr.yaml`, description: 'ACL4SSR 29 组（全部源）' },
+    { name: 'freesub', url: `${GH_SUB}/freesub.yaml`, description: 'freeSub 24 组' },
+  ];
+}
+
 export const BENCH_CONFIG: Record<string, unknown> = {
   'allow-lan': false,
   'external-controller': '127.0.0.1:19090',
