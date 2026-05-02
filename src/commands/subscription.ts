@@ -155,8 +155,8 @@ async function addFreeSubscription(freeId: number): Promise<void> {
     console.log(`添加合并免费订阅: ${name} (${sources.map(s => s.name).join(' + ')})`);
     try {
       addSubscription(mergedUrl, name);
-      setDefaultSubscription(name);
       const info = await subscription.downloadMergedSubscription(urls, name);
+      setDefaultSubscription(name);
       const repoUrls = sources.map(s => githubRepoUrl(s.url)).filter(Boolean);
       if (repoUrls.length > 0) saveSubscriptionCache(name, { web_page_url: repoUrls.join(', ') });
       console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)}, 合并 ${sources.length} 源)`);
@@ -180,8 +180,8 @@ async function addFreeSubscription(freeId: number): Promise<void> {
   console.log(`添加免费订阅: ${name}`);
   try {
     addSubscription(source.url, name);
-    setDefaultSubscription(name);
     const info = await subscription.downloadSubscription(source.url, name);
+    setDefaultSubscription(name);
     const repoUrl = githubRepoUrl(source.url);
     if (repoUrl) saveSubscriptionCache(name, { web_page_url: repoUrl });
     console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)})`);
@@ -214,8 +214,8 @@ async function addBestSubscription(bestId: number): Promise<void> {
   console.log(`添加 best 订阅: ${name} (${source.description})`);
   try {
     addSubscription(source.url, name);
-    setDefaultSubscription(name);
     const info = await subscription.downloadSubscription(source.url, name);
+    setDefaultSubscription(name);
     saveSubscriptionCache(name, { web_page_url: 'https://github.com/imaex/mihomo-free-sub' });
     console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)})`);
   } catch (e) {
