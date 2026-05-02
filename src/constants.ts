@@ -21,9 +21,15 @@ export const TUN_CONFIG = {
 
 export function getFreeSubscriptionSources(): Array<{ name: string; url: string }> {
   return [
-    // 完整配置（DNS + 分组 + rule-provider, 29 组）
+    // 完整配置（ACL4SSR 29 组）
     { name: 'FreeSubsCheck', url: 'https://gh-proxy.org/raw.githubusercontent.com/kooker/FreeSubsCheck/main/mihomo.yaml' },
+    { name: 'yahr601', url: 'https://gh-proxy.org/raw.githubusercontent.com/yahr601-prog/1/main/clash.yaml' },
+    { name: 'Auto-Sync', url: 'https://gh-proxy.org/raw.githubusercontent.com/walke2019/Auto-Sync/main/clash/GG/clash.yaml' },
+    { name: 'ssrsub', url: 'https://gh-proxy.org/raw.githubusercontent.com/ssrsub/ssr/master/clash.yaml' }, // OpenAi → Ai平台
     { name: 'shaoyouvip', url: 'https://gh-proxy.org/raw.githubusercontent.com/shaoyouvip/free/main/mihomo.yaml' },
+    { name: 'dalazhi', url: 'https://gh-proxy.org/raw.githubusercontent.com/dalazhi/v2ray/main/data/mihomo.yaml' },
+    { name: 'getnode', url: 'https://gh-proxy.org/raw.githubusercontent.com/limitless-d/getnode/main/clash.yaml' },
+    // 完整配置（24 组）
     { name: 'freeSub', url: 'https://gh-proxy.org/raw.githubusercontent.com/Ruk1ng001/freeSub/main/clash.yaml' },
     // 完整配置（13 组）
     { name: 'PuddinCat', url: 'https://gh-proxy.org/raw.githubusercontent.com/PuddinCat/BestClash/refs/heads/main/proxies.yaml' },
