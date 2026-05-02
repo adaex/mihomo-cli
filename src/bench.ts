@@ -149,54 +149,42 @@ export async function downloadAllSources(
   sources: Array<{ name: string; url: string }>,
   onProgress?: (name: string, ok: boolean, count: number, groups: number, error?: string) => void,
 ): Promise<DownloadedSource[]> {
-  const savedProxy = { http: process.env.http_proxy, https: process.env.https_proxy, HTTP: process.env.HTTP_PROXY, HTTPS: process.env.HTTPS_PROXY };
-  delete process.env.http_proxy;
-  delete process.env.https_proxy;
-  delete process.env.HTTP_PROXY;
-  delete process.env.HTTPS_PROXY;
+  const client = createHttpClient({ timeout: 30_000 });
 
-  try {
-    const client = createHttpClient({ timeout: 30_000 });
+  const tasks = sources.map(async (source): Promise<DownloadedSource> => {
+    const entry: DownloadedSource = { name: source.name, url: source.url, proxies: [], proxyGroups: 0 };
+    try {
+      const response = await client.get(source.url, { responseType: 'text' });
+      const content = response.data;
+      if (!content?.trim()) throw new Error('内容为空');
 
-    const tasks = sources.map(async (source): Promise<DownloadedSource> => {
-      const entry: DownloadedSource = { name: source.name, url: source.url, proxies: [], proxyGroups: 0 };
+      let proxies: Array<{ name: string; [k: string]: unknown }>;
+
       try {
-        const response = await client.get(source.url, { responseType: 'text' });
-        const content = response.data;
-        if (!content?.trim()) throw new Error('内容为空');
-
-        let proxies: Array<{ name: string; [k: string]: unknown }>;
-
-        try {
-          const parsed = parseYamlOrJson(content, '订阅内容') as Record<string, unknown>;
-          proxies = (parsed.proxies || []) as Array<{ name: string; [k: string]: unknown }>;
-          const groups = parsed['proxy-groups'] as unknown[] | undefined;
-          if (groups) entry.proxyGroups = groups.length;
-        } catch {
-          const decoded = tryDecodeBase64Content(content);
-          if (decoded) {
-            proxies = parseProxyUris(decoded);
-          } else {
-            proxies = parseProxyUris(content);
-          }
-          if (proxies.length === 0) throw new Error('无法解析订阅内容（非 YAML/JSON/Base64）');
+        const parsed = parseYamlOrJson(content, '订阅内容') as Record<string, unknown>;
+        proxies = (parsed.proxies || []) as Array<{ name: string; [k: string]: unknown }>;
+        const groups = parsed['proxy-groups'] as unknown[] | undefined;
+        if (groups) entry.proxyGroups = groups.length;
+      } catch {
+        const decoded = tryDecodeBase64Content(content);
+        if (decoded) {
+          proxies = parseProxyUris(decoded);
+        } else {
+          proxies = parseProxyUris(content);
         }
-
-        entry.proxies = proxies.map(p => ({ ...p, name: `[${source.name}] ${p.name}` }));
-        onProgress?.(source.name, true, proxies.length, entry.proxyGroups);
-      } catch (e) {
-        entry.error = (e as Error).message;
-        onProgress?.(source.name, false, 0, 0, entry.error);
+        if (proxies.length === 0) throw new Error('无法解析订阅内容（非 YAML/JSON/Base64）');
       }
-      return entry;
-    });
 
-    return await Promise.all(tasks);
-  } finally {
-    for (const [key, val] of Object.entries(savedProxy)) {
-      if (val !== undefined) process.env[key] = val;
+      entry.proxies = proxies.map(p => ({ ...p, name: `[${source.name}] ${p.name}` }));
+      onProgress?.(source.name, true, proxies.length, entry.proxyGroups);
+    } catch (e) {
+      entry.error = (e as Error).message;
+      onProgress?.(source.name, false, 0, 0, entry.error);
     }
-  }
+    return entry;
+  });
+
+  return await Promise.all(tasks);
 }
 
 function isProxyValid(proxy: { name: string; [k: string]: unknown }): boolean {

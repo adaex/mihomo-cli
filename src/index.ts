@@ -43,7 +43,17 @@ process.on('unhandledRejection', (reason: unknown) => {
   process.exit(1);
 });
 
+function clearProxyEnv(): void {
+  delete process.env.http_proxy;
+  delete process.env.https_proxy;
+  delete process.env.HTTP_PROXY;
+  delete process.env.HTTPS_PROXY;
+  delete process.env.all_proxy;
+  delete process.env.ALL_PROXY;
+}
+
 async function main(): Promise<void> {
+  clearProxyEnv();
   ensureDirs();
 
   const args = process.argv.slice(2);
