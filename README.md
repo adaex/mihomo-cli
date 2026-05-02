@@ -198,7 +198,7 @@ mihomo kernel --mirror-all hk.gh-proxy.org
 
 ## 订阅自动更新
 
-- 默认更新间隔：12 小时（或订阅服务端指定的 `profile-update-interval`）
+- 默认更新间隔：4 小时（或订阅服务端指定的 `profile-update-interval`）
 - 触发时机：`start` 命令、`sub list` 命令
 - 更新失败时继续使用本地缓存，不影响使用
 

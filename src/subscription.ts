@@ -24,7 +24,7 @@ import type {
 } from './types.js';
 import { colors, createHttpClient } from './utils.js';
 
-export const DEFAULT_UPDATE_INTERVAL_HOURS = 12;
+export const DEFAULT_UPDATE_INTERVAL_HOURS = 4;
 
 const YAML_DUMP_OPTS = { indent: 2, lineWidth: -1, noCompatMode: true };
 
