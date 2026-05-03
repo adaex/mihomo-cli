@@ -50,16 +50,18 @@ export async function cmdClean(args: string[]): Promise<void> {
 
   const timeout = parseIntArg(args, '-t', '--timeout', 1500);
   const concurrency = parseIntArg(args, '-j', '--concurrency', 100);
+  const rounds = parseIntArg(args, '-r', '--rounds', 3);
 
   console.log(`清理 "${activeSub.name}" 失败节点...`);
   console.log(`超时: ${timeout}ms  并发: ${concurrency}`);
   console.log('');
 
-  const progress = createProgressPrinter();
+  const progress = createProgressPrinter(rounds);
 
   const result = await subscription.autoCleanSubscription(activeSub.name, {
     timeout,
     concurrency,
+    rounds,
     onResult: progress.onResult,
     onRetryRound: progress.onRetryRound,
   });

@@ -23,13 +23,14 @@ interface TrackedResult {
   round: number;
 }
 
-export function createProgressPrinter(): {
+export function createProgressPrinter(totalRounds = 1): {
   onResult: (result: ProxyTestResult, index: number, total: number, round?: number) => void;
   onRetryRound: (round: number, count: number) => void;
   finish: () => void;
 } {
   let alive = 0;
   let dead = 0;
+  let started = false;
   const resultMap = new Map<string, TrackedResult>();
 
   function render(done: number, total: number): void {
@@ -42,6 +43,12 @@ export function createProgressPrinter(): {
 
   return {
     onResult(result, index, total, round = 1) {
+      if (!started) {
+        started = true;
+        if (totalRounds > 1) {
+          console.log(`--- 第 1 轮测试 (${total} 个节点) ---`);
+        }
+      }
       if (result.delay !== null) alive++;
       else dead++;
 
@@ -411,17 +418,19 @@ export async function cmdSubscription(args: string[]): Promise<void> {
 
   if (action === 'clean') {
     const { target, timeout, concurrency } = resolveTestTarget(args);
+    const rounds = parseIntArg(args, '-r', '--rounds', 3);
 
     console.log(`清理订阅 "${target.name}"...`);
     console.log(`超时: ${timeout}ms  并发: ${concurrency}`);
     console.log('');
 
-    const progress = createProgressPrinter();
+    const progress = createProgressPrinter(rounds);
 
     const result = await withTestInstance(target.name, async apiBase => {
       return subscription.autoCleanSubscription(target.name, {
         timeout,
         concurrency,
+        rounds,
         apiBase,
         onResult: progress.onResult,
         onRetryRound: progress.onRetryRound,

@@ -77,7 +77,7 @@ export async function cmdStart(args: string[]): Promise<void> {
 
     await sleep(1000);
 
-    const progress = createProgressPrinter();
+    const progress = createProgressPrinter(3);
     const cleanResult = await subscription.autoCleanSubscription(sub.name, {
       onResult: progress.onResult,
       onRetryRound: progress.onRetryRound,

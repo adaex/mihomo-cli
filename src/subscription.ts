@@ -494,12 +494,13 @@ export async function autoCleanSubscription(
     timeout?: number;
     concurrency?: number;
     apiBase?: string;
+    rounds?: number;
     onResult?: (result: ProxyTestResult, index: number, total: number, round: number) => void;
     onRetryRound?: (round: number, count: number) => void;
   } = {},
 ): Promise<{ summary: ProxyTestSummary; removedProxies: number; updatedGroups: number; removedGroups: number; skipped?: boolean }> {
   const parsed = loadSubscriptionConfig(subName);
-  const { onResult, onRetryRound, ...testOptions } = options;
+  const { onResult, onRetryRound, rounds = 3, ...testOptions } = options;
 
   const wrapOnResult = (round: number) => (onResult ? (r: ProxyTestResult, i: number, t: number) => onResult(r, i, t, round) : undefined);
 
@@ -521,7 +522,7 @@ export async function autoCleanSubscription(
       const deadNames = new Set(summary.results.filter(r => r.delay === null).map(r => r.name));
       const deadProxies = parsed.proxies.filter(p => deadNames.has(p.name));
 
-      for (let retry = 0; retry < 2; retry++) {
+      for (let retry = 0; retry < rounds - 1; retry++) {
         const round = retry + 2;
         const retryTargets = deadProxies.filter(p => deadNames.has(p.name));
         if (retryTargets.length === 0) break;

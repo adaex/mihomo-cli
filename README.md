@@ -102,9 +102,9 @@ mihomo ui yacd     # YACD
 | `mihomo sub remove <name>`    | 删除订阅（支持模糊匹配）               |
 | `mihomo sub web [name]`       | 打开订阅页面（无参打开默认）           |
 | `mihomo sub test [name]`      | 测试节点连通性（`-t` 超时，`-j` 并发） |
-| `mihomo sub clean [name]`     | 测速并清理失败节点                     |
+| `mihomo sub clean [name]`     | 测速并清理失败节点（`-r` 轮数，默认3）|
 | `mihomo test`                 | 快速测试当前节点连通性（`-t` 超时，`-j` 并发） |
-| `mihomo clean`                | 清理失败节点并自动重启（`-t` 超时，`-j` 并发） |
+| `mihomo clean`                | 清理失败节点并自动重启（`-t` 超时，`-j` 并发，`-r` 轮数） |
 
 ### 覆写配置
 
