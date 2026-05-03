@@ -50,7 +50,7 @@ export async function cmdClean(args: string[]): Promise<void> {
 
   const timeout = parseIntArg(args, '-t', '--timeout', 1500);
   const concurrency = parseIntArg(args, '-j', '--concurrency', 100);
-  const rounds = parseIntArg(args, '-r', '--rounds', 3);
+  const rounds = parseIntArg(args, '-r', '--rounds', subscription.DEFAULT_CLEAN_ROUNDS);
 
   console.log(`清理 "${activeSub.name}" 失败节点...`);
   console.log(`超时: ${timeout}ms  并发: ${concurrency}`);

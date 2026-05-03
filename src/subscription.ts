@@ -25,6 +25,7 @@ import type {
 import { colors, createHttpClient } from './utils.js';
 
 export const DEFAULT_UPDATE_INTERVAL_HOURS = 4;
+export const DEFAULT_CLEAN_ROUNDS = 3;
 
 const YAML_DUMP_OPTS = { indent: 2, lineWidth: -1, noCompatMode: true };
 
@@ -500,7 +501,7 @@ export async function autoCleanSubscription(
   } = {},
 ): Promise<{ summary: ProxyTestSummary; removedProxies: number; updatedGroups: number; removedGroups: number; skipped?: boolean }> {
   const parsed = loadSubscriptionConfig(subName);
-  const { onResult, onRetryRound, rounds = 3, ...testOptions } = options;
+  const { onResult, onRetryRound, rounds = DEFAULT_CLEAN_ROUNDS, ...testOptions } = options;
 
   const wrapOnResult = (round: number) => (onResult ? (r: ProxyTestResult, i: number, t: number) => onResult(r, i, t, round) : undefined);
 

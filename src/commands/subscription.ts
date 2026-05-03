@@ -30,7 +30,6 @@ export function createProgressPrinter(totalRounds = 1): {
 } {
   let alive = 0;
   let dead = 0;
-  let started = false;
   const resultMap = new Map<string, TrackedResult>();
 
   function render(done: number, total: number): void {
@@ -43,11 +42,8 @@ export function createProgressPrinter(totalRounds = 1): {
 
   return {
     onResult(result, index, total, round = 1) {
-      if (!started) {
-        started = true;
-        if (totalRounds > 1) {
-          console.log(`--- 第 1 轮测试 (${total} 个节点) ---`);
-        }
+      if (resultMap.size === 0 && totalRounds > 1) {
+        console.log(`--- 第 1 轮测试 (${total} 个节点) ---`);
       }
       if (result.delay !== null) alive++;
       else dead++;
@@ -418,7 +414,7 @@ export async function cmdSubscription(args: string[]): Promise<void> {
 
   if (action === 'clean') {
     const { target, timeout, concurrency } = resolveTestTarget(args);
-    const rounds = parseIntArg(args, '-r', '--rounds', 3);
+    const rounds = parseIntArg(args, '-r', '--rounds', subscription.DEFAULT_CLEAN_ROUNDS);
 
     console.log(`清理订阅 "${target.name}"...`);
     console.log(`超时: ${timeout}ms  并发: ${concurrency}`);
