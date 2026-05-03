@@ -16,14 +16,86 @@ import type { ProxyTestResult, Subscription } from '../types.js';
 import { colors, formatBytes, formatDate, formatTimestamp, getNonFlagArg, parseIntArg } from '../utils.js';
 import { cmdStart } from './start.js';
 
-export function printTestResult(result: ProxyTestResult, index: number, total: number): void {
-  const prefix = `[${index + 1}/${total}]`;
-  if (result.delay !== null) {
-    const delayColor = result.delay < 300 ? colors.green : result.delay < 800 ? colors.yellow : colors.red;
-    console.log(`${prefix} ${colors.green('✓')} ${result.name} ${delayColor(`${result.delay}ms`)}`);
-  } else {
-    console.log(`${prefix} ${colors.red('✗')} ${result.name} ${colors.gray(result.error || 'timeout')}`);
+const IS_TTY = process.stdout.isTTY === true;
+const BAR_WIDTH = 20;
+
+interface TrackedResult {
+  result: ProxyTestResult;
+  round: number;
+}
+
+export function createProgressPrinter(): {
+  onResult: (result: ProxyTestResult, index: number, total: number, round?: number) => void;
+  onRetryRound: (round: number, count: number) => void;
+  finish: () => void;
+} {
+  let alive = 0;
+  let dead = 0;
+  let hasRetry = false;
+  const resultMap = new Map<string, TrackedResult>();
+
+  function render(done: number, total: number): void {
+    if (!IS_TTY) return;
+    const pct = Math.round((done / total) * 100);
+    const filled = Math.round((done / total) * BAR_WIDTH);
+    const bar = '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
+    process.stdout.write(`\r${bar} ${done}/${total} (${pct}%) | ${colors.green(`✓${alive}`)} ${colors.red(`✗${dead}`)}`);
   }
+
+  return {
+    onResult(result, index, total, round = 1) {
+      const prev = resultMap.get(result.name);
+      if (prev) {
+        if (prev.result.delay === null && result.delay !== null) {
+          alive++;
+          dead--;
+        }
+      } else {
+        if (result.delay !== null) alive++;
+        else dead++;
+      }
+
+      resultMap.set(result.name, { result, round });
+      render(index + 1, total);
+    },
+    onRetryRound(round, count) {
+      if (!hasRetry) {
+        hasRetry = true;
+        if (IS_TTY) {
+          process.stdout.write('\n');
+        }
+        console.log(`--- 第 1 轮测试 (${resultMap.size} 个节点) ---`);
+      }
+      if (IS_TTY) {
+        process.stdout.write('\n');
+      }
+      console.log(`--- 第 ${round} 轮重试 (${count} 个节点) ---`);
+    },
+    finish() {
+      if (IS_TTY) {
+        process.stdout.write('\n');
+      }
+      console.log('');
+
+      const entries = [...resultMap.values()];
+      entries.sort((a, b) => a.result.name.localeCompare(b.result.name));
+      const total = entries.length;
+      console.log('节点最终状态:');
+
+      for (let i = 0; i < entries.length; i++) {
+        const { result, round } = entries[i];
+        const prefix = `[${i + 1}/${total}]`;
+        if (result.delay !== null) {
+          const delayColor = result.delay < 300 ? colors.green : result.delay < 800 ? colors.yellow : colors.red;
+          const retryNote = round > 1 ? colors.gray(` (第${round}轮通过)`) : '';
+          console.log(`${prefix} ${colors.green('✓')} ${result.name} ${delayColor(`${result.delay}ms`)}${retryNote}`);
+        } else {
+          console.log(`${prefix} ${colors.red('✗')} ${result.name} ${colors.gray(result.error || 'timeout')}`);
+        }
+      }
+      console.log('');
+    },
+  };
 }
 
 export function formatCleanSummary(result: { removedProxies: number; removedGroups: number; updatedGroups: number }): string {
@@ -434,16 +506,19 @@ export async function cmdSubscription(args: string[]): Promise<void> {
     console.log(`超时: ${timeout}ms  并发: ${concurrency}`);
     console.log('');
 
+    const progress = createProgressPrinter();
+
     const result = await withTestInstance(target.name, async apiBase => {
       return subscription.autoCleanSubscription(target.name, {
         timeout,
         concurrency,
         apiBase,
-        onResult: printTestResult,
+        onResult: progress.onResult,
+        onRetryRound: progress.onRetryRound,
       });
     });
 
-    console.log('');
+    progress.finish();
     console.log(formatTestSummary(result.summary));
 
     if (result.skipped) {
@@ -468,16 +543,18 @@ export async function cmdSubscription(args: string[]): Promise<void> {
     console.log(`超时: ${timeout}ms  并发: ${concurrency}`);
     console.log('');
 
+    const progress = createProgressPrinter();
+
     const summary = await withTestInstance(target.name, async apiBase => {
       return subscription.testSubscriptionProxies(target.name, {
         timeout,
         concurrency,
         apiBase,
-        onResult: printTestResult,
+        onResult: progress.onResult,
       });
     });
 
-    console.log('');
+    progress.finish();
     console.log(formatTestSummary(summary));
 
     return;

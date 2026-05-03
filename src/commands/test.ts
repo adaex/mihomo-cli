@@ -2,7 +2,7 @@ import * as processManager from '../process.js';
 import * as subscription from '../subscription.js';
 import type { Subscription } from '../types.js';
 import { colors, parseIntArg } from '../utils.js';
-import { formatCleanSummary, formatTestSummary, printTestResult } from './subscription.js';
+import { createProgressPrinter, formatCleanSummary, formatTestSummary } from './subscription.js';
 
 function requireRunning(): void {
   const status = processManager.getStatus();
@@ -32,13 +32,15 @@ export async function cmdTest(args: string[]): Promise<void> {
   console.log(`超时: ${timeout}ms  并发: ${concurrency}`);
   console.log('');
 
+  const progress = createProgressPrinter();
+
   const summary = await subscription.testSubscriptionProxies(activeSub.name, {
     timeout,
     concurrency,
-    onResult: printTestResult,
+    onResult: progress.onResult,
   });
 
-  console.log('');
+  progress.finish();
   console.log(formatTestSummary(summary));
 }
 
@@ -53,13 +55,16 @@ export async function cmdClean(args: string[]): Promise<void> {
   console.log(`超时: ${timeout}ms  并发: ${concurrency}`);
   console.log('');
 
+  const progress = createProgressPrinter();
+
   const result = await subscription.autoCleanSubscription(activeSub.name, {
     timeout,
     concurrency,
-    onResult: printTestResult,
+    onResult: progress.onResult,
+    onRetryRound: progress.onRetryRound,
   });
 
-  console.log('');
+  progress.finish();
   console.log(formatTestSummary(result.summary));
 
   if (result.skipped) {

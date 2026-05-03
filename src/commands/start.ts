@@ -4,7 +4,7 @@ import * as subscription from '../subscription.js';
 import type { StopResult } from '../types.js';
 import { colors, sleep } from '../utils.js';
 import { printStatus } from './status.js';
-import { formatCleanSummary, formatTestSummary, printTestResult } from './subscription.js';
+import { createProgressPrinter, formatCleanSummary, formatTestSummary } from './subscription.js';
 
 const AUTO_CLEAN_THRESHOLD = 50;
 
@@ -77,9 +77,12 @@ export async function cmdStart(args: string[]): Promise<void> {
 
     await sleep(1000);
 
-    const cleanResult = await subscription.autoCleanSubscription(sub.name, { onResult: printTestResult });
-
-    console.log('');
+    const progress = createProgressPrinter();
+    const cleanResult = await subscription.autoCleanSubscription(sub.name, {
+      onResult: progress.onResult,
+      onRetryRound: progress.onRetryRound,
+    });
+    progress.finish();
     console.log(formatTestSummary(cleanResult.summary));
 
     if (cleanResult.skipped) {

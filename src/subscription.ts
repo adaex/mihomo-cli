@@ -400,18 +400,22 @@ export async function testSubscriptionProxies(
   }
 
   const client = createHttpClient({ timeout: timeout + 3000 });
-  const results: ProxyTestResult[] = [];
+  const results: ProxyTestResult[] = new Array(proxies.length);
   let completedCount = 0;
+  let nextIndex = 0;
 
-  for (let i = 0; i < proxies.length; i += concurrency) {
-    const batch = proxies.slice(i, i + concurrency);
-    const batchResults = await Promise.all(batch.map(proxy => testProxyDelay(proxy.name, timeout, testUrl, client, apiBase)));
-    for (const result of batchResults) {
-      results.push(result);
+  async function runNext(): Promise<void> {
+    while (nextIndex < proxies.length) {
+      const idx = nextIndex++;
+      const result = await testProxyDelay(proxies[idx].name, timeout, testUrl, client, apiBase);
+      results[idx] = result;
       onResult?.(result, completedCount, proxies.length);
       completedCount++;
     }
   }
+
+  const workers = Array.from({ length: Math.min(concurrency, proxies.length) }, () => runNext());
+  await Promise.all(workers);
 
   const alive = results.filter(r => r.delay !== null).length;
   return { total: results.length, alive, dead: results.length - alive, results };
@@ -490,12 +494,20 @@ export async function autoCleanSubscription(
     timeout?: number;
     concurrency?: number;
     apiBase?: string;
-    onResult?: (result: ProxyTestResult, index: number, total: number) => void;
+    onResult?: (result: ProxyTestResult, index: number, total: number, round: number) => void;
+    onRetryRound?: (round: number, count: number) => void;
   } = {},
 ): Promise<{ summary: ProxyTestSummary; removedProxies: number; updatedGroups: number; removedGroups: number; skipped?: boolean }> {
   const parsed = loadSubscriptionConfig(subName);
+  const { onResult, onRetryRound, ...testOptions } = options;
 
-  const summary = await testSubscriptionProxies(subName, { ...options, parsed });
+  const wrapOnResult = (round: number) => (onResult ? (r: ProxyTestResult, i: number, t: number) => onResult(r, i, t, round) : undefined);
+
+  const summary = await testSubscriptionProxies(subName, {
+    ...testOptions,
+    parsed,
+    onResult: wrapOnResult(1),
+  });
 
   let removedProxies = 0;
   let updatedGroups = 0;
@@ -507,10 +519,38 @@ export async function autoCleanSubscription(
       skipped = true;
     } else {
       const deadNames = new Set(summary.results.filter(r => r.delay === null).map(r => r.name));
-      const cleanResult = cleanDeadProxies(parsed, deadNames);
-      removedProxies = cleanResult.removedProxies;
-      updatedGroups = cleanResult.updatedGroups;
-      removedGroups = cleanResult.removedGroups;
+      const deadProxies = parsed.proxies.filter(p => deadNames.has(p.name));
+
+      for (let retry = 0; retry < 2; retry++) {
+        const round = retry + 2;
+        const retryTargets = deadProxies.filter(p => deadNames.has(p.name));
+        if (retryTargets.length === 0) break;
+
+        onRetryRound?.(round, retryTargets.length);
+
+        const retryParsed: ParsedSubscription = { raw: {}, proxies: retryTargets, proxyGroups: [] };
+        const retrySummary = await testSubscriptionProxies(subName, {
+          ...testOptions,
+          parsed: retryParsed,
+          onResult: wrapOnResult(round),
+        });
+
+        for (const r of retrySummary.results) {
+          if (r.delay !== null) {
+            deadNames.delete(r.name);
+          }
+        }
+      }
+
+      summary.dead = deadNames.size;
+      summary.alive = summary.total - summary.dead;
+
+      if (deadNames.size > 0) {
+        const cleanResult = cleanDeadProxies(parsed, deadNames);
+        removedProxies = cleanResult.removedProxies;
+        updatedGroups = cleanResult.updatedGroups;
+        removedGroups = cleanResult.removedGroups;
+      }
     }
   }
 
