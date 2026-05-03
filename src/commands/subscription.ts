@@ -30,7 +30,6 @@ export function createProgressPrinter(): {
 } {
   let alive = 0;
   let dead = 0;
-  let hasRetry = false;
   const resultMap = new Map<string, TrackedResult>();
 
   function render(done: number, total: number): void {
@@ -43,32 +42,19 @@ export function createProgressPrinter(): {
 
   return {
     onResult(result, index, total, round = 1) {
-      const prev = resultMap.get(result.name);
-      if (prev) {
-        if (prev.result.delay === null && result.delay !== null) {
-          alive++;
-          dead--;
-        }
-      } else {
-        if (result.delay !== null) alive++;
-        else dead++;
-      }
+      if (result.delay !== null) alive++;
+      else dead++;
 
       resultMap.set(result.name, { result, round });
       render(index + 1, total);
     },
     onRetryRound(round, count) {
-      if (!hasRetry) {
-        hasRetry = true;
-        if (IS_TTY) {
-          process.stdout.write('\n');
-        }
-        console.log(`--- 第 1 轮测试 (${resultMap.size} 个节点) ---`);
-      }
       if (IS_TTY) {
         process.stdout.write('\n');
       }
       console.log(`--- 第 ${round} 轮重试 (${count} 个节点) ---`);
+      alive = 0;
+      dead = 0;
     },
     finish() {
       if (IS_TTY) {
