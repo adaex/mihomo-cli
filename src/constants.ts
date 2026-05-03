@@ -57,31 +57,35 @@ export function getFreeSubscriptionSources(): Array<{ name: string; url: string 
 }
 
 export const BENCH_CONFIG: Record<string, unknown> = {
+  'mixed-port': 17890,
   'allow-lan': false,
   'external-controller': '127.0.0.1:19090',
-  port: 17890,
-  'socks-port': 17891,
   'log-level': 'error',
   'geodata-mode': true,
 };
 
 export const TEST_CONFIG: Record<string, unknown> = {
+  'mixed-port': 27890,
   'allow-lan': false,
   'external-controller': '127.0.0.1:29090',
-  port: 27890,
-  'socks-port': 27891,
   'log-level': 'error',
   'geodata-mode': true,
 };
 
 export const BASE_CONFIG: Record<string, unknown> = {
+  'mixed-port': 7890,
   'allow-lan': false,
   'external-controller': '127.0.0.1:9090',
-  port: 7890,
-  'socks-port': 7891,
-  'log-level': 'warning',
-  'geodata-mode': true,
+  'unified-delay': true,
+  'tcp-concurrent': true,
+  'global-client-fingerprint': 'chrome',
+  'geo-auto-update': true,
   'geo-update-interval': 24,
+  'geodata-mode': true,
+  'log-level': 'warning',
+  profile: {
+    'store-selected': true,
+  },
   'geox-url': {
     geoip: 'https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip-lite.dat',
     geosite: 'https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite-lite.dat',

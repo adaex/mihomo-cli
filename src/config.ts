@@ -84,9 +84,10 @@ export function buildConfig(subRawContent: string, mode: string): BuildConfigRes
 
   systemConfig['allow-lan'] = false;
   systemConfig['external-controller'] = BASE_CONFIG['external-controller'];
-  systemConfig.port = BASE_CONFIG.port;
-  systemConfig['socks-port'] = BASE_CONFIG['socks-port'];
+  systemConfig['mixed-port'] = BASE_CONFIG['mixed-port'];
   delete withOverwrites['mixed-port'];
+  delete withOverwrites.port;
+  delete withOverwrites['socks-port'];
   delete withOverwrites['external-ui'];
   delete withOverwrites['external-ui-name'];
   delete withOverwrites['external-ui-url'];
@@ -107,6 +108,19 @@ export function buildConfig(subRawContent: string, mode: string): BuildConfigRes
 
   if (systemConfig.dns) {
     merged.dns = { ...((withOverwrites.dns || {}) as Record<string, unknown>), ...(systemConfig.dns as Record<string, unknown>) };
+  }
+
+  const mergedDns = (merged.dns || {}) as Record<string, unknown>;
+  if (mergedDns['enhanced-mode'] === 'fake-ip' && !('sniffer' in withOverwrites)) {
+    merged.sniffer = {
+      enable: true,
+      sniff: {
+        HTTP: { ports: [80, '8080-8880'], 'override-destination': true },
+        TLS: { ports: [443, 8443] },
+        QUIC: { ports: [443, 8443] },
+      },
+      'skip-domain': ['+.push.apple.com'],
+    };
   }
 
   return { config: merged, subscriptionConfig, overwriteFiles, systemConfig };

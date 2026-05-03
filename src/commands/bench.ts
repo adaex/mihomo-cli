@@ -133,7 +133,7 @@ export async function cmdBench(args: string[]): Promise<void> {
       d.proxies = d.proxies.filter(p => survivingSet.has(p));
     }
 
-    const benchPort = BENCH_CONFIG.port;
+    const benchPort = BENCH_CONFIG['mixed-port'];
     const benchApi = BENCH_CONFIG['external-controller'];
     console.log(colors.cyan('启动测试实例...'));
     await startBenchInstance();

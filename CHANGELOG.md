@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.6.0] - 2026-05-03
+
+### 改进
+
+- **统一使用 mixed-port**：用 `mixed-port: 7890` 替代原来的 `port: 7890` + `socks-port: 7891`，单端口同时支持 HTTP 和 SOCKS5
+- **BASE_CONFIG 优化**：新增 `unified-delay`、`tcp-concurrent`、`global-client-fingerprint`、`geo-auto-update`、`profile.store-selected`，不再依赖订阅自带这些配置
+- **自动启用 sniffer**：检测到 `fake-ip` 模式时自动注入 sniffer 配置（嗅探 HTTP/TLS/QUIC），确保域名规则正常工作；订阅自带 sniffer 时不覆盖
+
+---
+
 ## [2.5.0] - 2026-05-03
 
 ### 新功能
