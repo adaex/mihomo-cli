@@ -1,4 +1,3 @@
-import { cmdBench } from './commands/bench.js';
 import { cmdDirectory } from './commands/directory.js';
 import { printHelp, printShortHelp, printVersion } from './commands/help.js';
 import { cmdKernel } from './commands/kernel.js';
@@ -137,9 +136,6 @@ async function main(): Promise<void> {
     case 'ow':
     case 'overwrite':
       await cmdOverwrite(args);
-      break;
-    case 'bench':
-      await cmdBench(args);
       break;
     case 'test':
       await cmdTest(args);

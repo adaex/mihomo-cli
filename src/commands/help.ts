@@ -43,7 +43,6 @@ export function printHelp(): void {
       `  ${colors.bold('subscription')} clean [name]    测速并清理失败节点\n` +
       `  ${colors.bold('test')} [-t ms] [-j N]           快速测试当前节点连通性\n` +
       `  ${colors.bold('clean')} [-t ms] [-j N]          清理失败节点并自动重启\n` +
-      `  ${colors.bold('bench')} [name] [-t ms] [-j N]  测试免费订阅源质量排名\n` +
       '\n' +
       `${colors.cyan('配置:')}\n` +
       `  ${colors.bold('overwrite')}                   查看覆写状态（别名 ow）\n` +
@@ -62,7 +61,6 @@ export function printHelp(): void {
       '  mihomo start              # 启动/重启 Mixed 模式\n' +
       '  mihomo start tun          # 切换到 TUN 透明代理模式\n' +
       '  mihomo sub add <url>      # 添加订阅 (sub 是 subscription 别名)\n' +
-      '  mihomo bench              # 测试所有免费订阅源\n' +
       '  mihomo ui                 # 打开 Web UI\n' +
       '\n' +
       `${colors.cyan('模式说明:')}\n` +
