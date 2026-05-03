@@ -1,5 +1,5 @@
 import yaml from 'js-yaml';
-import { buildConfig, checkConfig, parseYamlOrJson, writeDebugConfig, writeMihomoConfig } from './config.js';
+import { buildConfig, parseYamlOrJson, writeDebugConfig, writeMihomoConfig } from './config.js';
 import { BASE_CONFIG } from './constants.js';
 import {
   getSubscriptions,
@@ -284,12 +284,6 @@ export function prepareConfigForStart(mode: string, subName = 'default'): { prox
 
   writeMihomoConfig(buildResult.config);
   writeDebugConfig(buildResult);
-
-  const configCheck = checkConfig();
-  if (!configCheck.ok) {
-    const errorDetail = configCheck.errors.length > 0 ? configCheck.errors.join('\n  ') : '未知错误';
-    throw new Error(`配置校验失败:\n  ${errorDetail}`);
-  }
 
   const proxies = buildResult.config.proxies as unknown[] | undefined;
   const proxyGroups = buildResult.config['proxy-groups'] as unknown[] | undefined;

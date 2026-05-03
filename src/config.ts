@@ -5,7 +5,7 @@ import yaml from 'js-yaml';
 import { BASE_CONFIG, TUN_CONFIG } from './constants.js';
 import { applyOverwrite, isOverwriteEnabled, loadOverwriteFile } from './overwrite.js';
 import { ensureDirs, PATHS } from './paths.js';
-import type { BuildConfigResult, ConfigInfo } from './types.js';
+import type { BuildConfigResult, ConfigInfo, ParsedProxy, ParsedProxyGroup } from './types.js';
 
 export function parseYamlOrJson(content: string, errorMsg?: string): Record<string, unknown> {
   if (!content?.trim()) {
@@ -62,24 +62,51 @@ function excludeOverwriteProxiesFromIncludeAll(config: Record<string, unknown>, 
 
 const BUILTIN_PROXY_NAMES = new Set(['DIRECT', 'REJECT', 'REJECT-DROP', 'PASS', 'COMPATIBLE']);
 
-type ProxyGroupEntry = { name: string; proxies?: string[]; [k: string]: unknown };
+function deduplicateByName<T extends { name: string }>(items: T[]): { result: T[]; names: Set<string>; duplicates: string[] } {
+  const names = new Set<string>();
+  const duplicates: string[] = [];
+  const result = items.filter(item => {
+    if (names.has(item.name)) {
+      duplicates.push(item.name);
+      return false;
+    }
+    names.add(item.name);
+    return true;
+  });
+  return { result, names, duplicates };
+}
 
-function validateProxyGroupDependencies(config: Record<string, unknown>): string[] {
+function validateConfig(config: Record<string, unknown>): string[] {
   const warnings: string[] = [];
-  const proxies = (config.proxies || []) as Array<{ name: string }>;
-  const groups = (config['proxy-groups'] || []) as ProxyGroupEntry[];
-  if (groups.length === 0) return warnings;
 
-  const validNames = new Set(BUILTIN_PROXY_NAMES);
-  for (const p of proxies) validNames.add(p.name);
-  for (const g of groups) validNames.add(g.name);
+  const proxies = (config.proxies || []) as ParsedProxy[];
+  const groups = (config['proxy-groups'] || []) as ParsedProxyGroup[];
+  const rules = (config.rules || []) as string[];
 
+  const proxyDedup = deduplicateByName(proxies);
+  config.proxies = proxyDedup.result;
+  if (proxyDedup.duplicates.length > 0) {
+    const preview = proxyDedup.duplicates
+      .slice(0, 3)
+      .map(n => `"${n}"`)
+      .join(', ');
+    warnings.push(`移除了 ${proxyDedup.duplicates.length} 个重名节点: ${preview}${proxyDedup.duplicates.length > 3 ? ' ...' : ''}`);
+  }
+
+  const groupDedup = deduplicateByName(groups);
+  config['proxy-groups'] = groupDedup.result;
+  if (groupDedup.duplicates.length > 0) {
+    warnings.push(`移除了 ${groupDedup.duplicates.length} 个重名分组: ${groupDedup.duplicates.map(n => `"${n}"`).join(', ')}`);
+  }
+
+  const validNames = new Set([...BUILTIN_PROXY_NAMES, ...proxyDedup.names, ...groupDedup.names]);
+  const activeGroups = groupDedup.result;
   const removedGroups = new Set<string>();
   let changed = true;
 
   while (changed) {
     changed = false;
-    for (const group of groups) {
+    for (const group of activeGroups) {
       if (removedGroups.has(group.name)) continue;
       if (!Array.isArray(group.proxies)) continue;
 
@@ -100,7 +127,22 @@ function validateProxyGroupDependencies(config: Record<string, unknown>): string
   }
 
   if (removedGroups.size > 0) {
-    config['proxy-groups'] = groups.filter(g => !removedGroups.has(g.name));
+    config['proxy-groups'] = activeGroups.filter(g => !removedGroups.has(g.name));
+  }
+
+  if (rules.length > 0) {
+    const removedRules: string[] = [];
+    config.rules = rules.filter(rule => {
+      const parts = rule.split(',');
+      if (parts.length < 2) return true;
+      const target = parts[parts.length - 1].trim();
+      if (!target || validNames.has(target)) return true;
+      removedRules.push(rule);
+      return false;
+    });
+    if (removedRules.length > 0) {
+      warnings.push(`移除了 ${removedRules.length} 条引用不存在目标的规则`);
+    }
   }
 
   return warnings;
@@ -169,27 +211,9 @@ export function buildConfig(subRawContent: string, mode: string): BuildConfigRes
     };
   }
 
-  const warnings = validateProxyGroupDependencies(merged);
+  const warnings = validateConfig(merged);
 
   return { config: merged, subscriptionConfig, overwriteFiles, systemConfig, warnings };
-}
-
-export function checkConfig(): { ok: boolean; errors: string[] } {
-  if (!hasKernel() || !hasConfig()) return { ok: true, errors: [] };
-  try {
-    execSync(`"${PATHS.mihomoBinary}" -t -f "${PATHS.configFile}" 2>&1`, { encoding: 'utf8' });
-    return { ok: true, errors: [] };
-  } catch (e) {
-    const output = (e as { stdout?: string; stderr?: string }).stdout || (e as Error).message || '';
-    const errors = output
-      .split('\n')
-      .filter(line => line.includes('level=error') || line.includes('level=fatal'))
-      .map(line => {
-        const match = line.match(/msg="(.+)"/);
-        return match ? match[1] : line;
-      });
-    return { ok: false, errors };
-  }
 }
 
 export function writeMihomoConfig(configObj: Record<string, unknown>): void {
