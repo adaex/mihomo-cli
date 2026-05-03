@@ -1,11 +1,24 @@
 # Changelog
 
+## [2.6.1] - 2026-05-03
+
+### 修复
+
+- **启动前配置校验** - 自动检测并修复 proxy-group 中引用不存在的节点/分组，避免内核启动失败
+- 写入配置后使用 `mihomo -t` 做内核级校验，提前发现配置错误
+
+### 改进
+
+- 移除已废弃的 `global-client-fingerprint` 配置项，消除内核启动时的 warning
+
+---
+
 ## [2.6.0] - 2026-05-03
 
 ### 改进
 
 - **统一使用 mixed-port**：用 `mixed-port: 7890` 替代原来的 `port: 7890` + `socks-port: 7891`，单端口同时支持 HTTP 和 SOCKS5
-- **BASE_CONFIG 优化**：新增 `unified-delay`、`tcp-concurrent`、`global-client-fingerprint`、`geo-auto-update`、`profile.store-selected`，不再依赖订阅自带这些配置
+- **BASE_CONFIG 优化**：新增 `unified-delay`、`tcp-concurrent`、`geo-auto-update`、`profile.store-selected`，不再依赖订阅自带这些配置
 - **自动启用 sniffer**：检测到 `fake-ip` 模式时自动注入 sniffer 配置（嗅探 HTTP/TLS/QUIC），确保域名规则正常工作；订阅自带 sniffer 时不覆盖
 
 ---

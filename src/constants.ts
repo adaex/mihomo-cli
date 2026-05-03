@@ -78,7 +78,6 @@ export const BASE_CONFIG: Record<string, unknown> = {
   'external-controller': '127.0.0.1:9090',
   'unified-delay': true,
   'tcp-concurrent': true,
-  'global-client-fingerprint': 'chrome',
   'geo-auto-update': true,
   'geo-update-interval': 24,
   'geodata-mode': true,

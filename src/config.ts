@@ -60,6 +60,52 @@ function excludeOverwriteProxiesFromIncludeAll(config: Record<string, unknown>, 
   }
 }
 
+const BUILTIN_PROXY_NAMES = new Set(['DIRECT', 'REJECT', 'REJECT-DROP', 'PASS', 'COMPATIBLE']);
+
+type ProxyGroupEntry = { name: string; proxies?: string[]; [k: string]: unknown };
+
+function validateProxyGroupDependencies(config: Record<string, unknown>): string[] {
+  const warnings: string[] = [];
+  const proxies = (config.proxies || []) as Array<{ name: string }>;
+  const groups = (config['proxy-groups'] || []) as ProxyGroupEntry[];
+  if (groups.length === 0) return warnings;
+
+  const validNames = new Set(BUILTIN_PROXY_NAMES);
+  for (const p of proxies) validNames.add(p.name);
+  for (const g of groups) validNames.add(g.name);
+
+  const removedGroups = new Set<string>();
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const group of groups) {
+      if (removedGroups.has(group.name)) continue;
+      if (!Array.isArray(group.proxies)) continue;
+
+      const invalid = group.proxies.filter(name => !validNames.has(name));
+      if (invalid.length === 0) continue;
+
+      group.proxies = group.proxies.filter(name => validNames.has(name));
+      warnings.push(`proxy-group "${group.name}": 移除了不存在的引用 ${invalid.map(n => `"${n}"`).join(', ')}`);
+
+      const hasOtherSource = group.use || group['include-all'] || group['include-all-proxies'];
+      if (group.proxies.length === 0 && !hasOtherSource) {
+        removedGroups.add(group.name);
+        validNames.delete(group.name);
+        warnings.push(`proxy-group "${group.name}": 已移除（无可用节点）`);
+        changed = true;
+      }
+    }
+  }
+
+  if (removedGroups.size > 0) {
+    config['proxy-groups'] = groups.filter(g => !removedGroups.has(g.name));
+  }
+
+  return warnings;
+}
+
 export function buildConfig(subRawContent: string, mode: string): BuildConfigResult {
   const subscriptionConfig = parseYamlOrJson(subRawContent, '订阅内容');
 
@@ -123,7 +169,27 @@ export function buildConfig(subRawContent: string, mode: string): BuildConfigRes
     };
   }
 
-  return { config: merged, subscriptionConfig, overwriteFiles, systemConfig };
+  const warnings = validateProxyGroupDependencies(merged);
+
+  return { config: merged, subscriptionConfig, overwriteFiles, systemConfig, warnings };
+}
+
+export function checkConfig(): { ok: boolean; errors: string[] } {
+  if (!hasKernel() || !hasConfig()) return { ok: true, errors: [] };
+  try {
+    execSync(`"${PATHS.mihomoBinary}" -t -f "${PATHS.configFile}" 2>&1`, { encoding: 'utf8' });
+    return { ok: true, errors: [] };
+  } catch (e) {
+    const output = (e as { stdout?: string; stderr?: string }).stdout || (e as Error).message || '';
+    const errors = output
+      .split('\n')
+      .filter(line => line.includes('level=error') || line.includes('level=fatal'))
+      .map(line => {
+        const match = line.match(/msg="(.+)"/);
+        return match ? match[1] : line;
+      });
+    return { ok: false, errors };
+  }
 }
 
 export function writeMihomoConfig(configObj: Record<string, unknown>): void {

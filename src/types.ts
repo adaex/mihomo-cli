@@ -57,6 +57,7 @@ export interface BuildConfigResult {
   subscriptionConfig: Record<string, unknown>;
   overwriteFiles: OverwriteFileEntry[];
   systemConfig: Record<string, unknown>;
+  warnings: string[];
 }
 
 export interface OverwriteFileEntry {
