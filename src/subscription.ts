@@ -24,8 +24,19 @@ import type {
 } from './types.js';
 import { colors, createHttpClient } from './utils.js';
 
-export const DEFAULT_UPDATE_INTERVAL_HOURS = 4;
-export const DEFAULT_CLEAN_ROUNDS = 3;
+export const DEFAULT_UPDATE_INTERVAL_HOURS = 12;
+export const DEFAULT_UPDATE_INTERVAL_HOURS_GITHUB = 6;
+export const DEFAULT_CLEAN_ROUNDS = 2;
+export const AUTO_CLEAN_THRESHOLD = 100;
+export const AUTO_CLEAN_THRESHOLD_GITHUB = 50;
+
+export function isGithubUrl(url: string): boolean {
+  return /github\.com|raw\.githubusercontent\.com/i.test(url);
+}
+
+export function getDefaultUpdateInterval(url: string): number {
+  return isGithubUrl(url) ? DEFAULT_UPDATE_INTERVAL_HOURS_GITHUB : DEFAULT_UPDATE_INTERVAL_HOURS;
+}
 
 const YAML_DUMP_OPTS = { indent: 2, lineWidth: -1, noCompatMode: true };
 
@@ -299,7 +310,7 @@ function needsAutoUpdate(sub: SubscriptionWithCache): boolean {
   if (!sub.updated_at) return true;
   const lastUpdate = new Date(sub.updated_at).getTime();
   if (Number.isNaN(lastUpdate)) return true;
-  const intervalHours = sub.update_interval || DEFAULT_UPDATE_INTERVAL_HOURS;
+  const intervalHours = sub.update_interval || getDefaultUpdateInterval(sub.url);
   const intervalMs = intervalHours * 60 * 60 * 1000;
   return Date.now() - lastUpdate > intervalMs;
 }
@@ -328,7 +339,7 @@ export async function autoUpdateStaleSubscription(): Promise<AutoUpdateResult> {
 
   if (staleSubs.length === 1) {
     const sub = staleSubs[0];
-    const interval = sub.update_interval || DEFAULT_UPDATE_INTERVAL_HOURS;
+    const interval = sub.update_interval || getDefaultUpdateInterval(sub.url);
     console.log(`订阅 "${sub.name}" 超过 ${interval} 小时未更新，正在更新...`);
   } else {
     console.log(`检查到 ${staleSubs.length} 个订阅需要更新，正在并行更新...`);

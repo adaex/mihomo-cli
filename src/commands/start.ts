@@ -2,11 +2,9 @@ import { hasKernel } from '../config.js';
 import * as processManager from '../process.js';
 import * as subscription from '../subscription.js';
 import type { StopResult } from '../types.js';
-import { colors, sleep } from '../utils.js';
+import { colors, parseIntArg, sleep } from '../utils.js';
 import { printStatus } from './status.js';
 import { createProgressPrinter, formatCleanSummary, formatTestSummary } from './subscription.js';
-
-const AUTO_CLEAN_THRESHOLD = 50;
 
 function handleStopResult(result: StopResult): void {
   if (result.remaining && result.remaining.length > 0) {
@@ -23,6 +21,9 @@ export async function cmdStart(args: string[]): Promise<void> {
   }
 
   const targetMode = args[1] === 'tun' ? 'tun' : 'mixed';
+  const rounds = parseIntArg(args, '-r', '--rounds', subscription.DEFAULT_CLEAN_ROUNDS);
+  const timeout = parseIntArg(args, '-t', '--timeout', 2000);
+  const concurrency = parseIntArg(args, '-j', '--concurrency', 100);
 
   const sub = subscription.getActiveSubscription();
   if (!sub) {
@@ -70,15 +71,20 @@ export async function cmdStart(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  if (configInfo.proxies > AUTO_CLEAN_THRESHOLD) {
+  const cleanThreshold = subscription.isGithubUrl(sub.url) ? subscription.AUTO_CLEAN_THRESHOLD_GITHUB : subscription.AUTO_CLEAN_THRESHOLD;
+
+  if (configInfo.proxies > cleanThreshold) {
     console.log('');
-    console.log(`节点数 ${configInfo.proxies} 超过 ${AUTO_CLEAN_THRESHOLD}，自动清理...`);
+    console.log(`节点数 ${configInfo.proxies} 超过 ${cleanThreshold}，自动清理...`);
     console.log('');
 
     await sleep(1000);
 
-    const progress = createProgressPrinter(subscription.DEFAULT_CLEAN_ROUNDS);
+    const progress = createProgressPrinter(rounds);
     const cleanResult = await subscription.autoCleanSubscription(sub.name, {
+      timeout,
+      concurrency,
+      rounds,
       onResult: progress.onResult,
       onRetryRound: progress.onRetryRound,
     });

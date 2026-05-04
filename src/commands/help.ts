@@ -23,7 +23,7 @@ export function printHelp(): void {
       '  mihomo <命令> [选项]\n' +
       '\n' +
       `${colors.cyan('控制:')}\n` +
-      `  ${colors.bold('start')} [tun|mixed]            启动/切换代理 (默认 mixed)\n` +
+      `  ${colors.bold('start')} [tun|mixed] [-r N] [-t ms] [-j N]  启动/切换代理 (默认 mixed)\n` +
       `  ${colors.bold('stop')}                         停止代理\n` +
       `  ${colors.bold('status')}                       查看状态\n` +
       '\n' +

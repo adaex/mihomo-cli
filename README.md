@@ -83,7 +83,7 @@ mihomo ui yacd     # YACD
 
 | 命令                        | 说明                                                                         |
 | --------------------------- | ---------------------------------------------------------------------------- |
-| `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式                                                       |
+| `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式（`-r` 清理轮次，`-t` 超时，`-j` 并发）               |
 | `mihomo stop`               | 停止代理                                                                     |
 | `mihomo status`             | 查看运行状态                                                                 |
 | `mihomo log`                | 实时查看日志 (`-o` 用系统编辑器打开)                                         |
@@ -102,7 +102,7 @@ mihomo ui yacd     # YACD
 | `mihomo sub remove <name>`    | 删除订阅（支持模糊匹配）               |
 | `mihomo sub web [name]`       | 打开订阅页面（无参打开默认）           |
 | `mihomo sub test [name]`      | 测试节点连通性（`-t` 超时，`-j` 并发） |
-| `mihomo sub clean [name]`     | 测速并清理失败节点（`-r` 轮数，默认3）|
+| `mihomo sub clean [name]`     | 测速并清理失败节点（`-r` 轮数，默认2）|
 | `mihomo test`                 | 快速测试当前节点连通性（`-t` 超时，`-j` 并发） |
 | `mihomo clean`                | 清理失败节点并自动重启（`-t` 超时，`-j` 并发，`-r` 轮数） |
 
@@ -142,7 +142,7 @@ mihomo ui yacd     # YACD
 
 | 快捷命令               | 等效于                     |
 | ---------------------- | -------------------------- |
-| `mihomo up`            | `mihomo start`             |
+| `mihomo up`            | `mihomo start`（同样支持 `-r`/`-t`/`-j`）|
 | `mihomo down`          | `mihomo stop`              |
 | `mihomo tun`           | `mihomo start tun`         |
 | `mihomo use <name>`    | `mihomo sub use <name>`    |
@@ -194,7 +194,7 @@ mihomo kernel --mirror-all hk.gh-proxy.org
 
 ## 订阅自动更新
 
-- 默认更新间隔：4 小时（或订阅服务端指定的 `profile-update-interval`）
+- 默认更新间隔：GitHub 订阅 6 小时，其他订阅 12 小时（订阅服务端可通过 `profile-update-interval` 覆盖）
 - 触发时机：`start` 命令、`sub list` 命令
 - 更新失败时继续使用本地缓存，不影响使用
 

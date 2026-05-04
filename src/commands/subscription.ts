@@ -149,7 +149,7 @@ async function printSubscriptionList(options?: { autoUpdate?: boolean }): Promis
     const time = formatDate(s.updated_at);
     const defaultMark = activeSub && s.name === activeSub.name ? colors.green(' [使用中]') : '';
     const mergeBadge = subscription.isMultiUrl(s.url) ? colors.cyan(` [合并 ${subscription.splitUrls(s.url).length} 源]`) : '';
-    const interval = s.update_interval || subscription.DEFAULT_UPDATE_INTERVAL_HOURS;
+    const interval = s.update_interval || subscription.getDefaultUpdateInterval(s.url);
     console.log(`  ${i + 1}. ${s.name}${defaultMark}${mergeBadge}`);
     console.log(`    ${colors.gray('更新: ')}${time} (间隔: ${interval}h)`);
 

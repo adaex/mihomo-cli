@@ -25,7 +25,7 @@ export async function cmdTest(args: string[]): Promise<void> {
   requireRunning();
   const activeSub = requireActiveSub();
 
-  const timeout = parseIntArg(args, '-t', '--timeout', 1500);
+  const timeout = parseIntArg(args, '-t', '--timeout', 2000);
   const concurrency = parseIntArg(args, '-j', '--concurrency', 100);
 
   console.log(`测试 "${activeSub.name}" 节点连通性...`);
@@ -48,7 +48,7 @@ export async function cmdClean(args: string[]): Promise<void> {
   requireRunning();
   const activeSub = requireActiveSub();
 
-  const timeout = parseIntArg(args, '-t', '--timeout', 1500);
+  const timeout = parseIntArg(args, '-t', '--timeout', 2000);
   const concurrency = parseIntArg(args, '-j', '--concurrency', 100);
   const rounds = parseIntArg(args, '-r', '--rounds', subscription.DEFAULT_CLEAN_ROUNDS);
 
