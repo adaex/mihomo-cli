@@ -232,7 +232,11 @@ download_subscription() {
 generate_config() {
     info "Generating config..."
 
-    cat "$SUB_PATH" > "$CONFIG_PATH"
+    sed -e '/^mixed-port:/d' \
+        -e '/^external-controller:/d' \
+        -e '/^port:/d' \
+        -e '/^socks-port:/d' \
+        "$SUB_PATH" > "$CONFIG_PATH"
 
     cat >> "$CONFIG_PATH" << 'EOF'
 mixed-port: 7890
@@ -240,6 +244,9 @@ external-controller: 127.0.0.1:9090
 EOF
 
     if [ "$TUN_MODE" -eq 1 ]; then
+        sed -i.bak -e '/^tun:/,/^[^ ]/{ /^[^ ]/!d; /^tun:/d; }' \
+                   -e '/^dns:/,/^[^ ]/{ /^[^ ]/!d; /^dns:/d; }' "$CONFIG_PATH"
+        rm -f "${CONFIG_PATH}.bak"
         cat >> "$CONFIG_PATH" << 'EOF'
 tun:
   enable: true
