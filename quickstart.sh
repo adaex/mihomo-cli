@@ -157,16 +157,16 @@ download_kernel() {
             [.[] | select(.prerelease==false and (.tag_name | test("alpha|beta|prerelease";"i") | not))][0].assets[]
             | select(.name | test("^mihomo-'"$PLATFORM"'-'"$ARCH"'.*\\.gz$"))
             | .browser_download_url
-        ')"
+        ')" || true
     else
         all_urls="$(printf '%s' "$releases_json" | \
             grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' | \
             sed 's/"browser_download_url"[[:space:]]*:[[:space:]]*"//;s/"$//' | \
             grep "mihomo-${PLATFORM}-${ARCH}" | \
-            grep '\.gz$')"
+            grep '\.gz$')" || true
     fi
 
-    download_url="$(printf '%s\n' "$all_urls" | grep -v '\-go' | head -1)"
+    download_url="$(printf '%s\n' "$all_urls" | grep -v '\-go' | head -1)" || true
     if [ -z "$download_url" ]; then
         download_url="$(printf '%s\n' "$all_urls" | head -1)"
     fi
@@ -239,11 +239,7 @@ generate_config() {
         -e '/^geodata-mode:/d' \
         -e '/^geo-auto-update:/d' \
         -e '/^geo-update-interval:/d' \
-        -e '/^geox-url:/d' \
-        -e '/^  geoip:/d' \
-        -e '/^  geosite:/d' \
-        -e '/^  mmdb:/d' \
-        -e '/^  asn:/d' \
+        -e '/^geox-url:/,/^[^ ]/{/^geox-url:/d;/^  /d;}' \
         "$SUB_PATH" > "$CONFIG_PATH"
 
     cat >> "$CONFIG_PATH" << 'EOF'
@@ -273,7 +269,7 @@ tun:
   strict-route: true
 EOF
         else
-            sed -i.bak 's/^  enable: false/  enable: true/' "$CONFIG_PATH"
+            sed -i.bak '/^tun:/,/^[^ ]/{s/^\(  enable:\).*/\1 true/;}' "$CONFIG_PATH"
             rm -f "${CONFIG_PATH}.bak"
         fi
         if ! grep -q '^dns:' "$CONFIG_PATH"; then
