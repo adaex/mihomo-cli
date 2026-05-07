@@ -9,7 +9,7 @@ export async function cmdStop(): Promise<void> {
   }
 
   console.log(`停止 ${pids.length} 个进程...`);
-  const result = processManager.stop(true);
+  const result = processManager.stop();
   if (result.remaining && result.remaining.length > 0) {
     console.error(`${colors.red('部分进程未终止:')} ${result.remaining.join(', ')}`);
     console.error('请手动运行: sudo pkill -9 mihomo');
