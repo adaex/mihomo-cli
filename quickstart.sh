@@ -150,7 +150,7 @@ download_kernel() {
 
     info "Fetching latest release info..."
     api_url="$(with_mirror "$GITHUB_API")"
-    releases_json="$(curl -fsSL --connect-timeout 30 "$api_url")" || die "Failed to fetch release info"
+    releases_json="$(curl -fsSL --connect-timeout 30 -H 'User-Agent: mihomo-quickstart' "$api_url")" || die "Failed to fetch release info"
 
     if command -v jq >/dev/null 2>&1; then
         all_urls="$(printf '%s' "$releases_json" | jq -r '
@@ -162,6 +162,7 @@ download_kernel() {
         all_urls="$(printf '%s' "$releases_json" | \
             grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' | \
             sed 's/"browser_download_url"[[:space:]]*:[[:space:]]*"//;s/"$//' | \
+            grep -v -i -e 'alpha' -e 'beta' -e 'prerelease' | \
             grep "mihomo-${PLATFORM}-${ARCH}" | \
             grep '\.gz$')" || true
     fi
@@ -192,10 +193,7 @@ download_kernel() {
         *.tar.gz|*.tgz)
             tar -xzf "$temp_path" -C "$DIR_KERNEL"
             rm -f "$temp_path"
-            found="$(find "$DIR_KERNEL" -type f -name 'mihomo' 2>/dev/null | head -1)"
-            if [ -z "$found" ]; then
-                found="$(find "$DIR_KERNEL" -type f -name 'mihomo-*' 2>/dev/null | grep -v '\.gz$' | head -1)"
-            fi
+            found="$(find "$DIR_KERNEL" -maxdepth 2 -type f \( -name 'mihomo' -o -name 'mihomo-*' \) ! -name '*.gz' 2>/dev/null | head -1)"
             if [ -n "$found" ] && [ "$found" != "$BINARY_PATH" ]; then
                 mv "$found" "$BINARY_PATH"
             fi
@@ -212,8 +210,8 @@ download_kernel() {
         die "Failed to extract kernel binary"
     fi
 
-    version="$("$BINARY_PATH" -v 2>/dev/null | head -1 || echo "unknown")"
-    info "Kernel installed: $version"
+    version="$("$BINARY_PATH" -v 2>/dev/null | head -1)" || true
+    info "Kernel installed: ${version:-unknown}"
 }
 
 download_subscription() {
@@ -239,7 +237,7 @@ generate_config() {
         -e '/^geodata-mode:/d' \
         -e '/^geo-auto-update:/d' \
         -e '/^geo-update-interval:/d' \
-        -e '/^geox-url:/,/^[^ ]/{/^geox-url:/d;/^  /d;}' \
+        -e '/^geox-url:/,/^[^ ]/{' -e '/^geox-url:/d' -e '/^  /d' -e '}' \
         "$SUB_PATH" > "$CONFIG_PATH"
 
     cat >> "$CONFIG_PATH" << 'EOF'
@@ -269,7 +267,7 @@ tun:
   strict-route: true
 EOF
         else
-            sed -i.bak '/^tun:/,/^[^ ]/{s/^\(  enable:\).*/\1 true/;}' "$CONFIG_PATH"
+            sed -i.bak -e '/^tun:/,/^[^ ]/{' -e 's/^\(  enable:\).*/\1 true/' -e '}' "$CONFIG_PATH"
             rm -f "${CONFIG_PATH}.bak"
         fi
         if ! grep -q '^dns:' "$CONFIG_PATH"; then
