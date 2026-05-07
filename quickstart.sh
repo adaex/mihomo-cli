@@ -236,11 +236,27 @@ generate_config() {
         -e '/^external-controller:/d' \
         -e '/^port:/d' \
         -e '/^socks-port:/d' \
+        -e '/^geodata-mode:/d' \
+        -e '/^geo-auto-update:/d' \
+        -e '/^geo-update-interval:/d' \
+        -e '/^geox-url:/d' \
+        -e '/^  geoip:/d' \
+        -e '/^  geosite:/d' \
+        -e '/^  mmdb:/d' \
+        -e '/^  asn:/d' \
         "$SUB_PATH" > "$CONFIG_PATH"
 
     cat >> "$CONFIG_PATH" << 'EOF'
 mixed-port: 7890
 external-controller: 127.0.0.1:9090
+geodata-mode: true
+geo-auto-update: true
+geo-update-interval: 24
+geox-url:
+  geoip: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip-lite.dat
+  geosite: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite-lite.dat
+  mmdb: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country-lite.mmdb
+  asn: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/GeoLite2-ASN.mmdb
 EOF
 
     if [ "$TUN_MODE" -eq 1 ]; then
