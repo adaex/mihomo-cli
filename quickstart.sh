@@ -244,10 +244,8 @@ external-controller: 127.0.0.1:9090
 EOF
 
     if [ "$TUN_MODE" -eq 1 ]; then
-        sed -i.bak -e '/^tun:/,/^[^ ]/{ /^[^ ]/!d; /^tun:/d; }' \
-                   -e '/^dns:/,/^[^ ]/{ /^[^ ]/!d; /^dns:/d; }' "$CONFIG_PATH"
-        rm -f "${CONFIG_PATH}.bak"
-        cat >> "$CONFIG_PATH" << 'EOF'
+        if ! grep -q '^tun:' "$CONFIG_PATH"; then
+            cat >> "$CONFIG_PATH" << 'EOF'
 tun:
   enable: true
   stack: mixed
@@ -257,11 +255,19 @@ tun:
   auto-route: true
   auto-detect-interface: true
   strict-route: true
+EOF
+        else
+            sed -i.bak 's/^  enable: false/  enable: true/' "$CONFIG_PATH"
+            rm -f "${CONFIG_PATH}.bak"
+        fi
+        if ! grep -q '^dns:' "$CONFIG_PATH"; then
+            cat >> "$CONFIG_PATH" << 'EOF'
 dns:
   enable: true
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
 EOF
+        fi
     fi
 }
 
