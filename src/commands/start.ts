@@ -2,7 +2,7 @@ import { hasKernel } from '../config.js';
 import * as processManager from '../process.js';
 import * as subscription from '../subscription.js';
 import type { StopResult } from '../types.js';
-import { colors, parseIntArg, sleep } from '../utils.js';
+import { colors, hasFlag, parseIntArg, sleep } from '../utils.js';
 import { printStatus } from './status.js';
 import { createProgressPrinter, formatCleanSummary, formatTestSummary } from './subscription.js';
 
@@ -24,6 +24,8 @@ export async function cmdStart(args: string[]): Promise<void> {
   const rounds = parseIntArg(args, '-r', '--rounds', subscription.DEFAULT_CLEAN_ROUNDS);
   const timeout = parseIntArg(args, '-t', '--timeout', 2000);
   const concurrency = parseIntArg(args, '-j', '--concurrency', 100);
+  const skipUpdate = hasFlag(args, '-s', '--no-update');
+  const updateTimeout = parseIntArg(args, '-u', '--update-timeout', subscription.DEFAULT_AUTO_UPDATE_TIMEOUT);
 
   const sub = subscription.getActiveSubscription();
   if (!sub) {
@@ -31,7 +33,9 @@ export async function cmdStart(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  await subscription.autoUpdateStaleSubscription();
+  if (!skipUpdate) {
+    await subscription.autoUpdateStaleSubscription({ timeout: updateTimeout });
+  }
 
   const status = processManager.getStatus();
   const hasProcess = status.running || status.allProcesses.length > 0;

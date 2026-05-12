@@ -83,7 +83,7 @@ mihomo ui yacd     # YACD
 
 | 命令                        | 说明                                                                         |
 | --------------------------- | ---------------------------------------------------------------------------- |
-| `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式（`-r` 清理轮次，`-t` 超时，`-j` 并发）               |
+| `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式（`-s` 跳过更新，`-u` 更新超时，`-r` 清理轮次，`-t` 超时，`-j` 并发） |
 | `mihomo stop`               | 停止代理                                                                     |
 | `mihomo status`             | 查看运行状态                                                                 |
 | `mihomo log`                | 实时查看日志 (`-o` 用系统编辑器打开)                                         |
@@ -142,7 +142,7 @@ mihomo ui yacd     # YACD
 
 | 快捷命令               | 等效于                     |
 | ---------------------- | -------------------------- |
-| `mihomo up`            | `mihomo start`（同样支持 `-r`/`-t`/`-j`）|
+| `mihomo up`            | `mihomo start`（同样支持 `-s`/`-u`/`-r`/`-t`/`-j`）|
 | `mihomo down`          | `mihomo stop`              |
 | `mihomo tun`           | `mihomo start tun`         |
 | `mihomo use <name>`    | `mihomo sub use <name>`    |
@@ -197,6 +197,7 @@ mihomo kernel --mirror-all hk.gh-proxy.org
 - 默认更新间隔：GitHub 订阅 6 小时，其他订阅 12 小时（订阅服务端可通过 `profile-update-interval` 覆盖）
 - 触发时机：`start` 命令、`sub list` 命令
 - 更新失败时继续使用本地缓存，不影响使用
+- 自动更新默认超时 10 秒，可通过 `-u <ms>` 调整；使用 `-s` 可完全跳过自动更新
 
 ## 数据目录
 

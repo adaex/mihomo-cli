@@ -34,6 +34,29 @@ export function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+export class TimeoutError extends Error {
+  constructor() {
+    super('timeout');
+    this.name = 'TimeoutError';
+  }
+}
+
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new TimeoutError()), ms);
+    promise.then(
+      v => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      e => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 export function formatBytes(bytes: unknown): string {
   if (bytes === undefined || bytes === null) return '未知';
   const num = Number(bytes);

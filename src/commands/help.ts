@@ -23,7 +23,8 @@ export function printHelp(): void {
       '  mihomo <命令> [选项]\n' +
       '\n' +
       `${colors.cyan('控制:')}\n` +
-      `  ${colors.bold('start')} [tun|mixed] [-r N] [-t ms] [-j N]  启动/切换代理 (默认 mixed)\n` +
+      `  ${colors.bold('start')} [tun|mixed] [-s] [-u ms]     启动/切换代理 (默认 mixed)\n` +
+      `        [-r N] [-t ms] [-j N]\n` +
       `  ${colors.bold('stop')}                         停止代理\n` +
       `  ${colors.bold('status')}                       查看状态\n` +
       '\n' +
@@ -60,6 +61,8 @@ export function printHelp(): void {
       `${colors.cyan('示例:')}\n` +
       '  mihomo start              # 启动/重启 Mixed 模式\n' +
       '  mihomo start tun          # 切换到 TUN 透明代理模式\n' +
+      '  mihomo start -s           # 跳过自动更新订阅\n' +
+      '  mihomo start -u 30000     # 自动更新超时 30 秒 (默认 10s)\n' +
       '  mihomo sub add <url>      # 添加订阅 (sub 是 subscription 别名)\n' +
       '  mihomo ui                 # 打开 Web UI\n' +
       '\n' +

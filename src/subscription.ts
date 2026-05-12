@@ -22,7 +22,7 @@ import type {
   TryUpdateResult,
   UserInfo,
 } from './types.js';
-import { colors, createHttpClient } from './utils.js';
+import { colors, createHttpClient, TimeoutError, withTimeout } from './utils.js';
 
 export const DEFAULT_UPDATE_INTERVAL_HOURS = 12;
 export const DEFAULT_UPDATE_INTERVAL_HOURS_GITHUB = 6;
@@ -329,7 +329,9 @@ export async function tryUpdateOne(sub: Subscription): Promise<TryUpdateResult> 
   }
 }
 
-export async function autoUpdateStaleSubscription(): Promise<AutoUpdateResult> {
+export const DEFAULT_AUTO_UPDATE_TIMEOUT = 10_000;
+
+export async function autoUpdateStaleSubscription(options: { timeout?: number } = {}): Promise<AutoUpdateResult> {
   const allSubs = getSubscriptionsWithCache();
   const staleSubs = allSubs.filter(needsAutoUpdate);
 
@@ -345,7 +347,18 @@ export async function autoUpdateStaleSubscription(): Promise<AutoUpdateResult> {
     console.log(`检查到 ${staleSubs.length} 个订阅需要更新，正在并行更新...`);
   }
 
-  const results = await Promise.all(staleSubs.map(tryUpdateOne));
+  const timeoutMs = options.timeout ?? DEFAULT_AUTO_UPDATE_TIMEOUT;
+  let results: TryUpdateResult[];
+  try {
+    results = await withTimeout(Promise.all(staleSubs.map(tryUpdateOne)), timeoutMs);
+  } catch (e) {
+    if (e instanceof TimeoutError) {
+      console.log(colors.yellow(`自动更新超时 (${timeoutMs / 1000}s)，跳过更新，使用缓存配置`));
+      return { total: staleSubs.length, updated: 0, failed: staleSubs.length };
+    }
+    throw e;
+  }
+
   let updatedCount = 0;
 
   for (const r of results) {
