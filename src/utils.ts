@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
 import type { HttpClient, HttpClientOptions, HttpResponse, MirrorArg } from './types.js';
@@ -60,7 +60,7 @@ export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 export function formatBytes(bytes: unknown): string {
   if (bytes === undefined || bytes === null) return '未知';
   const num = Number(bytes);
-  if (Number.isNaN(num) || num < 0) return '未知';
+  if (!Number.isFinite(num) || num < 0) return '未知';
   if (num === 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -144,8 +144,8 @@ export function getNonFlagArg(args: string[] | undefined, startIdx: number): str
 export function isProcessRunning(pid: number): boolean {
   if (!pid) return false;
   try {
-    const output = execSync(`ps -p ${pid} -o pid= 2>/dev/null || true`, { encoding: 'utf8' }).trim();
-    return output.length > 0;
+    const result = spawnSync('ps', ['-p', String(pid), '-o', 'pid='], { encoding: 'utf8', timeout: 5000 });
+    return (result.stdout || '').trim().length > 0;
   } catch {
     return false;
   }
@@ -154,8 +154,8 @@ export function isProcessRunning(pid: number): boolean {
 export function isProcessRoot(pid: number): boolean {
   if (!pid) return false;
   try {
-    const uidOutput = execSync(`ps -p ${pid} -o uid= 2>/dev/null || true`, { encoding: 'utf8' }).trim();
-    return uidOutput === '0';
+    const result = spawnSync('ps', ['-p', String(pid), '-o', 'uid='], { encoding: 'utf8', timeout: 5000 });
+    return (result.stdout || '').trim() === '0';
   } catch {
     return false;
   }
@@ -241,7 +241,8 @@ export function isProxyValid(proxy: { name: string; [k: string]: unknown }): boo
   if (!proxy.type) return false;
   if (proxy.type === 'ss' && typeof proxy.cipher === 'string' && proxy.cipher.startsWith('2022-blake3')) {
     const pw = String(proxy.password || '');
-    if (!/^[A-Za-z0-9+/]+=*$/.test(pw) || pw.length < 20) return false;
+    // 兼容 base64 与 base64url（- _ 替代 + /）编码的 SS2022 密钥
+    if (!/^[A-Za-z0-9+/\-_]+=*$/.test(pw) || pw.length < 20) return false;
   }
   return true;
 }

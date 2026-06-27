@@ -6,6 +6,7 @@ import yaml from 'js-yaml';
 
 import { parseYamlOrJson } from './config.js';
 import { TEST_CONFIG } from './constants.js';
+import { registerCleanup } from './lifecycle.js';
 import { PATHS, rmrf, USER_DATA_DIR } from './paths.js';
 import { readSubscriptionRawConfig } from './settings.js';
 import { createHttpClient, isProcessRunning, isProxyValid, sleep, sleepSync } from './utils.js';
@@ -143,10 +144,17 @@ function stopTestInstance(): void {
 export async function withTestInstance<T>(subName: string, fn: (apiBase: string) => Promise<T>): Promise<T> {
   cleanupTestDir();
   buildTestConfig(subName);
+  // 注册到全局清理表：即使用户 Ctrl+C 触发 process.exit（跳过 finally），
+  // 信号处理器也会同步执行这里的清理，避免端口 27890 的测试实例残留。
+  const unregister = registerCleanup(() => {
+    stopTestInstance();
+    cleanupTestDir();
+  });
   try {
     await startTestInstance();
     return await fn(TEST_API);
   } finally {
+    unregister();
     stopTestInstance();
     cleanupTestDir();
   }

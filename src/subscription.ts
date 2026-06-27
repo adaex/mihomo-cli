@@ -38,6 +38,11 @@ export function getDefaultUpdateInterval(url: string): number {
   return isGithubUrl(url) ? DEFAULT_UPDATE_INTERVAL_HOURS_GITHUB : DEFAULT_UPDATE_INTERVAL_HOURS;
 }
 
+/** 取有效更新间隔（小时）：缓存值需为正整数，否则回退默认值。 */
+export function resolveUpdateInterval(url: string, cachedInterval?: number | null): number {
+  return cachedInterval && cachedInterval > 0 ? cachedInterval : getDefaultUpdateInterval(url);
+}
+
 const YAML_DUMP_OPTS = { indent: 2, lineWidth: -1, noCompatMode: true };
 
 const HTTP_CLIENT = createHttpClient({ timeout: 60_000 });
@@ -85,6 +90,17 @@ function parseUserInfo(header: string | null): UserInfo | null {
     }
   }
   return info as UserInfo;
+}
+
+/**
+ * 解析 profile-update-interval 头。仅接受正整数小时数；
+ * 机场返回 -1/0/非数字时返回 null（由调用方回退到默认间隔），
+ * 避免负值写入缓存后导致 needsAutoUpdate 永远为 true。
+ */
+function parsePositiveInterval(header: string | null | undefined): number | null {
+  if (!header) return null;
+  const n = parseInt(header, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 function parseUsernameFromContentDisposition(header: string | null): string | null {
@@ -176,8 +192,7 @@ export async function downloadSubscription(url: string, subName = 'default'): Pr
 
   const headers = response.headers;
   const userInfo = parseUserInfo(headers.get('subscription-userinfo'));
-  const updateIntervalHeader = headers.get('profile-update-interval');
-  const updateInterval = updateIntervalHeader ? parseInt(updateIntervalHeader, 10) : null;
+  const updateInterval = parsePositiveInterval(headers.get('profile-update-interval'));
   const webPageUrl = headers.get('profile-web-page-url') || null;
   const username = parseUsernameFromContentDisposition(headers.get('content-disposition'));
 
@@ -251,8 +266,7 @@ export async function downloadMergedSubscription(urls: string[], subName: string
 
   const firstHeaders = responses[0].response?.headers;
   const userInfo = parseUserInfo(firstHeaders?.get('subscription-userinfo') ?? null);
-  const updateIntervalHeader = firstHeaders?.get('profile-update-interval');
-  const updateInterval = updateIntervalHeader ? parseInt(updateIntervalHeader, 10) : null;
+  const updateInterval = parsePositiveInterval(firstHeaders?.get('profile-update-interval'));
   const webPageUrl = firstHeaders?.get('profile-web-page-url') || null;
   const username = parseUsernameFromContentDisposition(firstHeaders?.get('content-disposition') ?? null);
 
@@ -310,7 +324,8 @@ function needsAutoUpdate(sub: SubscriptionWithCache): boolean {
   if (!sub.updated_at) return true;
   const lastUpdate = new Date(sub.updated_at).getTime();
   if (Number.isNaN(lastUpdate)) return true;
-  const intervalHours = sub.update_interval || getDefaultUpdateInterval(sub.url);
+  // 防御历史坏缓存：update_interval 为 0/负数/非数时回退默认值
+  const intervalHours = resolveUpdateInterval(sub.url, sub.update_interval);
   const intervalMs = intervalHours * 60 * 60 * 1000;
   return Date.now() - lastUpdate > intervalMs;
 }
@@ -341,7 +356,7 @@ export async function autoUpdateStaleSubscription(options: { timeout?: number } 
 
   if (staleSubs.length === 1) {
     const sub = staleSubs[0];
-    const interval = sub.update_interval || getDefaultUpdateInterval(sub.url);
+    const interval = resolveUpdateInterval(sub.url, sub.update_interval);
     console.log(`订阅 "${sub.name}" 超过 ${interval} 小时未更新，正在更新...`);
   } else {
     console.log(`检查到 ${staleSubs.length} 个订阅需要更新，正在并行更新...`);

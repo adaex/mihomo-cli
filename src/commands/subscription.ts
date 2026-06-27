@@ -149,7 +149,7 @@ async function printSubscriptionList(options?: { autoUpdate?: boolean }): Promis
     const time = formatDate(s.updated_at);
     const defaultMark = activeSub && s.name === activeSub.name ? colors.green(' [使用中]') : '';
     const mergeBadge = subscription.isMultiUrl(s.url) ? colors.cyan(` [合并 ${subscription.splitUrls(s.url).length} 源]`) : '';
-    const interval = s.update_interval || subscription.getDefaultUpdateInterval(s.url);
+    const interval = subscription.resolveUpdateInterval(s.url, s.update_interval);
     console.log(`  ${i + 1}. ${s.name}${defaultMark}${mergeBadge}`);
     console.log(`    ${colors.gray('更新: ')}${time} (间隔: ${interval}h)`);
 
@@ -355,10 +355,10 @@ export async function cmdSubscription(args: string[]): Promise<void> {
       const matches = subscription.findSubscriptionFuzzy(subs, name);
       target = subscription.pickSingleSubscription(matches, name);
     } else {
-      target = subs[0];
+      target = subscription.getActiveSubscription() || subs[0];
     }
 
-    const cached = getSubscriptionsWithCache().find(s => s.name === target.name);
+    const cached = subs.find(s => s.name === target.name);
     let webPageUrl = cached?.web_page_url;
     if (!webPageUrl) {
       console.log('订阅信息中缺少页面地址，正在更新订阅...');

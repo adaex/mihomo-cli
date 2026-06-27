@@ -1,10 +1,10 @@
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 
 import yaml from 'js-yaml';
 import { BASE_CONFIG, TUN_CONFIG } from './constants.js';
 import { applyOverwrite, isOverwriteEnabled, loadOverwriteFile } from './overwrite.js';
-import { ensureDirs, PATHS } from './paths.js';
+import { atomicWriteFileSync, ensureDirs, PATHS } from './paths.js';
 import type { BuildConfigResult, ConfigInfo, ParsedProxy, ParsedProxyGroup } from './types.js';
 
 export function parseYamlOrJson(content: string, errorMsg?: string): Record<string, unknown> {
@@ -219,7 +219,7 @@ export function buildConfig(subRawContent: string, mode: string): BuildConfigRes
 export function writeMihomoConfig(configObj: Record<string, unknown>): void {
   ensureDirs();
   const content = yaml.dump(configObj, { indent: 2, lineWidth: -1, noCompatMode: true });
-  fs.writeFileSync(PATHS.configFile, content, { mode: 0o600 });
+  atomicWriteFileSync(PATHS.configFile, content, { mode: 0o600 });
 }
 
 export function writeDebugConfig(buildResult: BuildConfigResult): void {
@@ -283,10 +283,11 @@ export function getKernelVersion(): string | null {
   }
   if (kernelVersionCached) return kernelVersionCache;
   try {
-    const output = execSync(`"${PATHS.mihomoBinary}" -v 2>&1 || true`, { encoding: 'utf8' }).trim();
+    const result = spawnSync(PATHS.mihomoBinary, ['-v'], { encoding: 'utf8', timeout: 5000 });
+    const output = `${result.stdout || ''}${result.stderr || ''}`.trim();
     if (output) {
       const match = output.match(/v?[\d]+\.[\d]+\.[\d]+/);
-      kernelVersionCache = match ? match[0] : output;
+      kernelVersionCache = match ? match[0] : output.split('\n')[0];
     } else {
       kernelVersionCache = 'unknown';
     }

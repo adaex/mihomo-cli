@@ -1,6 +1,7 @@
+import { getConfigInfo } from '../config.js';
 import * as processManager from '../process.js';
 import * as subscription from '../subscription.js';
-import type { Subscription } from '../types.js';
+import type { StopResult, Subscription } from '../types.js';
 import { colors, parseIntArg } from '../utils.js';
 import { createProgressPrinter, formatCleanSummary, formatTestSummary } from './subscription.js';
 
@@ -8,6 +9,14 @@ function requireRunning(): void {
   const status = processManager.getStatus();
   if (!status.running) {
     console.error('错误: mihomo 未运行，请先启动 (mihomo start)');
+    process.exit(1);
+  }
+}
+
+function ensureStopped(result: StopResult): void {
+  if (result.remaining && result.remaining.length > 0) {
+    console.error(`${colors.red('部分进程未终止:')} ${result.remaining.join(', ')}`);
+    console.error('请手动运行: sudo pkill -9 mihomo');
     process.exit(1);
   }
 }
@@ -79,9 +88,11 @@ export async function cmdClean(args: string[]): Promise<void> {
     console.log('');
     console.log('重启 mihomo 使更改生效...');
 
-    processManager.stop();
-    const configInfo = subscription.prepareConfigForStart('mixed', activeSub.name);
-    const startResult = await processManager.start('mixed');
+    // 保留当前运行模式，避免 TUN 用户被静默降级为 mixed
+    const currentMode = getConfigInfo()?.tun ? 'tun' : 'mixed';
+    ensureStopped(processManager.stop());
+    const configInfo = subscription.prepareConfigForStart(currentMode, activeSub.name);
+    const startResult = await processManager.start(currentMode);
     console.log(`${colors.green('已重启')} (PID ${startResult.pid}) · ${subscription.formatProxySummary(configInfo)}`);
   }
 }

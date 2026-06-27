@@ -1,4 +1,4 @@
-import { execSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -94,7 +94,8 @@ export async function checkUpdate(mirror: string | null): Promise<KernelUpdateIn
   };
 }
 
-function findBinaryInDir(dir: string): string | null {
+function findBinaryInDir(dir: string, maxDepth = 4): string | null {
+  if (maxDepth <= 0) return null;
   const files = fs.readdirSync(dir);
 
   for (const f of files) {
@@ -102,7 +103,7 @@ function findBinaryInDir(dir: string): string | null {
     const stat = fs.statSync(fullPath);
 
     if (stat.isDirectory()) {
-      const found = findBinaryInDir(fullPath);
+      const found = findBinaryInDir(fullPath, maxDepth - 1);
       if (found) return found;
       continue;
     }
@@ -170,11 +171,17 @@ export async function downloadKernel(
 
   try {
     if (tempPath.endsWith('.tar.gz') || tempPath.endsWith('.tgz')) {
-      execSync(`tar -xzf "${tempPath}" -C "${extractPath}"`, { stdio: ['pipe', 'pipe', 'inherit'] });
+      const tarResult = spawnSync('tar', ['-xzf', tempPath, '-C', extractPath], { stdio: ['ignore', 'ignore', 'inherit'], timeout: 60_000 });
+      if (tarResult.error) throw tarResult.error;
+      if (tarResult.status !== 0) throw new Error(`tar 退出码 ${tarResult.status}`);
     } else if (tempPath.endsWith('.gz')) {
       const baseName = path.basename(tempPath, '.gz');
       const outputPath = path.join(extractPath, baseName);
-      execSync(`gzip -dc "${tempPath}" > "${outputPath}"`, { stdio: ['pipe', 'pipe', 'inherit'] });
+      // gzip -dc 输出到 stdout，捕获为 buffer 后写文件，避免 shell 重定向（注入风险）
+      const gzipResult = spawnSync('gzip', ['-dc', tempPath], { maxBuffer: 256 * 1024 * 1024, timeout: 60_000 });
+      if (gzipResult.error) throw gzipResult.error;
+      if (gzipResult.status !== 0) throw new Error(`gzip 退出码 ${gzipResult.status}`);
+      fs.writeFileSync(outputPath, gzipResult.stdout, { mode: 0o755 });
       extractedBinary = outputPath;
     }
   } catch (e) {

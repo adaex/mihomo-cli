@@ -5,6 +5,16 @@
 
 ---
 
+## 修复状态（更新于 2026-06-28，v2.9.1）
+
+下列项已修复：#1（execSync→spawnSync + pgrep 正则转义）、#2（原子写）、#3（进程泄漏，新增 `lifecycle.ts`）、#5（sub web）、#6（clean 模式降级）、#7（updateInterval 校验）、#8（SIGINT 死代码）、#11（内核版本探测超时）、#13（formatBytes Infinity）、#16（base64url）、#18（findBinaryInDir 深度）、#19（原型链）、#20（settings 损坏备份）。
+
+仍待处理（低优先级）：#4（TUN TOCTOU，仅需注释）、#9（settingsCache 方案 B，已用克隆数组缓解）、#10（maskUrl 逗号切分）、#12（child.pid 校验）、#14（displayWidth emoji）、#15（ensureDirs 冗余）、#17（内核 SHA256 校验，唯一供应链缺口，建议优先补）。
+
+新发现（本报告未列）：`mihomo clean` 与 `mihomo sub clean` 同名不同义；autoUpdate 10s 超时后底层 fetch 60s 仍可能写盘竞态。
+
+---
+
 ## 高优先级（安全/数据丢失风险）
 
 ### 1. Shell 注入 — `execSync` 字符串拼接路径

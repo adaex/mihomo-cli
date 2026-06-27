@@ -11,22 +11,18 @@ import { cmdSubscription } from './commands/subscription.js';
 import { cmdClean, cmdTest } from './commands/test.js';
 import { cmdUI } from './commands/ui.js';
 import { cmdUpdate } from './commands/update.js';
+import { runCleanup } from './lifecycle.js';
 import { ensureDirs } from './paths.js';
 
-let exiting = false;
-
 process.on('SIGINT', () => {
-  if (exiting) {
-    console.log('\n强制退出');
-    process.exit(1);
-  }
-  exiting = true;
   console.log('\n正在退出...');
-  process.exit(0);
+  runCleanup();
+  process.exit(130);
 });
 
 process.on('SIGTERM', () => {
-  process.exit(0);
+  runCleanup();
+  process.exit(143);
 });
 
 process.on('uncaughtException', (e: Error) => {

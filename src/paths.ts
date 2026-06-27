@@ -54,6 +54,25 @@ export function fsExistsSync(p: string): boolean {
   return fs.existsSync(p);
 }
 
+/**
+ * 原子写文件：先写同目录临时文件再 rename（POSIX 下 rename 原子）。
+ * 避免写入中途崩溃/磁盘满导致目标文件被截断为空或半截内容。
+ */
+export function atomicWriteFileSync(filePath: string, content: string, options?: { mode?: number }): void {
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, content, options);
+    fs.renameSync(tmp, filePath);
+  } catch (e) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
+}
+
 export function rmrf(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
 }

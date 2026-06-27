@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { DIRS, ensureDirs, PATHS } from './paths.js';
+import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
 import type { Settings, Subscription, SubscriptionCache, SubscriptionCacheEntry, SubscriptionWithCache } from './types.js';
 
 let settingsCache: Settings | null = null;
@@ -13,7 +13,13 @@ export function readSettings(): Settings {
       settingsCache = JSON.parse(content) as Settings;
       return settingsCache;
     } catch {
-      console.warn('警告: settings.json 格式损坏，使用默认设置（原文件已保留）');
+      // 损坏文件先备份再回退默认，避免下次 writeSettings 覆盖丢失原始内容
+      try {
+        fs.copyFileSync(PATHS.settingsFile, `${PATHS.settingsFile}.bak`);
+        console.warn(`警告: settings.json 格式损坏，已备份到 ${PATHS.settingsFile}.bak，使用默认设置`);
+      } catch {
+        console.warn('警告: settings.json 格式损坏，使用默认设置');
+      }
       settingsCache = {};
       return settingsCache;
     }
@@ -29,7 +35,7 @@ export function writeSettings(settings: Partial<Settings>): Settings {
   for (const key of Object.keys(settings)) {
     if ((settings as Record<string, unknown>)[key] === undefined) delete merged[key];
   }
-  fs.writeFileSync(PATHS.settingsFile, JSON.stringify(merged, null, 2), { mode: 0o600 });
+  atomicWriteFileSync(PATHS.settingsFile, JSON.stringify(merged, null, 2), { mode: 0o600 });
   settingsCache = merged as Settings;
   return settingsCache;
 }
@@ -82,7 +88,7 @@ export function readSubscriptionCache(): SubscriptionCache {
 
 function writeSubscriptionCache(cache: SubscriptionCache): void {
   ensureDirs();
-  fs.writeFileSync(PATHS.subscriptionsCacheFile, JSON.stringify(cache, null, 2), { mode: 0o600 });
+  atomicWriteFileSync(PATHS.subscriptionsCacheFile, JSON.stringify(cache, null, 2), { mode: 0o600 });
 }
 
 export function saveSubscriptionCache(subName: string, data: Partial<SubscriptionCacheEntry>): void {
@@ -118,7 +124,7 @@ export function validateSubscriptionName(name: string): void {
 export function addSubscription(url: string, name = 'default'): void {
   validateSubscriptionName(name);
   const settings = readSettings();
-  const subs = settings.subscriptions || [];
+  const subs = [...(settings.subscriptions || [])];
   const existingIndex = subs.findIndex(s => s.name === name);
   if (existingIndex >= 0) {
     subs[existingIndex] = { name, url };
@@ -134,7 +140,7 @@ export function addSubscription(url: string, name = 'default'): void {
 
 export function removeSubscription(name: string): string | null {
   const settings = readSettings();
-  const subs = settings.subscriptions || [];
+  const subs = [...(settings.subscriptions || [])];
   const idx = subs.findIndex(s => s.name === name);
   if (idx < 0) return null;
 
@@ -179,7 +185,7 @@ function getSubscriptionRawConfigPath(subName: string): string {
 export function saveSubscriptionRawConfig(subName: string, content: string): void {
   ensureDirs();
   const filePath = getSubscriptionRawConfigPath(subName);
-  fs.writeFileSync(filePath, content, { mode: 0o600 });
+  atomicWriteFileSync(filePath, content, { mode: 0o600 });
 }
 
 export function readSubscriptionRawConfig(subName: string): string | null {

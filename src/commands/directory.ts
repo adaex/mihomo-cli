@@ -16,7 +16,8 @@ export function cmdDirectory(args: string[]): void {
       return;
     }
 
-    const targetInfo = DIRECTORY_TARGETS[target.toLowerCase()];
+    const key = target.toLowerCase();
+    const targetInfo = Object.hasOwn(DIRECTORY_TARGETS, key) ? DIRECTORY_TARGETS[key] : undefined;
     if (targetInfo) {
       const targetPath = targetInfo.path || USER_DATA_DIR;
       console.log(`正在打开: ${targetInfo.label}`);

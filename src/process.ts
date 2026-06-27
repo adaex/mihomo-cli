@@ -1,4 +1,4 @@
-import { execSync, spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getKernelVersion, hasConfig, hasKernel } from './config.js';
@@ -13,6 +13,14 @@ export const SUDO_TIMEOUT_MS = 60_000;
 export const TUN_MODE_POST_WAIT_MS = 500;
 const BATCH_KILL_THRESHOLD = 3;
 export const DEFAULT_LOG_RETENTION_DAYS = 7;
+
+/**
+ * 将路径转义为 pgrep/pkill -f 使用的正则字面量。
+ * 否则路径中的 `.`（如 ~/.mihomo-cli）会被当作正则通配符，可能误匹配其他进程。
+ */
+function escapeForPgrep(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 function clearRuntime(): void {
   if (fs.existsSync(DIRS.runtime)) {
@@ -39,12 +47,14 @@ function isRunning(): boolean {
 export function getAllMihomoPids(): number[] {
   const binaryPath = PATHS.mihomoBinary;
   try {
-    const output = execSync(`pgrep -f "${binaryPath}" 2>/dev/null || true`, { encoding: 'utf8' }).trim();
+    const result = spawnSync('pgrep', ['-f', escapeForPgrep(binaryPath)], { encoding: 'utf8', timeout: 10_000 });
+    const output = (result.stdout || '').trim();
     if (!output) return [];
     return output
       .split('\n')
       .filter(Boolean)
-      .map(p => parseInt(p, 10));
+      .map(p => parseInt(p, 10))
+      .filter(p => Number.isInteger(p) && p > 0);
   } catch {
     return [];
   }
@@ -83,7 +93,7 @@ function clearPid(): void {
   if (!fs.existsSync(PATHS.pidFile)) return;
   if (isPidFileOwnedByRoot()) {
     try {
-      execSync(`sudo rm -f "${PATHS.pidFile}" 2>/dev/null`, { stdio: 'inherit', timeout: 10_000 });
+      spawnSync('sudo', ['rm', '-f', PATHS.pidFile], { stdio: 'inherit', timeout: 10_000 });
     } catch {
       // ignore
     }
@@ -99,16 +109,15 @@ function clearPid(): void {
 function killProcess(pid: number, needsSudo = false): boolean {
   try {
     if (needsSudo) {
+      const result = spawnSync('sudo', ['kill', '-9', String(pid)], { stdio: 'inherit', timeout: 10_000 });
+      if (result.status === 0) {
+        return true;
+      }
       try {
-        execSync(`sudo kill -9 ${pid} 2>/dev/null`, { stdio: 'inherit', timeout: 10_000 });
+        process.kill(pid, 'SIGKILL');
         return true;
       } catch {
-        try {
-          process.kill(pid, 'SIGKILL');
-          return true;
-        } catch {
-          return false;
-        }
+        return false;
       }
     } else {
       process.kill(pid, 'SIGKILL');
@@ -120,17 +129,17 @@ function killProcess(pid: number, needsSudo = false): boolean {
 }
 
 function killAllMihomo(forceSudo = false): boolean {
-  const binaryPath = PATHS.mihomoBinary;
+  const pattern = escapeForPgrep(PATHS.mihomoBinary);
   if (forceSudo) {
     try {
-      execSync(`sudo pkill -9 -f "${binaryPath}" 2>/dev/null || true`, { stdio: 'inherit', timeout: 15_000 });
+      spawnSync('sudo', ['pkill', '-9', '-f', pattern], { stdio: 'inherit', timeout: 15_000 });
       return true;
     } catch {
       return false;
     }
   } else {
     try {
-      execSync(`pkill -9 -f "${binaryPath}" 2>/dev/null || true`);
+      spawnSync('pkill', ['-9', '-f', pattern], { timeout: 10_000 });
       return true;
     } catch {
       return false;
@@ -189,6 +198,7 @@ function createTunLaunchScript(): string {
   const logFile = PATHS.logFile;
   const pidFile = PATHS.pidFile;
   const dataDir = DIRS.data;
+  const killPattern = escapeForPgrep(binary);
 
   const scriptContent =
     '#!/bin/bash\n' +
@@ -197,9 +207,10 @@ function createTunLaunchScript(): string {
     `LOG_FILE="${logFile}"\n` +
     `PID_FILE="${pidFile}"\n` +
     `DATA_DIR="${dataDir}"\n` +
+    `KILL_PATTERN='${killPattern}'\n` +
     '\n' +
     '# 终止旧进程\n' +
-    'pkill -9 -f "${BINARY}" 2>/dev/null || true\n' +
+    'pkill -9 -f "${KILL_PATTERN}" 2>/dev/null || true\n' +
     'sleep 0.2\n' +
     'rm -f "${PID_FILE}" 2>/dev/null || true\n' +
     '\n' +
@@ -234,7 +245,8 @@ function createTunLaunchScript(): string {
 
 function getProcessInfo(pid: number): ProcessInfo | null {
   try {
-    const psOutput = execSync(`ps -p ${pid} -o rss=,pcpu=,comm= 2>/dev/null || true`, { encoding: 'utf8' }).trim();
+    const result = spawnSync('ps', ['-p', String(pid), '-o', 'rss=,pcpu=,comm='], { encoding: 'utf8', timeout: 5000 });
+    const psOutput = (result.stdout || '').trim();
     if (!psOutput) return null;
 
     const parts = psOutput.split(/\s+/).filter(p => p);
@@ -368,7 +380,13 @@ async function startTunMode(staleState: StaleState): Promise<StartResult> {
   console.log('TUN 模式需要 sudo 权限...');
 
   try {
-    execSync(`sudo "${launchScript}"`, { stdio: 'inherit', timeout: SUDO_TIMEOUT_MS });
+    const result = spawnSync('sudo', [launchScript], { stdio: 'inherit', timeout: SUDO_TIMEOUT_MS });
+    if (result.error) throw result.error;
+    if (result.status !== 0) {
+      const err = new Error('TUN 启动脚本执行失败') as Error & { status?: number };
+      err.status = result.status ?? undefined;
+      throw err;
+    }
   } catch (e) {
     try {
       fs.unlinkSync(launchScript);
