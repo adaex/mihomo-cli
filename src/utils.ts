@@ -110,18 +110,7 @@ export function parseIntArg(args: string[] | undefined, short: string, long: str
  * getNonFlagArg 识别位置参数时借此避免把 `-t 3000` 里的 `3000` 误当位置参数。
  * 注意：--mirror/--mirror-all 是可选值选项、只走 parseMirrorArg，故意不收录。
  */
-export const VALUE_FLAGS: ReadonlySet<string> = new Set([
-  '-t',
-  '--timeout',
-  '-j',
-  '--concurrency',
-  '-r',
-  '--rounds',
-  '-n',
-  '--lines',
-  '-u',
-  '--update-timeout',
-]);
+const VALUE_FLAGS: ReadonlySet<string> = new Set(['-t', '--timeout', '-j', '--concurrency', '-r', '--rounds', '-n', '--lines', '-u', '--update-timeout']);
 
 export function getNonFlagArg(args: string[] | undefined, startIdx: number, valueFlags: ReadonlySet<string> = VALUE_FLAGS): string | null {
   if (!args) return null;
@@ -188,7 +177,7 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
   };
 }
 
-export function normalizeMirrorUrl(val: string): string | null {
+function normalizeMirrorUrl(val: string): string | null {
   if (!val) return null;
   if (val === 'direct' || val === 'no' || val === 'none') return null;
 

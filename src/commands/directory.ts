@@ -61,6 +61,7 @@ export function cmdDirectory(args: string[]): void {
   console.log('  mihomo dir open                打开根目录');
   console.log('  mihomo dir open subs           打开订阅目录');
   console.log('  mihomo dir open logs           打开日志目录');
+  console.log('  mihomo dir open data           打开 mihomo 数据目录');
   console.log('  mihomo dir open runtime        打开运行时目录');
   console.log('  mihomo dir open kernel         打开内核目录');
   console.log('');

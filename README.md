@@ -190,7 +190,6 @@ mihomo kernel --mirror-all hk.gh-proxy.org
 | `gh-proxy.org`         | 官方     |
 | `hk.gh-proxy.org`      | 香港     |
 | `cdn.gh-proxy.org`     | CDN      |
-| `edgeone.gh-proxy.org` | EdgeOne  |
 
 ## 订阅自动更新
 

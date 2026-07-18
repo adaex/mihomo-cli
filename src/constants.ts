@@ -45,3 +45,27 @@ export const BASE_CONFIG: Record<string, unknown> = {
     asn: 'https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/GeoLite2-ASN.mmdb',
   },
 };
+
+// === 订阅更新默认值 ===
+
+/** 非 GitHub 订阅默认更新间隔（小时） */
+export const DEFAULT_UPDATE_INTERVAL_HOURS = 12;
+/** GitHub 订阅默认更新间隔（小时，更新更频繁） */
+export const DEFAULT_UPDATE_INTERVAL_HOURS_GITHUB = 6;
+/** 启动时自动更新订阅的默认超时（毫秒），超时后使用缓存配置 */
+export const DEFAULT_AUTO_UPDATE_TIMEOUT = 10_000;
+
+// === 节点测速 / 清理默认值 ===
+
+/** 测速默认超时（毫秒） */
+export const DEFAULT_TEST_TIMEOUT = 2000;
+/** 测速默认并发数 */
+export const DEFAULT_TEST_CONCURRENCY = 100;
+/** 测速使用的连通性探测 URL */
+export const DEFAULT_TEST_URL = 'http://www.gstatic.com/generate_204';
+/** 自动清理默认测试轮次（失败节点重试轮数） */
+export const DEFAULT_CLEAN_ROUNDS = 2;
+/** 非 GitHub 订阅启动后自动清理阈值（节点数超过则测速清理） */
+export const AUTO_CLEAN_THRESHOLD = 100;
+/** GitHub 订阅启动后自动清理阈值 */
+export const AUTO_CLEAN_THRESHOLD_GITHUB = 50;

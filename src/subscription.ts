@@ -1,6 +1,17 @@
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import { buildConfig, parseYamlOrJson, writeDebugConfig, writeMihomoConfig } from './config.js';
-import { BASE_CONFIG } from './constants.js';
+import {
+  AUTO_CLEAN_THRESHOLD,
+  AUTO_CLEAN_THRESHOLD_GITHUB,
+  BASE_CONFIG,
+  DEFAULT_AUTO_UPDATE_TIMEOUT,
+  DEFAULT_CLEAN_ROUNDS,
+  DEFAULT_TEST_CONCURRENCY,
+  DEFAULT_TEST_TIMEOUT,
+  DEFAULT_TEST_URL,
+  DEFAULT_UPDATE_INTERVAL_HOURS,
+  DEFAULT_UPDATE_INTERVAL_HOURS_GITHUB,
+} from './constants.js';
 import {
   getSubscriptions,
   getSubscriptionsWithCache,
@@ -24,17 +35,14 @@ import type {
 } from './types.js';
 import { colors, createHttpClient, TimeoutError, withTimeout } from './utils.js';
 
-export const DEFAULT_UPDATE_INTERVAL_HOURS = 12;
-export const DEFAULT_UPDATE_INTERVAL_HOURS_GITHUB = 6;
-export const DEFAULT_CLEAN_ROUNDS = 2;
-export const AUTO_CLEAN_THRESHOLD = 100;
-export const AUTO_CLEAN_THRESHOLD_GITHUB = 50;
+// 供命令层沿用 `subscription.XXX` 引用（实际定义在 constants.ts，集中管理默认值）
+export { AUTO_CLEAN_THRESHOLD, AUTO_CLEAN_THRESHOLD_GITHUB, DEFAULT_AUTO_UPDATE_TIMEOUT, DEFAULT_CLEAN_ROUNDS };
 
 export function isGithubUrl(url: string): boolean {
   return /github\.com|raw\.githubusercontent\.com/i.test(url);
 }
 
-export function getDefaultUpdateInterval(url: string): number {
+function getDefaultUpdateInterval(url: string): number {
   return isGithubUrl(url) ? DEFAULT_UPDATE_INTERVAL_HOURS_GITHUB : DEFAULT_UPDATE_INTERVAL_HOURS;
 }
 
@@ -43,7 +51,7 @@ export function resolveUpdateInterval(url: string, cachedInterval?: number | nul
   return cachedInterval && cachedInterval > 0 ? cachedInterval : getDefaultUpdateInterval(url);
 }
 
-const YAML_DUMP_OPTS = { indent: 2, lineWidth: -1, noCompatMode: true };
+const YAML_DUMP_OPTS = { indent: 2, lineWidth: -1, schema: yaml.CORE_SCHEMA };
 
 const HTTP_CLIENT = createHttpClient({ timeout: 60_000 });
 
@@ -58,7 +66,7 @@ export function splitUrls(url: string): string[] {
     .filter(Boolean);
 }
 
-export function loadSubscriptionConfig(subName: string): ParsedSubscription {
+function loadSubscriptionConfig(subName: string): ParsedSubscription {
   const rawContent = readSubscriptionRawConfig(subName);
   if (!rawContent) {
     throw new Error(`未找到订阅配置 "${subName}"`);
@@ -110,6 +118,38 @@ function parseUsernameFromContentDisposition(header: string | null): string | nu
   const filename = match[1];
   const parts = filename.split('/');
   return parts[parts.length - 1] || null;
+}
+
+interface SubscriptionMeta {
+  userInfo: UserInfo | null;
+  updateInterval: number | null;
+  webPageUrl: string | null;
+  username: string | null;
+}
+
+/** 从响应头解析订阅元信息（流量/更新间隔/页面/用户名） */
+function extractSubscriptionMeta(headers: Headers | undefined): SubscriptionMeta {
+  return {
+    userInfo: parseUserInfo(headers?.get('subscription-userinfo') ?? null),
+    updateInterval: parsePositiveInterval(headers?.get('profile-update-interval')),
+    webPageUrl: headers?.get('profile-web-page-url') || null,
+    username: parseUsernameFromContentDisposition(headers?.get('content-disposition') ?? null),
+  };
+}
+
+/** 将元信息组装为缓存对象并写入订阅缓存（下载/合并下载共用） */
+function saveSubscriptionMeta(subName: string, meta: SubscriptionMeta): void {
+  const cacheData: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (meta.userInfo) {
+    cacheData.upload = meta.userInfo.upload;
+    cacheData.download = meta.userInfo.download;
+    cacheData.total = meta.userInfo.total;
+    cacheData.expire = meta.userInfo.expire;
+  }
+  if (meta.updateInterval) cacheData.update_interval = meta.updateInterval;
+  if (meta.webPageUrl) cacheData.web_page_url = meta.webPageUrl;
+  if (meta.username) cacheData.username = meta.username;
+  saveSubscriptionCache(subName, cacheData);
 }
 
 export function formatProxySummary(info: { proxies?: number; proxyGroups?: number }): string {
@@ -190,23 +230,8 @@ export async function downloadSubscription(url: string, subName = 'default', sig
 
   saveSubscriptionRawConfig(subName, content);
 
-  const headers = response.headers;
-  const userInfo = parseUserInfo(headers.get('subscription-userinfo'));
-  const updateInterval = parsePositiveInterval(headers.get('profile-update-interval'));
-  const webPageUrl = headers.get('profile-web-page-url') || null;
-  const username = parseUsernameFromContentDisposition(headers.get('content-disposition'));
-
-  const cacheData: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (userInfo) {
-    cacheData.upload = userInfo.upload;
-    cacheData.download = userInfo.download;
-    cacheData.total = userInfo.total;
-    cacheData.expire = userInfo.expire;
-  }
-  if (updateInterval) cacheData.update_interval = updateInterval;
-  if (webPageUrl) cacheData.web_page_url = webPageUrl;
-  if (username) cacheData.username = username;
-  saveSubscriptionCache(subName, cacheData);
+  const meta = extractSubscriptionMeta(response.headers);
+  saveSubscriptionMeta(subName, meta);
 
   const proxies = parsed.proxies as unknown[] | undefined;
   const proxyGroups = parsed['proxy-groups'] as unknown[] | undefined;
@@ -214,10 +239,10 @@ export async function downloadSubscription(url: string, subName = 'default', sig
   return {
     proxies: proxies ? proxies.length : 0,
     proxyGroups: proxyGroups ? proxyGroups.length : 0,
-    userInfo,
-    updateInterval,
-    webPageUrl,
-    username,
+    userInfo: meta.userInfo,
+    updateInterval: meta.updateInterval,
+    webPageUrl: meta.webPageUrl,
+    username: meta.username,
   };
 }
 
@@ -264,32 +289,17 @@ export async function downloadMergedSubscription(urls: string[], subName: string
   const mergedContent = yaml.dump(base, YAML_DUMP_OPTS);
   saveSubscriptionRawConfig(subName, mergedContent);
 
-  const firstHeaders = responses[0].response?.headers;
-  const userInfo = parseUserInfo(firstHeaders?.get('subscription-userinfo') ?? null);
-  const updateInterval = parsePositiveInterval(firstHeaders?.get('profile-update-interval'));
-  const webPageUrl = firstHeaders?.get('profile-web-page-url') || null;
-  const username = parseUsernameFromContentDisposition(firstHeaders?.get('content-disposition') ?? null);
-
-  const cacheData: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (userInfo) {
-    cacheData.upload = userInfo.upload;
-    cacheData.download = userInfo.download;
-    cacheData.total = userInfo.total;
-    cacheData.expire = userInfo.expire;
-  }
-  if (updateInterval) cacheData.update_interval = updateInterval;
-  if (webPageUrl) cacheData.web_page_url = webPageUrl;
-  if (username) cacheData.username = username;
-  saveSubscriptionCache(subName, cacheData);
+  const meta = extractSubscriptionMeta(responses[0].response?.headers);
+  saveSubscriptionMeta(subName, meta);
 
   const proxyGroups = base['proxy-groups'] as unknown[] | undefined;
   return {
     proxies: baseProxies.length,
     proxyGroups: proxyGroups ? proxyGroups.length : 0,
-    userInfo,
-    updateInterval,
-    webPageUrl,
-    username,
+    userInfo: meta.userInfo,
+    updateInterval: meta.updateInterval,
+    webPageUrl: meta.webPageUrl,
+    username: meta.username,
   };
 }
 
@@ -344,7 +354,14 @@ export async function tryUpdateOne(sub: Subscription, signal?: AbortSignal): Pro
   }
 }
 
-export const DEFAULT_AUTO_UPDATE_TIMEOUT = 10_000;
+/** 打印单个订阅的更新结果（成功/失败），供自动更新与手动更新命令共用 */
+export function printUpdateResult(r: TryUpdateResult): void {
+  if (r.success) {
+    console.log(`${colors.green('✓')} ${r.name}: ${colors.green('已更新')} (${formatProxySummary(r)})`);
+  } else {
+    console.log(`${colors.red('✗')} ${r.name}: ${colors.red('失败')} (${(r.error || '').split('\n')[0]})`);
+  }
+}
 
 export async function autoUpdateStaleSubscription(options: { timeout?: number } = {}): Promise<AutoUpdateResult> {
   const allSubs = getSubscriptionsWithCache();
@@ -379,21 +396,16 @@ export async function autoUpdateStaleSubscription(options: { timeout?: number } 
   let updatedCount = 0;
 
   for (const r of results) {
-    if (r.success) {
-      updatedCount++;
-      console.log(`${colors.green('✓')} ${r.name}: ${colors.green('已更新')} (${formatProxySummary(r)})`);
-    } else {
-      console.log(`${colors.red('✗')} ${r.name}: ${colors.red('失败')} (${(r.error || '').split('\n')[0]})`);
-    }
+    if (r.success) updatedCount++;
+    printUpdateResult(r);
   }
 
   return { total: staleSubs.length, updated: updatedCount, failed: staleSubs.length - updatedCount };
 }
 
 const API_BASE = `http://${BASE_CONFIG['external-controller']}`;
-const DEFAULT_TEST_URL = 'http://www.gstatic.com/generate_204';
 
-export async function testProxyDelay(
+async function testProxyDelay(
   proxyName: string,
   timeout: number,
   testUrl: string,
@@ -433,7 +445,7 @@ export async function testSubscriptionProxies(
     parsed?: ParsedSubscription;
   } = {},
 ): Promise<ProxyTestSummary> {
-  const { timeout = 2000, concurrency = 100, testUrl = DEFAULT_TEST_URL, apiBase = API_BASE, onResult } = options;
+  const { timeout = DEFAULT_TEST_TIMEOUT, concurrency = DEFAULT_TEST_CONCURRENCY, testUrl = DEFAULT_TEST_URL, apiBase = API_BASE, onResult } = options;
 
   const { proxies } = options.parsed || loadSubscriptionConfig(subName);
 
@@ -495,7 +507,7 @@ function normalizeProxyNamesBeforeSave(parsed: ParsedSubscription): number {
   return renameMap.size;
 }
 
-export function cleanDeadProxies(parsed: ParsedSubscription, deadNames: Set<string>): { removedProxies: number; updatedGroups: number; removedGroups: number } {
+function cleanDeadProxies(parsed: ParsedSubscription, deadNames: Set<string>): { removedProxies: number; updatedGroups: number; removedGroups: number } {
   const { proxies, proxyGroups } = parsed;
 
   const originalCount = proxies.length;

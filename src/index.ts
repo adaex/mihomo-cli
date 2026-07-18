@@ -77,7 +77,7 @@ async function main(): Promise<void> {
       await cmdStart(args);
       break;
     case 'tun':
-      await cmdStart(['start', 'tun']);
+      await cmdStart(['start', 'tun', ...args.slice(1)]);
       break;
     case 'down':
     case 'stop':

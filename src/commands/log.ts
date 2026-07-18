@@ -1,4 +1,5 @@
 import * as processManager from '../process.js';
+import type { LogEntry } from '../types.js';
 import { formatBytes, formatDate, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
 
 export function cmdLog(args: string[]): void {
@@ -54,7 +55,7 @@ export function cmdLogs(args: string[]): void {
   }
 
   const logs = processManager.listLogs();
-  const all: Array<{ name: string; path: string; size: number; mtime: Date; isCurrent: boolean }> = [];
+  const all: LogEntry[] = [];
 
   if (logs.current) all.push(logs.current);
   all.push(...logs.archives);

@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.10.0] - 2026-07-18
+
+### 依赖升级
+
+- **js-yaml 4 → 5**（破坏性大版本）：迁移到命名空间导入，`noCompatMode` 选项移除后改用 `CORE_SCHEMA`（YAML 1.2 语义），保持 `yes/no/on/off` 等值不被错误加引号，与 mihomo 内核解析一致；移除随之内置类型的 `@types/js-yaml`
+- **TypeScript 6 → 7**（原生编译器）：类型检查更快，构建仍走 tsup/esbuild
+- **lint-staged 16 → 17**：随之将 `engines.node` 门槛从 `>=22.0.0` 抬高到 `>=22.22.1`
+- 其他：Biome 2.4 → 2.5、tsx 4.21 → 4.23、@types/node 22.19 → 22.20
+
+### 修复
+
+- **`mihomo tun` 丢弃命令行参数** - `mihomo tun -s`、`mihomo tun -u 30000 -t 3000` 等此前被静默忽略（快捷命令未透传参数），现与 `mihomo start tun ...` 行为一致
+
+### 优化
+
+- **默认值常量收归 `constants.ts`** - 测速超时/并发（2000/100）、清理轮次、自动更新超时、自动清理阈值、更新间隔等默认值统一集中管理，消除散落的裸魔数
+- **消除重复逻辑** - 订阅下载的缓存元信息组装（`downloadSubscription` / `downloadMergedSubscription`）、进程停止失败处理（start/stop/clean 三处）、更新结果打印、单订阅下载分派统一抽取复用
+- **清理冗余导出** - 移除仅在本模块内使用的多余 `export`
+- **文档一致性** - README 镜像列表与代码对齐；`dir open` 帮助补列 `data` 目标
+
+---
+
 ## [2.9.2] - 2026-07-18
 
 ### 修复

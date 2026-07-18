@@ -8,11 +8,11 @@ import { isProcessRoot, isProcessRunning, sleepSync } from './utils.js';
 
 export const PROCESS_WAIT_ATTEMPTS = 50;
 export const PROCESS_WAIT_INTERVAL = 100;
-export const STARTUP_WAIT_MS = 800;
-export const SUDO_TIMEOUT_MS = 60_000;
-export const TUN_MODE_POST_WAIT_MS = 500;
+const STARTUP_WAIT_MS = 800;
+const SUDO_TIMEOUT_MS = 60_000;
+const TUN_MODE_POST_WAIT_MS = 500;
 const BATCH_KILL_THRESHOLD = 3;
-export const DEFAULT_LOG_RETENTION_DAYS = 7;
+const DEFAULT_LOG_RETENTION_DAYS = 7;
 
 /**
  * 将路径转义为 pgrep/pkill -f 使用的正则字面量。

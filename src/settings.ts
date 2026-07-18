@@ -115,7 +115,7 @@ export function getSubscriptionsWithCache(): SubscriptionWithCache[] {
 
 const SAFE_NAME_RE = /^[\w\-\p{Unified_Ideograph}]{1,64}$/u;
 
-export function validateSubscriptionName(name: string): void {
+function validateSubscriptionName(name: string): void {
   if (!name || !SAFE_NAME_RE.test(name)) {
     throw new Error(`订阅名称无效: "${name}"，只允许字母、数字、下划线、短横线和中文（最长 64 字符）`);
   }

@@ -1,4 +1,5 @@
 import { getConfigInfo } from '../config.js';
+import { DEFAULT_TEST_CONCURRENCY, DEFAULT_TEST_TIMEOUT } from '../constants.js';
 import * as processManager from '../process.js';
 import {
   addSubscription,
@@ -111,8 +112,8 @@ function resolveTestTarget(args: string[]): { target: Subscription; timeout: num
   }
 
   const nameArg = getNonFlagArg(args, 2);
-  const timeout = parseIntArg(args, '-t', '--timeout', 2000);
-  const concurrency = parseIntArg(args, '-j', '--concurrency', 100);
+  const timeout = parseIntArg(args, '-t', '--timeout', DEFAULT_TEST_TIMEOUT);
+  const concurrency = parseIntArg(args, '-j', '--concurrency', DEFAULT_TEST_CONCURRENCY);
 
   let target: Subscription;
   if (nameArg) {
@@ -257,12 +258,8 @@ export async function cmdSubscription(args: string[]): Promise<void> {
       const results = await Promise.all(subs.map(sub => subscription.tryUpdateOne(sub)));
       let ok = 0;
       for (const r of results) {
-        if (r.success) {
-          ok++;
-          console.log(`${colors.green('✓')} ${r.name}: ${colors.green('已更新')} (${subscription.formatProxySummary(r)})`);
-        } else {
-          console.log(`${colors.red('✗')} ${r.name}: ${colors.red('失败')} (${(r.error || '').split('\n')[0]})`);
-        }
+        if (r.success) ok++;
+        subscription.printUpdateResult(r);
       }
       if (ok === 0) process.exit(1);
       console.log('');
@@ -274,19 +271,12 @@ export async function cmdSubscription(args: string[]): Promise<void> {
     const target = subscription.pickSingleSubscription(matches, name);
 
     console.log(`更新订阅: ${target.name}`);
-    try {
-      let info: { proxies?: number; proxyGroups?: number };
-      if (subscription.isMultiUrl(target.url)) {
-        const urls = subscription.splitUrls(target.url);
-        info = await subscription.downloadMergedSubscription(urls, target.name);
-      } else {
-        info = await subscription.downloadSubscription(target.url, target.name);
-      }
-      console.log(`已更新 (${subscription.formatProxySummary(info)})`);
-    } catch (e) {
-      console.error(`更新失败: ${(e as Error).message}`);
+    const result = await subscription.tryUpdateOne(target);
+    if (!result.success) {
+      console.error(`更新失败: ${(result.error || '').split('\n')[0]}`);
       process.exit(1);
     }
+    console.log(`已更新 (${subscription.formatProxySummary(result)})`);
     console.log('');
     await printSubscriptionList();
     return;

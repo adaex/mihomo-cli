@@ -1,22 +1,16 @@
 import { getConfigInfo } from '../config.js';
+import { DEFAULT_TEST_CONCURRENCY, DEFAULT_TEST_TIMEOUT } from '../constants.js';
 import * as processManager from '../process.js';
 import * as subscription from '../subscription.js';
-import type { StopResult, Subscription } from '../types.js';
+import type { Subscription } from '../types.js';
 import { colors, parseIntArg } from '../utils.js';
+import { handleStopResult } from './stop.js';
 import { createProgressPrinter, formatCleanSummary, formatTestSummary } from './subscription.js';
 
 function requireRunning(): void {
   const status = processManager.getStatus();
   if (!status.running) {
     console.error('错误: mihomo 未运行，请先启动 (mihomo start)');
-    process.exit(1);
-  }
-}
-
-function ensureStopped(result: StopResult): void {
-  if (result.remaining && result.remaining.length > 0) {
-    console.error(`${colors.red('部分进程未终止:')} ${result.remaining.join(', ')}`);
-    console.error('请手动运行: sudo pkill -9 mihomo');
     process.exit(1);
   }
 }
@@ -34,8 +28,8 @@ export async function cmdTest(args: string[]): Promise<void> {
   requireRunning();
   const activeSub = requireActiveSub();
 
-  const timeout = parseIntArg(args, '-t', '--timeout', 2000);
-  const concurrency = parseIntArg(args, '-j', '--concurrency', 100);
+  const timeout = parseIntArg(args, '-t', '--timeout', DEFAULT_TEST_TIMEOUT);
+  const concurrency = parseIntArg(args, '-j', '--concurrency', DEFAULT_TEST_CONCURRENCY);
 
   console.log(`测试 "${activeSub.name}" 节点连通性...`);
   console.log(`超时: ${timeout}ms  并发: ${concurrency}`);
@@ -57,8 +51,8 @@ export async function cmdClean(args: string[]): Promise<void> {
   requireRunning();
   const activeSub = requireActiveSub();
 
-  const timeout = parseIntArg(args, '-t', '--timeout', 2000);
-  const concurrency = parseIntArg(args, '-j', '--concurrency', 100);
+  const timeout = parseIntArg(args, '-t', '--timeout', DEFAULT_TEST_TIMEOUT);
+  const concurrency = parseIntArg(args, '-j', '--concurrency', DEFAULT_TEST_CONCURRENCY);
   const rounds = parseIntArg(args, '-r', '--rounds', subscription.DEFAULT_CLEAN_ROUNDS);
 
   console.log(`清理 "${activeSub.name}" 失败节点...`);
@@ -90,7 +84,7 @@ export async function cmdClean(args: string[]): Promise<void> {
 
     // 保留当前运行模式，避免 TUN 用户被静默降级为 mixed
     const currentMode = getConfigInfo()?.tun ? 'tun' : 'mixed';
-    ensureStopped(processManager.stop());
+    handleStopResult(processManager.stop());
     const configInfo = subscription.prepareConfigForStart(currentMode, activeSub.name);
     const startResult = await processManager.start(currentMode);
     console.log(`${colors.green('已重启')} (PID ${startResult.pid}) · ${subscription.formatProxySummary(configInfo)}`);

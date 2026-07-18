@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import { BASE_CONFIG, TUN_CONFIG } from './constants.js';
 import { applyOverwrite, isOverwriteEnabled, loadOverwriteFile } from './overwrite.js';
 import { atomicWriteFileSync, ensureDirs, PATHS } from './paths.js';
@@ -218,13 +218,13 @@ export function buildConfig(subRawContent: string, mode: string): BuildConfigRes
 
 export function writeMihomoConfig(configObj: Record<string, unknown>): void {
   ensureDirs();
-  const content = yaml.dump(configObj, { indent: 2, lineWidth: -1, noCompatMode: true });
+  const content = yaml.dump(configObj, { indent: 2, lineWidth: -1, schema: yaml.CORE_SCHEMA });
   atomicWriteFileSync(PATHS.configFile, content, { mode: 0o600 });
 }
 
 export function writeDebugConfig(buildResult: BuildConfigResult): void {
   ensureDirs();
-  const dumpOpts = { indent: 2, lineWidth: -1, noCompatMode: true };
+  const dumpOpts = { indent: 2, lineWidth: -1, schema: yaml.CORE_SCHEMA };
 
   fs.writeFileSync(PATHS.configStage1Subscription, yaml.dump(buildResult.subscriptionConfig, dumpOpts), { mode: 0o600 });
 

@@ -1,6 +1,6 @@
 {
   "name": "mihomo-cli",
-  "version": "2.9.2",
+  "version": "2.10.0",
   "type": "module",
   "description": "A terminal-based mihomo (Clash.Meta) client for macOS",
   "bin": {
@@ -38,23 +38,22 @@
     "url": "git+https://github.com/adaex/mihomo-cli.git"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.22.1"
   },
   "dependencies": {
     "compare-versions": "^6.1.0",
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^5.2.1"
   },
   "lint-staged": {
     "*.{ts,json,md}": "biome check --fix --no-errors-on-unmatched"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.11",
-    "@types/js-yaml": "^4.0.9",
-    "@types/node": "^22.0.0",
+    "@biomejs/biome": "^2.5.4",
+    "@types/node": "^22.20.1",
     "husky": "^9.1.7",
-    "lint-staged": "^16.4.0",
+    "lint-staged": "^17.0.8",
     "tsup": "^8.5.1",
-    "tsx": "^4.21.0",
-    "typescript": "^6.0.2"
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2"
   }
 }

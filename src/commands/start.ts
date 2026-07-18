@@ -1,18 +1,11 @@
 import { hasKernel } from '../config.js';
+import { DEFAULT_TEST_CONCURRENCY, DEFAULT_TEST_TIMEOUT } from '../constants.js';
 import * as processManager from '../process.js';
 import * as subscription from '../subscription.js';
-import type { StopResult } from '../types.js';
 import { colors, hasFlag, parseIntArg, sleep } from '../utils.js';
 import { printStatus } from './status.js';
+import { handleStopResult } from './stop.js';
 import { createProgressPrinter, formatCleanSummary, formatTestSummary } from './subscription.js';
-
-function handleStopResult(result: StopResult): void {
-  if (result.remaining && result.remaining.length > 0) {
-    console.error(`${colors.red('部分进程未终止:')} ${result.remaining.join(', ')}`);
-    console.error('请手动运行: sudo pkill -9 mihomo');
-    process.exit(1);
-  }
-}
 
 export async function cmdStart(args: string[]): Promise<void> {
   if (!hasKernel()) {
@@ -22,8 +15,8 @@ export async function cmdStart(args: string[]): Promise<void> {
 
   const targetMode = args[1] === 'tun' ? 'tun' : 'mixed';
   const rounds = parseIntArg(args, '-r', '--rounds', subscription.DEFAULT_CLEAN_ROUNDS);
-  const timeout = parseIntArg(args, '-t', '--timeout', 2000);
-  const concurrency = parseIntArg(args, '-j', '--concurrency', 100);
+  const timeout = parseIntArg(args, '-t', '--timeout', DEFAULT_TEST_TIMEOUT);
+  const concurrency = parseIntArg(args, '-j', '--concurrency', DEFAULT_TEST_CONCURRENCY);
   const skipUpdate = hasFlag(args, '-s', '--no-update');
   const updateTimeout = parseIntArg(args, '-u', '--update-timeout', subscription.DEFAULT_AUTO_UPDATE_TIMEOUT);
 
