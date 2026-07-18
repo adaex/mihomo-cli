@@ -119,6 +119,17 @@ export interface StaleState {
   needsSudo: boolean;
 }
 
+// === Daemon (launchd 保活) ===
+
+export interface DaemonStatus {
+  /** plist 文件是否存在（即用户是否启用过保活） */
+  enabled: boolean;
+  /** launchd 是否已装载该任务 */
+  loaded: boolean;
+  /** 被 launchd 托管的内核进程 PID（未运行为 null） */
+  pid: number | null;
+}
+
 // === Kernel ===
 
 export interface KernelUpdateInfo {

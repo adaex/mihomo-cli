@@ -1,5 +1,6 @@
 import { getConfigInfo } from '../config.js';
 import { DEFAULT_TEST_CONCURRENCY, DEFAULT_TEST_TIMEOUT } from '../constants.js';
+import { isDaemonEnabled } from '../daemon.js';
 import * as processManager from '../process.js';
 import {
   addSubscription,
@@ -310,7 +311,8 @@ export async function cmdSubscription(args: string[]): Promise<void> {
 
     const status = processManager.getStatus();
     const configInfo = getConfigInfo();
-    const currentMode = configInfo?.tun ? 'tun' : 'mixed';
+    // 保活恒为 Mixed；否则保留当前模式。避免订阅残留 tun 字段时误判为 tun 命中 cmdStart 的 TUN 守卫
+    const currentMode = isDaemonEnabled() ? 'mixed' : configInfo?.tun ? 'tun' : 'mixed';
 
     const success = setDefaultSubscription(target.name);
     if (success) {
@@ -320,7 +322,8 @@ export async function cmdSubscription(args: string[]): Promise<void> {
       process.exit(1);
     }
 
-    if (status.running) {
+    // 保活模式下内核由 launchd 托管、不写 pidFile，需显式感知以触发重启
+    if (status.running || isDaemonEnabled()) {
       console.log('');
       await cmdStart(['start', currentMode]);
       return;

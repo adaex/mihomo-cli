@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.0.0] - 2026-07-19
+
+### 新增
+
+- **进程保活（`daemon`）** - 基于 macOS 原生 launchd（LaunchAgent），让 mihomo 内核在崩溃、被系统 kill、开机/重新登录后自动拉起，代理后台常驻
+  - `mihomo daemon on` - 开启保活（生成 LaunchAgent、`KeepAlive` 崩溃重启 + `RunAtLoad` 开机自启，仅 Mixed 模式，装载无需 sudo）
+  - `mihomo daemon off` - 关闭保活并停止代理
+  - `mihomo daemon status` - 查看保活状态
+  - 零额外常驻进程、零轮询：保活由系统 launchd 兜底，不占用系统资源
+
+### 变更
+
+- **保活开启时的生命周期联动** - 启用保活后，`start` / `clean` / `ow on|off` / `sub use` 的重启改走 `launchctl kickstart`（不再裸 `kill`，避免与 `KeepAlive` 打架）；`stop` 会提示改用 `daemon off`；`start tun` 会提示保活仅支持 Mixed，需先 `daemon off`
+- **`status` 显示保活状态** - 保活开启时，运行状态以 launchd 托管进程为准（托管进程不写 pidFile）
+- **`reset` 支持 `daemon` 目标** - `reset daemon` / `reset --full` 会先卸载 launchd 任务再删除 plist；例行 `reset`（无参）默认保留保活
+
+---
+
 ## [2.10.0] - 2026-07-18
 
 ### 依赖升级

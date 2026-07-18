@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import readline from 'node:readline';
 import { clearKernelVersionCache, hasKernel } from '../config.js';
+import { disableDaemon, isDaemonEnabled } from '../daemon.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import * as processManager from '../process.js';
 import { invalidateSettingsCache } from '../settings.js';
@@ -68,6 +69,18 @@ const RESET_TARGETS: ResetTarget[] = [
     },
     needsStop: false,
   },
+  {
+    id: 'daemon',
+    aliases: ['daemon'],
+    label: '保活',
+    // 删除全部交给 onAfter：disableDaemon 会先 bootout 卸载、再删 plist、再兜底清理进程，
+    // 顺序正确（先卸载再删文件）；此处返回空避免提前删掉 plist 破坏卸载。
+    paths: () => [],
+    needsStop: false,
+    onAfter: () => disableDaemon(),
+    checkEmpty: () => !isDaemonEnabled(),
+    emptyMsg: '保活未启用，无需删除',
+  },
 ];
 
 function resolveResetTargets(names: string[]): { matched: ResetTarget[]; unmatched: string[] } {
@@ -121,7 +134,7 @@ export async function cmdReset(args: string[]): Promise<void> {
     }
     targets = matched;
   } else {
-    targets = RESET_TARGETS.filter(t => !['settings', 'kernel', 'overwrites'].includes(t.id));
+    targets = RESET_TARGETS.filter(t => !['settings', 'kernel', 'overwrites', 'daemon'].includes(t.id));
   }
 
   for (const t of targets) {
@@ -135,18 +148,19 @@ export async function cmdReset(args: string[]): Promise<void> {
 
   const needsStop = targets.some(t => t.needsStop);
   const warnRunning = targets.some(t => t.warnIfRunning);
+  // 删内核会让保活 plist 指向已删二进制（KeepAlive 空转）；需停止进程的重置也要求保活先卸载。
+  // 两种情况都应在重置时一并关闭保活。
+  const kernelTargeted = targets.some(t => t.id === 'kernel');
+  const disablesDaemon = needsStop || kernelTargeted;
 
   const pids = needsStop || warnRunning ? processManager.getAllMihomoPids() : [];
 
-  if (needsStop && pids.length > 0) {
-    console.log(`停止 ${pids.length} 个进程...`);
-    processManager.cleanupAll();
-    for (let i = 0; i < processManager.PROCESS_WAIT_ATTEMPTS; i++) {
-      if (processManager.getAllMihomoPids().length === 0) break;
-      await new Promise(r => setTimeout(r, processManager.PROCESS_WAIT_INTERVAL));
-    }
-  } else if (warnRunning && pids.length > 0) {
+  // 确认前只做只读警告，不做任何破坏性操作（停止进程/卸载保活）——用户取消时环境须原样保留
+  if (warnRunning && pids.length > 0) {
     console.log(colors.yellow(`警告: mihomo 正在运行 (PID ${pids.join(', ')})，删除内核后将无法重新启动`));
+  }
+  if (disablesDaemon && isDaemonEnabled()) {
+    console.log(colors.yellow('保活已启用，重置将一并关闭保活（移除开机自启）'));
   }
 
   console.log(`将删除: ${targets.map(t => t.label).join('、')}`);
@@ -154,6 +168,22 @@ export async function cmdReset(args: string[]): Promise<void> {
   if (!skipConfirm && !(await confirmPrompt('确认?'))) {
     console.log('已取消');
     return;
+  }
+
+  // 确认后再执行破坏性操作。保活开启时必须先卸载（使 KeepAlive 失效），
+  // 否则后续 cleanupAll 裸杀会被立即拉起。daemon target 的卸载由其 onAfter 兜底，
+  // 但停止段早于删除循环，故这里对"需停止/删内核 + 保活开启"统一先卸载（含 --full）。
+  if (disablesDaemon && isDaemonEnabled()) {
+    disableDaemon();
+  }
+
+  if (needsStop && processManager.getAllMihomoPids().length > 0) {
+    console.log('停止进程...');
+    processManager.cleanupAll();
+    for (let i = 0; i < processManager.PROCESS_WAIT_ATTEMPTS; i++) {
+      if (processManager.getAllMihomoPids().length === 0) break;
+      await new Promise(r => setTimeout(r, processManager.PROCESS_WAIT_INTERVAL));
+    }
   }
 
   for (const t of targets) {

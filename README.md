@@ -11,6 +11,7 @@
 - 📝 **覆写配置** - 在订阅基础上进行自定义覆写，支持强制覆盖、数组合并
 - 🔄 **智能重启** - `sub use` 切换订阅、`ow on/off` 切换覆写后自动重启
 - 🚀 **进程管理** - 启动/停止/切换模式，自动清理残留进程
+- 🛡️ **进程保活** - 基于 launchd，崩溃/开机自动拉起，代理后台常驻（`daemon on`）
 - 🔄 **双模式支持** - Mixed 模式和 TUN 透明代理模式
 - 📊 **状态监控** - 查看运行状态、内存占用
 - 📝 **日志管理** - 实时日志 + 历史日志归档（自动轮转，保留7天）
@@ -119,6 +120,7 @@ mihomo ui yacd     # YACD
 | 命令                              | 说明                                                                |
 | --------------------------------- | ------------------------------------------------------------------- |
 | `mihomo kernel [--mirror [镜像]]` | 更新内核（默认直连，`--mirror` 使用镜像）                           |
+| `mihomo daemon [on\|off\|status]` | 进程保活：开机自启 + 崩溃自动重启（仅 Mixed 模式）                   |
 | `mihomo update`                   | 更新 mihomo-cli (npm install -g)                                    |
 | `mihomo ui [zash\|dash\|yacd]`    | 打开 Web UI                                                         |
 | `mihomo dir`                      | 显示数据目录位置                                                    |
@@ -162,6 +164,30 @@ mihomo ui yacd     # YACD
 - 全局自动路由，所有流量自动走代理
 - 需要 sudo / 管理员权限
 - 首次使用会自动配置 DNS 和路由
+
+## 进程保活
+
+默认情况下，mihomo 内核在后台独立运行，但如果内核崩溃、被系统 kill（如内存不足）、或重启/重新登录后，代理就会失效且不会自动恢复。进程保活用 macOS 原生的 **launchd** 解决这个问题。
+
+```bash
+mihomo daemon on       # 开启保活
+mihomo daemon off      # 关闭保活并停止代理
+mihomo daemon status   # 查看保活状态
+```
+
+### 原理
+
+- 基于用户级 **LaunchAgent**（`~/Library/LaunchAgents/`），装载/卸载**无需 sudo**
+- **`KeepAlive`** - 内核崩溃或被杀后由 launchd 自动拉起（约 10 秒节流后重启）
+- **`RunAtLoad`** - 登录/开机后自动启动，无需手动 `start`
+- 常驻的是系统 launchd 进程本身，**不额外占用系统资源、无轮询**
+
+### 注意事项
+
+- **仅支持 Mixed 模式**。保活开启时执行 `start tun` 会被拦截，需先 `daemon off`
+- 保活开启后，`mihomo stop` 不再直接停止（会被自动拉起），请用 `mihomo daemon off`
+- 切换订阅、覆写开关、清理节点后的重启会自动生效（内部走 `launchctl kickstart`）
+- 保活模式下日志持续追加到 `mihomo.log`（不触发启动时的日志轮转）
 
 ## 内核更新镜像
 

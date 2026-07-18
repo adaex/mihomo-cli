@@ -1,3 +1,4 @@
+import { isDaemonEnabled } from '../daemon.js';
 import * as processManager from '../process.js';
 import type { StopResult } from '../types.js';
 import { colors } from '../utils.js';
@@ -12,6 +13,12 @@ export function handleStopResult(result: StopResult): void {
 }
 
 export async function cmdStop(): Promise<void> {
+  if (isDaemonEnabled()) {
+    console.log(colors.yellow('保活已启用，代理由 launchd 托管'));
+    console.log('直接停止会被自动重新拉起，请用: mihomo daemon off');
+    return;
+  }
+
   const pids = processManager.getAllMihomoPids();
   if (pids.length === 0) {
     console.log(colors.yellow('不在运行'));

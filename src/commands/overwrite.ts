@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 import { getConfigInfo } from '../config.js';
+import { isDaemonEnabled } from '../daemon.js';
 import { isOverwriteEnabled, listOverwriteFile, setOverwriteEnabled } from '../overwrite.js';
 import * as processManager from '../process.js';
 import { colors } from '../utils.js';
@@ -40,7 +41,8 @@ export async function cmdOverwrite(args: string[]): Promise<void> {
 
   const status = processManager.getStatus();
   const configInfo = getConfigInfo();
-  const currentMode = configInfo?.tun ? 'tun' : 'mixed';
+  // 保活恒为 Mixed；否则保留当前模式。避免订阅/覆写残留 tun 字段时误判为 tun 命中 cmdStart 的 TUN 守卫
+  const currentMode = isDaemonEnabled() ? 'mixed' : configInfo?.tun ? 'tun' : 'mixed';
 
   if (action === 'on' || action === 'enable') {
     if (isOverwriteEnabled()) {
@@ -53,7 +55,7 @@ export async function cmdOverwrite(args: string[]): Promise<void> {
     setOverwriteEnabled(true);
     console.log('已启用覆写配置');
 
-    if (status.running) {
+    if (status.running || isDaemonEnabled()) {
       console.log('');
       await cmdStart(['start', currentMode]);
       return;
@@ -75,7 +77,7 @@ export async function cmdOverwrite(args: string[]): Promise<void> {
     setOverwriteEnabled(false);
     console.log('已禁用覆写配置');
 
-    if (status.running) {
+    if (status.running || isDaemonEnabled()) {
       console.log('');
       await cmdStart(['start', currentMode]);
       return;

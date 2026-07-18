@@ -1,4 +1,5 @@
 import { getConfigInfo } from '../config.js';
+import { getDaemonStatus, isDaemonRunning } from '../daemon.js';
 import { isOverwriteEnabled, listOverwriteFile } from '../overwrite.js';
 import * as processManager from '../process.js';
 import { formatProxySummary, getActiveSubscription } from '../subscription.js';
@@ -6,23 +7,28 @@ import { colors } from '../utils.js';
 
 export function printStatus(): void {
   const status = processManager.getStatus();
+  const daemon = getDaemonStatus();
   const info = getConfigInfo();
   const overwriteEnabled = isOverwriteEnabled();
   const overwriteFiles = listOverwriteFile().files;
   const activeSub = getActiveSubscription();
 
+  // 保活模式下内核由 launchd 托管、不写 pidFile，以 daemon 状态为准
+  const running = daemon.enabled ? isDaemonRunning(daemon) : status.running;
+  const pid = daemon.enabled ? daemon.pid : status.pid;
+
   console.log('');
   let modeLabel = '';
-  if (info && status.running) {
+  if (info && running) {
     modeLabel = colors.cyan(info.tun ? ' (TUN)' : ' (Mixed)') as string;
   }
-  const statusText = status.running ? colors.green('● 运行中') : colors.yellow('不在运行');
+  const statusText = running ? colors.green('● 运行中') : colors.yellow('不在运行');
   console.log(`${colors.gray('状态: ')}${statusText}${modeLabel}`);
   console.log(`${colors.gray('内核: ')}${status.kernelVersion || '未安装'}`);
 
-  if (status.pid) {
-    console.log(`${colors.gray('PID:  ')}${status.pid}`);
-    if (status.processInfo) {
+  if (pid) {
+    console.log(`${colors.gray('PID:  ')}${pid}`);
+    if (!daemon.enabled && status.processInfo) {
       console.log(`${colors.gray('内存: ')}${status.processInfo.memory}`);
     }
   }
@@ -55,6 +61,10 @@ export function printStatus(): void {
     console.log(`${colors.gray('覆写: ')}${colors.green('已启用')} (无文件)`);
   } else {
     console.log(`${colors.gray('覆写: ')}${colors.yellow('已禁用')}`);
+  }
+
+  if (daemon.enabled) {
+    console.log(`${colors.gray('保活: ')}${colors.green('已启用')} ${colors.gray('(开机自启 + 崩溃重启)')}`);
   }
   console.log('');
 }

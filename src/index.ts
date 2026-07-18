@@ -1,3 +1,4 @@
+import { cmdDaemon } from './commands/daemon.js';
 import { cmdDirectory } from './commands/directory.js';
 import { printHelp, printShortHelp, printVersion } from './commands/help.js';
 import { cmdKernel } from './commands/kernel.js';
@@ -122,6 +123,9 @@ async function main(): Promise<void> {
       break;
     case 'reset':
       await cmdReset(args);
+      break;
+    case 'daemon':
+      await cmdDaemon(args);
       break;
     case 'on':
       await cmdOverwrite(['ow', 'on']);
