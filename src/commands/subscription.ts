@@ -254,7 +254,7 @@ export async function cmdSubscription(args: string[]): Promise<void> {
 
     if (!name) {
       console.log(`更新所有 ${subs.length} 个订阅...`);
-      const results = await Promise.all(subs.map(subscription.tryUpdateOne));
+      const results = await Promise.all(subs.map(sub => subscription.tryUpdateOne(sub)));
       let ok = 0;
       for (const r of results) {
         if (r.success) {

@@ -139,6 +139,10 @@ export async function downloadKernel(
   const tempPath = path.join(DIRS.kernel, asset.name);
   const sizeMB = (asset.size / 1024 / 1024).toFixed(2);
 
+  if (mirror && progressCallback) {
+    progressCallback('提示: 经第三方镜像中转下载，无法验证来源完整性，建议直连或自行校验产物');
+  }
+
   if (progressCallback) {
     progressCallback(`下载内核: ${asset.name} (${sizeMB} MB)`);
   }
@@ -219,6 +223,26 @@ export async function downloadKernel(
   }
 
   fs.chmodSync(targetPath, 0o755);
+
+  // 下载后自检：跑一次 -v 确认二进制可执行且未损坏/架构匹配（上游 release 不提供 checksums，无法哈希校验）
+  if (progressCallback) {
+    progressCallback('校验内核...');
+  }
+  const check = spawnSync(targetPath, ['-v'], { encoding: 'utf8', timeout: 5000 });
+  const checkOutput = `${check.stdout || ''}${check.stderr || ''}`.trim();
+  if (check.error || check.status !== 0 || !/v?\d+\.\d+\.\d+/.test(checkOutput)) {
+    try {
+      fs.unlinkSync(targetPath);
+    } catch {
+      /* ignore */
+    }
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+      /* ignore */
+    }
+    throw new Error(`内核自检失败（可能下载损坏或架构不匹配），已删除\n  退出码: ${check.status}\n  输出: ${checkOutput || '(空)'}`);
+  }
 
   try {
     fs.unlinkSync(tempPath);

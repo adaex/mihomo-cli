@@ -245,24 +245,19 @@ function createTunLaunchScript(): string {
 
 function getProcessInfo(pid: number): ProcessInfo | null {
   try {
-    const result = spawnSync('ps', ['-p', String(pid), '-o', 'rss=,pcpu=,comm='], { encoding: 'utf8', timeout: 5000 });
+    const result = spawnSync('ps', ['-p', String(pid), '-o', 'rss='], { encoding: 'utf8', timeout: 5000 });
     const psOutput = (result.stdout || '').trim();
     if (!psOutput) return null;
 
-    const parts = psOutput.split(/\s+/).filter(p => p);
-    if (parts.length < 2) return null;
-
-    const rss = parseInt(parts[0], 10);
-    const pcpu = parseFloat(parts[1]);
+    const rss = parseInt(psOutput, 10);
 
     return {
       pid,
       memory: rss ? `${(rss / 1024).toFixed(1)} MB` : '未知',
-      cpu: pcpu ? `${pcpu.toFixed(1)}%` : '未知',
       isRoot: isProcessRoot(pid),
     };
   } catch {
-    return { pid, memory: '未知', cpu: '未知', isRoot: false };
+    return { pid, memory: '未知', isRoot: false };
   }
 }
 

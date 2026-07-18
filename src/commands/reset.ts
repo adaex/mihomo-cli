@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import readline from 'node:readline';
 import { clearKernelVersionCache, hasKernel } from '../config.js';
-import { DIRS, ensureDirs, fsExistsSync, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
+import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import * as processManager from '../process.js';
 import { invalidateSettingsCache } from '../settings.js';
 import type { ResetTarget } from '../types.js';
@@ -158,7 +158,7 @@ export async function cmdReset(args: string[]): Promise<void> {
 
   for (const t of targets) {
     for (const p of t.paths()) {
-      if (fsExistsSync(p)) {
+      if (fs.existsSync(p)) {
         try {
           rmrf(p);
         } catch (e) {

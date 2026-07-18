@@ -9,7 +9,6 @@ export interface Settings {
   subscriptions?: Subscription[];
   active_subscription?: string;
   overwrite_enabled?: boolean;
-  github_mirror?: string | false;
 }
 
 // === Subscription Cache ===
@@ -88,7 +87,6 @@ export interface ProcessStatus {
 export interface ProcessInfo {
   pid: number;
   memory: string;
-  cpu: string;
   isRoot: boolean;
 }
 
@@ -263,7 +261,7 @@ export interface HttpResponse {
 }
 
 export interface HttpClient {
-  get(url: string, config?: { responseType?: 'text' | 'json' }): Promise<HttpResponse>;
+  get(url: string, config?: { responseType?: 'text' | 'json'; signal?: AbortSignal }): Promise<HttpResponse>;
 }
 
 // === Update Result ===

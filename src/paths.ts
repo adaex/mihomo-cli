@@ -50,10 +50,6 @@ export function ensureDirs(): void {
   }
 }
 
-export function fsExistsSync(p: string): boolean {
-  return fs.existsSync(p);
-}
-
 /**
  * 原子写文件：先写同目录临时文件再 rename（POSIX 下 rename 原子）。
  * 避免写入中途崩溃/磁盘满导致目标文件被截断为空或半截内容。

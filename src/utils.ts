@@ -88,32 +88,6 @@ export function formatDate(dateOrIso: unknown): string {
   }
 }
 
-export function displayWidth(str: string): number {
-  let w = 0;
-  for (const ch of str) {
-    const code = ch.codePointAt(0) as number;
-    if (
-      code >= 0x1100 &&
-      (code <= 0x115f ||
-        code === 0x2329 ||
-        code === 0x232a ||
-        (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
-        (code >= 0xac00 && code <= 0xd7a3) ||
-        (code >= 0xf900 && code <= 0xfaff) ||
-        (code >= 0xfe10 && code <= 0xfe6f) ||
-        (code >= 0xff01 && code <= 0xff60) ||
-        (code >= 0xffe0 && code <= 0xffe6) ||
-        (code >= 0x20000 && code <= 0x2fffd) ||
-        (code >= 0x30000 && code <= 0x3fffd))
-    ) {
-      w += 2;
-    } else {
-      w += 1;
-    }
-  }
-  return w;
-}
-
 export function hasFlag(args: string[] | undefined, short: string, long: string): boolean {
   return !!args && (args.includes(short) || args.includes(long));
 }
@@ -131,12 +105,33 @@ export function parseIntArg(args: string[] | undefined, short: string, long: str
   return defaultValue;
 }
 
-export function getNonFlagArg(args: string[] | undefined, startIdx: number): string | null {
+/**
+ * 需要「跳过其后一个值」的选项名（空格分隔、带整数值），与全部 parseIntArg 调用一一对应。
+ * getNonFlagArg 识别位置参数时借此避免把 `-t 3000` 里的 `3000` 误当位置参数。
+ * 注意：--mirror/--mirror-all 是可选值选项、只走 parseMirrorArg，故意不收录。
+ */
+export const VALUE_FLAGS: ReadonlySet<string> = new Set([
+  '-t',
+  '--timeout',
+  '-j',
+  '--concurrency',
+  '-r',
+  '--rounds',
+  '-n',
+  '--lines',
+  '-u',
+  '--update-timeout',
+]);
+
+export function getNonFlagArg(args: string[] | undefined, startIdx: number, valueFlags: ReadonlySet<string> = VALUE_FLAGS): string | null {
   if (!args) return null;
   for (let i = startIdx; i < args.length; i++) {
-    if (!args[i].startsWith('-')) {
-      return args[i];
+    const a = args[i];
+    if (a.startsWith('-')) {
+      if (valueFlags.has(a)) i++; // 跳过该带值选项的值
+      continue;
     }
+    return a;
   }
   return null;
 }
@@ -165,12 +160,13 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
   const { timeout = 60_000 } = options;
 
   return {
-    async get(url: string, config?: { responseType?: 'text' | 'json' }): Promise<HttpResponse> {
+    async get(url: string, config?: { responseType?: 'text' | 'json'; signal?: AbortSignal }): Promise<HttpResponse> {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeout);
+      const signal = config?.signal ? AbortSignal.any([controller.signal, config.signal]) : controller.signal;
       try {
         const response = await fetch(url, {
-          signal: controller.signal,
+          signal,
           headers: { 'User-Agent': `mihomo-cli/${VERSION}` },
         });
         if (!response.ok) {

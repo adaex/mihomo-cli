@@ -1,5 +1,3 @@
-export const DEFAULT_GITHUB_MIRROR = 'https://v6.gh-proxy.org/';
-
 export const AVAILABLE_MIRRORS = ['gh-proxy.org', 'v6.gh-proxy.org', 'hk.gh-proxy.org', 'cdn.gh-proxy.org'];
 
 export const UI_URLS: Record<string, string> = {

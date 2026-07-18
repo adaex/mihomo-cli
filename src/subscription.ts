@@ -165,10 +165,10 @@ export function pickSingleSubscription(subs: Subscription[], pattern: string): S
   process.exit(1);
 }
 
-export async function downloadSubscription(url: string, subName = 'default'): Promise<DownloadResult> {
+export async function downloadSubscription(url: string, subName = 'default', signal?: AbortSignal): Promise<DownloadResult> {
   let response: Awaited<ReturnType<typeof HTTP_CLIENT.get>>;
   try {
-    response = await HTTP_CLIENT.get(url, { responseType: 'text' });
+    response = await HTTP_CLIENT.get(url, { responseType: 'text', signal });
   } catch (e) {
     const maskedUrl = maskUrl(url);
     let errorMsg = `获取订阅失败: ${(e as Error).message}`;
@@ -221,11 +221,11 @@ export async function downloadSubscription(url: string, subName = 'default'): Pr
   };
 }
 
-export async function downloadMergedSubscription(urls: string[], subName: string): Promise<DownloadResult> {
+export async function downloadMergedSubscription(urls: string[], subName: string, signal?: AbortSignal): Promise<DownloadResult> {
   const responses = await Promise.all(
     urls.map(async (url, index) => {
       try {
-        const response = await HTTP_CLIENT.get(url, { responseType: 'text' });
+        const response = await HTTP_CLIENT.get(url, { responseType: 'text', signal });
         return { url, index, response, error: null };
       } catch (e) {
         return { url, index, response: null, error: e as Error };
@@ -330,13 +330,13 @@ function needsAutoUpdate(sub: SubscriptionWithCache): boolean {
   return Date.now() - lastUpdate > intervalMs;
 }
 
-export async function tryUpdateOne(sub: Subscription): Promise<TryUpdateResult> {
+export async function tryUpdateOne(sub: Subscription, signal?: AbortSignal): Promise<TryUpdateResult> {
   try {
     let info: DownloadResult;
     if (isMultiUrl(sub.url)) {
-      info = await downloadMergedSubscription(splitUrls(sub.url), sub.name);
+      info = await downloadMergedSubscription(splitUrls(sub.url), sub.name, signal);
     } else {
-      info = await downloadSubscription(sub.url, sub.name);
+      info = await downloadSubscription(sub.url, sub.name, signal);
     }
     return { name: sub.name, success: true, proxies: info.proxies, proxyGroups: info.proxyGroups };
   } catch (e) {
@@ -363,11 +363,13 @@ export async function autoUpdateStaleSubscription(options: { timeout?: number } 
   }
 
   const timeoutMs = options.timeout ?? DEFAULT_AUTO_UPDATE_TIMEOUT;
+  const controller = new AbortController();
   let results: TryUpdateResult[];
   try {
-    results = await withTimeout(Promise.all(staleSubs.map(tryUpdateOne)), timeoutMs);
+    results = await withTimeout(Promise.all(staleSubs.map(sub => tryUpdateOne(sub, controller.signal))), timeoutMs);
   } catch (e) {
     if (e instanceof TimeoutError) {
+      controller.abort(); // 中断仍在跑的 fetch，阻止其超时后成功回来又写盘（与"已用缓存启动"竞态）
       console.log(colors.yellow(`自动更新超时 (${timeoutMs / 1000}s)，跳过更新，使用缓存配置`));
       return { total: staleSubs.length, updated: 0, failed: staleSubs.length };
     }
@@ -522,6 +524,16 @@ export function cleanDeadProxies(parsed: ParsedSubscription, deadNames: Set<stri
       if (Array.isArray(group.proxies)) {
         group.proxies = group.proxies.filter(name => !removedGroupNames.has(name));
       }
+    }
+    // 移除引用了已删空分组的规则，避免残留在保存的订阅文件里（target 取末段，与 config.ts validateConfig 一致）
+    const rules = parsed.raw.rules;
+    if (Array.isArray(rules)) {
+      parsed.raw.rules = rules.filter(rule => {
+        if (typeof rule !== 'string') return true;
+        const parts = rule.split(',');
+        if (parts.length < 2) return true;
+        return !removedGroupNames.has(parts[parts.length - 1].trim());
+      });
     }
   }
 
