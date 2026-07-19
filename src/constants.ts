@@ -6,8 +6,11 @@ export const UI_URLS: Record<string, string> = {
   yacd: 'https://yacd.metacubex.one',
 };
 
-/** launchd 保活任务的 LaunchAgent 标签（同时用作 plist 文件名） */
-export const LAUNCH_AGENT_LABEL = 'com.mihomo-cli.daemon';
+/**
+ * launchd 保活任务的 LaunchDaemon 标签（同时用作 /Library/LaunchDaemons/ 下的 plist 文件名）。
+ * 可用 MIHOMO_CLI_DAEMON_LABEL 覆盖，供隔离测试使用一次性 label，避免碰生产 plist 文件名。
+ */
+export const LAUNCH_DAEMON_LABEL = process.env.MIHOMO_CLI_DAEMON_LABEL || 'com.mihomo-cli.daemon';
 
 export const TUN_CONFIG = {
   tun: {

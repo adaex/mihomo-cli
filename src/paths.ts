@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { LAUNCH_AGENT_LABEL } from './constants.js';
+import { LAUNCH_DAEMON_LABEL } from './constants.js';
 import type { DirectoryTarget } from './types.js';
 
 function getUserDataDir(): string {
@@ -32,8 +32,8 @@ export const PATHS = {
   configStage1Subscription: path.join(DIRS.runtime, '1.subscription.yaml'),
   configStage2Overwrite: path.join(DIRS.runtime, '2.overwrite.yaml'),
   configStage3System: path.join(DIRS.runtime, '3.system.yaml'),
-  // launchd LaunchAgent plist 必须位于真实用户主目录，不受 MIHOMO_CLI_DIR 影响
-  launchAgentPlist: path.join(os.homedir(), 'Library', 'LaunchAgents', `${LAUNCH_AGENT_LABEL}.plist`),
+  // launchd LaunchDaemon plist 位于系统级 /Library/LaunchDaemons/，root:wheel 拥有，与 homedir / MIHOMO_CLI_DIR 无关
+  launchDaemonPlist: path.join('/Library/LaunchDaemons', `${LAUNCH_DAEMON_LABEL}.plist`),
 } as const;
 
 export const DIRECTORY_TARGETS: Record<string, DirectoryTarget> = {

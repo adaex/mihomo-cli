@@ -9,7 +9,7 @@ import { isProcessRoot, isProcessRunning, sleepSync } from './utils.js';
 export const PROCESS_WAIT_ATTEMPTS = 50;
 export const PROCESS_WAIT_INTERVAL = 100;
 const STARTUP_WAIT_MS = 800;
-const SUDO_TIMEOUT_MS = 60_000;
+export const SUDO_TIMEOUT_MS = 60_000;
 const TUN_MODE_POST_WAIT_MS = 500;
 const BATCH_KILL_THRESHOLD = 3;
 const DEFAULT_LOG_RETENTION_DAYS = 7;
@@ -18,7 +18,7 @@ const DEFAULT_LOG_RETENTION_DAYS = 7;
  * 将路径转义为 pgrep/pkill -f 使用的正则字面量。
  * 否则路径中的 `.`（如 ~/.mihomo-cli）会被当作正则通配符，可能误匹配其他进程。
  */
-function escapeForPgrep(s: string): string {
+export function escapeForPgrep(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
@@ -325,6 +325,21 @@ async function startMixedMode(staleState: StaleState): Promise<StartResult> {
   const configFile = PATHS.configFile;
   const logFile = PATHS.logFile;
   const args = ['-d', DIRS.data, '-f', configFile];
+
+  // 防御：保活（root LaunchDaemon）曾运行时可能把 mihomo.log 变成 root 属主，
+  // 用户态 openSync('a') 会 EACCES。若不可写则直接删除（父目录用户拥有，unlink 必成功；
+  // rotateLog 对 size===0 会跳过，故不能依赖它），让下面重建用户属主的新日志。
+  if (fs.existsSync(logFile)) {
+    try {
+      fs.accessSync(logFile, fs.constants.W_OK);
+    } catch {
+      try {
+        fs.unlinkSync(logFile);
+      } catch {
+        /* ignore：极端情况下留给 openSync 抛出可读错误 */
+      }
+    }
+  }
 
   const logFd = fs.openSync(logFile, 'a');
 
