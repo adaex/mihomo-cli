@@ -1,7 +1,10 @@
 import { hasKernel } from '../config.js';
 import { disableDaemon, enableDaemon, getDaemonStatus, isDaemonEnabled, isDaemonRunning } from '../daemon.js';
 import * as subscription from '../subscription.js';
-import { colors } from '../utils.js';
+import { colors, sleep } from '../utils.js';
+
+/** 启用后等待 launchd RunAtLoad 拉起内核、再查询状态的时间 */
+const DAEMON_STATUS_WAIT_MS = 500;
 
 function printDaemonStatus(): void {
   const status = getDaemonStatus();
@@ -45,6 +48,8 @@ export async function cmdDaemon(args: string[]): Promise<void> {
       process.exit(1);
     }
 
+    console.log(colors.gray('将请求管理员权限以安装系统级保活服务（LaunchDaemon）'));
+    console.log(colors.gray('系统级保活需要 root，以解决局域网访问受限问题'));
     try {
       enableDaemon();
     } catch (e) {
@@ -55,6 +60,7 @@ export async function cmdDaemon(args: string[]): Promise<void> {
     console.log(`${colors.green('已启用保活')} · ${sub.name} · ${subscription.formatProxySummary(configInfo)}`);
     console.log(colors.gray('开机自启 + 崩溃自动重启，代理将在后台常驻'));
     console.log('');
+    await sleep(DAEMON_STATUS_WAIT_MS);
     printDaemonStatus();
     return;
   }
@@ -67,6 +73,7 @@ export async function cmdDaemon(args: string[]): Promise<void> {
       return;
     }
 
+    console.log(colors.gray('将请求管理员权限以移除系统级保活服务'));
     try {
       disableDaemon();
     } catch (e) {

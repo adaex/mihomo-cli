@@ -95,7 +95,7 @@ export async function cmdClean(args: string[]): Promise<void> {
       // 保活模式恒为 mixed，重新生成配置后 kickstart 重启
       const configInfo = subscription.prepareConfigForStart('mixed', activeSub.name);
       try {
-        restartDaemon();
+        await restartDaemon();
       } catch (e) {
         console.error(`${colors.red('重启失败:')} ${(e as Error).message.split('\n')[0]}`);
         process.exit(1);

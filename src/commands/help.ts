@@ -53,7 +53,7 @@ export function printHelp(): void {
       '\n' +
       `${colors.cyan('系统:')}\n` +
       `  ${colors.bold('kernel')} [--mirror [镜像]]         更新内核（默认直连，--mirror 使用 v6）\n` +
-      `  ${colors.bold('daemon')} on|off               开机自启 + 崩溃重启（仅 Mixed）\n` +
+      `  ${colors.bold('daemon')} on|off               开机自启 + 崩溃重启（仅 Mixed，需管理员密码）\n` +
       `  ${colors.bold('daemon')} status               查看保活状态\n` +
       `  ${colors.bold('update')}                       更新 mihomo-cli (npm install -g)\n` +
       `  ${colors.bold('reset')} [目标...] [--full]   重置: 留空保留设置/内核/覆写, 指定目标删对应项, --full 删全部\n` +

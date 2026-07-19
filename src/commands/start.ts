@@ -46,7 +46,7 @@ export async function cmdStart(args: string[]): Promise<void> {
   // 非保活模式沿用 stop() + start()。
   async function launchOrRestart(): Promise<number | null> {
     if (daemonEnabled) {
-      restartDaemon();
+      await restartDaemon();
       await sleep(DAEMON_RESTART_WAIT_MS);
       return getDaemonStatus().pid;
     }

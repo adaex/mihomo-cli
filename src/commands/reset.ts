@@ -73,8 +73,9 @@ const RESET_TARGETS: ResetTarget[] = [
     id: 'daemon',
     aliases: ['daemon'],
     label: '保活',
-    // 删除全部交给 onAfter：disableDaemon 会先 bootout 卸载、再删 plist、再兜底清理进程，
-    // 顺序正确（先卸载再删文件）；此处返回空避免提前删掉 plist 破坏卸载。
+    // 卸载由确认后的 disablesDaemon 段统一处理（需 sudo，受取消保护）；
+    // 此处 paths 返回空（plist 在系统目录，用户态删不掉，且不应提前删破坏卸载），
+    // onAfter 因幂等守卫（plist 已删）成为 no-op，仅作单独 reset 未走前段时的兜底。
     paths: () => [],
     needsStop: false,
     onAfter: () => disableDaemon(),
@@ -148,10 +149,12 @@ export async function cmdReset(args: string[]): Promise<void> {
 
   const needsStop = targets.some(t => t.needsStop);
   const warnRunning = targets.some(t => t.warnIfRunning);
-  // 删内核会让保活 plist 指向已删二进制（KeepAlive 空转）；需停止进程的重置也要求保活先卸载。
-  // 两种情况都应在重置时一并关闭保活。
+  // 删内核会让保活 plist 指向已删二进制（KeepAlive 空转）；需停止进程的重置也要求保活先卸载；
+  // 直接重置 daemon target 本身也要卸载。三种情况统一走确认后的 disableDaemon（受 sudo 取消保护），
+  // 使 daemon target 的 onAfter 因幂等守卫成为 no-op，避免重复弹密码或未捕获抛错冒泡。
   const kernelTargeted = targets.some(t => t.id === 'kernel');
-  const disablesDaemon = needsStop || kernelTargeted;
+  const daemonTargeted = targets.some(t => t.id === 'daemon');
+  const disablesDaemon = needsStop || kernelTargeted || daemonTargeted;
 
   const pids = needsStop || warnRunning ? processManager.getAllMihomoPids() : [];
 
@@ -173,8 +176,14 @@ export async function cmdReset(args: string[]): Promise<void> {
   // 确认后再执行破坏性操作。保活开启时必须先卸载（使 KeepAlive 失效），
   // 否则后续 cleanupAll 裸杀会被立即拉起。daemon target 的卸载由其 onAfter 兜底，
   // 但停止段早于删除循环，故这里对"需停止/删内核 + 保活开启"统一先卸载（含 --full）。
+  // disableDaemon 现需 sudo：用户取消（密码错误/Ctrl-C）则中止重置，避免部分删除后环境不一致。
   if (disablesDaemon && isDaemonEnabled()) {
-    disableDaemon();
+    try {
+      disableDaemon();
+    } catch (e) {
+      console.error(`${colors.red('保活关闭已取消，重置中止:')} ${(e as Error).message.split('\n')[0]}`);
+      return;
+    }
   }
 
   if (needsStop && processManager.getAllMihomoPids().length > 0) {
