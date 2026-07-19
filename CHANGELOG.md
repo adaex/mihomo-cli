@@ -1,5 +1,39 @@
 # Changelog
 
+## [3.2.0] - 2026-07-19
+
+### 修复
+
+- **测速隔离实例被主进程管理误杀/误判** - `getMihomoPids`（原 `getAllMihomoPids`）此前用 `pgrep -f <内核路径>` 匹配，会连带命中 `sub test`/`sub clean` 启动的、跑同一内核但 `-f` 指向 `test/runtime/config.yaml` 的隔离实例。导致主实例运行时另开终端测速，`stop`/`start` 会误杀测速实例、或把它误判为残留而拒绝启动。改用「内核路径 + 主 configFile」双段正则精确匹配主实例（三种启动方式命令行均含这两段），隔离实例与仅用编辑器打开配置的进程都不再命中
+- **未捕获异常时测速实例泄漏** - `uncaughtException` / `unhandledRejection` / `main().catch` 退出前未执行清理，测速期间崩溃会残留端口 27890 的实例。现三处退出前均调用 `runCleanup()`（此前仅 SIGINT/SIGTERM 有）
+- **TUN 启动脚本路径未安全转义** - 生成的 sudo bash 脚本用双引号直接拼接内核/配置路径，`MIHOMO_CLI_DIR` 含 `"`/`$`/反引号时存在本地注入面。改用单引号字面量转义（`shellQuote`，与 daemon 脚本同一范式）
+- **带 `no-resolve` 的规则在启动时被误删** - `validateConfig` 校验规则时取逗号分隔的末段当目标，`IP-CIDR,1.1.1.1/32,DIRECT,no-resolve` 这类带 `no-resolve` 修饰后缀的规则，其末段是修饰词而非目标，会被当作"引用不存在目标"静默移除（机场订阅中很常见）。现提取 `getRuleTarget()`：末段为 `no-resolve` 时取倒数第二段；`clean` 的规则清理同步改用
+- **`clean` 误删带 `include-all`/`use` 的分组** - `cleanDeadProxies` 只按 `proxies` 清空判定删组，未像 `validateConfig` 那样检查其他节点来源；`{include-all: true, proxies: []}` 这类分组（或引用节点恰好全死但有 `include-all` 兜底）会被从订阅文件里持久删除。补上一致的 `hasOtherSource` 检查
+- **Mixed 模式未清理订阅残留的 `tun` 字段** - 订阅/覆写自带 `tun.enable: true` 时，`start`（Mixed）会以 TUN 静默启动，保活（限定 Mixed）也可能带 tun 配置被 launchd 拉起。现 Mixed 模式显式丢弃订阅侧的 tun 字段（TUN 模式仍由系统 `TUN_CONFIG` 强制覆盖）
+- **`sub add` 同名订阅被静默覆盖** - 两次不带名称的 `sub add` 会让第二个直接替换 `default`，原订阅 URL 无提示丢失。现同名即报错，提示换名或先删除
+- **内核下载可能选中 compatible 版**（Intel Mac）- `-compatible` 变体同样满足"版本号尾缀"判定且字母序靠前，会被优先当作标准版下载（性能低于标准版）。现显式排除，仅在无标准版时回退
+- **订阅名路径穿越**（低危）- 原始配置路径直接拼接订阅名，手改 `settings.json` 塞入 `../` 可让读/写/删越出 subscriptions 目录。现统一校验名称合法性；`sub remove` 对非法名跳过文件清理、仍可正常从列表移除
+
+### 变更
+
+- **新增 `runtime.ts` 运行时门面** - 收敛「普通进程（pidFile） vs 保活（launchd 托管）」双轨差异：运行模式判定、运行状态/PID、启停重启统一为三个函数。命令层（`start`/`status`/`sub use`/`ow`/`clean`）不再各自 `if (isDaemonEnabled())` 分支，消除重复与不一致（此前 `clean` 两分支输出已分叉）
+- **命令路由改为注册表驱动** - 新增 `commands/registry.ts`，以数据表描述命令的名称/别名/handler/argv 改写；`index.ts` 从表分发（消除 ~110 行手写 switch，模块加载时校验别名无冲突）。帮助文本的命令清单由各命令的 `usage` 生成（单一真相源），修复此前手写 `help` 与实际命令脱节的问题，并补上「快捷命令」映射说明
+- **保活模式日志不再无限增长** - daemon 常驻时不经 `process.start`，日志轮转/归档清理从不触发。现 `restartDaemon` 检测日志超 10MB 时跳过热重载、改走 sudo kickstart 路径顺便 copy-truncate 轮转（daemon 日志为 root 属主，用户态无法 truncate；运行中 rename 会让 launchd 的日志 fd 继续写进归档文件，只能 copy-truncate），并顺带清理 7 天前归档
+- **`sub update` 后提示重启生效** - 运行中的实例仍使用旧配置，更新完成后提示执行 `mihomo start`
+- **`kernel` 命令输出精简** - 不再每次打印整段镜像用法；仅直连失败时才提示 `--mirror`/`--mirror-all` 与可用镜像列表
+
+### 内部
+
+- 提取共用工具消除重复：`escapeRegExp`、`shellQuote`（utils）、`dumpYaml`（config，合并 4 处相同 YAML 序列化选项）
+- `external-controller` 地址统一为常量 `CONTROLLER_ADDR`（constants），供配置生成、测速探测、热重载共用；删除 daemon 中因地址恒定而永不触发的运行时端口解析
+- `HttpClient.get<T>()` 泛型化，json 模式直接返回目标类型，去掉调用点的 `as unknown as` 强转
+- 覆写文件名判定提取为 `isOverwriteFilename`（overwrite），reset 复用
+- 归档日志时间戳从 UTC 改为本地时间（与 `logs` 列表展示的 mtime 时区一致），提取 `formatLocalTimestamp`（utils）
+- 常量收敛：`CONTROLLER_BASE_URL` 入 constants（daemon 热重载与测速探测共用，删除重复的地址构造）；`DAEMON_BOOT_WAIT_MS` 合并两处重复的 launchd 等待定义；`cleanupOldLogs` 导出供 daemon 复用
+- 文档同步：CLAUDE.md 架构表补上 `lifecycle.ts`；`allow-lan` 强制 false 标注为有意安全默认（防覆写误开入站代理）；README 安全章节说明 controller 仅监听回环、无鉴权的适用边界
+
+---
+
 ## [3.1.0] - 2026-07-19
 
 ### 修复

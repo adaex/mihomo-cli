@@ -119,6 +119,11 @@ export function setOverwriteEnabled(enabled: boolean): void {
   writeSettings({ overwrite_enabled: enabled });
 }
 
+/** 判断文件名是否为覆写文件:主文件 overwrite.yaml 或扩展文件 overwrite.*.ya?ml。 */
+export function isOverwriteFilename(filename: string): boolean {
+  return filename === 'overwrite.yaml' || /^overwrite\..+\.ya?ml$/.test(filename);
+}
+
 export function loadOverwriteFile(): OverwriteFileEntry[] {
   const dir = USER_DATA_DIR;
 
@@ -126,7 +131,7 @@ export function loadOverwriteFile(): OverwriteFileEntry[] {
 
   const files = fs
     .readdirSync(dir)
-    .filter(f => f === 'overwrite.yaml' || /^overwrite\..+\.ya?ml$/.test(f))
+    .filter(isOverwriteFilename)
     .sort((a, b) => {
       if (a === 'overwrite.yaml') return -1;
       if (b === 'overwrite.yaml') return 1;

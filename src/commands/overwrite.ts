@@ -1,9 +1,7 @@
 import path from 'node:path';
 
-import { getConfigInfo } from '../config.js';
-import { isDaemonEnabled } from '../daemon.js';
 import { isOverwriteEnabled, listOverwriteFile, setOverwriteEnabled } from '../overwrite.js';
-import * as processManager from '../process.js';
+import * as runtime from '../runtime.js';
 import { colors } from '../utils.js';
 import { cmdStart } from './start.js';
 
@@ -39,10 +37,9 @@ function printOverwriteList(): void {
 export async function cmdOverwrite(args: string[]): Promise<void> {
   const action = args?.[1];
 
-  const status = processManager.getStatus();
-  const configInfo = getConfigInfo();
-  // 保活恒为 Mixed；否则保留当前模式。避免订阅/覆写残留 tun 字段时误判为 tun 命中 cmdStart 的 TUN 守卫
-  const currentMode = isDaemonEnabled() ? 'mixed' : configInfo?.tun ? 'tun' : 'mixed';
+  // 保活恒为 Mixed;否则保留当前模式(避免残留 tun 字段误判);运行中(含保活)才需重启使覆写生效。
+  const currentMode = runtime.getRuntimeMode();
+  const restartNeeded = runtime.isRestartNeededOnChange();
 
   if (action === 'on' || action === 'enable') {
     if (isOverwriteEnabled()) {
@@ -55,7 +52,7 @@ export async function cmdOverwrite(args: string[]): Promise<void> {
     setOverwriteEnabled(true);
     console.log('已启用覆写配置');
 
-    if (status.running || isDaemonEnabled()) {
+    if (restartNeeded) {
       console.log('');
       await cmdStart(['start', currentMode]);
       return;
@@ -77,7 +74,7 @@ export async function cmdOverwrite(args: string[]): Promise<void> {
     setOverwriteEnabled(false);
     console.log('已禁用覆写配置');
 
-    if (status.running || isDaemonEnabled()) {
+    if (restartNeeded) {
       console.log('');
       await cmdStart(['start', currentMode]);
       return;

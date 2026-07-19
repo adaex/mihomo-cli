@@ -1,21 +1,21 @@
 import { getConfigInfo } from '../config.js';
-import { getDaemonStatus, isDaemonRunning } from '../daemon.js';
+import { isDaemonEnabled } from '../daemon.js';
 import { isOverwriteEnabled, listOverwriteFile } from '../overwrite.js';
 import * as processManager from '../process.js';
+import { getRunningState } from '../runtime.js';
 import { formatProxySummary, getActiveSubscription } from '../subscription.js';
 import { colors } from '../utils.js';
 
 export function printStatus(): void {
   const status = processManager.getStatus();
-  const daemon = getDaemonStatus();
+  const state = getRunningState();
   const info = getConfigInfo();
   const overwriteEnabled = isOverwriteEnabled();
   const overwriteFiles = listOverwriteFile().files;
   const activeSub = getActiveSubscription();
 
-  // 保活模式下内核由 launchd 托管、不写 pidFile，以 daemon 状态为准
-  const running = daemon.enabled ? isDaemonRunning(daemon) : status.running;
-  const pid = daemon.enabled ? daemon.pid : status.pid;
+  // 运行状态/PID 由门面统一(保活看 launchd,普通看 pidFile);此处只负责展示。
+  const { running, pid, daemon: daemonManaged } = state;
 
   console.log('');
   let modeLabel = '';
@@ -28,7 +28,7 @@ export function printStatus(): void {
 
   if (pid) {
     console.log(`${colors.gray('PID:  ')}${pid}`);
-    if (!daemon.enabled && status.processInfo) {
+    if (!daemonManaged && status.processInfo) {
       console.log(`${colors.gray('内存: ')}${status.processInfo.memory}`);
     }
   }
@@ -63,7 +63,7 @@ export function printStatus(): void {
     console.log(`${colors.gray('覆写: ')}${colors.yellow('已禁用')}`);
   }
 
-  if (daemon.enabled) {
+  if (isDaemonEnabled()) {
     console.log(`${colors.gray('保活: ')}${colors.green('已启用')} ${colors.gray('(开机自启 + 崩溃重启)')}`);
   }
   console.log('');

@@ -34,6 +34,19 @@ export function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * 转义正则特殊字符,把任意字符串当作正则字面量。
+ * 用于 pgrep/pkill -f 的模式(否则路径中的 `.` 会被当通配符误匹配),以及构造 exclude-filter。
+ */
+export function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** 单引号包裹并转义嵌入的单引号,安全地把任意字符串作为 bash 字面量(防御路径中的 `"`/`$`/反引号注入)。 */
+export function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
 export class TimeoutError extends Error {
   constructor() {
     super('timeout');
@@ -75,6 +88,12 @@ export function formatTimestamp(ts: unknown): string {
   } catch {
     return '未知';
   }
+}
+
+/** 本地时间戳，用于归档文件名（yyyy-MM-dd_HH-mm-ss）；与列表展示的本地 mtime 时区一致。 */
+export function formatLocalTimestamp(d = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
 }
 
 export function formatDate(dateOrIso: unknown): string {
@@ -149,7 +168,7 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
   const { timeout = 60_000 } = options;
 
   return {
-    async get(url: string, config?: { responseType?: 'text' | 'json'; signal?: AbortSignal }): Promise<HttpResponse> {
+    async get<T = string>(url: string, config?: { responseType?: 'text' | 'json'; signal?: AbortSignal }): Promise<HttpResponse<T>> {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeout);
       const signal = config?.signal ? AbortSignal.any([controller.signal, config.signal]) : controller.signal;
@@ -169,7 +188,7 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
           throw error;
         }
         const data = config?.responseType === 'json' ? await response.json() : await response.text();
-        return { data: data as string, headers: response.headers, status: response.status };
+        return { data: data as T, headers: response.headers, status: response.status };
       } finally {
         clearTimeout(timer);
       }

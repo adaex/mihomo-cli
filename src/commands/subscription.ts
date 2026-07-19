@@ -1,7 +1,6 @@
-import { getConfigInfo } from '../config.js';
 import { DEFAULT_TEST_CONCURRENCY, DEFAULT_TEST_TIMEOUT } from '../constants.js';
-import { isDaemonEnabled } from '../daemon.js';
 import * as processManager from '../process.js';
+import * as runtime from '../runtime.js';
 import {
   addSubscription,
   getSubscriptions,
@@ -130,6 +129,14 @@ function resolveTestTarget(args: string[]): { target: Subscription; timeout: num
   }
 
   return { target, timeout, concurrency };
+}
+
+/** 订阅内容更新后，运行中的实例仍用旧配置，提示重启生效 */
+function printRestartHintIfRunning(): void {
+  if (runtime.getRunningState().running) {
+    console.log(colors.yellow('提示: 运行中的实例仍使用旧配置，执行 mihomo start 使更新生效'));
+    console.log('');
+  }
 }
 
 async function printSubscriptionList(options?: { autoUpdate?: boolean }): Promise<void> {
@@ -264,6 +271,7 @@ export async function cmdSubscription(args: string[]): Promise<void> {
       }
       if (ok === 0) process.exit(1);
       console.log('');
+      printRestartHintIfRunning();
       await printSubscriptionList();
       return;
     }
@@ -279,6 +287,7 @@ export async function cmdSubscription(args: string[]): Promise<void> {
     }
     console.log(`已更新 (${subscription.formatProxySummary(result)})`);
     console.log('');
+    printRestartHintIfRunning();
     await printSubscriptionList();
     return;
   }
@@ -309,10 +318,9 @@ export async function cmdSubscription(args: string[]): Promise<void> {
       return;
     }
 
-    const status = processManager.getStatus();
-    const configInfo = getConfigInfo();
-    // 保活恒为 Mixed；否则保留当前模式。避免订阅残留 tun 字段时误判为 tun 命中 cmdStart 的 TUN 守卫
-    const currentMode = isDaemonEnabled() ? 'mixed' : configInfo?.tun ? 'tun' : 'mixed';
+    // 保活恒为 Mixed;否则保留当前模式(避免订阅残留 tun 字段误判 TUN);运行状态用于决定是否重启。
+    const currentMode = runtime.getRuntimeMode();
+    const restartNeeded = runtime.isRestartNeededOnChange();
 
     const success = setDefaultSubscription(target.name);
     if (success) {
@@ -322,8 +330,8 @@ export async function cmdSubscription(args: string[]): Promise<void> {
       process.exit(1);
     }
 
-    // 保活模式下内核由 launchd 托管、不写 pidFile，需显式感知以触发重启
-    if (status.running || isDaemonEnabled()) {
+    // 运行中(含保活:launchd 托管不写 pidFile)才重启使新订阅生效
+    if (restartNeeded) {
       console.log('');
       await cmdStart(['start', currentMode]);
       return;
@@ -434,8 +442,7 @@ export async function cmdSubscription(args: string[]): Promise<void> {
       console.log(colors.yellow('存活节点不足 1%，跳过清理。请检查原始订阅是否有效'));
     } else if (result.removedProxies > 0) {
       console.log(`${colors.green('已清理')}: ${formatCleanSummary(result)}`);
-      const status = processManager.getStatus();
-      if (status.running) {
+      if (runtime.getRunningState().running) {
         console.log('');
         console.log('提示: 需要重启 mihomo 使更改生效 (mihomo start)');
       }

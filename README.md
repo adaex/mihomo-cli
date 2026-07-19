@@ -97,7 +97,7 @@ mihomo ui yacd     # YACD
 | ----------------------------- | -------------------------------------- |
 | `mihomo sub`                  | 列出所有订阅（含流量、到期时间）       |
 | `mihomo sub use <name>`       | 切换当前订阅（支持模糊匹配，自动重启） |
-| `mihomo sub add <url> [name]` | 添加订阅并自动切换（支持逗号分隔多 URL 合并） |
+| `mihomo sub add <url> [name]` | 添加订阅并自动切换（支持逗号分隔多 URL 合并，名称不可重复） |
 | `mihomo sub update`           | 更新所有订阅                           |
 | `mihomo sub update <name>`    | 更新指定订阅（支持模糊匹配）           |
 | `mihomo sub remove <name>`    | 删除订阅（支持模糊匹配）               |
@@ -150,6 +150,7 @@ mihomo ui yacd     # YACD
 | `mihomo use <name>`    | `mihomo sub use <name>`    |
 | `mihomo on` / `off`    | `mihomo ow on` / `ow off`  |
 | `mihomo open <target>` | `mihomo dir open <target>` |
+| `mihomo upd` / `upgrade` | `mihomo update`          |
 
 ## 模式说明
 
@@ -189,7 +190,7 @@ mihomo daemon status   # 查看保活状态（无需密码）
 - **仅支持 Mixed 模式**。保活开启时执行 `start tun` 会被拦截，需先 `daemon off`
 - 保活开启后，`mihomo stop` 不再直接停止（会被自动拉起），请用 `mihomo daemon off`
 - 切换订阅、覆写开关、清理节点后的重启**优先走内核热重载（免密）**，失败才回退到需密码的 `launchctl kickstart`
-- 保活模式下日志持续追加到 `mihomo.log`（不触发启动时的日志轮转）
+- 保活模式下日志持续追加到 `mihomo.log`；超过 10MB 时，下次配置变更触发的重启会走 kickstart（需密码）并顺便轮转归档，不再无限增长
 
 ## 内核更新镜像
 
@@ -332,8 +333,11 @@ sudo pkill -9 mihomo
 
 - **URL 脱敏**：订阅 URL 中的 token、key、password 等敏感参数自动替换为 `***`
 - **文件权限**：配置文件使用 `0o600` 权限（仅所有者可读可写），目录使用 `0o700` 权限
+- **入站锁定**：`allow-lan` 强制为 `false`，局域网设备无法连入代理端口（不可通过覆写开启）
 - **信号处理**：优雅处理 SIGINT/SIGTERM 信号
 - **异常捕获**：全局 uncaughtException 和 unhandledRejection 处理
+
+> **注意**：外部控制器（`127.0.0.1:9090`）无鉴权，与 Clash 系工具惯例一致。它仅监听本机回环、局域网不可达；但本机其他进程（含浏览器中的网页）可访问它，请勿在不可信的多用户环境使用。
 
 ## 许可证
 

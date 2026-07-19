@@ -4,7 +4,7 @@ import path from 'node:path';
 import { getKernelVersion, hasConfig, hasKernel } from './config.js';
 import { DIRS, ensureDirs, PATHS, rmrf } from './paths.js';
 import type { CleanupResult, LogList, ProcessInfo, ProcessStatus, StaleState, StartResult, StopResult } from './types.js';
-import { isProcessRoot, isProcessRunning, sleepSync } from './utils.js';
+import { escapeRegExp, formatLocalTimestamp, isProcessRoot, isProcessRunning, shellQuote, sleepSync } from './utils.js';
 
 export const PROCESS_WAIT_ATTEMPTS = 50;
 export const PROCESS_WAIT_INTERVAL = 100;
@@ -15,12 +15,12 @@ const BATCH_KILL_THRESHOLD = 3;
 const DEFAULT_LOG_RETENTION_DAYS = 7;
 
 /**
- * 将路径转义为 pgrep/pkill -f 使用的正则字面量。
- * 否则路径中的 `.`（如 ~/.mihomo-cli）会被当作正则通配符，可能误匹配其他进程。
+ * pgrep/pkill -f 用于识别「主实例」的正则:binary 路径 + 主 configFile 两段拼接。
+ * mixed(spawn)、tun(脚本)、daemon(plist)三种启动的命令行都是 `<binary> -d <data> -f <configFile>`,
+ * 均含这两段;而 `-f` 指向 `test/runtime/config.yaml` 的测速隔离实例、以及仅用编辑器打开配置文件的
+ * 进程(命令行无 binary)都不会命中,从而避免误杀/误判为残留。escapeRegExp 防止路径里的 `.` 当通配符。
  */
-export function escapeForPgrep(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+export const MAIN_INSTANCE_PATTERN = `${escapeRegExp(PATHS.mihomoBinary)}.*${escapeRegExp(PATHS.configFile)}`;
 
 function clearRuntime(): void {
   if (fs.existsSync(DIRS.runtime)) {
@@ -44,10 +44,9 @@ function isRunning(): boolean {
   return pid ? isProcessRunning(pid) : false;
 }
 
-export function getAllMihomoPids(): number[] {
-  const binaryPath = PATHS.mihomoBinary;
+export function getMihomoPids(): number[] {
   try {
-    const result = spawnSync('pgrep', ['-f', escapeForPgrep(binaryPath)], { encoding: 'utf8', timeout: 10_000 });
+    const result = spawnSync('pgrep', ['-f', MAIN_INSTANCE_PATTERN], { encoding: 'utf8', timeout: 10_000 });
     const output = (result.stdout || '').trim();
     if (!output) return [];
     return output
@@ -71,7 +70,7 @@ function isPidFileOwnedByRoot(): boolean {
 }
 
 function checkStaleState(): StaleState {
-  const allPids = getAllMihomoPids();
+  const allPids = getMihomoPids();
   const hasRootProcess = allPids.some(p => isProcessRoot(p));
   const hasRootPidFile = isPidFileOwnedByRoot();
 
@@ -129,7 +128,7 @@ function killProcess(pid: number, needsSudo = false): boolean {
 }
 
 function killAllMihomo(forceSudo = false): boolean {
-  const pattern = escapeForPgrep(PATHS.mihomoBinary);
+  const pattern = MAIN_INSTANCE_PATTERN;
   if (forceSudo) {
     try {
       spawnSync('sudo', ['pkill', '-9', '-f', pattern], { stdio: 'inherit', timeout: 15_000 });
@@ -148,7 +147,7 @@ function killAllMihomo(forceSudo = false): boolean {
 }
 
 export function cleanupAll(forceSudo = false): CleanupResult {
-  const pids = getAllMihomoPids();
+  const pids = getMihomoPids();
   if (pids.length === 0) {
     clearPid();
     return { killed: 0, failed: 0, remaining: [] };
@@ -183,31 +182,31 @@ export function cleanupAll(forceSudo = false): CleanupResult {
   }
 
   for (let i = 0; i < PROCESS_WAIT_ATTEMPTS; i++) {
-    if (getAllMihomoPids().length === 0) break;
+    if (getMihomoPids().length === 0) break;
     sleepSync(PROCESS_WAIT_INTERVAL);
   }
 
   clearPid();
 
-  return { killed: killedCount, failed: failedPids.length, remaining: getAllMihomoPids() };
+  return { killed: killedCount, failed: failedPids.length, remaining: getMihomoPids() };
 }
 
 function createTunLaunchScript(): string {
-  const binary = PATHS.mihomoBinary;
-  const configFile = PATHS.configFile;
-  const logFile = PATHS.logFile;
-  const pidFile = PATHS.pidFile;
-  const dataDir = DIRS.data;
-  const killPattern = escapeForPgrep(binary);
+  const binary = shellQuote(PATHS.mihomoBinary);
+  const configFile = shellQuote(PATHS.configFile);
+  const logFile = shellQuote(PATHS.logFile);
+  const pidFile = shellQuote(PATHS.pidFile);
+  const dataDir = shellQuote(DIRS.data);
+  const killPattern = shellQuote(MAIN_INSTANCE_PATTERN);
 
   const scriptContent =
     '#!/bin/bash\n' +
-    `BINARY="${binary}"\n` +
-    `CONFIG_FILE="${configFile}"\n` +
-    `LOG_FILE="${logFile}"\n` +
-    `PID_FILE="${pidFile}"\n` +
-    `DATA_DIR="${dataDir}"\n` +
-    `KILL_PATTERN='${killPattern}'\n` +
+    `BINARY=${binary}\n` +
+    `CONFIG_FILE=${configFile}\n` +
+    `LOG_FILE=${logFile}\n` +
+    `PID_FILE=${pidFile}\n` +
+    `DATA_DIR=${dataDir}\n` +
+    `KILL_PATTERN=${killPattern}\n` +
     '\n' +
     '# 终止旧进程\n' +
     'pkill -9 -f "${KILL_PATTERN}" 2>/dev/null || true\n' +
@@ -264,7 +263,7 @@ function getProcessInfo(pid: number): ProcessInfo | null {
 export function getStatus(): ProcessStatus {
   const running = isRunning();
   const pid = getPid();
-  const allPids = getAllMihomoPids();
+  const allPids = getMihomoPids();
 
   return {
     running,
@@ -426,7 +425,7 @@ async function startTunMode(staleState: StaleState): Promise<StartResult> {
 }
 
 export function stop(forceSudo = false): StopResult {
-  const allPids = getAllMihomoPids();
+  const allPids = getMihomoPids();
   if (allPids.length === 0) {
     clearPid();
     clearRuntime();
@@ -435,7 +434,7 @@ export function stop(forceSudo = false): StopResult {
 
   const result = cleanupAll(forceSudo);
 
-  const remaining = getAllMihomoPids();
+  const remaining = getMihomoPids();
   if (remaining.length > 0) {
     console.log('');
     console.log('仍有进程残留，需要手动清理:');
@@ -467,15 +466,14 @@ function rotateLog(): string | null {
   const stat = fs.statSync(logFile);
   if (stat.size === 0) return null;
 
-  const timestamp = new Date().toISOString().replace(/T/, '_').replace(/:/g, '-').replace(/\..+/, '');
-  const rotatedName = `mihomo.${timestamp}.log`;
+  const rotatedName = `mihomo.${formatLocalTimestamp()}.log`;
   const rotatedPath = path.join(DIRS.logs, rotatedName);
 
   fs.renameSync(logFile, rotatedPath);
   return rotatedPath;
 }
 
-function cleanupOldLogs(maxAgeDays = DEFAULT_LOG_RETENTION_DAYS): { deleted: number; errors: number } {
+export function cleanupOldLogs(maxAgeDays = DEFAULT_LOG_RETENTION_DAYS): { deleted: number; errors: number } {
   const logsDir = DIRS.logs;
   if (!fs.existsSync(logsDir)) return { deleted: 0, errors: 0 };
 

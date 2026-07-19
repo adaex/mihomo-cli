@@ -12,6 +12,18 @@ export const UI_URLS: Record<string, string> = {
  */
 export const LAUNCH_DAEMON_LABEL = process.env.MIHOMO_CLI_DAEMON_LABEL || 'com.mihomo-cli.daemon';
 
+/**
+ * external-controller 地址(系统强制,不受订阅/覆写影响)。
+ * host 固定 127.0.0.1:loopback 必可达;控制面板 API、热重载、测速探测统一走此地址。
+ */
+export const CONTROLLER_PORT = 9090;
+export const CONTROLLER_ADDR = `127.0.0.1:${CONTROLLER_PORT}`;
+/** 控制面板 API 基址。config.ts 恒把 external-controller 覆盖为该地址，故调用方无需运行时解析 */
+export const CONTROLLER_BASE_URL = `http://${CONTROLLER_ADDR}`;
+
+/** 测速隔离实例的 external-controller(独立端口,避免与主实例 9090 冲突) */
+export const TEST_CONTROLLER_ADDR = '127.0.0.1:29090';
+
 export const TUN_CONFIG = {
   tun: {
     enable: true,
@@ -26,7 +38,7 @@ export const TUN_CONFIG = {
 export const TEST_CONFIG: Record<string, unknown> = {
   'mixed-port': 27890,
   'allow-lan': false,
-  'external-controller': '127.0.0.1:29090',
+  'external-controller': TEST_CONTROLLER_ADDR,
   'log-level': 'error',
   'geodata-mode': true,
 };
@@ -34,7 +46,7 @@ export const TEST_CONFIG: Record<string, unknown> = {
 export const BASE_CONFIG: Record<string, unknown> = {
   'mixed-port': 7890,
   'allow-lan': false,
-  'external-controller': '127.0.0.1:9090',
+  'external-controller': CONTROLLER_ADDR,
   'unified-delay': true,
   'tcp-concurrent': true,
   'geo-auto-update': true,

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import readline from 'node:readline';
 import { clearKernelVersionCache, hasKernel } from '../config.js';
 import { disableDaemon, isDaemonEnabled } from '../daemon.js';
+import { isOverwriteFilename } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import * as processManager from '../process.js';
 import { invalidateSettingsCache } from '../settings.js';
@@ -64,7 +65,7 @@ const RESET_TARGETS: ResetTarget[] = [
       if (!fs.existsSync(dir)) return [];
       return fs
         .readdirSync(dir)
-        .filter(f => f === 'overwrite.yaml' || /^overwrite\..+\.ya?ml$/.test(f))
+        .filter(isOverwriteFilename)
         .map(f => `${dir}/${f}`);
     },
     needsStop: false,
@@ -156,7 +157,7 @@ export async function cmdReset(args: string[]): Promise<void> {
   const daemonTargeted = targets.some(t => t.id === 'daemon');
   const disablesDaemon = needsStop || kernelTargeted || daemonTargeted;
 
-  const pids = needsStop || warnRunning ? processManager.getAllMihomoPids() : [];
+  const pids = needsStop || warnRunning ? processManager.getMihomoPids() : [];
 
   // 确认前只做只读警告，不做任何破坏性操作（停止进程/卸载保活）——用户取消时环境须原样保留
   if (warnRunning && pids.length > 0) {
@@ -186,11 +187,11 @@ export async function cmdReset(args: string[]): Promise<void> {
     }
   }
 
-  if (needsStop && processManager.getAllMihomoPids().length > 0) {
+  if (needsStop && processManager.getMihomoPids().length > 0) {
     console.log('停止进程...');
     processManager.cleanupAll();
     for (let i = 0; i < processManager.PROCESS_WAIT_ATTEMPTS; i++) {
-      if (processManager.getAllMihomoPids().length === 0) break;
+      if (processManager.getMihomoPids().length === 0) break;
       await new Promise(r => setTimeout(r, processManager.PROCESS_WAIT_INTERVAL));
     }
   }

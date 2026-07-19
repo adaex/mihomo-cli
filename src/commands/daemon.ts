@@ -1,10 +1,7 @@
 import { hasKernel } from '../config.js';
-import { disableDaemon, enableDaemon, getDaemonStatus, isDaemonEnabled, isDaemonRunning } from '../daemon.js';
+import { DAEMON_BOOT_WAIT_MS, disableDaemon, enableDaemon, getDaemonStatus, isDaemonEnabled, isDaemonRunning } from '../daemon.js';
 import * as subscription from '../subscription.js';
 import { colors, sleep } from '../utils.js';
-
-/** 启用后等待 launchd RunAtLoad 拉起内核、再查询状态的时间 */
-const DAEMON_STATUS_WAIT_MS = 500;
 
 function printDaemonStatus(): void {
   const status = getDaemonStatus();
@@ -60,7 +57,7 @@ export async function cmdDaemon(args: string[]): Promise<void> {
     console.log(`${colors.green('已启用保活')} · ${sub.name} · ${subscription.formatProxySummary(configInfo)}`);
     console.log(colors.gray('开机自启 + 崩溃自动重启，代理将在后台常驻'));
     console.log('');
-    await sleep(DAEMON_STATUS_WAIT_MS);
+    await sleep(DAEMON_BOOT_WAIT_MS);
     printDaemonStatus();
     return;
   }

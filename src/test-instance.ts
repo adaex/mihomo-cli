@@ -2,9 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import * as yaml from 'js-yaml';
-
-import { parseYamlOrJson } from './config.js';
+import { dumpYaml, parseYamlOrJson } from './config.js';
 import { TEST_CONFIG } from './constants.js';
 import { registerCleanup } from './lifecycle.js';
 import { PATHS, rmrf, USER_DATA_DIR } from './paths.js';
@@ -71,7 +69,7 @@ function buildTestConfig(subName: string): void {
     rules: ['MATCH,PROXY'],
   };
 
-  const content = yaml.dump(config, { indent: 2, lineWidth: -1, schema: yaml.CORE_SCHEMA });
+  const content = dumpYaml(config);
   fs.writeFileSync(TEST_PATHS.configFile, content, { mode: 0o600 });
 }
 

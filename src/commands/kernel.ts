@@ -9,22 +9,8 @@ export async function cmdKernel(args: string[]): Promise<void> {
   if (effectiveMirror) {
     const mirrorDesc = mirrorInfo.type === 'all' ? ' (API和下载均使用镜像)' : ' (下载时使用镜像)';
     console.log(`镜像: ${effectiveMirror}${mirrorDesc}`);
+    console.log('');
   }
-
-  console.log('\n提示: 如果下载速度过慢或直连失败，可使用 --mirror 参数通过镜像下载');
-  console.log('\n用法:');
-  console.log('  mihomo kernel                    # 直连');
-  console.log('  mihomo kernel --mirror           # 下载使用默认镜像 (v6.gh-proxy.org)');
-  console.log('  mihomo kernel --mirror hk.gh-proxy.org  # 下载使用指定镜像');
-  console.log('  mihomo kernel --mirror-all       # API请求和下载都使用默认镜像');
-  console.log('  mihomo kernel --mirror-all hk.gh-proxy.org  # API和下载都使用指定镜像');
-
-  console.log('\n可用镜像:');
-  for (const m of AVAILABLE_MIRRORS) {
-    const isCurrent = effectiveMirror && (effectiveMirror.includes(`//${m}/`) || effectiveMirror.includes(`//${m}:`) || effectiveMirror.endsWith(`//${m}`));
-    console.log(`  ${m}${isCurrent ? ' (当前)' : ''}`);
-  }
-  console.log('');
 
   console.log('检查内核更新...');
 
@@ -51,6 +37,14 @@ export async function cmdKernel(args: string[]): Promise<void> {
       if (err.response.data.documentation_url) {
         console.error(`文档: ${err.response.data.documentation_url}`);
       }
+    }
+    // 平时不打扰；仅直连失败时提示镜像用法
+    if (!effectiveMirror) {
+      console.error('');
+      console.error('提示: 直连失败或下载过慢时可使用镜像:');
+      console.error('  mihomo kernel --mirror [镜像]     # 下载走镜像（默认 v6.gh-proxy.org）');
+      console.error('  mihomo kernel --mirror-all [镜像] # API 和下载都走镜像');
+      console.error(`  可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`);
     }
     process.exit(1);
   }

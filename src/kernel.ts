@@ -37,11 +37,14 @@ function findMatchingAsset(assets: GitHubAsset[], platform: string, arch: string
   if (matchingAssets.length === 0) return null;
   if (matchingAssets.length === 1) return matchingAssets[0];
 
+  // 标准版尾缀为版本号（mihomo-darwin-arm64-v1.x.y.gz）；-compatible/-go 变体也满足尾缀形态，
+  // 需显式排除——否则字母序靠前的 compatible 版会被优先选中（Intel Mac 上性能低于标准版）。
+  // 无标准版时回退 matchingAssets[0]，仍能装上可用内核。
   const standardAsset = matchingAssets.find(a => {
     const nameWithoutGz = a.name.slice(0, -3);
     const parts = nameWithoutGz.split('-');
     const lastPart = parts[parts.length - 1];
-    return /^v?\d+\.\d+\.\d+/.test(lastPart) && !nameWithoutGz.includes('-go');
+    return /^v?\d+\.\d+\.\d+/.test(lastPart) && !nameWithoutGz.includes('-go') && !nameWithoutGz.includes('-compatible');
   });
 
   return standardAsset || matchingAssets[0];
@@ -49,8 +52,8 @@ function findMatchingAsset(assets: GitHubAsset[], platform: string, arch: string
 
 async function getLatestRelease(repo: string, mirror: string | null): Promise<GitHubRelease> {
   const url = withMirror(`https://api.github.com/repos/${repo}/releases`, mirror);
-  const response = await HTTP_CLIENT.get(url, { responseType: 'json' });
-  const releases = response.data as unknown as GitHubRelease[];
+  const response = await HTTP_CLIENT.get<GitHubRelease[]>(url, { responseType: 'json' });
+  const releases = response.data;
 
   if (!Array.isArray(releases) || releases.length === 0) {
     throw new Error('无法获取版本信息');

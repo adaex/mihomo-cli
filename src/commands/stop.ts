@@ -19,7 +19,7 @@ export async function cmdStop(): Promise<void> {
     return;
   }
 
-  const pids = processManager.getAllMihomoPids();
+  const pids = processManager.getMihomoPids();
   if (pids.length === 0) {
     console.log(colors.yellow('不在运行'));
     return;

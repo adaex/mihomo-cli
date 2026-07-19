@@ -2,22 +2,27 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import * as yaml from 'js-yaml';
-
-import { BASE_CONFIG, LAUNCH_DAEMON_LABEL } from './constants.js';
+import { CONTROLLER_BASE_URL, LAUNCH_DAEMON_LABEL } from './constants.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
-import { escapeForPgrep, getAllMihomoPids, SUDO_TIMEOUT_MS } from './process.js';
+import { cleanupOldLogs, getMihomoPids, MAIN_INSTANCE_PATTERN, SUDO_TIMEOUT_MS } from './process.js';
 import type { DaemonStatus } from './types.js';
-import { isProcessRoot } from './utils.js';
+import { formatLocalTimestamp, isProcessRoot, shellQuote } from './utils.js';
 
 /** launchd 服务目标：root 级 LaunchDaemon 用系统域 system/<label>（无需 uid） */
 const SERVICE_TARGET = `system/${LAUNCH_DAEMON_LABEL}`;
 /** 热重载（PUT /configs）超时 */
 const HOT_RELOAD_TIMEOUT_MS = 5000;
+/** bootstrap/kickstart/RunAtLoad 后，等待 launchd 拉起进程再查询 PID/状态的时间 */
+export const DAEMON_BOOT_WAIT_MS = 500;
+/** 日志超过该大小时，restartDaemon 放弃热重载、改走 kickstart 顺便轮转（热重载路径无法轮转日志） */
+const LOG_ROTATE_MAX_BYTES = 10 * 1024 * 1024;
 
-/** 单引号包裹并转义嵌入的单引号，安全地把任意字符串作为 bash 字面量。 */
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, "'\\''")}'`;
+function logOversized(): boolean {
+  try {
+    return fs.statSync(PATHS.logFile).size > LOG_ROTATE_MAX_BYTES;
+  } catch {
+    return false;
+  }
 }
 
 /** XML 文本节点转义，防御主目录/数据目录路径中出现 & < > 等字符。 */
@@ -122,7 +127,7 @@ export function getDaemonStatus(): DaemonStatus {
   if (!isDaemonEnabled()) {
     return { enabled: false, loaded: false, pid: null };
   }
-  const rootPids = getAllMihomoPids().filter(isProcessRoot);
+  const rootPids = getMihomoPids().filter(isProcessRoot);
   return { enabled: true, loaded: rootPids.length > 0, pid: rootPids[0] ?? null };
 }
 
@@ -150,7 +155,7 @@ export function enableDaemon(): void {
   const target = shellQuote(SERVICE_TARGET);
   const plistDest = shellQuote(PATHS.launchDaemonPlist);
   const stage = shellQuote(stagePath);
-  const pattern = shellQuote(escapeForPgrep(PATHS.mihomoBinary));
+  const pattern = shellQuote(MAIN_INSTANCE_PATTERN);
 
   // 顺序关键：先 bootout 卸载旧任务（使 KeepAlive 失效）→ root 身份 pkill 清残留
   // （替代 JS cleanupAll，普通用户杀不掉 root 进程）→ install 到系统目录 → bootstrap。
@@ -209,38 +214,12 @@ export function disableDaemon(): void {
   runSudoScript(script, { action: '关闭保活', file: 'daemon-disable.sh' });
 
   // bootout 通常已终止托管内核；仅在极少数残留时提示手动清理，不自动裸杀。
-  const rootPids = getAllMihomoPids().filter(isProcessRoot);
+  const rootPids = getMihomoPids().filter(isProcessRoot);
   if (rootPids.length > 0) {
     console.log('');
     console.log(`仍有 root 内核进程残留 (PID ${rootPids.join(', ')})`);
     console.log('手动清理: sudo pkill -9 mihomo');
   }
-}
-
-/**
- * 热重载 API 基址：从运行时配置的 external-controller 只取**端口**，host 固定 127.0.0.1。
- * 用户为从其他设备访问控制面板常把 external-controller 设为 ':9090' 或 '0.0.0.0:9090'，
- * 直接用其 host 会得到非法/不可靠地址（'http://:9090' 抛 ERR_INVALID_URL、'0.0.0.0' 连接不稳）；
- * 而 bind-all 监听器经 loopback 必可达，故统一走 127.0.0.1:<port>。读不到端口回退默认。
- */
-function getControllerBase(): string {
-  const fallbackPort = String(BASE_CONFIG['external-controller']).split(':').pop() || '9090';
-  let port = fallbackPort;
-  try {
-    const content = fs.readFileSync(PATHS.configFile, 'utf8');
-    const cfg = yaml.load(content) as Record<string, unknown> | null;
-    const ec = cfg?.['external-controller'];
-    if (typeof ec === 'string' && ec.trim()) {
-      const parsed = ec
-        .replace(/^https?:\/\//, '')
-        .split(':')
-        .pop();
-      if (parsed && /^\d+$/.test(parsed)) port = parsed;
-    }
-  } catch {
-    /* ignore */
-  }
-  return `http://127.0.0.1:${port}`;
 }
 
 /**
@@ -253,7 +232,7 @@ async function tryHotReload(): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HOT_RELOAD_TIMEOUT_MS);
   try {
-    const res = await fetch(`${getControllerBase()}/configs?force=true`, {
+    const res = await fetch(`${CONTROLLER_BASE_URL}/configs?force=true`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
@@ -271,18 +250,28 @@ async function tryHotReload(): Promise<boolean> {
  * 重启托管内核使配置变更生效。优先热重载（PUT /configs，免 sudo）；
  * 失败才回退 sudo kickstart 脚本。kickstart -k 是命令式重启，不与 KeepAlive 冲突；
  * 若任务未装载（plist 在但被手动 bootout）则 bootstrap 自愈。
+ *
+ * 日志超阈值时跳过热重载、强制 kickstart 顺便轮转：daemon 日志为 root 属主
+ * （用户态无法 truncate），且运行中不能 rename 轮转——launchd 的 StandardOutPath
+ * fd 指向旧 inode，rename 后日志会继续写进归档文件。只能在 sudo 脚本里
+ * copy-truncate（fd 为 O_APPEND，truncate 后从 0 续写不丢句柄）。
  */
 export async function restartDaemon(): Promise<void> {
   if (!fs.existsSync(PATHS.launchDaemonPlist)) {
     throw new Error('保活未启用，无法重启');
   }
 
-  if (await tryHotReload()) return;
+  if (!logOversized() && (await tryHotReload())) return;
 
   const target = shellQuote(SERVICE_TARGET);
   const plistDest = shellQuote(PATHS.launchDaemonPlist);
+  const logFile = shellQuote(PATHS.logFile);
+  const archiveFile = shellQuote(path.join(DIRS.logs, `mihomo.${formatLocalTimestamp()}.log`));
   const script = [
     '#!/bin/bash',
+    `if [ -f ${logFile} ] && [ "$(stat -f%z ${logFile} 2>/dev/null || echo 0)" -gt ${LOG_ROTATE_MAX_BYTES} ]; then`,
+    `  cp ${logFile} ${archiveFile} 2>/dev/null && : > ${logFile}`,
+    'fi',
     `if launchctl kickstart -k ${target} 2>/dev/null; then exit 0; fi`,
     `launchctl bootstrap system ${plistDest} || exit 3`,
     'exit 0',
@@ -294,4 +283,7 @@ export async function restartDaemon(): Promise<void> {
     file: 'daemon-restart.sh',
     codeMessages: { 3: '重启保活失败（launchctl bootstrap）' },
   });
+
+  // 顺手清理过期归档：归档可能为 root 属主，但 logs/ 目录归用户所有，unlink 只看目录权限
+  cleanupOldLogs();
 }

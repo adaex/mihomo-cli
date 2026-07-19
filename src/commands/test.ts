@@ -1,7 +1,7 @@
-import { getConfigInfo } from '../config.js';
 import { DEFAULT_TEST_CONCURRENCY, DEFAULT_TEST_TIMEOUT } from '../constants.js';
-import { getDaemonStatus, isDaemonEnabled, isDaemonRunning, restartDaemon } from '../daemon.js';
+import { isDaemonEnabled } from '../daemon.js';
 import * as processManager from '../process.js';
+import * as runtime from '../runtime.js';
 import * as subscription from '../subscription.js';
 import type { Subscription } from '../types.js';
 import { colors, parseIntArg } from '../utils.js';
@@ -9,17 +9,11 @@ import { handleStopResult } from './stop.js';
 import { createProgressPrinter, formatCleanSummary, formatTestSummary } from './subscription.js';
 
 function requireRunning(): void {
-  // 保活模式下内核由 launchd 托管、不写 pidFile，以 daemon 状态判断（与 status 命令同源）
-  if (isDaemonEnabled()) {
-    if (!isDaemonRunning(getDaemonStatus())) {
-      console.error('错误: mihomo 未运行，请先启动 (mihomo daemon on)');
-      process.exit(1);
-    }
-    return;
-  }
-  const status = processManager.getStatus();
-  if (!status.running) {
-    console.error('错误: mihomo 未运行，请先启动 (mihomo start)');
+  // 运行状态由门面统一(保活看 launchd,普通看 pidFile);提示语按模式区分启动命令。
+  const state = runtime.getRunningState();
+  if (!state.running) {
+    const hint = state.daemon ? 'mihomo daemon on' : 'mihomo start';
+    console.error(`错误: mihomo 未运行，请先启动 (${hint})`);
     process.exit(1);
   }
 }
@@ -91,23 +85,18 @@ export async function cmdClean(args: string[]): Promise<void> {
     console.log('');
     console.log('重启 mihomo 使更改生效...');
 
-    if (isDaemonEnabled()) {
-      // 保活模式恒为 mixed，重新生成配置后 kickstart 重启
-      const configInfo = subscription.prepareConfigForStart('mixed', activeSub.name);
-      try {
-        await restartDaemon();
-      } catch (e) {
-        console.error(`${colors.red('重启失败:')} ${(e as Error).message.split('\n')[0]}`);
-        process.exit(1);
-      }
-      console.log(`${colors.green('已重启 (保活)')} · ${subscription.formatProxySummary(configInfo)}`);
-    } else {
-      // 保留当前运行模式，避免 TUN 用户被静默降级为 mixed
-      const currentMode = getConfigInfo()?.tun ? 'tun' : 'mixed';
-      handleStopResult(processManager.stop());
-      const configInfo = subscription.prepareConfigForStart(currentMode, activeSub.name);
-      const startResult = await processManager.start(currentMode);
-      console.log(`${colors.green('已重启')} (PID ${startResult.pid}) · ${subscription.formatProxySummary(configInfo)}`);
+    // 模式与重启方式由门面统一:保活恒 mixed 走 kickstart(不 stop);普通保留当前模式、先 stop 再 start。
+    const mode = runtime.getRuntimeMode();
+    const daemonManaged = isDaemonEnabled();
+    try {
+      if (!daemonManaged) handleStopResult(processManager.stop());
+      const configInfo = subscription.prepareConfigForStart(mode, activeSub.name);
+      const pid = await runtime.launchOrRestart(mode);
+      const label = daemonManaged ? '已重启 (保活)' : '已重启';
+      console.log(`${colors.green(label)}${pid ? ` (PID ${pid})` : ''} · ${subscription.formatProxySummary(configInfo)}`);
+    } catch (e) {
+      console.error(`${colors.red('重启失败:')} ${(e as Error).message.split('\n')[0]}`);
+      process.exit(1);
     }
   }
 }

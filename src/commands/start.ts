@@ -1,15 +1,13 @@
 import { hasKernel } from '../config.js';
 import { DEFAULT_TEST_CONCURRENCY, DEFAULT_TEST_TIMEOUT } from '../constants.js';
-import { getDaemonStatus, isDaemonEnabled, restartDaemon } from '../daemon.js';
+import { isDaemonEnabled } from '../daemon.js';
 import * as processManager from '../process.js';
+import * as runtime from '../runtime.js';
 import * as subscription from '../subscription.js';
 import { colors, hasFlag, parseIntArg, sleep } from '../utils.js';
 import { printStatus } from './status.js';
 import { handleStopResult } from './stop.js';
 import { createProgressPrinter, formatCleanSummary, formatTestSummary } from './subscription.js';
-
-/** kickstart 后等待 launchd 拉起进程、再查询 PID 的时间 */
-const DAEMON_RESTART_WAIT_MS = 500;
 
 export async function cmdStart(args: string[]): Promise<void> {
   if (!hasKernel()) {
@@ -42,17 +40,8 @@ export async function cmdStart(args: string[]): Promise<void> {
     await subscription.autoUpdateStaleSubscription({ timeout: updateTimeout });
   }
 
-  // 保活模式下由 launchd 托管进程，重启走 kickstart（不裸 kill，避免与 KeepAlive 打架）；
-  // 非保活模式沿用 stop() + start()。
-  async function launchOrRestart(): Promise<number | null> {
-    if (daemonEnabled) {
-      await restartDaemon();
-      await sleep(DAEMON_RESTART_WAIT_MS);
-      return getDaemonStatus().pid;
-    }
-    const result = await processManager.start(targetMode);
-    return result.pid;
-  }
+  // 保活模式下由 launchd 托管进程,重启走 kickstart(不裸 kill,避免与 KeepAlive 打架);
+  // 非保活模式沿用 stop() + start()。差异收敛在 runtime.launchOrRestart。
 
   if (!daemonEnabled) {
     const status = processManager.getStatus();
@@ -82,7 +71,7 @@ export async function cmdStart(args: string[]): Promise<void> {
   console.log([colors.cyan(modeLabel), sub.name, subscription.formatProxySummary(configInfo)].join(' · '));
 
   try {
-    const pid = await launchOrRestart();
+    const pid = await runtime.launchOrRestart(targetMode);
     const label = daemonEnabled ? '已启动 (保活)' : '已启动';
     console.log(`${colors.green(label)}${pid ? ` (PID ${pid})` : ''}`);
   } catch (e) {
@@ -125,7 +114,7 @@ export async function cmdStart(args: string[]): Promise<void> {
       if (!daemonEnabled) handleStopResult(processManager.stop());
       try {
         configInfo = subscription.prepareConfigForStart(targetMode, sub.name);
-        const pid = await launchOrRestart();
+        const pid = await runtime.launchOrRestart(targetMode);
         console.log(`${colors.green('已重启')}${pid ? ` (PID ${pid})` : ''} · ${subscription.formatProxySummary(configInfo)}`);
       } catch (e) {
         console.error(`${colors.red('重启失败:')} ${(e as Error).message.split('\n')[0]}`);

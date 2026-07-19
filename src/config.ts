@@ -6,6 +6,7 @@ import { BASE_CONFIG, TUN_CONFIG } from './constants.js';
 import { applyOverwrite, isOverwriteEnabled, loadOverwriteFile } from './overwrite.js';
 import { atomicWriteFileSync, ensureDirs, PATHS } from './paths.js';
 import type { BuildConfigResult, ConfigInfo, ParsedProxy, ParsedProxyGroup } from './types.js';
+import { escapeRegExp } from './utils.js';
 
 export function parseYamlOrJson(content: string, errorMsg?: string): Record<string, unknown> {
   if (!content?.trim()) {
@@ -22,6 +23,11 @@ export function parseYamlOrJson(content: string, errorMsg?: string): Record<stri
   } catch {
     throw new Error(`${errorMsg || '内容'}格式错误，无法解析为 YAML 或 JSON`);
   }
+}
+
+/** 统一的 YAML 序列化选项:2 空格缩进、不折行、CORE_SCHEMA(避免 js-yaml 5 对特殊值的额外转义)。 */
+export function dumpYaml(obj: unknown): string {
+  return yaml.dump(obj, { indent: 2, lineWidth: -1, schema: yaml.CORE_SCHEMA });
 }
 
 function collectOverwriteProxyNames(overwriteFiles: { config: Record<string, unknown> }[]): string[] {
@@ -47,7 +53,7 @@ function excludeOverwriteProxiesFromIncludeAll(config: Record<string, unknown>, 
   const groups = config['proxy-groups'] as Array<Record<string, unknown>> | undefined;
   if (!groups) return;
 
-  const excludePattern = injectedNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const excludePattern = injectedNames.map(n => escapeRegExp(n)).join('|');
 
   for (const group of groups) {
     if (!group['include-all'] && !group['include-all-proxies']) continue;
@@ -74,6 +80,20 @@ function deduplicateByName<T extends { name: string }>(items: T[]): { result: T[
     return true;
   });
   return { result, names, duplicates };
+}
+
+/**
+ * 取规则的目标（代理/分组名）。末段为 `no-resolve` 修饰后缀时取倒数第二段
+ * （如 `IP-CIDR,1.1.1.1/32,DIRECT,no-resolve` 的目标是 DIRECT，不是 no-resolve）。
+ */
+export function getRuleTarget(rule: string): string {
+  const parts = rule.split(',');
+  if (parts.length < 2) return '';
+  const last = parts[parts.length - 1].trim();
+  if (last.toLowerCase() === 'no-resolve' && parts.length >= 3) {
+    return parts[parts.length - 2].trim();
+  }
+  return last;
 }
 
 function validateConfig(config: Record<string, unknown>): string[] {
@@ -133,9 +153,7 @@ function validateConfig(config: Record<string, unknown>): string[] {
   if (rules.length > 0) {
     const removedRules: string[] = [];
     config.rules = rules.filter(rule => {
-      const parts = rule.split(',');
-      if (parts.length < 2) return true;
-      const target = parts[parts.length - 1].trim();
+      const target = getRuleTarget(rule);
       if (!target || validNames.has(target)) return true;
       removedRules.push(rule);
       return false;
@@ -170,6 +188,8 @@ export function buildConfig(subRawContent: string, mode: string): BuildConfigRes
     }
   }
 
+  // 系统锁定项（不受订阅/覆写影响）：allow-lan 强制 false 是有意的安全默认——
+  // 防止覆写误开入站代理让局域网设备连入；controller/端口固定是 UI、热重载、测速的统一依赖地址
   systemConfig['allow-lan'] = false;
   systemConfig['external-controller'] = BASE_CONFIG['external-controller'];
   systemConfig['mixed-port'] = BASE_CONFIG['mixed-port'];
@@ -190,6 +210,9 @@ export function buildConfig(subRawContent: string, mode: string): BuildConfigRes
     if (Object.keys(dns).length > 0) {
       systemConfig.dns = dns;
     }
+  } else {
+    // Mixed 模式（含保活）不保留订阅/覆写自带的 tun 字段，避免未要求 TUN 却被静默按 TUN 启动
+    delete withOverwrites.tun;
   }
 
   const merged = { ...withOverwrites, ...systemConfig };
@@ -218,24 +241,23 @@ export function buildConfig(subRawContent: string, mode: string): BuildConfigRes
 
 export function writeMihomoConfig(configObj: Record<string, unknown>): void {
   ensureDirs();
-  const content = yaml.dump(configObj, { indent: 2, lineWidth: -1, schema: yaml.CORE_SCHEMA });
+  const content = dumpYaml(configObj);
   atomicWriteFileSync(PATHS.configFile, content, { mode: 0o600 });
 }
 
 export function writeDebugConfig(buildResult: BuildConfigResult): void {
   ensureDirs();
-  const dumpOpts = { indent: 2, lineWidth: -1, schema: yaml.CORE_SCHEMA };
 
-  fs.writeFileSync(PATHS.configStage1Subscription, yaml.dump(buildResult.subscriptionConfig, dumpOpts), { mode: 0o600 });
+  fs.writeFileSync(PATHS.configStage1Subscription, dumpYaml(buildResult.subscriptionConfig), { mode: 0o600 });
 
   const overwriteMerged: Record<string, unknown> = {};
   for (const f of buildResult.overwriteFiles) {
     Object.assign(overwriteMerged, f.config);
   }
-  const overwriteContent = buildResult.overwriteFiles.length > 0 ? yaml.dump(overwriteMerged, dumpOpts) : '# overwrite 已禁用或无覆写文件\n';
+  const overwriteContent = buildResult.overwriteFiles.length > 0 ? dumpYaml(overwriteMerged) : '# overwrite 已禁用或无覆写文件\n';
   fs.writeFileSync(PATHS.configStage2Overwrite, overwriteContent, { mode: 0o600 });
 
-  fs.writeFileSync(PATHS.configStage3System, yaml.dump(buildResult.systemConfig, dumpOpts), { mode: 0o600 });
+  fs.writeFileSync(PATHS.configStage3System, dumpYaml(buildResult.systemConfig), { mode: 0o600 });
 }
 
 export function hasConfig(): boolean {

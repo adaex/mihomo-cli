@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
 import type { Settings, Subscription, SubscriptionCache, SubscriptionCacheEntry, SubscriptionWithCache } from './types.js';
 
@@ -125,12 +126,10 @@ export function addSubscription(url: string, name = 'default'): void {
   validateSubscriptionName(name);
   const settings = readSettings();
   const subs = [...(settings.subscriptions || [])];
-  const existingIndex = subs.findIndex(s => s.name === name);
-  if (existingIndex >= 0) {
-    subs[existingIndex] = { name, url };
-  } else {
-    subs.push({ name, url });
+  if (subs.some(s => s.name === name)) {
+    throw new Error(`订阅 "${name}" 已存在，请换个名称（mihomo sub add <url> <名称>），或先删除（mihomo sub remove ${name}）`);
   }
+  subs.push({ name, url });
   const updates: Partial<Settings> = { subscriptions: subs };
   if (!settings.active_subscription && subs.length === 1) {
     updates.active_subscription = name;
@@ -161,7 +160,13 @@ export function removeSubscription(name: string): string | null {
     writeSubscriptionCache(cache);
   }
 
-  fs.rmSync(getSubscriptionRawConfigPath(name), { force: true });
+  // 名字非法（手改 settings.json）时 getSubscriptionRawConfigPath 会抛错；
+  // 此处跳过文件清理即可——订阅已从设置移除，非法路径的文件本就不应存在
+  try {
+    fs.rmSync(getSubscriptionRawConfigPath(name), { force: true });
+  } catch {
+    /* ignore */
+  }
 
   return switchedTo;
 }
@@ -179,7 +184,12 @@ export function setDefaultSubscription(name: string): boolean {
 // === Subscription raw config ===
 
 function getSubscriptionRawConfigPath(subName: string): string {
-  return `${DIRS.subscriptions}/${subName}.yaml`;
+  // 防御路径穿越：名字正常经 addSubscription 校验，但 settings.json 可被手改成 ../ 之类，
+  // 直接拼接会让读/写/删越出 subscriptions 目录
+  if (!SAFE_NAME_RE.test(subName)) {
+    throw new Error(`订阅名称无效: "${subName}"`);
+  }
+  return path.join(DIRS.subscriptions, `${subName}.yaml`);
 }
 
 export function saveSubscriptionRawConfig(subName: string, content: string): void {

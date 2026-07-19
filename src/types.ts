@@ -265,14 +265,14 @@ export interface HttpClientOptions {
   timeout?: number;
 }
 
-export interface HttpResponse {
-  data: string;
+export interface HttpResponse<T = string> {
+  data: T;
   headers: Headers;
   status: number;
 }
 
 export interface HttpClient {
-  get(url: string, config?: { responseType?: 'text' | 'json'; signal?: AbortSignal }): Promise<HttpResponse>;
+  get<T = string>(url: string, config?: { responseType?: 'text' | 'json'; signal?: AbortSignal }): Promise<HttpResponse<T>>;
 }
 
 // === Update Result ===

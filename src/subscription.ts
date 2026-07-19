@@ -1,9 +1,8 @@
-import * as yaml from 'js-yaml';
-import { buildConfig, parseYamlOrJson, writeDebugConfig, writeMihomoConfig } from './config.js';
+import { buildConfig, dumpYaml, getRuleTarget, parseYamlOrJson, writeDebugConfig, writeMihomoConfig } from './config.js';
 import {
   AUTO_CLEAN_THRESHOLD,
   AUTO_CLEAN_THRESHOLD_GITHUB,
-  BASE_CONFIG,
+  CONTROLLER_BASE_URL,
   DEFAULT_AUTO_UPDATE_TIMEOUT,
   DEFAULT_CLEAN_ROUNDS,
   DEFAULT_TEST_CONCURRENCY,
@@ -25,6 +24,7 @@ import {
 import type {
   AutoUpdateResult,
   DownloadResult,
+  HttpResponse,
   ParsedSubscription,
   ProxyTestResult,
   ProxyTestSummary,
@@ -50,8 +50,6 @@ function getDefaultUpdateInterval(url: string): number {
 export function resolveUpdateInterval(url: string, cachedInterval?: number | null): number {
   return cachedInterval && cachedInterval > 0 ? cachedInterval : getDefaultUpdateInterval(url);
 }
-
-const YAML_DUMP_OPTS = { indent: 2, lineWidth: -1, schema: yaml.CORE_SCHEMA };
 
 const HTTP_CLIENT = createHttpClient({ timeout: 60_000 });
 
@@ -83,7 +81,7 @@ function saveSubscriptionConfig(subName: string, parsed: ParsedSubscription): vo
   normalizeProxyNamesBeforeSave(parsed);
   parsed.raw.proxies = parsed.proxies;
   parsed.raw['proxy-groups'] = parsed.proxyGroups;
-  saveSubscriptionRawConfig(subName, yaml.dump(parsed.raw, YAML_DUMP_OPTS));
+  saveSubscriptionRawConfig(subName, dumpYaml(parsed.raw));
 }
 
 function parseUserInfo(header: string | null): UserInfo | null {
@@ -206,9 +204,9 @@ export function pickSingleSubscription(subs: Subscription[], pattern: string): S
 }
 
 export async function downloadSubscription(url: string, subName = 'default', signal?: AbortSignal): Promise<DownloadResult> {
-  let response: Awaited<ReturnType<typeof HTTP_CLIENT.get>>;
+  let response: HttpResponse<string>;
   try {
-    response = await HTTP_CLIENT.get(url, { responseType: 'text', signal });
+    response = await HTTP_CLIENT.get<string>(url, { responseType: 'text', signal });
   } catch (e) {
     const maskedUrl = maskUrl(url);
     let errorMsg = `获取订阅失败: ${(e as Error).message}`;
@@ -286,7 +284,7 @@ export async function downloadMergedSubscription(urls: string[], subName: string
   }
   base.proxies = baseProxies;
 
-  const mergedContent = yaml.dump(base, YAML_DUMP_OPTS);
+  const mergedContent = dumpYaml(base);
   saveSubscriptionRawConfig(subName, mergedContent);
 
   const meta = extractSubscriptionMeta(responses[0].response?.headers);
@@ -403,14 +401,12 @@ export async function autoUpdateStaleSubscription(options: { timeout?: number } 
   return { total: staleSubs.length, updated: updatedCount, failed: staleSubs.length - updatedCount };
 }
 
-const API_BASE = `http://${BASE_CONFIG['external-controller']}`;
-
 async function testProxyDelay(
   proxyName: string,
   timeout: number,
   testUrl: string,
   client: ReturnType<typeof createHttpClient>,
-  apiBase = API_BASE,
+  apiBase = CONTROLLER_BASE_URL,
 ): Promise<ProxyTestResult> {
   const encodedName = encodeURIComponent(proxyName);
   const url = `${apiBase}/proxies/${encodedName}/delay?timeout=${timeout}&url=${encodeURIComponent(testUrl)}`;
@@ -445,7 +441,13 @@ export async function testSubscriptionProxies(
     parsed?: ParsedSubscription;
   } = {},
 ): Promise<ProxyTestSummary> {
-  const { timeout = DEFAULT_TEST_TIMEOUT, concurrency = DEFAULT_TEST_CONCURRENCY, testUrl = DEFAULT_TEST_URL, apiBase = API_BASE, onResult } = options;
+  const {
+    timeout = DEFAULT_TEST_TIMEOUT,
+    concurrency = DEFAULT_TEST_CONCURRENCY,
+    testUrl = DEFAULT_TEST_URL,
+    apiBase = CONTROLLER_BASE_URL,
+    onResult,
+  } = options;
 
   const { proxies } = options.parsed || loadSubscriptionConfig(subName);
 
@@ -524,7 +526,9 @@ function cleanDeadProxies(parsed: ParsedSubscription, deadNames: Set<string>): {
       if (group.proxies.length < before) {
         updatedGroups++;
       }
-      if (group.proxies.length === 0) {
+      // 与 config.ts validateConfig 一致：有 use/include-all 等其他节点来源的组，proxies 清空也不删
+      const hasOtherSource = group.use || group['include-all'] || group['include-all-proxies'];
+      if (group.proxies.length === 0 && !hasOtherSource) {
         removedGroupNames.add(group.name);
       }
     }
@@ -537,14 +541,12 @@ function cleanDeadProxies(parsed: ParsedSubscription, deadNames: Set<string>): {
         group.proxies = group.proxies.filter(name => !removedGroupNames.has(name));
       }
     }
-    // 移除引用了已删空分组的规则，避免残留在保存的订阅文件里（target 取末段，与 config.ts validateConfig 一致）
+    // 移除引用了已删空分组的规则，避免残留在保存的订阅文件里（target 提取与 config.ts validateConfig 一致）
     const rules = parsed.raw.rules;
     if (Array.isArray(rules)) {
       parsed.raw.rules = rules.filter(rule => {
         if (typeof rule !== 'string') return true;
-        const parts = rule.split(',');
-        if (parts.length < 2) return true;
-        return !removedGroupNames.has(parts[parts.length - 1].trim());
+        return !removedGroupNames.has(getRuleTarget(rule));
       });
     }
   }
