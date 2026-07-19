@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.1.0] - 2026-07-19
+
+### 修复
+
+- **保活模式下经局域网跳板的代理连不通**（v3.0.0 引入的严重 bug）- 用户级 LaunchAgent 启动的内核受 macOS 15+ 本地网络隐私（TCC）限制，访问**局域网其他设备**被静默拦截（报 `no route to host`），导致经局域网 socks5 跳板转发的内网流量在 `daemon on` 后全部失效、`daemon off` 后立刻恢复。手动在系统设置授权对裸命令行二进制无效。改为 **root 级 LaunchDaemon** 彻底解决（系统上下文不受该限制）
+
+### 变更
+
+- **保活迁移到系统级 LaunchDaemon** - plist 位于 `/Library/LaunchDaemons/`（`root:wheel`），以 root 运行；`daemon on` / `daemon off` 需输入一次管理员密码（复用 TUN 模式的交互式 sudo 范式，一次密码完成全部操作）
+- **配置变更优先热重载（免密）** - `sub use` / `ow on|off` / `clean` 等触发的重启优先经 external-controller `PUT /configs` 热重载（走 localhost、无需 sudo），失败才回退到需密码的 `launchctl kickstart`
+- **`daemon status` / `status` 免密** - 保活状态查询改用 `pgrep` + root 属主过滤判定运行状态，不再调用需 sudo 的 `launchctl print`
+- **关闭保活时归还文件属主** - `daemon off` 会把 root 守护进程创建的日志、数据文件 `chown` 回当前用户，避免后续非保活模式 `start` 因 root 属主日志无法写入而失败
+- `daemon on/off` 在非交互终端（无 TTY，如 CI）会明确报错而非挂起
+
+---
+
 ## [3.0.0] - 2026-07-19
 
 ### 新增
