@@ -151,7 +151,10 @@ npm run format         # 格式化代码
 | `key!`   | 强制覆盖整个对象      |
 | `+key`   | 数组前置插入          |
 | `key+`   | 数组追加              |
-| `<+key>` | 键名以 `+` 开头时转义 |
+| `~key`   | 按 `name` 就地合并数组中的单个元素 |
+| `<+key>` | 键名以 `+`/`~` 开头时转义 |
+
+覆写文件可在顶部加 `match:` 块限定作用域（`subscription` 按订阅名、`url-domain` 按 URL hostname 后缀；AND 语义；无 `match` 则全局）。`match` 在 `loadOverwriteFile` 阶段剥离，不进入最终配置。
 
 ---
 

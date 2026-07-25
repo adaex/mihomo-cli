@@ -63,12 +63,14 @@ export interface OverwriteFileEntry {
   name: string;
   path: string;
   config: Record<string, unknown>;
+  match?: OverwriteMatch;
 }
 
 export interface OverwriteFileInfo {
   name: string;
   path: string;
   keys: string[];
+  scope?: string;
 }
 
 // === Process ===
@@ -161,6 +163,21 @@ export interface ParsedOverrideKey {
   forceOverwrite: boolean;
   arrayPrepend: boolean;
   arrayAppend: boolean;
+  arrayMergeByName: boolean;
+}
+
+/** 覆写文件作用域限定：所列条件需同时满足（AND），条件值为数组时其内部为 OR。 */
+export interface OverwriteMatch {
+  /** 按订阅名精确匹配 */
+  subscription?: string | string[];
+  /** 按订阅 URL 的 hostname 后缀匹配 */
+  'url-domain'?: string | string[];
+}
+
+/** 构建配置时的订阅上下文，用于按 match 过滤覆写文件 */
+export interface OverwriteScope {
+  subName?: string;
+  subUrl?: string;
 }
 
 export interface OverwriteListResult {

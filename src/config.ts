@@ -3,9 +3,9 @@ import fs from 'node:fs';
 
 import * as yaml from 'js-yaml';
 import { BASE_CONFIG, TUN_CONFIG } from './constants.js';
-import { applyOverwrite, isOverwriteEnabled, loadOverwriteFile } from './overwrite.js';
+import { applyOverwrite, filterOverwriteFilesByScope, isOverwriteEnabled, loadOverwriteFile } from './overwrite.js';
 import { atomicWriteFileSync, ensureDirs, PATHS } from './paths.js';
-import type { BuildConfigResult, ConfigInfo, ParsedProxy, ParsedProxyGroup } from './types.js';
+import type { BuildConfigResult, ConfigInfo, OverwriteScope, ParsedProxy, ParsedProxyGroup } from './types.js';
 import { escapeRegExp } from './utils.js';
 
 export function parseYamlOrJson(content: string, errorMsg?: string): Record<string, unknown> {
@@ -166,7 +166,7 @@ function validateConfig(config: Record<string, unknown>): string[] {
   return warnings;
 }
 
-export function buildConfig(subRawContent: string, mode: string): BuildConfigResult {
+export function buildConfig(subRawContent: string, mode: string, scope?: OverwriteScope): BuildConfigResult {
   const subscriptionConfig = parseYamlOrJson(subRawContent, '订阅内容');
 
   if (!subscriptionConfig) {
@@ -174,7 +174,9 @@ export function buildConfig(subRawContent: string, mode: string): BuildConfigRes
   }
 
   const overwriteEnabled = isOverwriteEnabled();
-  const overwriteFiles = overwriteEnabled ? loadOverwriteFile() : [];
+  const allFiles = overwriteEnabled ? loadOverwriteFile() : [];
+  // 作用域过滤统一在此做一次，后续 applyOverwrite / excludeOverwrite / 返回值全部沿用这份已过滤列表
+  const overwriteFiles = filterOverwriteFilesByScope(allFiles, scope);
   const withOverwrites = applyOverwrite(subscriptionConfig, overwriteFiles);
 
   if (overwriteFiles.length > 0) {

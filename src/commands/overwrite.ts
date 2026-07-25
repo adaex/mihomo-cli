@@ -23,6 +23,9 @@ function printOverwriteList(): void {
     info.files.forEach((f, i) => {
       const num = i < 10 ? ` ${i}` : `${i}`;
       console.log(`  ${num}. ${f.name}`);
+      if (f.scope) {
+        console.log(`    ${colors.gray('作用域: ')}${f.scope}`);
+      }
       if (f.keys.length > 0) {
         console.log(`    ${colors.gray('字段: ')}${f.keys.join(', ')}`);
       }

@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.3.0] - 2026-07-25
+
+### 新增
+
+- **覆写按 name 就地 patch 数组元素（`~key` 语法）** - 此前覆写数组只有整体替换（`key!`）、前置（`+key`）、追加（`key+`）三种语义，无法「只改数组里某一个元素的部分字段」。新增 `~key`：以 `name` 为主键匹配数组元素，命中则深度合并该元素、保留其余字段与其余元素，找不到则追加。典型用途：修改订阅下发的某个 `proxy-group` 的字段（如给 `select` 组注入 `default-selected` 改默认选中节点），保留原有全部节点、不动其它分组、订阅更新后依然生效。键名真以 `~` 开头时用 `<~key>` 转义
+- **覆写作用域限定（`match` 块）** - 覆写文件顶部可加 `match:` 块，让该文件只对指定订阅生效（无 `match` 仍全局生效，向后兼容）。支持 `subscription`（按订阅名精确匹配）和 `url-domain`（按订阅 URL hostname 后缀匹配）两个条件，所列条件需全部满足（AND），条件值为数组时其内部为 OR。未知匹配键或无法评估的条件均 fail closed（跳过该文件并告警），避免误配置静默全局生效。`ow list` 与 `status` 会展示各文件的作用域
+
+### 内部
+
+- `buildConfig(subRawContent, mode, scope?)` 新增可选订阅作用域参数（`{ subName, subUrl }`），由 `prepareConfigForStart` 组装传入；作用域过滤在 `buildConfig` 顶部统一执行一次，确保被排除的覆写文件不会污染 `exclude-filter` 与 debug 输出
+- `match` 元数据键在 `loadOverwriteFile` 阶段即抽成结构化字段并从 config 剥离，保证它永不进入最终 mihomo 配置
+
 ## [3.2.0] - 2026-07-19
 
 ### 修复

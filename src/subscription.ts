@@ -307,7 +307,8 @@ export function prepareConfigForStart(mode: string, subName = 'default'): { prox
     throw new Error(`未找到订阅配置 "${subName}"，请先添加订阅`);
   }
 
-  const buildResult = buildConfig(rawContent, mode);
+  const subUrl = getSubscriptions().find(s => s.name === subName)?.url;
+  const buildResult = buildConfig(rawContent, mode, { subName, subUrl });
 
   if (buildResult.warnings.length > 0) {
     for (const warning of buildResult.warnings) {
