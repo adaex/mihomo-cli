@@ -13,10 +13,11 @@
 - 🚀 **进程管理** - 启动/停止/切换模式，自动清理残留进程
 - 🛡️ **进程保活** - 基于 launchd（root），崩溃/开机自动拉起，代理后台常驻（`daemon on`）
 - 🔄 **双模式支持** - Mixed 模式和 TUN 透明代理模式
-- 📊 **状态监控** - 查看运行状态、内存占用
+- 📊 **状态监控** - 查看运行状态、内存占用、订阅流量与到期时间
 - 📝 **日志管理** - 实时日志 + 历史日志归档（自动轮转，保留7天）
 - 🎨 **Web UI** - 一键打开 Web 控制面板 (zash/metacubexd/yacd)
 - 🔄 **内核更新** - 自动检查更新，支持 GitHub 镜像加速
+- 💡 **容错提示** - 命令/子命令拼错时给出 did-you-mean 纠错建议
 - ⌨️ **命令别名** - `mihomo` / `mhm` / `mh` 均可调用
 
 ## 安装
@@ -86,7 +87,7 @@ mihomo ui yacd     # YACD
 | --------------------------- | ---------------------------------------------------------------------------- |
 | `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式（`-s` 跳过更新，`-u` 更新超时，`-r` 清理轮次，`-t` 超时，`-j` 并发，`--no-clean` 跳过启动自动清理） |
 | `mihomo stop`               | 停止代理                                                                     |
-| `mihomo status`             | 查看运行状态                                                                 |
+| `mihomo status`             | 查看运行状态（含订阅流量、到期时间）                                         |
 | `mihomo log`                | 实时查看日志 (`-o` 用系统编辑器打开)                                         |
 | `mihomo logs`               | 列出所有日志（当前 + 历史归档）                                              |
 | `mihomo logs <编号>`        | 查看指定日志（`0`=当前日志，`1+`=归档日志，支持 `-n N` 指定行数、`-o` 打开） |
@@ -119,9 +120,9 @@ mihomo ui yacd     # YACD
 
 | 命令                              | 说明                                                                |
 | --------------------------------- | ------------------------------------------------------------------- |
-| `mihomo kernel [--mirror [镜像]]` | 更新内核（默认直连，`--mirror` 使用镜像）                           |
+| `mihomo kernel [--mirror [镜像]]` | 更新内核（默认直连，`--mirror` 使用镜像；更新后运行中实例需重启生效） |
 | `mihomo daemon [on\|off\|status]` | 进程保活：开机自启 + 崩溃自动重启（仅 Mixed 模式，on/off 需管理员密码）  |
-| `mihomo update`                   | 更新 mihomo-cli (npm install -g)                                    |
+| `mihomo update`                   | 更新 mihomo-cli（先查 npm 最新版，已是最新则跳过重装）              |
 | `mihomo ui [zash\|dash\|yacd]`    | 打开 Web UI                                                         |
 | `mihomo dir`                      | 显示数据目录位置                                                    |
 | `mihomo dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `kernel` 等）                 |

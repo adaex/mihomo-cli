@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.6.0] - 2026-08-15
+
+### 修复
+
+- **`sub add` 重名时误删既有同名订阅** - 回滚逻辑包住了入库步骤，添加重名订阅时「已存在」错误同样触发 `removeSubscription`，把用户既有的同名订阅（含缓存与配置文件）删掉。现入库移出 try 块，回滚仅覆盖「入库成功后下载失败」
+- **`start` 拼错模式名静默按 Mixed 启动** - `mihomo start tn` 之类只判 `=== 'tun'`，拼错不报错，用户会误以为已切到 TUN。现校验模式参数并报错，参数校验先于内核/订阅环境检查
+- **pidFile 运行判定可被 PID 复用欺骗** - 只检查 pid 存活，系统重启后残留 pid 文件里的 pid 可能已被无关进程复用，被误判成运行中的 mihomo。现同时校验进程命令行包含内核路径（与测速实例防护同口径）
+- **数据层预期错误打印堆栈** - 订阅名称非法/重名、未找到订阅配置、无有效节点、内核/配置缺失等用户可见的预期错误仍抛裸 `Error`，经统一收口后打印堆栈。现全部迁移为 `CliError`
+
+### 新增
+
+- **did-you-mean 纠错** - 未知命令与 `sub`/`daemon` 未知子命令按前缀 + 编辑距离给出纠错建议（如 `mihomo strt` -> `是否想输入: start / stop?`）
+- **`update` 更新前检查最新版** - 先查 npm registry，已是最新版本则跳过重装；查询失败（15s 超时）降级为直接安装
+- **`status` 显示订阅流量与到期** - 复用订阅缓存的响应头数据，有则展示
+- **场景化提醒** - `ui` 在 mihomo 未运行时提示先启动；`kernel` 更新成功后运行中实例提示需重启生效
+
+### 内部
+
+- **utils 按职责拆分** - `colors.ts`（颜色）、`errors.ts`（CliError/TimeoutError/withTimeout）、`http.ts`（HTTP 客户端）独立成模块；`isProcess*` 进程探测归入 `process.ts`，`isProxyValid` 归入其唯一消费者 `test-instance.ts`；`VERSION`/`PKG_NAME` 移入 `constants.ts`。`utils.ts` 只留无副作用的纯函数（sleep、转义、格式化、flag 解析、纠错建议）
+- **补充单元测试** - 新增 `suggestSimilar`（did-you-mean）单测，总计 55 个
+
 ## [3.5.0] - 2026-08-15
 
 ### 变更
