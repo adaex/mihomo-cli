@@ -1,11 +1,13 @@
 import { printShortHelp } from './commands/help.js';
 import { findCommand } from './commands/registry.js';
 import { printStatus } from './commands/status.js';
-import { runCleanup } from './lifecycle.js';
+import { isSilentSigint, runCleanup } from './lifecycle.js';
 import { ensureDirs } from './paths.js';
 
 process.on('SIGINT', () => {
-  console.log('\n正在退出...');
+  if (!isSilentSigint()) {
+    console.log('\n正在退出...');
+  }
   runCleanup();
   process.exit(130);
 });

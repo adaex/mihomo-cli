@@ -39,7 +39,12 @@ import { colors, createHttpClient, TimeoutError, withTimeout } from './utils.js'
 export { AUTO_CLEAN_THRESHOLD, AUTO_CLEAN_THRESHOLD_GITHUB, DEFAULT_AUTO_UPDATE_TIMEOUT, DEFAULT_CLEAN_ROUNDS };
 
 export function isGithubUrl(url: string): boolean {
-  return /github\.com|raw\.githubusercontent\.com/i.test(url);
+  const githubRe = /github\.com|raw\.githubusercontent\.com/i;
+  // 多 URL 合并订阅：全部来源都是 GitHub 才按 GitHub 策略（更勤更新、更低清理阈值）
+  if (isMultiUrl(url)) {
+    return splitUrls(url).every(u => githubRe.test(u));
+  }
+  return githubRe.test(url);
 }
 
 function getDefaultUpdateInterval(url: string): number {
@@ -55,6 +60,16 @@ const HTTP_CLIENT = createHttpClient({ timeout: 60_000 });
 
 export function isMultiUrl(url: string): boolean {
   return url.includes(',');
+}
+
+/** 校验是否为合法 http(s) 订阅 URL：必须 http/https 协议且能被 URL 解析（排除 httpfoo://、http-evil 等）。 */
+export function isValidHttpUrl(url: string): boolean {
+  try {
+    const u = new URL(url.trim());
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 export function splitUrls(url: string): string[] {
@@ -203,7 +218,7 @@ export function pickSingleSubscription(subs: Subscription[], pattern: string): S
   process.exit(1);
 }
 
-export async function downloadSubscription(url: string, subName = 'default', signal?: AbortSignal): Promise<DownloadResult> {
+export async function downloadSubscription(url: string, subName = 'default', signal?: AbortSignal, persist = true): Promise<DownloadResult> {
   let response: HttpResponse<string>;
   try {
     response = await HTTP_CLIENT.get<string>(url, { responseType: 'text', signal });
@@ -226,10 +241,14 @@ export async function downloadSubscription(url: string, subName = 'default', sig
   const parsed = parseYamlOrJson(content, '订阅内容') as Record<string, unknown>;
   if (!parsed) throw new Error('订阅内容为空');
 
-  saveSubscriptionRawConfig(subName, content);
+  if (persist) {
+    saveSubscriptionRawConfig(subName, content);
+  }
 
   const meta = extractSubscriptionMeta(response.headers);
-  saveSubscriptionMeta(subName, meta);
+  if (persist) {
+    saveSubscriptionMeta(subName, meta);
+  }
 
   const proxies = parsed.proxies as unknown[] | undefined;
   const proxyGroups = parsed['proxy-groups'] as unknown[] | undefined;
@@ -244,13 +263,17 @@ export async function downloadSubscription(url: string, subName = 'default', sig
   };
 }
 
-export async function downloadMergedSubscription(urls: string[], subName: string, signal?: AbortSignal): Promise<DownloadResult> {
+export async function downloadMergedSubscription(urls: string[], subName: string, signal?: AbortSignal, persist = true): Promise<DownloadResult> {
+  // 任一来源失败即取消其余下载，避免白等其他 URL
+  const internal = new AbortController();
+  const combinedSignal = signal ? AbortSignal.any([signal, internal.signal]) : internal.signal;
   const responses = await Promise.all(
     urls.map(async (url, index) => {
       try {
-        const response = await HTTP_CLIENT.get(url, { responseType: 'text', signal });
+        const response = await HTTP_CLIENT.get(url, { responseType: 'text', signal: combinedSignal });
         return { url, index, response, error: null };
       } catch (e) {
+        internal.abort();
         return { url, index, response: null, error: e as Error };
       }
     }),
@@ -285,10 +308,14 @@ export async function downloadMergedSubscription(urls: string[], subName: string
   base.proxies = baseProxies;
 
   const mergedContent = dumpYaml(base);
-  saveSubscriptionRawConfig(subName, mergedContent);
+  if (persist) {
+    saveSubscriptionRawConfig(subName, mergedContent);
+  }
 
   const meta = extractSubscriptionMeta(responses[0].response?.headers);
-  saveSubscriptionMeta(subName, meta);
+  if (persist) {
+    saveSubscriptionMeta(subName, meta);
+  }
 
   const proxyGroups = base['proxy-groups'] as unknown[] | undefined;
   return {
@@ -380,16 +407,23 @@ export async function autoUpdateStaleSubscription(options: { timeout?: number } 
 
   const timeoutMs = options.timeout ?? DEFAULT_AUTO_UPDATE_TIMEOUT;
   const controller = new AbortController();
-  let results: TryUpdateResult[];
+  // 结果就地收集：超时后也能统计已完成的更新，而不是把全部计为失败
+  const results: TryUpdateResult[] = [];
+  const updatePromise = Promise.all(
+    staleSubs.map(sub =>
+      tryUpdateOne(sub, controller.signal).then(r => {
+        results.push(r);
+        return r;
+      }),
+    ),
+  );
   try {
-    results = await withTimeout(Promise.all(staleSubs.map(sub => tryUpdateOne(sub, controller.signal))), timeoutMs);
+    await withTimeout(updatePromise, timeoutMs);
   } catch (e) {
-    if (e instanceof TimeoutError) {
-      controller.abort(); // 中断仍在跑的 fetch，阻止其超时后成功回来又写盘（与"已用缓存启动"竞态）
-      console.log(colors.yellow(`自动更新超时 (${timeoutMs / 1000}s)，跳过更新，使用缓存配置`));
-      return { total: staleSubs.length, updated: 0, failed: staleSubs.length };
-    }
-    throw e;
+    if (!(e instanceof TimeoutError)) throw e;
+    controller.abort(); // 中断仍在跑的 fetch，阻止其超时后成功回来又写盘（与"已用缓存启动"竞态）
+    await updatePromise.catch(() => {}); // 等 abort 落地，收全已完成/已失败的结果
+    console.log(colors.yellow(`自动更新超时 (${timeoutMs / 1000}s)，已完成的更新生效，其余使用缓存配置`));
   }
 
   let updatedCount = 0;
@@ -507,6 +541,22 @@ function normalizeProxyNamesBeforeSave(parsed: ParsedSubscription): number {
     }
   }
 
+  // 同步 raw.rules 中直接引用旧节点名的规则目标，避免裁剪后留下悬空引用（会被 validateConfig 静默删除）
+  const rules = parsed.raw.rules;
+  if (Array.isArray(rules)) {
+    parsed.raw.rules = rules.map(rule => {
+      if (typeof rule !== 'string') return rule;
+      const parts = rule.split(',');
+      if (parts.length < 2) return rule;
+      // 目标位：末段是 no-resolve 修饰时取倒数第二段（与 config.ts getRuleTarget 口径一致）
+      const targetIdx = parts[parts.length - 1].trim().toLowerCase() === 'no-resolve' && parts.length >= 3 ? parts.length - 2 : parts.length - 1;
+      const target = parts[targetIdx].trim();
+      const renamed = renameMap.get(target);
+      if (renamed) parts[targetIdx] = renamed;
+      return parts.join(',');
+    });
+  }
+
   return renameMap.size;
 }
 
@@ -542,12 +592,17 @@ function cleanDeadProxies(parsed: ParsedSubscription, deadNames: Set<string>): {
         group.proxies = group.proxies.filter(name => !removedGroupNames.has(name));
       }
     }
-    // 移除引用了已删空分组的规则，避免残留在保存的订阅文件里（target 提取与 config.ts validateConfig 一致）
+  }
+
+  // 移除引用了已删空分组或已删死节点的规则，避免残留在保存的订阅文件里
+  // （target 提取与 config.ts validateConfig 一致；构建时还有一层兜底）
+  const removedTargets = new Set([...removedGroupNames, ...deadNames]);
+  if (removedTargets.size > 0) {
     const rules = parsed.raw.rules;
     if (Array.isArray(rules)) {
       parsed.raw.rules = rules.filter(rule => {
         if (typeof rule !== 'string') return true;
-        return !removedGroupNames.has(getRuleTarget(rule));
+        return !removedTargets.has(getRuleTarget(rule));
       });
     }
   }

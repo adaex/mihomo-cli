@@ -122,6 +122,7 @@ export function isDaemonEnabled(): boolean {
  * 不用 `launchctl print system/<label>`（需 sudo）；改用 pgrep + root 属主过滤：
  * daemon 内核跑在 root（无 UserName），用户 `start` 是用户属主（排除），TUN 与 daemon 互斥，
  * 故 enabled 为真时 root 属主的 mihomo 进程即 daemon 内核。isProcessRoot 用 ps（对 root pid 有效）。
+ * 注意 loaded 是「内核在跑」的免 sudo 近似，非 launchctl 真实装载状态（KeepAlive 下两者等价）。
  */
 export function getDaemonStatus(): DaemonStatus {
   if (!isDaemonEnabled()) {

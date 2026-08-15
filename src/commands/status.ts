@@ -18,8 +18,9 @@ export function printStatus(): void {
   const { running, pid, daemon: daemonManaged } = state;
 
   console.log('');
+  // 模式取自配置文件：未运行时也展示上次构建的模式（stop 会清配置，清了就不显示）
   let modeLabel = '';
-  if (info && running) {
+  if (info) {
     modeLabel = colors.cyan(info.tun ? ' (TUN)' : ' (Mixed)') as string;
   }
   const statusText = running ? colors.green('● 运行中') : colors.yellow('不在运行');
@@ -34,7 +35,11 @@ export function printStatus(): void {
   }
 
   if (info) {
-    if (info.mixedPort) {
+    if (info.tun) {
+      // TUN 模式由虚拟网卡接管全局流量；mixed-port 仍在监听可作备用入口，一并标注
+      const extra = info.mixedPort ? `，另监听 ${info.mixedPort}` : '';
+      console.log(`${colors.gray('端口: ')}TUN 接管${extra}`);
+    } else if (info.mixedPort) {
       console.log(`${colors.gray('端口: ')}${info.mixedPort}`);
     } else {
       const ports: string[] = [];

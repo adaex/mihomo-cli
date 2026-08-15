@@ -1,13 +1,15 @@
 import { hasKernel } from '../config.js';
-import { DEFAULT_TEST_CONCURRENCY, DEFAULT_TEST_TIMEOUT } from '../constants.js';
+import { AUTO_CLEAN_COOLDOWN_HOURS, DEFAULT_TEST_CONCURRENCY, DEFAULT_TEST_TIMEOUT } from '../constants.js';
 import { isDaemonEnabled } from '../daemon.js';
+import { PATHS } from '../paths.js';
 import * as processManager from '../process.js';
+import { createProgressPrinter, formatCleanSummary, formatTestSummary } from '../progress.js';
 import * as runtime from '../runtime.js';
+import { readSubscriptionCache, saveSubscriptionCache } from '../settings.js';
 import * as subscription from '../subscription.js';
 import { colors, hasFlag, parseIntArg, sleep } from '../utils.js';
 import { printStatus } from './status.js';
 import { handleStopResult } from './stop.js';
-import { createProgressPrinter, formatCleanSummary, formatTestSummary } from './subscription.js';
 
 export async function cmdStart(args: string[]): Promise<void> {
   if (!hasKernel()) {
@@ -28,6 +30,7 @@ export async function cmdStart(args: string[]): Promise<void> {
   const timeout = parseIntArg(args, '-t', '--timeout', DEFAULT_TEST_TIMEOUT);
   const concurrency = parseIntArg(args, '-j', '--concurrency', DEFAULT_TEST_CONCURRENCY);
   const skipUpdate = hasFlag(args, '-s', '--no-update');
+  const skipClean = hasFlag(args, '--no-clean');
   const updateTimeout = parseIntArg(args, '-u', '--update-timeout', subscription.DEFAULT_AUTO_UPDATE_TIMEOUT);
 
   const sub = subscription.getActiveSubscription();
@@ -44,6 +47,14 @@ export async function cmdStart(args: string[]): Promise<void> {
   // 非保活模式沿用 stop() + start()。差异收敛在 runtime.launchOrRestart。
 
   if (!daemonEnabled) {
+    // 隐式停止不应意外弹 sudo：有 root 残留时直接报错引导（与 startMixedMode 的设计一致）
+    if (processManager.hasRootResidue()) {
+      console.error(`${colors.red('错误:')} 存在需要 root 权限清理的残留进程/文件`);
+      console.error(`请先手动清理: sudo pkill -9 mihomo && sudo rm -f ${PATHS.pidFile}`);
+      console.error('或切换到 TUN 模式启动（自动清理）: mihomo start tun');
+      process.exit(1);
+    }
+
     const status = processManager.getStatus();
     const hasProcess = status.running || status.allProcesses.length > 0;
 
@@ -86,40 +97,50 @@ export async function cmdStart(args: string[]): Promise<void> {
 
   const cleanThreshold = subscription.isGithubUrl(sub.url) ? subscription.AUTO_CLEAN_THRESHOLD_GITHUB : subscription.AUTO_CLEAN_THRESHOLD;
 
-  if (configInfo.proxies > cleanThreshold) {
-    console.log('');
-    console.log(`节点数 ${configInfo.proxies} 超过 ${cleanThreshold}，自动清理...`);
-    console.log('');
+  if (!skipClean && configInfo.proxies > cleanThreshold) {
+    // 冷却：上次自动清理在 AUTO_CLEAN_COOLDOWN_HOURS 内则跳过，避免每次 start 都全量测速
+    const cache = readSubscriptionCache();
+    const lastCleanAt = cache[sub.name]?.last_auto_clean_at;
+    const withinCooldown = !!lastCleanAt && Date.now() - new Date(lastCleanAt).getTime() < AUTO_CLEAN_COOLDOWN_HOURS * 60 * 60 * 1000;
 
-    await sleep(1000);
-
-    const progress = createProgressPrinter(rounds);
-    const cleanResult = await subscription.autoCleanSubscription(sub.name, {
-      timeout,
-      concurrency,
-      rounds,
-      onResult: progress.onResult,
-      onRetryRound: progress.onRetryRound,
-    });
-    progress.finish();
-    console.log(formatTestSummary(cleanResult.summary));
-
-    if (cleanResult.skipped) {
-      console.log(colors.yellow('存活节点不足 1%，跳过清理。请检查原始订阅是否有效'));
-    } else if (cleanResult.removedProxies > 0) {
-      console.log(`${colors.green('已清理')}: ${formatCleanSummary(cleanResult)}`);
-
+    if (!withinCooldown) {
       console.log('');
-      console.log('重新加载配置...');
-      if (!daemonEnabled) handleStopResult(processManager.stop());
-      try {
-        configInfo = subscription.prepareConfigForStart(targetMode, sub.name);
-        const pid = await runtime.launchOrRestart(targetMode);
-        console.log(`${colors.green('已重启')}${pid ? ` (PID ${pid})` : ''} · ${subscription.formatProxySummary(configInfo)}`);
-      } catch (e) {
-        console.error(`${colors.red('重启失败:')} ${(e as Error).message.split('\n')[0]}`);
-        process.exit(1);
+      console.log(`节点数 ${configInfo.proxies} 超过 ${cleanThreshold}，自动清理（${AUTO_CLEAN_COOLDOWN_HOURS}h 内仅一次，--no-clean 跳过）...`);
+      console.log('');
+
+      await sleep(1000);
+
+      const progress = createProgressPrinter(rounds);
+      const cleanResult = await subscription.autoCleanSubscription(sub.name, {
+        timeout,
+        concurrency,
+        rounds,
+        onResult: progress.onResult,
+        onRetryRound: progress.onRetryRound,
+      });
+      progress.finish();
+      console.log(formatTestSummary(cleanResult.summary));
+
+      if (cleanResult.skipped) {
+        console.log(colors.yellow('存活节点不足 1%，跳过清理。请检查原始订阅是否有效'));
+      } else if (cleanResult.removedProxies > 0) {
+        console.log(`${colors.green('已清理')}: ${formatCleanSummary(cleanResult)}`);
+
+        console.log('');
+        console.log('重新加载配置...');
+        if (!daemonEnabled) handleStopResult(processManager.stop());
+        try {
+          configInfo = subscription.prepareConfigForStart(targetMode, sub.name);
+          const pid = await runtime.launchOrRestart(targetMode);
+          console.log(`${colors.green('已重启')}${pid ? ` (PID ${pid})` : ''} · ${subscription.formatProxySummary(configInfo)}`);
+        } catch (e) {
+          console.error(`${colors.red('重启失败:')} ${(e as Error).message.split('\n')[0]}`);
+          process.exit(1);
+        }
       }
+
+      // 记录本次自动清理时间（含 skipped：已测过一轮，冷却内不再测）
+      saveSubscriptionCache(sub.name, { last_auto_clean_at: new Date().toISOString() });
     }
   }
 

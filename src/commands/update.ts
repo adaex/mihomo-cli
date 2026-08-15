@@ -18,12 +18,17 @@ export async function cmdUpdate(): Promise<void> {
       if (code === 0) {
         resolve();
       } else {
+        console.error('更新失败。若为权限问题（EACCES），可尝试: sudo npm install -g mihomo-cli');
         process.exit(code || 1);
       }
     });
 
     npm.on('error', e => {
-      console.error(`执行失败: ${e.message}`);
+      if (e.message.includes('EACCES') || e.message.includes('permission')) {
+        console.error('权限不足，可尝试: sudo npm install -g mihomo-cli');
+      } else {
+        console.error(`执行失败: ${e.message}`);
+      }
       process.exit(1);
     });
   });

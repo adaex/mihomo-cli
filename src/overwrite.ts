@@ -262,10 +262,13 @@ export function loadOverwriteFile(): OverwriteFileEntry[] {
     try {
       const content = fs.readFileSync(filePath, 'utf8');
       const parsed = yaml.load(content) as Record<string, unknown> | null;
-      if (parsed && typeof parsed === 'object') {
+      // 顶层数组/标量不是合法覆写文件（解构会得到数字键），直接跳过并告警
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         // match 是元数据键：抽成结构化字段并从 config 剥离，确保它永不进入最终 mihomo 配置。
         const { match, ...config } = parsed;
         results.push({ name: file, path: filePath, config, match: normalizeMatch(match, file) });
+      } else if (parsed !== null) {
+        console.warn(`警告: 覆写文件 "${file}" 顶层必须是对象，已跳过`);
       }
     } catch (e) {
       console.warn(`警告: 覆写文件 "${file}" 解析失败: ${(e as Error).message}`);
@@ -276,11 +279,13 @@ export function loadOverwriteFile(): OverwriteFileEntry[] {
 }
 
 export function applyOverwrite(baseConfig: Record<string, unknown>, preloadedFiles?: OverwriteFileEntry[]): Record<string, unknown> {
-  if (!isOverwriteEnabled()) return baseConfig;
+  if (!isOverwriteEnabled()) return { ...baseConfig };
 
   const overwriteFiles = preloadedFiles || loadOverwriteFile();
-  if (overwriteFiles.length === 0) return baseConfig;
+  if (overwriteFiles.length === 0) return { ...baseConfig };
 
+  // 恒返回浅拷贝：buildConfig 随后会 delete 端口/tun 等锁定键，
+  // 直接返回 baseConfig 会污染订阅原始对象（debug stage1 也会随之失真）
   let result = { ...baseConfig };
   for (const file of overwriteFiles) {
     result = deepMergeWithOverrides(result, file.config);

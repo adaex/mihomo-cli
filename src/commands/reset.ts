@@ -5,7 +5,7 @@ import { disableDaemon, isDaemonEnabled } from '../daemon.js';
 import { isOverwriteFilename } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import * as processManager from '../process.js';
-import { invalidateSettingsCache } from '../settings.js';
+import { invalidateSettingsCache, writeSettings } from '../settings.js';
 import type { ResetTarget } from '../types.js';
 import { colors } from '../utils.js';
 
@@ -16,6 +16,9 @@ const RESET_TARGETS: ResetTarget[] = [
     label: '订阅',
     paths: () => [DIRS.subscriptions],
     needsStop: true,
+    // 同步清空 settings 里的订阅列表：只删缓存文件会留下"列表存在但无配置"的半重置状态
+    // （start 会报"未找到订阅配置"）。active_subscription 一并清除
+    onAfter: () => writeSettings({ subscriptions: undefined, active_subscription: undefined }),
   },
   {
     id: 'logs',
@@ -113,7 +116,20 @@ async function confirmPrompt(question: string): Promise<boolean> {
 export async function cmdReset(args: string[]): Promise<void> {
   const flags = (args || []).filter(a => a.startsWith('-'));
   const names = (args || []).slice(1).filter(a => !a.startsWith('-'));
-  const fullReset = flags.includes('--full') || flags.includes('-f');
+
+  // 已知标志白名单：未知标志一律报错退出（避免 --ful 拼错被静默忽略后走默认删除）。
+  // 注意：-f 不再是 --full 的别名——删全部只能显式 --full，免确认统一用 -y/--yes，
+  // 防止与常见 -f=force 直觉混淆导致误删设置/内核/覆写。
+  const KNOWN_FLAGS = new Set(['--full', '--yes', '-y']);
+  const unknownFlags = flags.filter(f => !KNOWN_FLAGS.has(f));
+  if (unknownFlags.length > 0) {
+    console.error(`错误: 未知的选项: ${unknownFlags.join(', ')}`);
+    console.log('');
+    console.log('可用选项: --full（删全部）, -y/--yes（跳过确认）');
+    process.exit(1);
+  }
+
+  const fullReset = flags.includes('--full');
   const skipConfirm = flags.includes('--yes') || flags.includes('-y');
 
   let targets: ResetTarget[];

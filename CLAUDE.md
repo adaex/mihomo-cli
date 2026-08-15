@@ -11,7 +11,7 @@ This file provides guidance to Claude Code when working with this repository.
 - **构建**: `tsup` → `dist/index.js` (单文件打包)
 - **开发运行**: `tsx src/index.ts`
 - **别名**: `mihomo` (推荐), `mhm`, `mh`, `mihomo-cli`
-- **运行时**: Node.js >= 22
+- **运行时**: Node.js >= 22.22.1
 
 ---
 

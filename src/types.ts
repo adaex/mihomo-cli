@@ -9,6 +9,8 @@ export interface Settings {
   subscriptions?: Subscription[];
   active_subscription?: string;
   overwrite_enabled?: boolean;
+  /** external-controller 访问密钥（可选，多用户环境建议设置）；不设置则控制器无鉴权 */
+  controller_secret?: string;
 }
 
 // === Subscription Cache ===
@@ -22,6 +24,8 @@ export interface SubscriptionCacheEntry {
   expire?: number;
   web_page_url?: string;
   username?: string;
+  /** 上次启动时自动测速清理的时间（冷却用，避免每次 start 都全量测速） */
+  last_auto_clean_at?: string;
 }
 
 export interface SubscriptionCache {
@@ -126,7 +130,7 @@ export interface StaleState {
 export interface DaemonStatus {
   /** plist 文件是否存在（即用户是否启用过保活） */
   enabled: boolean;
-  /** launchd 是否已装载该任务 */
+  /** 托管内核是否在运行（免 sudo 近似：root 属主主实例进程存在；非 launchctl 真实装载状态） */
   loaded: boolean;
   /** 被 launchd 托管的内核进程 PID（未运行为 null） */
   pid: number | null;

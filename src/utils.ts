@@ -1,12 +1,16 @@
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
+import { DEFAULT_MIRROR } from './constants.js';
 import type { HttpClient, HttpClientOptions, HttpResponse, MirrorArg } from './types.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 
 export const VERSION: string = pkg.version;
+
+/** HTTP 响应体大小上限（50MB）：订阅/内核产物远小于此，超限视为异常（劫持/故障）并中止，防 OOM。 */
+const MAX_RESPONSE_BYTES = 50 * 1024 * 1024;
 
 const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
 
@@ -83,6 +87,8 @@ export function formatBytes(bytes: unknown): string {
 
 export function formatTimestamp(ts: unknown): string {
   if (ts === undefined || ts === null) return '未知';
+  // 机场以 expire=0（或缺省）表示永久/无限期，不能显示成 1970-01-01
+  if (ts === 0) return '永久';
   try {
     return new Date((ts as number) * 1000).toLocaleString('zh-CN');
   } catch {
@@ -107,8 +113,8 @@ export function formatDate(dateOrIso: unknown): string {
   }
 }
 
-export function hasFlag(args: string[] | undefined, short: string, long: string): boolean {
-  return !!args && (args.includes(short) || args.includes(long));
+export function hasFlag(args: string[] | undefined, short: string, long?: string): boolean {
+  return !!args && (args.includes(short) || (long !== undefined && args.includes(long)));
 }
 
 export function parseIntArg(args: string[] | undefined, short: string, long: string, defaultValue: number): number {
@@ -119,6 +125,9 @@ export function parseIntArg(args: string[] | undefined, short: string, long: str
         const val = parseInt(args[i + 1], 10);
         return Number.isNaN(val) ? defaultValue : val;
       }
+    } else if (args[i].startsWith(`${long}=`)) {
+      const val = parseInt(args[i].slice(long.length + 1), 10);
+      if (!Number.isNaN(val)) return val;
     }
   }
   return defaultValue;
@@ -130,6 +139,26 @@ export function parseIntArg(args: string[] | undefined, short: string, long: str
  * 注意：--mirror/--mirror-all 是可选值选项、只走 parseMirrorArg，故意不收录。
  */
 const VALUE_FLAGS: ReadonlySet<string> = new Set(['-t', '--timeout', '-j', '--concurrency', '-r', '--rounds', '-n', '--lines', '-u', '--update-timeout']);
+
+/**
+ * 从任意命令的 argv 中抽取 start 支持的启动选项（含其值），供 sub use / ow on|off 触发的重启透传。
+ * 否则 `mihomo sub use foo -s` 里的 -s 等选项会被丢弃，重启仍走默认行为。
+ */
+export function extractStartOptions(args: string[] | undefined): string[] {
+  if (!args) return [];
+  const BOOL_FLAGS = new Set(['-s', '--no-update', '--no-clean']);
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (VALUE_FLAGS.has(a)) {
+      out.push(a);
+      if (i + 1 < args.length) out.push(args[++i]);
+    } else if (BOOL_FLAGS.has(a) || /^--(timeout|concurrency|rounds|update-timeout)=/.test(a)) {
+      out.push(a);
+    }
+  }
+  return out;
+}
 
 export function getNonFlagArg(args: string[] | undefined, startIdx: number, valueFlags: ReadonlySet<string> = VALUE_FLAGS): string | null {
   if (!args) return null;
@@ -187,13 +216,47 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
           }
           throw error;
         }
-        const data = config?.responseType === 'json' ? await response.json() : await response.text();
+        // 提前拒绝声明超大的响应，避免把 GB 级 body 读进内存（订阅/内核下载被劫持或故障时的 OOM 防护）
+        const declaredLen = Number(response.headers.get('content-length'));
+        if (Number.isFinite(declaredLen) && declaredLen > MAX_RESPONSE_BYTES) {
+          throw new Error(`响应体过大（${formatBytes(declaredLen)}，上限 ${formatBytes(MAX_RESPONSE_BYTES)}）`);
+        }
+        const text = await readBodyWithLimit(response, controller);
+        const data = config?.responseType === 'json' ? JSON.parse(text) : text;
         return { data: data as T, headers: response.headers, status: response.status };
       } finally {
         clearTimeout(timer);
       }
     },
   };
+}
+
+/**
+ * 流式读取响应体并强制大小上限：即使服务端不声明 Content-Length（分块传输），
+ * 累计超过 MAX_RESPONSE_BYTES 也立即 abort 中止，避免边读边膨胀撑爆内存。
+ */
+async function readBodyWithLimit(response: Response, controller: AbortController): Promise<string> {
+  if (!response.body) return response.text();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        total += value.byteLength;
+        if (total > MAX_RESPONSE_BYTES) {
+          controller.abort();
+          throw new Error(`响应体超过大小上限（${formatBytes(MAX_RESPONSE_BYTES)}）`);
+        }
+        chunks.push(value);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 function normalizeMirrorUrl(val: string): string | null {
@@ -219,20 +282,25 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
     return { mirror: null, isOverride: true, type: 'download' };
   }
 
+  // 同时支持 `--mirror url` 与 `--mirror=url` 两种形式
+  const mirrorAllEq = args.find(a => a.startsWith('--mirror-all='));
   const mirrorAllIdx = args.indexOf('--mirror-all');
-  if (mirrorAllIdx >= 0) {
-    const nextArg = args[mirrorAllIdx + 1];
+  if (mirrorAllIdx >= 0 || mirrorAllEq) {
+    const inline = mirrorAllEq?.slice('--mirror-all='.length);
+    const nextArg = inline ?? args[mirrorAllIdx + 1];
     if (!nextArg || nextArg.startsWith('-')) {
-      return { mirror: 'https://v6.gh-proxy.org/', isOverride: true, type: 'all' };
+      return { mirror: DEFAULT_MIRROR, isOverride: true, type: 'all' };
     }
     return { mirror: normalizeMirrorUrl(nextArg), isOverride: true, type: 'all' };
   }
 
+  const mirrorEq = args.find(a => a.startsWith('--mirror='));
   const mirrorIdx = args.indexOf('--mirror');
-  if (mirrorIdx >= 0) {
-    const nextArg = args[mirrorIdx + 1];
+  if (mirrorIdx >= 0 || mirrorEq) {
+    const inline = mirrorEq?.slice('--mirror='.length);
+    const nextArg = inline ?? args[mirrorIdx + 1];
     if (!nextArg || nextArg.startsWith('-')) {
-      return { mirror: 'https://v6.gh-proxy.org/', isOverride: true, type: 'download' };
+      return { mirror: DEFAULT_MIRROR, isOverride: true, type: 'download' };
     }
     return { mirror: normalizeMirrorUrl(nextArg), isOverride: true, type: 'download' };
   }

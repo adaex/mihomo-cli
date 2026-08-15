@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import { isOverwriteEnabled, listOverwriteFile, setOverwriteEnabled } from '../overwrite.js';
 import * as runtime from '../runtime.js';
-import { colors } from '../utils.js';
+import { colors, extractStartOptions } from '../utils.js';
 import { cmdStart } from './start.js';
 
 function printOverwriteList(): void {
@@ -57,7 +57,7 @@ export async function cmdOverwrite(args: string[]): Promise<void> {
 
     if (restartNeeded) {
       console.log('');
-      await cmdStart(['start', currentMode]);
+      await cmdStart(['start', currentMode, ...extractStartOptions(args)]);
       return;
     }
 
@@ -79,7 +79,7 @@ export async function cmdOverwrite(args: string[]): Promise<void> {
 
     if (restartNeeded) {
       console.log('');
-      await cmdStart(['start', currentMode]);
+      await cmdStart(['start', currentMode, ...extractStartOptions(args)]);
       return;
     }
 

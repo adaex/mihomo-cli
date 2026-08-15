@@ -84,7 +84,7 @@ mihomo ui yacd     # YACD
 
 | 命令                        | 说明                                                                         |
 | --------------------------- | ---------------------------------------------------------------------------- |
-| `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式（`-s` 跳过更新，`-u` 更新超时，`-r` 清理轮次，`-t` 超时，`-j` 并发） |
+| `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式（`-s` 跳过更新，`-u` 更新超时，`-r` 清理轮次，`-t` 超时，`-j` 并发，`--no-clean` 跳过启动自动清理） |
 | `mihomo stop`               | 停止代理                                                                     |
 | `mihomo status`             | 查看运行状态                                                                 |
 | `mihomo log`                | 实时查看日志 (`-o` 用系统编辑器打开)                                         |
@@ -102,10 +102,10 @@ mihomo ui yacd     # YACD
 | `mihomo sub update <name>`    | 更新指定订阅（支持模糊匹配）           |
 | `mihomo sub remove <name>`    | 删除订阅（支持模糊匹配）               |
 | `mihomo sub web [name]`       | 打开订阅页面（无参打开默认）           |
-| `mihomo sub test [name]`      | 测试节点连通性（`-t` 超时，`-j` 并发） |
-| `mihomo sub clean [name]`     | 测速并清理失败节点（`-r` 轮数，默认2）|
-| `mihomo test`                 | 快速测试当前节点连通性（`-t` 超时，`-j` 并发） |
-| `mihomo clean`                | 清理失败节点并自动重启（`-t` 超时，`-j` 并发，`-r` 轮数） |
+| `mihomo sub test [name]`      | 测试节点连通性（独立隔离实例，无需运行主实例，`-t` 超时，`-j` 并发） |
+| `mihomo sub clean [name]`     | 测速并清理失败节点（独立实例，不动主实例，`-r` 轮数，默认2）|
+| `mihomo test`                 | 测试当前节点（经运行中的主实例，`-t` 超时，`-j` 并发） |
+| `mihomo clean`                | 清理失败节点并重启（经主实例，`-t` 超时，`-j` 并发，`-r` 轮数） |
 
 ### 覆写配置
 
@@ -125,7 +125,7 @@ mihomo ui yacd     # YACD
 | `mihomo ui [zash\|dash\|yacd]`    | 打开 Web UI                                                         |
 | `mihomo dir`                      | 显示数据目录位置                                                    |
 | `mihomo dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `kernel` 等）                 |
-| `mihomo reset [目标...] [--full]` | 重置用户数据（可用目标：`subs`, `logs`, `kernel`, `overwrites` 等） |
+| `mihomo reset [目标...] [--full] [-y]` | 重置用户数据（可用目标：`subs`, `logs`, `kernel`, `overwrites` 等；`--full` 删全部，`-y` 跳过确认） |
 | `mihomo version`                  | 显示版本信息                                                        |
 | `mihomo help`                     | 显示帮助信息                                                        |
 
@@ -223,9 +223,16 @@ mihomo kernel --mirror-all hk.gh-proxy.org
 ## 订阅自动更新
 
 - 默认更新间隔：GitHub 订阅 6 小时，其他订阅 12 小时（订阅服务端可通过 `profile-update-interval` 覆盖）
-- 触发时机：`start` 命令、`sub list` 命令
+- 触发时机：`start` 命令（`sub` 列表为纯只读，不再触发更新）
 - 更新失败时继续使用本地缓存，不影响使用
 - 自动更新默认超时 10 秒，可通过 `-u <ms>` 调整；使用 `-s` 可完全跳过自动更新
+
+## 启动自动清理
+
+节点数超过阈值（GitHub 订阅 50、其他 100）时，`start` 会自动测速清理死节点：
+
+- 同一订阅 12 小时内只自动清理一次（冷却记录在订阅缓存），避免每次启动都全量测速
+- `--no-clean` 可跳过；随时可用 `mihomo clean` / `mihomo sub clean` 手动清理
 
 ## 数据目录
 
@@ -356,13 +363,15 @@ sudo pkill -9 mihomo
 
 ## 安全特性
 
-- **URL 脱敏**：订阅 URL 中的 token、key、password 等敏感参数自动替换为 `***`
+- **URL 脱敏**：订阅 URL 中的 token、key、password 等敏感参数（含 query、userinfo 及路径型令牌）自动替换为 `***`
 - **文件权限**：配置文件使用 `0o600` 权限（仅所有者可读可写），目录使用 `0o700` 权限
-- **入站锁定**：`allow-lan` 强制为 `false`，局域网设备无法连入代理端口（不可通过覆写开启）
+- **入站默认关闭**：订阅/覆写未指定时 `allow-lan` 默认 `false`；如需局域网设备连入代理端口，可在订阅或覆写中显式开启
 - **信号处理**：优雅处理 SIGINT/SIGTERM 信号
 - **异常捕获**：全局 uncaughtException 和 unhandledRejection 处理
 
-> **注意**：外部控制器（`127.0.0.1:9090`）无鉴权，与 Clash 系工具惯例一致。它仅监听本机回环、局域网不可达；但本机其他进程（含浏览器中的网页）可访问它，请勿在不可信的多用户环境使用。
+> **注意**：外部控制器（`127.0.0.1:9090`）默认无鉴权，与 Clash 系工具惯例一致。它仅监听本机回环、局域网不可达；但本机其他进程（含浏览器中的网页）可访问它，请勿在不可信的多用户环境使用。
+>
+> 多用户环境可在 `settings.json` 中设置 `controller_secret`（写入配置后随启动生效，`ui` 命令会提示密钥），为控制器 API 加上 Bearer 认证；密钥由系统锁定，订阅/覆写无法伪造。
 
 ## 许可证
 

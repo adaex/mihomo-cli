@@ -156,6 +156,13 @@ export async function downloadKernel(
     { stdio: 'inherit' },
   );
 
+  if (curlResult.error) {
+    if ((curlResult.error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error('未找到 curl 命令，请先安装 curl 后重试');
+    }
+    throw new Error(`下载失败: ${curlResult.error.message}`);
+  }
+
   if (curlResult.status !== 0) {
     try {
       fs.unlinkSync(tempPath);
@@ -178,6 +185,16 @@ export async function downloadKernel(
 
   try {
     if (tempPath.endsWith('.tar.gz') || tempPath.endsWith('.tgz')) {
+      // 路径穿越防护：解压前列出条目，拒绝绝对路径或含 .. 的成员（恶意镜像可借此写出 extractPath 之外）
+      const listResult = spawnSync('tar', ['-tzf', tempPath], { encoding: 'utf8', timeout: 60_000 });
+      if (listResult.error) throw listResult.error;
+      if (listResult.status !== 0) throw new Error(`tar 列表退出码 ${listResult.status}`);
+      const entries = (listResult.stdout || '').split('\n').filter(Boolean);
+      for (const entry of entries) {
+        if (entry.startsWith('/') || entry.split('/').includes('..')) {
+          throw new Error(`归档含非法路径条目: ${entry}`);
+        }
+      }
       const tarResult = spawnSync('tar', ['-xzf', tempPath, '-C', extractPath], { stdio: ['ignore', 'ignore', 'inherit'], timeout: 60_000 });
       if (tarResult.error) throw tarResult.error;
       if (tarResult.status !== 0) throw new Error(`tar 退出码 ${tarResult.status}`);

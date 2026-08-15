@@ -5,6 +5,7 @@ import * as yaml from 'js-yaml';
 import { BASE_CONFIG, TUN_CONFIG } from './constants.js';
 import { applyOverwrite, filterOverwriteFilesByScope, isOverwriteEnabled, loadOverwriteFile } from './overwrite.js';
 import { atomicWriteFileSync, ensureDirs, PATHS } from './paths.js';
+import { readSettings } from './settings.js';
 import type { BuildConfigResult, ConfigInfo, OverwriteScope, ParsedProxy, ParsedProxyGroup } from './types.js';
 import { escapeRegExp } from './utils.js';
 
@@ -37,7 +38,9 @@ function collectOverwriteProxyNames(overwriteFiles: { config: Record<string, unk
       if ((key === '+proxies' || key === 'proxies+') && Array.isArray(value)) {
         for (const proxy of value) {
           if (proxy && typeof proxy === 'object' && 'name' in proxy) {
-            names.push((proxy as { name: string }).name);
+            const name = (proxy as { name: unknown }).name;
+            // 过滤空/非字符串 name：否则 exclude-filter 正则会出现空分支（a||b），匹配所有节点，清空 include-all 分组
+            if (typeof name === 'string' && name.length > 0) names.push(name);
           }
         }
       }
@@ -81,6 +84,12 @@ function deduplicateByName<T extends { name: string }>(items: T[]): { result: T[
   });
   return { result, names, duplicates };
 }
+
+/**
+ * 无「目标为代理/分组名」语义的规则类型：末段不是 proxy/group 引用，不参与目标存在性校验。
+ * - SUB-RULE: `SUB-RULE,(表达式),<sub-rule名>` 末段引用 sub-rules 顶层键，非代理
+ */
+const NON_TARGET_RULE_TYPES = new Set(['SUB-RULE']);
 
 /**
  * 取规则的目标（代理/分组名）。末段为 `no-resolve` 修饰后缀时取倒数第二段
@@ -153,6 +162,9 @@ function validateConfig(config: Record<string, unknown>): string[] {
   if (rules.length > 0) {
     const removedRules: string[] = [];
     config.rules = rules.filter(rule => {
+      // SUB-RULE 等类型末段非代理/分组引用，跳过目标存在性校验，避免误删
+      const ruleType = rule.split(',')[0]?.trim().toUpperCase();
+      if (NON_TARGET_RULE_TYPES.has(ruleType)) return true;
       const target = getRuleTarget(rule);
       if (!target || validNames.has(target)) return true;
       removedRules.push(rule);
@@ -190,9 +202,8 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
     }
   }
 
-  // 系统锁定项（不受订阅/覆写影响）：allow-lan 强制 false 是有意的安全默认——
-  // 防止覆写误开入站代理让局域网设备连入；controller/端口固定是 UI、热重载、测速的统一依赖地址
-  systemConfig['allow-lan'] = false;
+  // 系统锁定项：controller/端口固定是 UI、热重载、测速的统一依赖地址；secret 仅取自用户设置。
+  // allow-lan 不锁定——订阅/覆写显式提供时按其值（见入站需求），未提供时由上面的 BASE_CONFIG 循环兜底为 false。
   systemConfig['external-controller'] = BASE_CONFIG['external-controller'];
   systemConfig['mixed-port'] = BASE_CONFIG['mixed-port'];
   delete withOverwrites['mixed-port'];
@@ -201,6 +212,11 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   delete withOverwrites['external-ui'];
   delete withOverwrites['external-ui-name'];
   delete withOverwrites['external-ui-url'];
+  delete withOverwrites.secret;
+  const controllerSecret = readSettings().controller_secret;
+  if (controllerSecret) {
+    systemConfig.secret = controllerSecret;
+  }
 
   if (mode === 'tun') {
     systemConfig.tun = TUN_CONFIG.tun;

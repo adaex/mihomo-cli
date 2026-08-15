@@ -75,7 +75,7 @@ function buildTestConfig(subName: string): void {
 
 async function startTestInstance(): Promise<void> {
   const binary = PATHS.mihomoBinary;
-  if (!fs.existsSync(binary)) throw new Error('未找到 mihomo 内核');
+  if (!fs.existsSync(binary)) throw new Error('未找到 mihomo 内核，请先运行 "mihomo kernel" 下载');
 
   stopTestInstance();
 
@@ -84,10 +84,12 @@ async function startTestInstance(): Promise<void> {
     detached: true,
     stdio: ['ignore', logFd, logFd],
   });
+  child.on('error', () => {});
   fs.closeSync(logFd);
   child.unref();
 
-  const pid = child.pid as number;
+  const pid = child.pid;
+  if (!pid) throw new Error('测试实例启动失败：无法创建进程（内核二进制可能不可执行）');
   fs.writeFileSync(TEST_PATHS.pidFile, pid.toString(), { mode: 0o600 });
 
   const client = createHttpClient({ timeout: 2000 });

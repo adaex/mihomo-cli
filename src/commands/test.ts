@@ -1,12 +1,12 @@
 import { DEFAULT_TEST_CONCURRENCY, DEFAULT_TEST_TIMEOUT } from '../constants.js';
 import { isDaemonEnabled } from '../daemon.js';
 import * as processManager from '../process.js';
+import { createProgressPrinter, formatCleanSummary, formatTestSummary } from '../progress.js';
 import * as runtime from '../runtime.js';
 import * as subscription from '../subscription.js';
 import type { Subscription } from '../types.js';
 import { colors, parseIntArg } from '../utils.js';
 import { handleStopResult } from './stop.js';
-import { createProgressPrinter, formatCleanSummary, formatTestSummary } from './subscription.js';
 
 function requireRunning(): void {
   // 运行状态由门面统一(保活看 launchd,普通看 pidFile);提示语按模式区分启动命令。
@@ -89,7 +89,15 @@ export async function cmdClean(args: string[]): Promise<void> {
     const mode = runtime.getRuntimeMode();
     const daemonManaged = isDaemonEnabled();
     try {
-      if (!daemonManaged) handleStopResult(processManager.stop());
+      if (!daemonManaged) {
+        // 隐式停止不应意外弹 sudo：root（TUN）实例引导用户用 sub clean（隔离测速，无需停止）
+        if (processManager.hasRootResidue()) {
+          console.error(`${colors.red('错误:')} 主实例以 root 运行（TUN），停止它需要 sudo`);
+          console.error('请改用 mihomo sub clean（隔离实例测速，无需停止主实例）');
+          process.exit(1);
+        }
+        handleStopResult(processManager.stop());
+      }
       const configInfo = subscription.prepareConfigForStart(mode, activeSub.name);
       const pid = await runtime.launchOrRestart(mode);
       const label = daemonManaged ? '已重启 (保活)' : '已重启';

@@ -1,4 +1,7 @@
-export const AVAILABLE_MIRRORS = ['gh-proxy.org', 'v6.gh-proxy.org', 'hk.gh-proxy.org', 'cdn.gh-proxy.org'];
+export const AVAILABLE_MIRRORS = ['v6.gh-proxy.org', 'gh-proxy.org', 'hk.gh-proxy.org', 'cdn.gh-proxy.org'];
+
+/** --mirror 不带值时的默认镜像（与 AVAILABLE_MIRRORS 首项一致） */
+export const DEFAULT_MIRROR = 'https://v6.gh-proxy.org/';
 
 export const UI_URLS: Record<string, string> = {
   zash: 'https://board.zash.run.place',
@@ -87,3 +90,5 @@ export const DEFAULT_CLEAN_ROUNDS = 2;
 export const AUTO_CLEAN_THRESHOLD = 100;
 /** GitHub 订阅启动后自动清理阈值 */
 export const AUTO_CLEAN_THRESHOLD_GITHUB = 50;
+/** 启动时自动测速清理的冷却（小时）：冷却期内 start 不再全量测速，避免每次启动都慢 */
+export const AUTO_CLEAN_COOLDOWN_HOURS = 12;

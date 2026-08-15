@@ -63,6 +63,12 @@ export function maskUrl(url: string): string {
     }
     if (parsed.username) parsed.username = '***';
     if (parsed.password) parsed.password = '***';
+    // 路径型 token（如 /api/v1/client/subscribe/<长串>）：对疑似令牌的长路径段做遮蔽，
+    // 保留结构可读。阈值 16，保留首尾 4 位便于用户辨认是哪条订阅。
+    parsed.pathname = parsed.pathname
+      .split('/')
+      .map(seg => (seg.length >= 16 ? `${seg.slice(0, 4)}***${seg.slice(-4)}` : seg))
+      .join('/');
     return parsed.toString();
   } catch {
     if (url.length > 30) {
@@ -81,6 +87,13 @@ export function readSubscriptionCache(): SubscriptionCache {
       const content = fs.readFileSync(PATHS.subscriptionsCacheFile, 'utf8');
       return JSON.parse(content) as SubscriptionCache;
     } catch {
+      // 与 settings.json 一致：损坏先备份再回退默认，避免下次写入覆盖丢失原始内容
+      try {
+        fs.copyFileSync(PATHS.subscriptionsCacheFile, `${PATHS.subscriptionsCacheFile}.bak`);
+        console.warn(`警告: 订阅缓存格式损坏，已备份到 ${PATHS.subscriptionsCacheFile}.bak`);
+      } catch {
+        console.warn('警告: 订阅缓存格式损坏，已忽略');
+      }
       return {};
     }
   }

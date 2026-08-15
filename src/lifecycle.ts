@@ -3,6 +3,20 @@ type CleanupFn = () => void;
 const cleanupFns = new Set<CleanupFn>();
 
 /**
+ * 静默 SIGINT 标志：tail -f 等场景下 Ctrl+C 是常规退出，
+ * 置位后全局 SIGINT 处理器不再打印"正在退出..."（仍执行清理并退出）。
+ */
+let silentSigint = false;
+
+export function setSilentSigint(value: boolean): void {
+  silentSigint = value;
+}
+
+export function isSilentSigint(): boolean {
+  return silentSigint;
+}
+
+/**
  * 注册一个进程退出前需要同步执行的清理函数（如杀掉测试实例）。
  * 返回取消注册的函数，正常流程结束后应调用以避免重复清理。
  */

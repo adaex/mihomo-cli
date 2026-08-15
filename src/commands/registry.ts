@@ -45,7 +45,7 @@ export const COMMANDS: Command[] = [
     aliases: ['up'],
     handler: cmdStart,
     group: 'control',
-    usage: ['start [tun|mixed] [-s] [-u ms]     启动/切换代理 (默认 mixed)', '      [-r N] [-t ms] [-j N]'],
+    usage: ['start [tun|mixed] [-s] [-u ms]     启动/切换代理 (默认 mixed)', '      [-r N] [-t ms] [-j N] [--no-clean]'],
   },
   {
     name: 'tun',
@@ -104,8 +104,8 @@ export const COMMANDS: Command[] = [
       'subscription update [name]   更新订阅（无参更新所有）',
       'subscription remove <name>   删除订阅',
       'subscription web [name]      打开订阅页面',
-      'subscription test [name]     测试节点连通性',
-      'subscription clean [name]    测速并清理失败节点',
+      'subscription test [name]     测试节点（独立实例，无需运行）',
+      'subscription clean [name]    测速清理（独立实例，不动主实例）',
     ],
   },
   {
@@ -121,14 +121,14 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdTest,
     group: 'subscription',
-    usage: ['test [-t ms] [-j N]           快速测试当前节点连通性'],
+    usage: ['test [-t ms] [-j N]           测试当前节点（经运行中的主实例）'],
   },
   {
     name: 'clean',
     aliases: [],
     handler: cmdClean,
     group: 'subscription',
-    usage: ['clean [-t ms] [-j N] [-r N]   清理失败节点并自动重启'],
+    usage: ['clean [-t ms] [-j N] [-r N]   清理失败节点并重启（经主实例）'],
   },
   // === 配置 ===
   {
@@ -196,7 +196,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdReset,
     group: 'system',
-    usage: ['reset [目标...] [--full]   重置: 留空保留设置/内核/覆写, 指定目标删对应项, --full 删全部'],
+    usage: ['reset [目标...] [--full] [-y]   重置: 留空保留设置/内核/覆写, 指定目标删对应项, --full 删全部, -y 跳过确认'],
   },
   // === meta(不在分组清单展示,help 末尾单列) ===
   {

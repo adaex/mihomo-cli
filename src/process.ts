@@ -2,6 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getKernelVersion, hasConfig, hasKernel } from './config.js';
+import { setSilentSigint } from './lifecycle.js';
 import { DIRS, ensureDirs, PATHS, rmrf } from './paths.js';
 import type { CleanupResult, LogList, ProcessInfo, ProcessStatus, StaleState, StartResult, StopResult } from './types.js';
 import { escapeRegExp, formatLocalTimestamp, isProcessRoot, isProcessRunning, shellQuote, sleepSync } from './utils.js';
@@ -83,6 +84,14 @@ function checkStaleState(): StaleState {
   };
 }
 
+/**
+ * 是否存在需要 root 权限清理的残留（root 属主进程或 root 属主 pid 文件）。
+ * start/clean 等「隐式停止」场景先查它：有残留则报错引导，避免 stop() 内部 sudo 提权意外弹密码。
+ */
+export function hasRootResidue(): boolean {
+  return checkStaleState().needsSudo;
+}
+
 function savePid(pid: number): void {
   ensureDirs();
   fs.writeFileSync(PATHS.pidFile, pid.toString(), { mode: 0o600 });
@@ -105,23 +114,10 @@ function clearPid(): void {
   }
 }
 
-function killProcess(pid: number, needsSudo = false): boolean {
+function killProcess(pid: number): boolean {
   try {
-    if (needsSudo) {
-      const result = spawnSync('sudo', ['kill', '-9', String(pid)], { stdio: 'inherit', timeout: 10_000 });
-      if (result.status === 0) {
-        return true;
-      }
-      try {
-        process.kill(pid, 'SIGKILL');
-        return true;
-      } catch {
-        return false;
-      }
-    } else {
-      process.kill(pid, 'SIGKILL');
-      return true;
-    }
+    process.kill(pid, 'SIGKILL');
+    return true;
   } catch {
     return false;
   }
@@ -172,7 +168,7 @@ export function cleanupAll(forceSudo = false): CleanupResult {
       killedCount = pids.length;
     } else {
       for (const pid of pids) {
-        if (killProcess(pid, false)) {
+        if (killProcess(pid)) {
           killedCount++;
         } else {
           failedPids.push(pid);
@@ -230,12 +226,13 @@ function createTunLaunchScript(): string {
     '  fi\n' +
     'done\n' +
     '\n' +
-    '# 失败，显示日志\n' +
+    '# 失败，显示日志（退出码 2：避开 sudo 的 1=鉴权失败/取消，供调用方区分）\n' +
+    'rm -f "${PID_FILE}" 2>/dev/null || true\n' +
     'echo "TUN 启动失败"\n' +
     'echo ""\n' +
     'echo "--- 日志 ---"\n' +
     'tail -25 "${LOG_FILE}" 2>/dev/null\n' +
-    'exit 1\n';
+    'exit 2\n';
 
   const scriptPath = path.join(DIRS.runtime, 'launch-tun.sh');
   fs.writeFileSync(scriptPath, scriptContent, { mode: 0o700 });
@@ -305,7 +302,7 @@ async function startMixedMode(staleState: StaleState): Promise<StartResult> {
   if (staleState.needsCleanup) {
     if (staleState.needsSudo) {
       console.log('\n发现需要 root 权限清理的残留进程/文件');
-      console.log('请先手动清理: sudo pkill -9 mihomo');
+      console.log(`请先手动清理: sudo pkill -9 mihomo && sudo rm -f ${PATHS.pidFile}`);
       console.log('或者切换到 TUN 模式，启动时会自动清理');
       throw new Error('存在需要 root 权限清理的残留');
     }
@@ -347,11 +344,19 @@ async function startMixedMode(staleState: StaleState): Promise<StartResult> {
     stdio: ['ignore', logFd, logFd],
   });
 
+  // 监听 error（如二进制不可执行 EACCES/ENOENT）：detached 进程的 error 事件若无 handler 会冒泡为
+  // uncaughtException。这里吞掉，交由下面的 isRunning() + 日志读取给出可读错误。
+  child.on('error', () => {});
+
   fs.closeSync(logFd);
 
   child.unref();
 
-  const pid = child.pid as number;
+  const pid = child.pid;
+  if (!pid) {
+    clearPid();
+    throw new Error('启动失败：无法创建内核进程（内核二进制可能不可执行）');
+  }
   savePid(pid);
 
   await new Promise(resolve => setTimeout(resolve, STARTUP_WAIT_MS));
@@ -404,6 +409,9 @@ async function startTunMode(staleState: StaleState): Promise<StartResult> {
     }
     if ((e as { status?: number }).status === 1) {
       throw new Error('密码错误或取消');
+    }
+    if ((e as { status?: number }).status === 2) {
+      throw new Error('TUN 启动失败（详见上方日志）');
     }
     throw new Error((e as Error).message);
   }
@@ -609,6 +617,9 @@ export function viewLogWithTail(logPath: string, options?: { follow?: boolean; l
   tailArgs.push(logPath);
 
   const tail = spawn('tail', tailArgs, { stdio: 'inherit' });
+
+  // follow 模式下 Ctrl+C 是常规退出：抑制全局 SIGINT 处理器的"正在退出..."提示
+  if (follow) setSilentSigint(true);
 
   tail.on('close', () => process.exit(0));
   tail.on('error', e => {

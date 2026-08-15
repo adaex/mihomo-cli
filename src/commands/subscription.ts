@@ -1,102 +1,20 @@
 import { DEFAULT_TEST_CONCURRENCY, DEFAULT_TEST_TIMEOUT } from '../constants.js';
 import * as processManager from '../process.js';
+import { createProgressPrinter, formatCleanSummary, formatTestSummary } from '../progress.js';
 import * as runtime from '../runtime.js';
 import {
   addSubscription,
   getSubscriptions,
   getSubscriptionsWithCache,
-  readSubscriptionCache,
   removeSubscription,
   saveSubscriptionCache,
   setDefaultSubscription,
 } from '../settings.js';
 import * as subscription from '../subscription.js';
 import { withTestInstance } from '../test-instance.js';
-import type { ProxyTestResult, Subscription } from '../types.js';
-import { colors, formatBytes, formatDate, formatTimestamp, getNonFlagArg, parseIntArg } from '../utils.js';
+import type { Subscription } from '../types.js';
+import { colors, extractStartOptions, formatBytes, formatDate, formatTimestamp, getNonFlagArg, parseIntArg } from '../utils.js';
 import { cmdStart } from './start.js';
-
-const IS_TTY = process.stdout.isTTY === true;
-const BAR_WIDTH = 20;
-
-interface TrackedResult {
-  result: ProxyTestResult;
-  round: number;
-}
-
-export function createProgressPrinter(totalRounds = 1): {
-  onResult: (result: ProxyTestResult, index: number, total: number, round?: number) => void;
-  onRetryRound: (round: number, count: number) => void;
-  finish: () => void;
-} {
-  let alive = 0;
-  let dead = 0;
-  const resultMap = new Map<string, TrackedResult>();
-
-  function render(done: number, total: number): void {
-    if (!IS_TTY) return;
-    const pct = Math.round((done / total) * 100);
-    const filled = Math.round((done / total) * BAR_WIDTH);
-    const bar = '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
-    process.stdout.write(`\r${bar} ${done}/${total} (${pct}%) | ${colors.green(`✓${alive}`)} ${colors.red(`✗${dead}`)}`);
-  }
-
-  return {
-    onResult(result, index, total, round = 1) {
-      if (resultMap.size === 0 && totalRounds > 1) {
-        console.log(`--- 第 1 轮测试 (${total} 个节点) ---`);
-      }
-      if (result.delay !== null) alive++;
-      else dead++;
-
-      resultMap.set(result.name, { result, round });
-      render(index + 1, total);
-    },
-    onRetryRound(round, count) {
-      if (IS_TTY) {
-        process.stdout.write('\n');
-      }
-      console.log(`--- 第 ${round} 轮重试 (${count} 个节点) ---`);
-      alive = 0;
-      dead = 0;
-    },
-    finish() {
-      if (IS_TTY) {
-        process.stdout.write('\n');
-      }
-      console.log('');
-
-      const entries = [...resultMap.values()];
-      entries.sort((a, b) => a.result.name.localeCompare(b.result.name));
-      const total = entries.length;
-      console.log('节点最终状态:');
-
-      for (let i = 0; i < entries.length; i++) {
-        const { result, round } = entries[i];
-        const prefix = `[${i + 1}/${total}]`;
-        if (result.delay !== null) {
-          const delayColor = result.delay < 300 ? colors.green : result.delay < 800 ? colors.yellow : colors.red;
-          const retryNote = round > 1 ? colors.gray(` (第${round}轮通过)`) : '';
-          console.log(`${prefix} ${colors.green('✓')} ${result.name} ${delayColor(`${result.delay}ms`)}${retryNote}`);
-        } else {
-          console.log(`${prefix} ${colors.red('✗')} ${result.name} ${colors.gray(result.error || 'timeout')}`);
-        }
-      }
-      console.log('');
-    },
-  };
-}
-
-export function formatCleanSummary(result: { removedProxies: number; removedGroups: number; updatedGroups: number }): string {
-  const parts = [`移除 ${result.removedProxies} 个节点`];
-  if (result.removedGroups > 0) parts.push(`删除 ${result.removedGroups} 个空分组`);
-  if (result.updatedGroups > 0) parts.push(`更新 ${result.updatedGroups} 个分组`);
-  return parts.join(', ');
-}
-
-export function formatTestSummary(summary: { alive: number; dead: number; total: number }): string {
-  return `结果: ${colors.green(`${summary.alive} 存活`)} / ${colors.red(`${summary.dead} 失败`)} / ${summary.total} 总计`;
-}
 
 function githubRepoUrl(rawUrl: string): string | null {
   const match = rawUrl.match(/raw\.githubusercontent\.com\/([^/]+\/[^/]+)/);
@@ -139,11 +57,8 @@ function printRestartHintIfRunning(): void {
   }
 }
 
-async function printSubscriptionList(options?: { autoUpdate?: boolean }): Promise<void> {
-  if (options?.autoUpdate !== false) {
-    const updateResult = await subscription.autoUpdateStaleSubscription();
-    if (updateResult.total > 0) console.log('');
-  }
+/** 纯只读列表：不触发自动更新（更新是写操作，交给 start 与显式 sub update） */
+function printSubscriptionList(): void {
   const subs = getSubscriptionsWithCache();
   if (subs.length === 0) {
     console.log('没有订阅');
@@ -198,12 +113,12 @@ export async function cmdSubscription(args: string[]): Promise<void> {
   const action = args[1];
 
   if (!action || action === 'list') {
-    await printSubscriptionList();
+    printSubscriptionList();
     return;
   }
 
   if (action === 'add') {
-    const url = args[2];
+    const url = args[2]?.trim();
     const name = args[3] || 'default';
 
     if (!url) {
@@ -213,25 +128,33 @@ export async function cmdSubscription(args: string[]): Promise<void> {
 
     if (subscription.isMultiUrl(url)) {
       const urls = subscription.splitUrls(url);
+      if (urls.length === 0) {
+        console.error('错误: 请提供有效的订阅 URL');
+        process.exit(1);
+      }
       for (const u of urls) {
-        if (!u.startsWith('http')) {
+        if (!subscription.isValidHttpUrl(u)) {
           console.error(`错误: 无效的 URL: ${u}`);
           process.exit(1);
         }
       }
+      // 入库用清洗后的 urls 重新拼接，避免存进带多余空格/尾逗号的原始串
+      const normalizedUrl = urls.join(',');
       console.log(`添加合并订阅: ${name} (${urls.length} 个源)`);
       try {
-        addSubscription(url, name);
+        addSubscription(normalizedUrl, name);
         setDefaultSubscription(name);
         const info = await subscription.downloadMergedSubscription(urls, name);
         console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)}, 合并 ${urls.length} 源)`);
       } catch (e) {
+        // 下载失败回滚：不留"已入库但无配置"的半成品订阅（否则 start 会直接报错）
+        removeSubscription(name);
         console.error(`添加失败: ${(e as Error).message}`);
         process.exit(1);
       }
     } else {
-      if (!url.startsWith('http')) {
-        console.error('错误: 请提供有效的订阅 URL');
+      if (!subscription.isValidHttpUrl(url)) {
+        console.error('错误: 请提供有效的订阅 URL（需以 http:// 或 https:// 开头）');
         process.exit(1);
       }
       console.log(`添加订阅: ${name}`);
@@ -243,12 +166,14 @@ export async function cmdSubscription(args: string[]): Promise<void> {
         if (repoUrl) saveSubscriptionCache(name, { web_page_url: repoUrl });
         console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)})`);
       } catch (e) {
+        // 下载失败回滚：不留"已入库但无配置"的半成品订阅（否则 start 会直接报错）
+        removeSubscription(name);
         console.error(`添加失败: ${(e as Error).message}`);
         process.exit(1);
       }
     }
     console.log('');
-    await printSubscriptionList();
+    printSubscriptionList();
     return;
   }
 
@@ -272,7 +197,7 @@ export async function cmdSubscription(args: string[]): Promise<void> {
       if (ok === 0) process.exit(1);
       console.log('');
       printRestartHintIfRunning();
-      await printSubscriptionList();
+      printSubscriptionList();
       return;
     }
 
@@ -288,7 +213,7 @@ export async function cmdSubscription(args: string[]): Promise<void> {
     console.log(`已更新 (${subscription.formatProxySummary(result)})`);
     console.log('');
     printRestartHintIfRunning();
-    await printSubscriptionList();
+    printSubscriptionList();
     return;
   }
 
@@ -314,7 +239,7 @@ export async function cmdSubscription(args: string[]): Promise<void> {
     if (isAlreadyDefault) {
       console.log(`"${target.name}" 已是当前使用的订阅`);
       console.log('');
-      await printSubscriptionList();
+      printSubscriptionList();
       return;
     }
 
@@ -330,15 +255,15 @@ export async function cmdSubscription(args: string[]): Promise<void> {
       process.exit(1);
     }
 
-    // 运行中(含保活:launchd 托管不写 pidFile)才重启使新订阅生效
+    // 运行中(含保活:launchd 托管不写 pidFile)才重启使新订阅生效；透传用户显式的启动选项(-s/-t 等)
     if (restartNeeded) {
       console.log('');
-      await cmdStart(['start', currentMode]);
+      await cmdStart(['start', currentMode, ...extractStartOptions(args)]);
       return;
     }
 
     console.log('');
-    await printSubscriptionList();
+    printSubscriptionList();
     return;
   }
 
@@ -362,18 +287,20 @@ export async function cmdSubscription(args: string[]): Promise<void> {
     const cached = subs.find(s => s.name === target.name);
     let webPageUrl = cached?.web_page_url;
     if (!webPageUrl) {
-      console.log('订阅信息中缺少页面地址，正在更新订阅...');
+      console.log('订阅信息中缺少页面地址，正在查询订阅...');
       try {
-        await subscription.downloadSubscription(target.url, target.name);
-        const cache = readSubscriptionCache();
-        if (cache[target.name]?.web_page_url) {
-          webPageUrl = cache[target.name].web_page_url;
+        // persist=false：只取响应头里的页面地址，不覆盖已保存的订阅配置
+        const info = subscription.isMultiUrl(target.url)
+          ? await subscription.downloadMergedSubscription(subscription.splitUrls(target.url), target.name, undefined, false)
+          : await subscription.downloadSubscription(target.url, target.name, undefined, false);
+        if (info.webPageUrl) {
+          webPageUrl = info.webPageUrl;
         } else {
           console.error('错误: 该订阅没有提供页面地址');
           process.exit(1);
         }
       } catch (e) {
-        console.error(`更新失败: ${(e as Error).message}`);
+        console.error(`查询失败: ${(e as Error).message}`);
         process.exit(1);
       }
     }
@@ -409,7 +336,7 @@ export async function cmdSubscription(args: string[]): Promise<void> {
     }
 
     console.log('');
-    await printSubscriptionList({ autoUpdate: false });
+    printSubscriptionList();
     return;
   }
 
