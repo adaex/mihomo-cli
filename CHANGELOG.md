@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.5.0] - 2026-08-15
+
+### 变更
+
+- **统一错误处理机制** - 命令层与数据层的预期错误改为抛出领域错误 `CliError`，由入口 `main().catch` 单点渲染（错误前缀 + 多行提示 + 退出码）并执行清理。此前命令层散落几十处 `console.error + process.exit`，错误从不冒泡到统一收口、可能绕过退出前清理。现仅信号处理器与日志 `tail` 事件回调保留直接退出（进程生命周期末端，无法收口）。所有错误前缀统一为红色（`NO_COLOR`/非 TTY 下自动降级为纯文本），动词化提示（如「配置错误」「启用保活失败」）予以保留
+- **数据层去除 UI 副作用** - `pickSingleSubscription` 等数据层函数不再直接打印和退出进程，改为抛错由命令层收口，函数返回类型恢复诚实、可复用
+
+### 内部
+
+- **命令子命令分发同构化** - `subscription`/`overwrite`/`directory`/`daemon` 的手写 `if (action === ...)` 分支链改为与顶层命令注册表同构的表驱动分发（`dispatchSubcommand` + 子命令表），并抽取 `requireRunning`/`restartToApply`/`requireActiveSubscription`/`resolveSubscription` 等公共 helper 消除重复。命令行为、帮助输出与退出码均无变化
+- **补充单元测试** - 为覆写合并（`parseOverrideKey`/`deepMergeWithOverrides`/作用域匹配）、配置校验（级联删除/规则目标）、节点名归一化、URL 遮蔽等高危纯函数补充 49 个单测，使用 Node 内置 `node:test` 经 tsx 运行，零新增依赖（`npm test`）
+
 ## [3.4.0] - 2026-08-15
 
 ### 修复
