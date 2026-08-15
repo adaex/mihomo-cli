@@ -1,6 +1,6 @@
 import * as processManager from '../process.js';
 import type { LogEntry } from '../types.js';
-import { formatBytes, formatDate, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
+import { CliError, formatBytes, formatDate, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
 
 export function cmdLog(args: string[]): void {
   const logPath = processManager.getLogPath();
@@ -29,9 +29,7 @@ export function cmdLogs(args: string[]): void {
         const archiveLogs = processManager.listLogs();
         const archive = archiveLogs.archives[parsedIdx - 1];
         if (!archive) {
-          console.error(`错误: 未找到日志 "${targetName}"`);
-          console.log('使用 "mihomo logs" 查看可用日志列表');
-          process.exit(1);
+          throw new CliError(`未找到日志 "${targetName}"`, { hint: '使用 "mihomo logs" 查看可用日志列表' });
         }
         logPath = archive.path;
       } else {
@@ -40,9 +38,7 @@ export function cmdLogs(args: string[]): void {
     }
 
     if (!logPath) {
-      console.error(`错误: 未找到日志 "${targetName}"`);
-      console.log('使用 "mihomo logs" 查看可用日志列表');
-      process.exit(1);
+      throw new CliError(`未找到日志 "${targetName}"`, { hint: '使用 "mihomo logs" 查看可用日志列表' });
     }
 
     if (openInViewer) {

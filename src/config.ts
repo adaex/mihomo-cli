@@ -126,7 +126,7 @@ export function getRuleTarget(rule: string): string {
   return last;
 }
 
-function validateConfig(config: Record<string, unknown>): string[] {
+export function validateConfig(config: Record<string, unknown>): string[] {
   const warnings: string[] = [];
 
   const proxies = (config.proxies || []) as ParsedProxy[];

@@ -6,7 +6,7 @@ import { USER_DATA_DIR } from './paths.js';
 import { readSettings, writeSettings } from './settings.js';
 import type { OverwriteFileEntry, OverwriteListResult, OverwriteMatch, OverwriteScope, ParsedOverrideKey } from './types.js';
 
-function parseOverrideKey(key: string): ParsedOverrideKey {
+export function parseOverrideKey(key: string): ParsedOverrideKey {
   let actualKey = key;
   let forceOverwrite = false;
   let arrayPrepend = false;
@@ -54,7 +54,7 @@ function parseOverrideKey(key: string): ParsedOverrideKey {
   return { key: actualKey, forceOverwrite, arrayPrepend, arrayAppend, arrayMergeByName };
 }
 
-function deepMergeWithOverrides(target: unknown, override: unknown): Record<string, unknown> {
+export function deepMergeWithOverrides(target: unknown, override: unknown): Record<string, unknown> {
   let t = target as Record<string, unknown>;
   if (t === null || t === undefined) {
     t = Array.isArray(override) ? ([] as unknown as Record<string, unknown>) : {};

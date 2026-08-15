@@ -1,9 +1,8 @@
 import path from 'node:path';
 
 import { isOverwriteEnabled, listOverwriteFile, setOverwriteEnabled } from '../overwrite.js';
-import * as runtime from '../runtime.js';
-import { colors, extractStartOptions } from '../utils.js';
-import { cmdStart } from './start.js';
+import { colors } from '../utils.js';
+import { dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 function printOverwriteList(): void {
   const info = listOverwriteFile();
@@ -37,57 +36,36 @@ function printOverwriteList(): void {
   console.log('');
 }
 
-export async function cmdOverwrite(args: string[]): Promise<void> {
-  const action = args?.[1];
-
-  // 保活恒为 Mixed;否则保留当前模式(避免残留 tun 字段误判);运行中(含保活)才需重启使覆写生效。
-  const currentMode = runtime.getRuntimeMode();
-  const restartNeeded = runtime.isRestartNeededOnChange();
-
-  if (action === 'on' || action === 'enable') {
-    if (isOverwriteEnabled()) {
-      console.log('覆写配置已是启用状态');
-      console.log('');
-      printOverwriteList();
-      return;
-    }
-
-    setOverwriteEnabled(true);
-    console.log('已启用覆写配置');
-
-    if (restartNeeded) {
-      console.log('');
-      await cmdStart(['start', currentMode, ...extractStartOptions(args)]);
-      return;
-    }
-
+/** 切换覆写开关：已是目标状态则仅提示；否则写入并（运行中）重启生效。 */
+async function setOverwrite(enabled: boolean, args: string[]): Promise<void> {
+  if (isOverwriteEnabled() === enabled) {
+    console.log(`覆写配置已是${enabled ? '启用' : '禁用'}状态`);
     console.log('');
     printOverwriteList();
     return;
   }
 
-  if (action === 'off' || action === 'disable') {
-    if (!isOverwriteEnabled()) {
-      console.log('覆写配置已是禁用状态');
-      console.log('');
-      printOverwriteList();
-      return;
-    }
+  setOverwriteEnabled(enabled);
+  console.log(`已${enabled ? '启用' : '禁用'}覆写配置`);
 
-    setOverwriteEnabled(false);
-    console.log('已禁用覆写配置');
-
-    if (restartNeeded) {
-      console.log('');
-      await cmdStart(['start', currentMode, ...extractStartOptions(args)]);
-      return;
-    }
-
-    console.log('');
-    printOverwriteList();
-    return;
-  }
+  // 运行中(含保活)才重启使覆写生效
+  if (await restartToApply(args)) return;
 
   console.log('');
   printOverwriteList();
+}
+
+const SUBCOMMANDS: SubCommand[] = [
+  { name: 'on', aliases: ['enable'], handler: args => setOverwrite(true, args) },
+  { name: 'off', aliases: ['disable'], handler: args => setOverwrite(false, args) },
+];
+
+export async function cmdOverwrite(args: string[]): Promise<void> {
+  // 无 action 或未知 action 均回落到列表视图（保持现状：ow 任意参数都显示状态）
+  await dispatchSubcommand(args, SUBCOMMANDS, {
+    fallback: () => {
+      console.log('');
+      printOverwriteList();
+    },
+  });
 }

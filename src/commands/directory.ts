@@ -1,46 +1,42 @@
 import { DIRECTORY_TARGETS, DIRS, PATHS, USER_DATA_DIR } from '../paths.js';
 import * as processManager from '../process.js';
+import { CliError } from '../utils.js';
+import { dispatchSubcommand, type SubCommand } from './shared.js';
 
-export function cmdDirectory(args: string[]): void {
-  const action = args?.[1];
+function openDirectory(args: string[]): void {
+  const target = args[2];
 
-  if (action === 'open') {
-    const target = args[2];
-
-    if (!target || target === 'root') {
-      console.log('正在打开: 根目录');
-      const success = processManager.openUrl(USER_DATA_DIR);
-      if (!success) {
-        console.log(`请手动打开: ${USER_DATA_DIR}`);
-      }
-      return;
+  if (!target || target === 'root') {
+    console.log('正在打开: 根目录');
+    const success = processManager.openUrl(USER_DATA_DIR);
+    if (!success) {
+      console.log(`请手动打开: ${USER_DATA_DIR}`);
     }
-
-    const key = target.toLowerCase();
-    const targetInfo = Object.hasOwn(DIRECTORY_TARGETS, key) ? DIRECTORY_TARGETS[key] : undefined;
-    if (targetInfo) {
-      const targetPath = targetInfo.path || USER_DATA_DIR;
-      console.log(`正在打开: ${targetInfo.label}`);
-      const success = processManager.openUrl(targetPath);
-      if (!success) {
-        console.log(`请手动打开: ${targetPath}`);
-      }
-      return;
-    }
-
-    console.error(`错误: 未知的目录目标 "${target}"`);
-    console.log('');
-    console.log('可用目标:');
-    console.log('  root (默认)   根目录');
-    for (const [key, val] of Object.entries(DIRECTORY_TARGETS)) {
-      if (key !== 'root') {
-        console.log(`  ${key.padEnd(14)}${val.label}`);
-      }
-    }
-    console.log('');
-    process.exit(1);
+    return;
   }
 
+  const key = target.toLowerCase();
+  const targetInfo = Object.hasOwn(DIRECTORY_TARGETS, key) ? DIRECTORY_TARGETS[key] : undefined;
+  if (targetInfo) {
+    const targetPath = targetInfo.path || USER_DATA_DIR;
+    console.log(`正在打开: ${targetInfo.label}`);
+    const success = processManager.openUrl(targetPath);
+    if (!success) {
+      console.log(`请手动打开: ${targetPath}`);
+    }
+    return;
+  }
+
+  const hint = ['', '可用目标:', '  root (默认)   根目录'];
+  for (const [k, val] of Object.entries(DIRECTORY_TARGETS)) {
+    if (k !== 'root') {
+      hint.push(`  ${k.padEnd(14)}${val.label}`);
+    }
+  }
+  throw new CliError(`未知的目录目标 "${target}"`, { hint });
+}
+
+function printDirectoryInfo(): void {
   console.log('');
   console.log('数据目录位置:');
   console.log(`  根目录: ${USER_DATA_DIR}`);
@@ -68,4 +64,11 @@ export function cmdDirectory(args: string[]): void {
   console.log('环境变量:');
   console.log('  MIHOMO_CLI_DIR: 自定义根目录位置');
   console.log('');
+}
+
+const SUBCOMMANDS: SubCommand[] = [{ name: 'open', handler: openDirectory }];
+
+export function cmdDirectory(args: string[]): void {
+  // 无 action 或未知 action 均回落到目录信息展示（保持现状）
+  void dispatchSubcommand(args, SUBCOMMANDS, { fallback: printDirectoryInfo });
 }

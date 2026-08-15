@@ -1,7 +1,7 @@
 import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { colors, VERSION } from '../utils.js';
+import { CliError, colors, VERSION } from '../utils.js';
 
 const execAsync = promisify(exec);
 
@@ -11,25 +11,20 @@ export async function cmdUpdate(): Promise<void> {
   console.log('正在更新 mihomo-cli...');
   console.log('');
 
-  await new Promise<void>(resolve => {
+  await new Promise<void>((resolve, reject) => {
     const npm = spawn('npm', ['install', '-g', 'mihomo-cli'], { stdio: 'inherit' });
 
     npm.on('close', code => {
       if (code === 0) {
         resolve();
       } else {
-        console.error('更新失败。若为权限问题（EACCES），可尝试: sudo npm install -g mihomo-cli');
-        process.exit(code || 1);
+        reject(new CliError('更新失败。若为权限问题（EACCES），可尝试: sudo npm install -g mihomo-cli', { exitCode: code || 1 }));
       }
     });
 
     npm.on('error', e => {
-      if (e.message.includes('EACCES') || e.message.includes('permission')) {
-        console.error('权限不足，可尝试: sudo npm install -g mihomo-cli');
-      } else {
-        console.error(`执行失败: ${e.message}`);
-      }
-      process.exit(1);
+      const perm = e.message.includes('EACCES') || e.message.includes('permission');
+      reject(perm ? new CliError('权限不足，可尝试: sudo npm install -g mihomo-cli') : new CliError(`执行失败: ${e.message}`));
     });
   });
 

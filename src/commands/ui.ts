@@ -1,14 +1,13 @@
 import { UI_URLS } from '../constants.js';
 import * as processManager from '../process.js';
 import { readSettings } from '../settings.js';
+import { CliError } from '../utils.js';
 
 export function cmdUI(args: string[]): void {
   const uiName = args[1] || 'zash';
 
   if (!Object.hasOwn(UI_URLS, uiName)) {
-    console.error(`错误: 未知的 UI "${uiName}"`);
-    console.error('可用 UI: zash (默认), dash, yacd');
-    process.exit(1);
+    throw new CliError(`未知的 UI "${uiName}"`, { hint: '可用 UI: zash (默认), dash, yacd' });
   }
 
   const url = UI_URLS[uiName];

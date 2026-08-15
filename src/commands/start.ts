@@ -7,23 +7,20 @@ import { createProgressPrinter, formatCleanSummary, formatTestSummary } from '..
 import * as runtime from '../runtime.js';
 import { readSubscriptionCache, saveSubscriptionCache } from '../settings.js';
 import * as subscription from '../subscription.js';
-import { colors, hasFlag, parseIntArg, sleep } from '../utils.js';
+import { CliError, colors, hasFlag, parseIntArg, sleep } from '../utils.js';
 import { printStatus } from './status.js';
 import { handleStopResult } from './stop.js';
 
 export async function cmdStart(args: string[]): Promise<void> {
   if (!hasKernel()) {
-    console.error('错误: 未找到内核，请运行 "mihomo kernel"');
-    process.exit(1);
+    throw new CliError('未找到内核，请运行 "mihomo kernel"');
   }
 
   const targetMode = args[1] === 'tun' ? 'tun' : 'mixed';
   const daemonEnabled = isDaemonEnabled();
 
   if (targetMode === 'tun' && daemonEnabled) {
-    console.error(`${colors.red('错误:')} 保活已启用（仅支持 Mixed 模式），无法启动 TUN`);
-    console.error('请先关闭保活: mihomo daemon off');
-    process.exit(1);
+    throw new CliError('保活已启用（仅支持 Mixed 模式），无法启动 TUN', { hint: '请先关闭保活: mihomo daemon off' });
   }
 
   const rounds = parseIntArg(args, '-r', '--rounds', subscription.DEFAULT_CLEAN_ROUNDS);
@@ -33,11 +30,7 @@ export async function cmdStart(args: string[]): Promise<void> {
   const skipClean = hasFlag(args, '--no-clean');
   const updateTimeout = parseIntArg(args, '-u', '--update-timeout', subscription.DEFAULT_AUTO_UPDATE_TIMEOUT);
 
-  const sub = subscription.getActiveSubscription();
-  if (!sub) {
-    console.error('错误: 没有订阅，请先添加订阅');
-    process.exit(1);
-  }
+  const sub = subscription.requireActiveSubscription('没有订阅，请先添加订阅');
 
   if (!skipUpdate) {
     await subscription.autoUpdateStaleSubscription({ timeout: updateTimeout });
@@ -49,10 +42,9 @@ export async function cmdStart(args: string[]): Promise<void> {
   if (!daemonEnabled) {
     // 隐式停止不应意外弹 sudo：有 root 残留时直接报错引导（与 startMixedMode 的设计一致）
     if (processManager.hasRootResidue()) {
-      console.error(`${colors.red('错误:')} 存在需要 root 权限清理的残留进程/文件`);
-      console.error(`请先手动清理: sudo pkill -9 mihomo && sudo rm -f ${PATHS.pidFile}`);
-      console.error('或切换到 TUN 模式启动（自动清理）: mihomo start tun');
-      process.exit(1);
+      throw new CliError('存在需要 root 权限清理的残留进程/文件', {
+        hint: [`请先手动清理: sudo pkill -9 mihomo && sudo rm -f ${PATHS.pidFile}`, '或切换到 TUN 模式启动（自动清理）: mihomo start tun'],
+      });
     }
 
     const status = processManager.getStatus();
@@ -74,8 +66,8 @@ export async function cmdStart(args: string[]): Promise<void> {
   try {
     configInfo = subscription.prepareConfigForStart(targetMode, sub.name);
   } catch (e) {
-    console.error(`${colors.red('配置错误:')} ${(e as Error).message}`);
-    process.exit(1);
+    if (e instanceof CliError) throw e;
+    throw new CliError((e as Error).message, { label: '配置错误' });
   }
 
   const modeLabel = targetMode === 'tun' ? 'TUN' : 'Mixed';
@@ -86,13 +78,9 @@ export async function cmdStart(args: string[]): Promise<void> {
     const label = daemonEnabled ? '已启动 (保活)' : '已启动';
     console.log(`${colors.green(label)}${pid ? ` (PID ${pid})` : ''}`);
   } catch (e) {
-    const msg = (e as Error).message;
-    const lines = msg.split('\n');
-    console.error(`${colors.red('启动失败:')} ${lines[0]}`);
-    if (lines.length > 1) {
-      for (const line of lines.slice(1)) console.error(line);
-    }
-    process.exit(1);
+    if (e instanceof CliError) throw e;
+    const lines = (e as Error).message.split('\n');
+    throw new CliError(lines[0], { label: '启动失败', hint: lines.slice(1) });
   }
 
   const cleanThreshold = subscription.isGithubUrl(sub.url) ? subscription.AUTO_CLEAN_THRESHOLD_GITHUB : subscription.AUTO_CLEAN_THRESHOLD;
@@ -134,8 +122,8 @@ export async function cmdStart(args: string[]): Promise<void> {
           const pid = await runtime.launchOrRestart(targetMode);
           console.log(`${colors.green('已重启')}${pid ? ` (PID ${pid})` : ''} · ${subscription.formatProxySummary(configInfo)}`);
         } catch (e) {
-          console.error(`${colors.red('重启失败:')} ${(e as Error).message.split('\n')[0]}`);
-          process.exit(1);
+          if (e instanceof CliError) throw e;
+          throw new CliError((e as Error).message.split('\n')[0], { label: '重启失败' });
         }
       }
 

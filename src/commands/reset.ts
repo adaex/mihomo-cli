@@ -7,7 +7,7 @@ import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import * as processManager from '../process.js';
 import { invalidateSettingsCache, writeSettings } from '../settings.js';
 import type { ResetTarget } from '../types.js';
-import { colors } from '../utils.js';
+import { CliError, colors } from '../utils.js';
 
 const RESET_TARGETS: ResetTarget[] = [
   {
@@ -123,10 +123,7 @@ export async function cmdReset(args: string[]): Promise<void> {
   const KNOWN_FLAGS = new Set(['--full', '--yes', '-y']);
   const unknownFlags = flags.filter(f => !KNOWN_FLAGS.has(f));
   if (unknownFlags.length > 0) {
-    console.error(`错误: 未知的选项: ${unknownFlags.join(', ')}`);
-    console.log('');
-    console.log('可用选项: --full（删全部）, -y/--yes（跳过确认）');
-    process.exit(1);
+    throw new CliError(`未知的选项: ${unknownFlags.join(', ')}`, { hint: ['', '可用选项: --full（删全部）, -y/--yes（跳过确认）'] });
   }
 
   const fullReset = flags.includes('--full');
@@ -139,16 +136,18 @@ export async function cmdReset(args: string[]): Promise<void> {
   } else if (names.length > 0) {
     const { matched, unmatched } = resolveResetTargets(names);
     if (unmatched.length > 0) {
-      console.error(`错误: 未知的重置目标: ${unmatched.join(', ')}`);
-      console.log('');
-      console.log(`可用目标: ${RESET_TARGETS.map(t => t.aliases[0]).join(', ')}`);
-      console.log('');
-      console.log('示例:');
-      console.log('  mihomo reset sub log      # 删除订阅和日志');
-      console.log('  mihomo reset kernel       # 只删内核');
-      console.log('  mihomo reset --full       # 删除全部');
-      console.log('  mihomo reset              # 删除全部（保留设置、内核、覆写）');
-      process.exit(1);
+      throw new CliError(`未知的重置目标: ${unmatched.join(', ')}`, {
+        hint: [
+          '',
+          `可用目标: ${RESET_TARGETS.map(t => t.aliases[0]).join(', ')}`,
+          '',
+          '示例:',
+          '  mihomo reset sub log      # 删除订阅和日志',
+          '  mihomo reset kernel       # 只删内核',
+          '  mihomo reset --full       # 删除全部',
+          '  mihomo reset              # 删除全部（保留设置、内核、覆写）',
+        ],
+      });
     }
     targets = matched;
   } else {

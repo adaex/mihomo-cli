@@ -1,14 +1,12 @@
 import { isDaemonEnabled } from '../daemon.js';
 import * as processManager from '../process.js';
 import type { StopResult } from '../types.js';
-import { colors } from '../utils.js';
+import { CliError, colors } from '../utils.js';
 
 /** 检查停止结果：若有进程未终止则报错并退出。start/stop/clean 命令共用。 */
 export function handleStopResult(result: StopResult): void {
   if (result.remaining && result.remaining.length > 0) {
-    console.error(`${colors.red('部分进程未终止:')} ${result.remaining.join(', ')}`);
-    console.error('请手动运行: sudo pkill -9 mihomo');
-    process.exit(1);
+    throw new CliError(result.remaining.join(', '), { label: '部分进程未终止', hint: '请手动运行: sudo pkill -9 mihomo' });
   }
 }
 

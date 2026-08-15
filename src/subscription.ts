@@ -33,7 +33,7 @@ import type {
   TryUpdateResult,
   UserInfo,
 } from './types.js';
-import { colors, createHttpClient, TimeoutError, withTimeout } from './utils.js';
+import { CliError, colors, createHttpClient, TimeoutError, withTimeout } from './utils.js';
 
 // 供命令层沿用 `subscription.XXX` 引用（实际定义在 constants.ts，集中管理默认值）
 export { AUTO_CLEAN_THRESHOLD, AUTO_CLEAN_THRESHOLD_GITHUB, DEFAULT_AUTO_UPDATE_TIMEOUT, DEFAULT_CLEAN_ROUNDS };
@@ -184,11 +184,20 @@ export function getActiveSubscription(): Subscription | null {
   return subs[0];
 }
 
-export function findSubscriptionFuzzy(subs: Subscription[], pattern: string): Subscription[] {
+/** 取当前活跃订阅，无则抛 CliError（emptyMsg 按场景定制：无订阅 vs 有订阅但需指定）。 */
+export function requireActiveSubscription(emptyMsg = '没有订阅，请先添加订阅'): Subscription {
+  const sub = getActiveSubscription();
+  if (!sub) {
+    throw new CliError(emptyMsg);
+  }
+  return sub;
+}
+
+export function findSubscriptionFuzzy<T extends Subscription>(subs: T[], pattern: string): T[] {
   const lowerPattern = pattern.toLowerCase();
-  const exact: Subscription[] = [];
-  const prefix: Subscription[] = [];
-  const includes: Subscription[] = [];
+  const exact: T[] = [];
+  const prefix: T[] = [];
+  const includes: T[] = [];
 
   for (const s of subs) {
     const name = s.name.toLowerCase();
@@ -206,16 +215,19 @@ export function findSubscriptionFuzzy(subs: Subscription[], pattern: string): Su
   return includes;
 }
 
-export function pickSingleSubscription(subs: Subscription[], pattern: string): Subscription {
+export function pickSingleSubscription<T extends Subscription>(subs: T[], pattern: string): T {
   if (subs.length === 0) {
-    console.error(`错误: 未找到匹配 "${pattern}" 的订阅`);
-    process.exit(1);
+    throw new CliError(`未找到匹配 "${pattern}" 的订阅`);
   }
   if (subs.length === 1) return subs[0];
-  console.error('错误: 匹配到多个订阅，请更精确指定');
-  console.log('\n匹配的订阅:');
-  for (const s of subs) console.log(`  ${s.name}`);
-  process.exit(1);
+  throw new CliError('匹配到多个订阅，请更精确指定', {
+    hint: ['', '匹配的订阅:', ...subs.map(s => `  ${s.name}`)],
+  });
+}
+
+/** 模糊匹配并收敛到唯一订阅（折叠 findSubscriptionFuzzy + pickSingleSubscription）；不唯一时抛 CliError。 */
+export function resolveSubscription<T extends Subscription>(subs: T[], pattern: string): T {
+  return pickSingleSubscription(findSubscriptionFuzzy(subs, pattern), pattern);
 }
 
 export async function downloadSubscription(url: string, subName = 'default', signal?: AbortSignal, persist = true): Promise<DownloadResult> {
@@ -514,7 +526,7 @@ export async function testSubscriptionProxies(
   return { total: results.length, alive, dead: results.length - alive, results };
 }
 
-function normalizeProxyNamesBeforeSave(parsed: ParsedSubscription): number {
+export function normalizeProxyNamesBeforeSave(parsed: ParsedSubscription): number {
   const { proxies, proxyGroups } = parsed;
 
   const renameMap = new Map<string, string>();
