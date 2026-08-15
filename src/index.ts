@@ -3,6 +3,7 @@ import { findCommand } from './commands/registry.js';
 import { printStatus } from './commands/status.js';
 import { isSilentSigint, runCleanup } from './lifecycle.js';
 import { ensureDirs } from './paths.js';
+import { CliError, colors } from './utils.js';
 
 process.on('SIGINT', () => {
   if (!isSilentSigint()) {
@@ -58,9 +59,7 @@ async function main(): Promise<void> {
   const command = findCommand(token);
 
   if (!command) {
-    console.error(`未知命令: ${token}`);
-    console.error('使用 "mihomo help" 查看帮助');
-    process.exit(1);
+    throw new CliError(`未知命令: ${token}`, { hint: '使用 "mihomo help" 查看帮助' });
   }
 
   // rewrite 把顶层快捷命令(tun/use/on/off/open)映射为子命令形式;其余命令原样透传。
@@ -68,7 +67,16 @@ async function main(): Promise<void> {
 }
 
 main().catch(e => {
-  console.error(`错误: ${(e as Error).message}`);
+  if (e instanceof CliError) {
+    console.error(`${colors.red(`${e.label}:`)} ${e.message}`);
+    for (const line of e.hint) console.error(line);
+    runCleanup();
+    process.exit(e.exitCode);
+  }
+  // 未预期错误 = bug：打印堆栈辅助定位（与 uncaughtException 处理器一致）
+  const err = e as Error;
+  console.error(`${colors.red('错误:')} ${err.message}`);
+  if (err.stack) console.error(err.stack.split('\n').slice(1).join('\n'));
   runCleanup();
   process.exit(1);
 });
