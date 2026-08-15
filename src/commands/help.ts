@@ -1,6 +1,7 @@
+import { colors } from '../colors.js';
 import { getKernelVersion } from '../config.js';
+import { VERSION } from '../constants.js';
 import { USER_DATA_DIR } from '../paths.js';
-import { colors, VERSION } from '../utils.js';
 import type { Command, CommandGroup } from './registry.js';
 
 export function printShortHelp(): void {

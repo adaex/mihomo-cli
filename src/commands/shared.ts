@@ -1,5 +1,6 @@
+import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
-import { CliError, extractStartOptions } from '../utils.js';
+import { extractStartOptions } from '../utils.js';
 import { cmdStart } from './start.js';
 
 /**

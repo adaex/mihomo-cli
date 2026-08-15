@@ -1,6 +1,9 @@
+import { colors } from '../colors.js';
 import { AVAILABLE_MIRRORS } from '../constants.js';
+import { CliError } from '../errors.js';
 import * as kernel from '../kernel.js';
-import { CliError, parseMirrorArg } from '../utils.js';
+import { getRunningState } from '../runtime.js';
+import { parseMirrorArg } from '../utils.js';
 
 export async function cmdKernel(args: string[]): Promise<void> {
   const mirrorInfo = parseMirrorArg(args);
@@ -26,6 +29,10 @@ export async function cmdKernel(args: string[]): Promise<void> {
       console.log('\n正在下载...');
       const result = await kernel.downloadKernel(msg => console.log(msg), mirrorInfo.mirror, info.release);
       console.log(`\n已更新到 ${result.version}`);
+      // 运行中的内核仍是旧二进制（进程持有旧 inode），提醒重启生效
+      if (getRunningState().running) {
+        console.log(colors.yellow('提示: 运行中的内核仍是旧版本，执行 mihomo start 重启后生效'));
+      }
     }
   } catch (e) {
     if (e instanceof CliError) throw e;

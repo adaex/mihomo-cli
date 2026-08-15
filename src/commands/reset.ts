@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import readline from 'node:readline';
+import { colors } from '../colors.js';
 import { clearKernelVersionCache, hasKernel } from '../config.js';
 import { disableDaemon, isDaemonEnabled } from '../daemon.js';
+import { CliError } from '../errors.js';
 import { isOverwriteFilename } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import * as processManager from '../process.js';
 import { invalidateSettingsCache, writeSettings } from '../settings.js';
 import type { ResetTarget } from '../types.js';
-import { CliError, colors } from '../utils.js';
 
 const RESET_TARGETS: ResetTarget[] = [
   {

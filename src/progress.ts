@@ -1,5 +1,5 @@
+import { colors } from './colors.js';
 import type { ProxyTestResult } from './types.js';
-import { colors } from './utils.js';
 
 const IS_TTY = process.stdout.isTTY === true;
 const BAR_WIDTH = 20;

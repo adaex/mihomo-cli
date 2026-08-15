@@ -1,7 +1,8 @@
+import { colors } from '../colors.js';
 import { isDaemonEnabled } from '../daemon.js';
+import { CliError } from '../errors.js';
 import * as processManager from '../process.js';
 import type { StopResult } from '../types.js';
-import { CliError, colors } from '../utils.js';
 
 /** 检查停止结果：若有进程未终止则报错并退出。start/stop/clean 命令共用。 */
 export function handleStopResult(result: StopResult): void {

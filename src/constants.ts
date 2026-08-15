@@ -1,3 +1,12 @@
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const pkg = require('../package.json');
+
+/** CLI 自身版本与包名（package.json 单一来源；http UA、version/update 命令共用） */
+export const VERSION: string = pkg.version;
+export const PKG_NAME: string = pkg.name;
+
 export const AVAILABLE_MIRRORS = ['v6.gh-proxy.org', 'gh-proxy.org', 'hk.gh-proxy.org', 'cdn.gh-proxy.org'];
 
 /** --mirror 不带值时的默认镜像（与 AVAILABLE_MIRRORS 首项一致） */

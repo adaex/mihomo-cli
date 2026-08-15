@@ -1,4 +1,6 @@
+import { colors } from '../colors.js';
 import { DEFAULT_TEST_CONCURRENCY, DEFAULT_TEST_TIMEOUT } from '../constants.js';
+import { CliError } from '../errors.js';
 import * as processManager from '../process.js';
 import { createProgressPrinter, formatCleanSummary, formatTestSummary } from '../progress.js';
 import * as runtime from '../runtime.js';
@@ -13,7 +15,7 @@ import {
 import * as subscription from '../subscription.js';
 import { withTestInstance } from '../test-instance.js';
 import type { Subscription } from '../types.js';
-import { CliError, colors, formatBytes, formatDate, formatTimestamp, getNonFlagArg, parseIntArg } from '../utils.js';
+import { formatBytes, formatDate, formatTimestamp, getNonFlagArg, parseIntArg, suggestSimilar } from '../utils.js';
 import { dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 function githubRepoUrl(rawUrl: string): string | null {
@@ -127,8 +129,10 @@ async function subAdd(args: string[]): Promise<void> {
     // 入库用清洗后的 urls 重新拼接，避免存进带多余空格/尾逗号的原始串
     const normalizedUrl = urls.join(',');
     console.log(`添加合并订阅: ${name} (${urls.length} 个源)`);
+    // 入库（重名/名称非法）在 try 外抛出：回滚只针对「入库成功后下载失败」，
+    // 否则重名错误会触发 removeSubscription 误删用户既有的同名订阅
+    addSubscription(normalizedUrl, name);
     try {
-      addSubscription(normalizedUrl, name);
       setDefaultSubscription(name);
       const info = await subscription.downloadMergedSubscription(urls, name);
       console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)}, 合并 ${urls.length} 源)`);
@@ -142,8 +146,9 @@ async function subAdd(args: string[]): Promise<void> {
       throw new CliError('请提供有效的订阅 URL（需以 http:// 或 https:// 开头）');
     }
     console.log(`添加订阅: ${name}`);
+    // 同上：入库在 try 外，回滚仅覆盖下载失败
+    addSubscription(url, name);
     try {
-      addSubscription(url, name);
       setDefaultSubscription(name);
       const info = await subscription.downloadSubscription(url, name);
       const repoUrl = githubRepoUrl(url);
@@ -367,8 +372,12 @@ export async function cmdSubscription(args: string[]): Promise<void> {
   await dispatchSubcommand(args, SUBCOMMANDS, {
     // 无子命令 → 列表；未知子命令 → 报错
     fallback: printSubscriptionList,
-    onUnknown: () => {
-      throw new CliError('未知的订阅命令', { hint: '用法: mihomo sub [list|use|add|update|remove|web|test|clean]' });
+    onUnknown: action => {
+      const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
+      const suggestion = suggestSimilar(action, names);
+      throw new CliError(`未知的订阅命令: ${action}`, {
+        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '用法: mihomo sub [list|use|add|update|remove|web|test|clean]'],
+      });
     },
   });
 }

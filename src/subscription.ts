@@ -1,3 +1,4 @@
+import { colors } from './colors.js';
 import { buildConfig, dumpYaml, getRuleTarget, parseYamlOrJson, writeDebugConfig, writeMihomoConfig } from './config.js';
 import {
   AUTO_CLEAN_THRESHOLD,
@@ -11,6 +12,8 @@ import {
   DEFAULT_UPDATE_INTERVAL_HOURS,
   DEFAULT_UPDATE_INTERVAL_HOURS_GITHUB,
 } from './constants.js';
+import { CliError, TimeoutError, withTimeout } from './errors.js';
+import { createHttpClient } from './http.js';
 import {
   getSubscriptions,
   getSubscriptionsWithCache,
@@ -20,7 +23,6 @@ import {
   saveSubscriptionCache,
   saveSubscriptionRawConfig,
 } from './settings.js';
-
 import type {
   AutoUpdateResult,
   DownloadResult,
@@ -33,7 +35,6 @@ import type {
   TryUpdateResult,
   UserInfo,
 } from './types.js';
-import { CliError, colors, createHttpClient, TimeoutError, withTimeout } from './utils.js';
 
 // 供命令层沿用 `subscription.XXX` 引用（实际定义在 constants.ts，集中管理默认值）
 export { AUTO_CLEAN_THRESHOLD, AUTO_CLEAN_THRESHOLD_GITHUB, DEFAULT_AUTO_UPDATE_TIMEOUT, DEFAULT_CLEAN_ROUNDS };
@@ -82,7 +83,7 @@ export function splitUrls(url: string): string[] {
 function loadSubscriptionConfig(subName: string): ParsedSubscription {
   const rawContent = readSubscriptionRawConfig(subName);
   if (!rawContent) {
-    throw new Error(`未找到订阅配置 "${subName}"`);
+    throw new CliError(`未找到订阅配置 "${subName}"，请先更新订阅（mihomo sub update ${subName}）`);
   }
   const raw = parseYamlOrJson(rawContent, '订阅内容') as Record<string, unknown>;
   return {
@@ -343,7 +344,7 @@ export async function downloadMergedSubscription(urls: string[], subName: string
 export function prepareConfigForStart(mode: string, subName = 'default'): { proxies: number; proxyGroups: number } {
   const rawContent = readSubscriptionRawConfig(subName);
   if (!rawContent) {
-    throw new Error(`未找到订阅配置 "${subName}"，请先添加订阅`);
+    throw new CliError(`未找到订阅配置 "${subName}"，请先添加订阅`);
   }
 
   const subUrl = getSubscriptions().find(s => s.name === subName)?.url;

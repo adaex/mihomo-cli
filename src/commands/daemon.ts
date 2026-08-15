@@ -1,7 +1,9 @@
+import { colors } from '../colors.js';
 import { hasKernel } from '../config.js';
 import { DAEMON_BOOT_WAIT_MS, disableDaemon, enableDaemon, getDaemonStatus, isDaemonEnabled, isDaemonRunning } from '../daemon.js';
+import { CliError } from '../errors.js';
 import * as subscription from '../subscription.js';
-import { CliError, colors, sleep } from '../utils.js';
+import { sleep, suggestSimilar } from '../utils.js';
 import { dispatchSubcommand, type SubCommand } from './shared.js';
 
 function printDaemonStatus(): void {
@@ -91,7 +93,11 @@ export async function cmdDaemon(args: string[]): Promise<void> {
     // 无 action → 显示状态；未知 action → 报错
     fallback: printStatusView,
     onUnknown: action => {
-      throw new CliError(`未知的 daemon 子命令: ${action}`, { hint: ['', '可用子命令: on, off, status'] });
+      const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
+      const suggestion = suggestSimilar(action, names);
+      throw new CliError(`未知的 daemon 子命令: ${action}`, {
+        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '', '可用子命令: on, off, status'],
+      });
     },
   });
 }

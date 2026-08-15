@@ -1,7 +1,6 @@
 import path from 'node:path';
-
+import { colors } from '../colors.js';
 import { isOverwriteEnabled, listOverwriteFile, setOverwriteEnabled } from '../overwrite.js';
-import { colors } from '../utils.js';
 import { dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 function printOverwriteList(): void {

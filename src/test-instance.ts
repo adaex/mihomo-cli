@@ -4,10 +4,25 @@ import path from 'node:path';
 
 import { dumpYaml, parseYamlOrJson } from './config.js';
 import { TEST_CONFIG } from './constants.js';
+import { CliError } from './errors.js';
+import { createHttpClient } from './http.js';
 import { registerCleanup } from './lifecycle.js';
 import { PATHS, rmrf, USER_DATA_DIR } from './paths.js';
+import { isProcessCommandMatching, isProcessRunning } from './process.js';
 import { readSubscriptionRawConfig } from './settings.js';
-import { createHttpClient, isProcessCommandMatching, isProcessRunning, isProxyValid, sleep, sleepSync } from './utils.js';
+import { sleep, sleepSync } from './utils.js';
+
+/** 节点字段有效性校验：缺 name/server/port/type 视为无效；SS2022 密钥需为合法 base64 且足够长 */
+function isProxyValid(proxy: { name: string; [k: string]: unknown }): boolean {
+  if (!proxy.name || !proxy.server || !proxy.port) return false;
+  if (!proxy.type) return false;
+  if (proxy.type === 'ss' && typeof proxy.cipher === 'string' && proxy.cipher.startsWith('2022-blake3')) {
+    const pw = String(proxy.password || '');
+    // 兼容 base64 与 base64url（- _ 替代 + /）编码的 SS2022 密钥
+    if (!/^[A-Za-z0-9+/\-_]+=*$/.test(pw) || pw.length < 20) return false;
+  }
+  return true;
+}
 
 const TEST_DIR = path.join(USER_DATA_DIR, 'test');
 const TEST_DIRS = {
@@ -37,14 +52,14 @@ function buildTestConfig(subName: string): void {
 
   const rawContent = readSubscriptionRawConfig(subName);
   if (!rawContent) {
-    throw new Error(`未找到订阅配置 "${subName}"`);
+    throw new CliError(`未找到订阅配置 "${subName}"，请先更新订阅（mihomo sub update ${subName}）`);
   }
 
   const parsed = parseYamlOrJson(rawContent, '订阅内容') as Record<string, unknown>;
   const proxies = ((parsed.proxies || []) as Array<{ name: string; [k: string]: unknown }>).filter(isProxyValid);
 
   if (proxies.length === 0) {
-    throw new Error(`订阅 "${subName}" 没有有效节点`);
+    throw new CliError(`订阅 "${subName}" 没有有效节点`);
   }
 
   const nameCount = new Map<string, number>();
@@ -75,7 +90,7 @@ function buildTestConfig(subName: string): void {
 
 async function startTestInstance(): Promise<void> {
   const binary = PATHS.mihomoBinary;
-  if (!fs.existsSync(binary)) throw new Error('未找到 mihomo 内核，请先运行 "mihomo kernel" 下载');
+  if (!fs.existsSync(binary)) throw new CliError('未找到 mihomo 内核，请先运行 "mihomo kernel" 下载');
 
   stopTestInstance();
 
@@ -89,7 +104,7 @@ async function startTestInstance(): Promise<void> {
   child.unref();
 
   const pid = child.pid;
-  if (!pid) throw new Error('测试实例启动失败：无法创建进程（内核二进制可能不可执行）');
+  if (!pid) throw new CliError('测试实例启动失败：无法创建进程（内核二进制可能不可执行）');
   fs.writeFileSync(TEST_PATHS.pidFile, pid.toString(), { mode: 0o600 });
 
   const client = createHttpClient({ timeout: 2000 });
@@ -112,11 +127,11 @@ async function startTestInstance(): Promise<void> {
     } catch {
       /* ignore */
     }
-    throw new Error(`测试实例启动失败${errorDetail ? `\n${errorDetail}` : ''}`);
+    throw new CliError(`测试实例启动失败${errorDetail ? `\n${errorDetail}` : ''}`);
   }
 
   if (!ready) {
-    throw new Error('测试实例启动超时，API 未响应');
+    throw new CliError('测试实例启动超时，API 未响应');
   }
 }
 

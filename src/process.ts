@@ -2,10 +2,11 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getKernelVersion, hasConfig, hasKernel } from './config.js';
+import { CliError } from './errors.js';
 import { setSilentSigint } from './lifecycle.js';
 import { DIRS, ensureDirs, PATHS, rmrf } from './paths.js';
 import type { CleanupResult, LogList, ProcessInfo, ProcessStatus, StaleState, StartResult, StopResult } from './types.js';
-import { escapeRegExp, formatLocalTimestamp, isProcessRoot, isProcessRunning, shellQuote, sleepSync } from './utils.js';
+import { escapeRegExp, formatLocalTimestamp, shellQuote, sleepSync } from './utils.js';
 
 export const PROCESS_WAIT_ATTEMPTS = 50;
 export const PROCESS_WAIT_INTERVAL = 100;
@@ -14,6 +15,43 @@ export const SUDO_TIMEOUT_MS = 60_000;
 const TUN_MODE_POST_WAIT_MS = 500;
 const BATCH_KILL_THRESHOLD = 3;
 const DEFAULT_LOG_RETENTION_DAYS = 7;
+
+/** ps 查询超时：探测进程存活/属主/命令行的统一上限，卡住时按不存在处理 */
+const PS_TIMEOUT_MS = 5000;
+
+export function isProcessRunning(pid: number): boolean {
+  if (!pid) return false;
+  try {
+    const result = spawnSync('ps', ['-p', String(pid), '-o', 'pid='], { encoding: 'utf8', timeout: PS_TIMEOUT_MS });
+    return (result.stdout || '').trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 校验 pid 对应进程的命令行是否包含指定子串（防 PID 复用误杀：pid 文件残留后该 pid 可能已被
+ * 系统分配给无关进程）。读不到命令行时保守返回 false。
+ */
+export function isProcessCommandMatching(pid: number, needle: string): boolean {
+  if (!pid) return false;
+  try {
+    const result = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8', timeout: PS_TIMEOUT_MS });
+    return (result.stdout || '').includes(needle);
+  } catch {
+    return false;
+  }
+}
+
+export function isProcessRoot(pid: number): boolean {
+  if (!pid) return false;
+  try {
+    const result = spawnSync('ps', ['-p', String(pid), '-o', 'uid='], { encoding: 'utf8', timeout: PS_TIMEOUT_MS });
+    return (result.stdout || '').trim() === '0';
+  } catch {
+    return false;
+  }
+}
 
 /**
  * pgrep/pkill -f 用于识别「主实例」的正则:binary 路径 + 主 configFile 两段拼接。
@@ -42,7 +80,10 @@ function getPid(): number | null {
 
 function isRunning(): boolean {
   const pid = getPid();
-  return pid ? isProcessRunning(pid) : false;
+  if (!pid) return false;
+  // 同时校验命令行含内核路径：pidFile 残留 + 系统重启后 PID 可能被无关进程复用，
+  // 只看存活会把无关进程误判成运行中的 mihomo（与 test-instance 的防护同口径）
+  return isProcessRunning(pid) && isProcessCommandMatching(pid, PATHS.mihomoBinary);
 }
 
 export function getMihomoPids(): number[] {
@@ -282,12 +323,12 @@ export async function start(mode = 'mixed'): Promise<StartResult> {
 
   const binary = PATHS.mihomoBinary;
   if (!fs.existsSync(binary)) {
-    throw new Error('未找到 mihomo 内核，请先下载内核');
+    throw new CliError('未找到 mihomo 内核，请先下载内核');
   }
 
   const configFile = PATHS.configFile;
   if (!fs.existsSync(configFile)) {
-    throw new Error('未找到配置文件，请先添加订阅并启动');
+    throw new CliError('未找到配置文件，请先添加订阅并启动');
   }
 
   const staleState = checkStaleState();

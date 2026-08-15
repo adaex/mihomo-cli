@@ -1,10 +1,12 @@
+import { colors } from '../colors.js';
 import { getConfigInfo } from '../config.js';
 import { isDaemonEnabled } from '../daemon.js';
 import { isOverwriteEnabled, listOverwriteFile } from '../overwrite.js';
 import * as processManager from '../process.js';
 import { getRunningState } from '../runtime.js';
+import { getSubscriptionsWithCache } from '../settings.js';
 import { formatProxySummary, getActiveSubscription } from '../subscription.js';
-import { colors } from '../utils.js';
+import { formatBytes, formatTimestamp } from '../utils.js';
 
 export function printStatus(): void {
   const status = processManager.getStatus();
@@ -55,6 +57,19 @@ export function printStatus(): void {
       subLine += ` (${formatProxySummary(info)})`;
     }
     console.log(subLine);
+    // 订阅流量/到期来自缓存（上次下载响应头），仅缓存里有才展示
+    const cached = getSubscriptionsWithCache().find(s => s.name === activeSub.name);
+    if (cached && (cached.download !== undefined || cached.total !== undefined)) {
+      const used = (cached.upload || 0) + (cached.download || 0);
+      let trafficLine = `${colors.gray('流量: ')}${formatBytes(used)} / ${formatBytes(cached.total)}`;
+      if (cached.total && cached.total > 0) {
+        trafficLine += ` (${Math.min((used / cached.total) * 100, 100).toFixed(1)}%)`;
+      }
+      console.log(trafficLine);
+    }
+    if (cached?.expire !== undefined) {
+      console.log(`${colors.gray('到期: ')}${formatTimestamp(cached.expire)}`);
+    }
   } else {
     console.log(`${colors.gray('订阅: ')}未配置`);
   }

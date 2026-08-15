@@ -1,6 +1,7 @@
+import { CliError } from '../errors.js';
 import * as processManager from '../process.js';
 import type { LogEntry } from '../types.js';
-import { CliError, formatBytes, formatDate, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
+import { formatBytes, formatDate, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
 
 export function cmdLog(args: string[]): void {
   const logPath = processManager.getLogPath();

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { CliError } from './errors.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
 import type { Settings, Subscription, SubscriptionCache, SubscriptionCacheEntry, SubscriptionWithCache } from './types.js';
 
@@ -137,7 +138,7 @@ const SAFE_NAME_RE = /^[\w\-\p{Unified_Ideograph}]{1,64}$/u;
 
 function validateSubscriptionName(name: string): void {
   if (!name || !SAFE_NAME_RE.test(name)) {
-    throw new Error(`订阅名称无效: "${name}"，只允许字母、数字、下划线、短横线和中文（最长 64 字符）`);
+    throw new CliError(`订阅名称无效: "${name}"，只允许字母、数字、下划线、短横线和中文（最长 64 字符）`);
   }
 }
 
@@ -146,7 +147,7 @@ export function addSubscription(url: string, name = 'default'): void {
   const settings = readSettings();
   const subs = [...(settings.subscriptions || [])];
   if (subs.some(s => s.name === name)) {
-    throw new Error(`订阅 "${name}" 已存在，请换个名称（mihomo sub add <url> <名称>），或先删除（mihomo sub remove ${name}）`);
+    throw new CliError(`订阅 "${name}" 已存在，请换个名称（mihomo sub add <url> <名称>），或先删除（mihomo sub remove ${name}）`);
   }
   subs.push({ name, url });
   const updates: Partial<Settings> = { subscriptions: subs };
@@ -206,7 +207,7 @@ function getSubscriptionRawConfigPath(subName: string): string {
   // 防御路径穿越：名字正常经 addSubscription 校验，但 settings.json 可被手改成 ../ 之类，
   // 直接拼接会让读/写/删越出 subscriptions 目录
   if (!SAFE_NAME_RE.test(subName)) {
-    throw new Error(`订阅名称无效: "${subName}"`);
+    throw new CliError(`订阅名称无效: "${subName}"`);
   }
   return path.join(DIRS.subscriptions, `${subName}.yaml`);
 }

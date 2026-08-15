@@ -1,9 +1,11 @@
+import { colors } from './colors.js';
 import { printShortHelp } from './commands/help.js';
-import { findCommand } from './commands/registry.js';
+import { allCommandTokens, findCommand } from './commands/registry.js';
 import { printStatus } from './commands/status.js';
+import { CliError } from './errors.js';
 import { isSilentSigint, runCleanup } from './lifecycle.js';
 import { ensureDirs } from './paths.js';
-import { CliError, colors } from './utils.js';
+import { suggestSimilar } from './utils.js';
 
 process.on('SIGINT', () => {
   if (!isSilentSigint()) {
@@ -59,7 +61,10 @@ async function main(): Promise<void> {
   const command = findCommand(token);
 
   if (!command) {
-    throw new CliError(`未知命令: ${token}`, { hint: '使用 "mihomo help" 查看帮助' });
+    const suggestion = suggestSimilar(token, allCommandTokens());
+    throw new CliError(`未知命令: ${token}`, {
+      hint: [suggestion.length > 0 ? `是否想输入: ${suggestion.join(' / ')}?` : '使用 "mihomo help" 查看帮助'],
+    });
   }
 
   // rewrite 把顶层快捷命令(tun/use/on/off/open)映射为子命令形式;其余命令原样透传。

@@ -3,11 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { CONTROLLER_BASE_URL, LAUNCH_DAEMON_LABEL } from './constants.js';
+import { CliError } from './errors.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
-import { cleanupOldLogs, getMihomoPids, MAIN_INSTANCE_PATTERN, SUDO_TIMEOUT_MS } from './process.js';
+import { cleanupOldLogs, getMihomoPids, isProcessRoot, MAIN_INSTANCE_PATTERN, SUDO_TIMEOUT_MS } from './process.js';
 import { readSettings } from './settings.js';
 import type { DaemonStatus } from './types.js';
-import { formatLocalTimestamp, isProcessRoot, shellQuote } from './utils.js';
+import { formatLocalTimestamp, shellQuote } from './utils.js';
 
 /** launchd 服务目标：root 级 LaunchDaemon 用系统域 system/<label>（无需 uid） */
 const SERVICE_TARGET = `system/${LAUNCH_DAEMON_LABEL}`;
@@ -144,10 +145,10 @@ export function isDaemonRunning(status: DaemonStatus): boolean {
  */
 export function enableDaemon(): void {
   if (!fs.existsSync(PATHS.mihomoBinary)) {
-    throw new Error('未找到 mihomo 内核，请先下载内核');
+    throw new CliError('未找到 mihomo 内核，请先下载内核');
   }
   if (!fs.existsSync(PATHS.configFile)) {
-    throw new Error('未找到运行时配置，请先添加订阅');
+    throw new CliError('未找到运行时配置，请先添加订阅');
   }
 
   ensureDirs();

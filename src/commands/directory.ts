@@ -1,6 +1,6 @@
+import { CliError } from '../errors.js';
 import { DIRECTORY_TARGETS, DIRS, PATHS, USER_DATA_DIR } from '../paths.js';
 import * as processManager from '../process.js';
-import { CliError } from '../utils.js';
 import { dispatchSubcommand, type SubCommand } from './shared.js';
 
 function openDirectory(args: string[]): void {

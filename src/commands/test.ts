@@ -1,10 +1,12 @@
+import { colors } from '../colors.js';
 import { DEFAULT_TEST_CONCURRENCY, DEFAULT_TEST_TIMEOUT } from '../constants.js';
 import { isDaemonEnabled } from '../daemon.js';
+import { CliError } from '../errors.js';
 import * as processManager from '../process.js';
 import { createProgressPrinter, formatCleanSummary, formatTestSummary } from '../progress.js';
 import * as runtime from '../runtime.js';
 import * as subscription from '../subscription.js';
-import { CliError, colors, parseIntArg } from '../utils.js';
+import { parseIntArg } from '../utils.js';
 import { requireRunning } from './shared.js';
 import { handleStopResult } from './stop.js';
 

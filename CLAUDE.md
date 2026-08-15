@@ -21,13 +21,16 @@ This file provides guidance to Claude Code when working with this repository.
 | -------------------------- | --------------------------------- |
 | `src/index.ts`             | main()、信号处理、从注册表分发命令 |
 | `src/types.ts`             | 所有类型定义（集中管理）          |
-| `src/constants.ts`         | 默认配置、UI URLs、镜像列表、控制器地址 |
-| `src/utils.ts`             | 颜色、格式化、flag 解析、HTTP、escapeRegExp/shellQuote、CliError |
+| `src/constants.ts`         | 默认配置、UI URLs、镜像列表、控制器地址、VERSION/PKG_NAME |
+| `src/utils.ts`             | 纯函数小工具：sleep、escapeRegExp/shellQuote、格式化、flag 解析、did-you-mean |
+| `src/colors.ts`            | 颜色与 NO_COLOR                   |
+| `src/errors.ts`            | CliError、TimeoutError、withTimeout |
+| `src/http.ts`              | HTTP 客户端（超时、响应体大小上限、Bearer） |
 | `src/paths.ts`             | 路径常量、目录管理                |
 | `src/settings.ts`          | settings.json 读写、订阅缓存     |
 | `src/config.ts`            | 配置构建、YAML 解析/序列化、内核版本 |
 | `src/subscription.ts`      | 订阅下载、流量解析、自动更新      |
-| `src/process.ts`           | 进程启动/停止、PID 管理、日志轮转 |
+| `src/process.ts`           | 进程启动/停止、PID 管理、日志轮转、进程探测（isProcess*） |
 | `src/daemon.ts`            | launchd 保活：开机自启/崩溃重启、热重载、状态查询 |
 | `src/runtime.ts`           | 运行时门面：收敛普通进程/保活双轨（模式、状态、启停） |
 | `src/lifecycle.ts`         | 退出清理注册表（信号/异常退出前杀掉测试实例） |

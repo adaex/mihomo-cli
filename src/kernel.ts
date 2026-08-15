@@ -4,9 +4,9 @@ import path from 'node:path';
 
 import { compareVersions } from 'compare-versions';
 import { clearKernelVersionCache, getKernelVersion } from './config.js';
+import { createHttpClient } from './http.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
 import type { GitHubAsset, GitHubRelease, KernelUpdateInfo } from './types.js';
-import { createHttpClient } from './utils.js';
 
 const GITHUB_REPO = 'MetaCubeX/mihomo';
 const KERNEL_HTTP_TIMEOUT = 120_000;

@@ -232,3 +232,8 @@ const COMMAND_INDEX: Map<string, Command> = (() => {
 export function findCommand(token: string): Command | undefined {
   return COMMAND_INDEX.get(token);
 }
+
+/** 全部可识别 token(主名+别名)，供 did-you-mean 纠错候选。 */
+export function allCommandTokens(): string[] {
+  return [...COMMAND_INDEX.keys()];
+}

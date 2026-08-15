@@ -1,34 +1,13 @@
-import { spawnSync } from 'node:child_process';
-import { createRequire } from 'node:module';
-
 import { DEFAULT_MIRROR } from './constants.js';
-import type { HttpClient, HttpClientOptions, HttpResponse, MirrorArg } from './types.js';
+import type { MirrorArg } from './types.js';
 
-const require = createRequire(import.meta.url);
-const pkg = require('../package.json');
-
-export const VERSION: string = pkg.version;
-
-/** HTTP 响应体大小上限（50MB）：订阅/内核产物远小于此，超限视为异常（劫持/故障）并中止，防 OOM。 */
-const MAX_RESPONSE_BYTES = 50 * 1024 * 1024;
+/**
+ * 通用纯函数小工具：sleep、字符串转义、格式化、flag 解析、did-you-mean。
+ * 有 I/O 或独立职责的模块已拆出：colors.ts（颜色）、errors.ts（CliError/TimeoutError）、
+ * http.ts（HTTP 客户端）、process.ts（进程探测）。
+ */
 
 const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
-
-const NO_COLOR = process.env.NO_COLOR !== undefined || !process.stdout.isTTY;
-
-function colorize(code: string, str: unknown): string {
-  if (NO_COLOR) return String(str);
-  return `${code + String(str)}\x1b[0m`;
-}
-
-export const colors = {
-  bold: (s: unknown) => colorize('\x1b[1m', s),
-  red: (s: unknown) => colorize('\x1b[31m', s),
-  green: (s: unknown) => colorize('\x1b[32m', s),
-  yellow: (s: unknown) => colorize('\x1b[33m', s),
-  cyan: (s: unknown) => colorize('\x1b[36m', s),
-  gray: (s: unknown) => colorize('\x1b[90m', s),
-};
 
 export function sleepSync(ms: number): void {
   Atomics.wait(sleepBuf, 0, 0, ms);
@@ -49,57 +28,6 @@ export function escapeRegExp(s: string): string {
 /** 单引号包裹并转义嵌入的单引号,安全地把任意字符串作为 bash 字面量(防御路径中的 `"`/`$`/反引号注入)。 */
 export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`;
-}
-
-export class TimeoutError extends Error {
-  constructor() {
-    super('timeout');
-    this.name = 'TimeoutError';
-  }
-}
-
-export interface CliErrorOptions {
-  /** 附加说明，渲染在主消息之后（每项一行）：候选列表 / 原因·文档 / 镜像提示等 */
-  hint?: string | string[];
-  /** 前缀标签，默认 '错误'；动词化场景传入如 '配置错误' / '启动失败' / '更新失败' */
-  label?: string;
-  /** 退出码，默认 1；仅 update 透传 npm 退出码时需要非 1 */
-  exitCode?: number;
-}
-
-/**
- * 命令层「预期内、用户可见」的错误。抛出后由 index.ts 的 main().catch 统一收口：
- * 渲染 `label: message` + hint 多行，按 exitCode 退出，不打印堆栈。
- * 与 TimeoutError 相互独立（后者用于 withTimeout 的控制流 instanceof 判定，勿混继承）。
- * 约定：detached 子进程 / 事件回调中不得抛 CliError（此时 main 已 resolve，收口捕获不到）。
- */
-export class CliError extends Error {
-  readonly hint: string[];
-  readonly label: string;
-  readonly exitCode: number;
-  constructor(message: string, options: CliErrorOptions = {}) {
-    super(message);
-    this.name = 'CliError';
-    this.label = options.label ?? '错误';
-    this.hint = options.hint === undefined ? [] : Array.isArray(options.hint) ? options.hint : [options.hint];
-    this.exitCode = options.exitCode ?? 1;
-  }
-}
-
-export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new TimeoutError()), ms);
-    promise.then(
-      v => {
-        clearTimeout(timer);
-        resolve(v);
-      },
-      e => {
-        clearTimeout(timer);
-        reject(e);
-      },
-    );
-  });
 }
 
 export function formatBytes(bytes: unknown): string {
@@ -201,106 +129,44 @@ export function getNonFlagArg(args: string[] | undefined, startIdx: number, valu
   return null;
 }
 
-export function isProcessRunning(pid: number): boolean {
-  if (!pid) return false;
-  try {
-    const result = spawnSync('ps', ['-p', String(pid), '-o', 'pid='], { encoding: 'utf8', timeout: 5000 });
-    return (result.stdout || '').trim().length > 0;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * 校验 pid 对应进程的命令行是否包含指定子串（防 PID 复用误杀：pid 文件残留后该 pid 可能已被
- * 系统分配给无关进程）。读不到命令行时保守返回 false。
- */
-export function isProcessCommandMatching(pid: number, needle: string): boolean {
-  if (!pid) return false;
-  try {
-    const result = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8', timeout: 5000 });
-    return (result.stdout || '').includes(needle);
-  } catch {
-    return false;
-  }
-}
-
-export function isProcessRoot(pid: number): boolean {
-  if (!pid) return false;
-  try {
-    const result = spawnSync('ps', ['-p', String(pid), '-o', 'uid='], { encoding: 'utf8', timeout: 5000 });
-    return (result.stdout || '').trim() === '0';
-  } catch {
-    return false;
-  }
-}
-
-export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
-  const { timeout = 60_000, secret } = options;
-  // 访问带鉴权的 external-controller 时附带 Bearer token；secret 为空则退化为无鉴权（订阅下载等外部 HTTP 不受影响）
-  const authHeaders: Record<string, string> = secret ? { Authorization: `Bearer ${secret}` } : {};
-
-  return {
-    async get<T = string>(url: string, config?: { responseType?: 'text' | 'json'; signal?: AbortSignal }): Promise<HttpResponse<T>> {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeout);
-      const signal = config?.signal ? AbortSignal.any([controller.signal, config.signal]) : controller.signal;
-      try {
-        const response = await fetch(url, {
-          signal,
-          headers: { 'User-Agent': `mihomo-cli/${VERSION}`, ...authHeaders },
-        });
-        if (!response.ok) {
-          const error: Error & { response?: { status: number; data?: Record<string, unknown> } } = new Error(`HTTP ${response.status}`);
-          error.response = { status: response.status };
-          try {
-            error.response.data = (await response.json()) as Record<string, unknown>;
-          } catch {
-            // ignore json parse errors
-          }
-          throw error;
-        }
-        // 提前拒绝声明超大的响应，避免把 GB 级 body 读进内存（订阅/内核下载被劫持或故障时的 OOM 防护）
-        const declaredLen = Number(response.headers.get('content-length'));
-        if (Number.isFinite(declaredLen) && declaredLen > MAX_RESPONSE_BYTES) {
-          throw new Error(`响应体过大（${formatBytes(declaredLen)}，上限 ${formatBytes(MAX_RESPONSE_BYTES)}）`);
-        }
-        const text = await readBodyWithLimit(response, controller);
-        const data = config?.responseType === 'json' ? JSON.parse(text) : text;
-        return { data: data as T, headers: response.headers, status: response.status };
-      } finally {
-        clearTimeout(timer);
-      }
-    },
-  };
-}
-
-/**
- * 流式读取响应体并强制大小上限：即使服务端不声明 Content-Length（分块传输），
- * 累计超过 MAX_RESPONSE_BYTES 也立即 abort 中止，避免边读边膨胀撑爆内存。
- */
-async function readBodyWithLimit(response: Response, controller: AbortController): Promise<string> {
-  if (!response.body) return response.text();
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        total += value.byteLength;
-        if (total > MAX_RESPONSE_BYTES) {
-          controller.abort();
-          throw new Error(`响应体超过大小上限（${formatBytes(MAX_RESPONSE_BYTES)}）`);
-        }
-        chunks.push(value);
-      }
+/** Levenshtein 编辑距离（两行滚动数组，O(min(m,n)) 空间；输入为命令 token，长度很短） */
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const curr = [i];
+    for (let j = 1; j <= b.length; j++) {
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
     }
-  } finally {
-    reader.releaseLock();
+    prev = curr;
   }
-  return Buffer.concat(chunks).toString('utf8');
+  return prev[b.length];
+}
+
+/**
+ * did-you-mean：从候选词中挑出与输入相近的词，按相似度升序返回（至多 3 个）。
+ * 命中规则（大小写不敏感）：前缀匹配，或编辑距离 <= 2。无相近词返回空数组。
+ */
+export function suggestSimilar(input: string, candidates: readonly string[]): string[] {
+  const lower = input.toLowerCase();
+  const scored: { name: string; score: number; lenDiff: number }[] = [];
+  for (const cand of candidates) {
+    const c = cand.toLowerCase();
+    // 输入与候选完全一致（区分大小写）时不建议；仅大小写不同的仍建议（token 大小写易敲错）
+    if (cand === input) continue;
+    if (c.startsWith(lower)) {
+      scored.push({ name: cand, score: 0, lenDiff: Math.abs(cand.length - input.length) });
+    } else if (lower.length >= 3) {
+      // 编辑距离只对 >= 3 字符的输入生效：两字符输入（如 su）与任意候选的距离都 <= 2，全是噪音
+      const d = levenshtein(lower, c);
+      if (d <= 2) scored.push({ name: cand, score: d, lenDiff: Math.abs(cand.length - input.length) });
+    }
+  }
+  // 同分时优先长度接近的候选（su -> sub 优先于 subscription）
+  scored.sort((a, b) => a.score - b.score || a.lenDiff - b.lenDiff);
+  return scored.slice(0, 3).map(s => s.name);
 }
 
 function normalizeMirrorUrl(val: string): string | null {
@@ -350,15 +216,4 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
   }
 
   return { mirror: null, isOverride: false, type: 'download' };
-}
-
-export function isProxyValid(proxy: { name: string; [k: string]: unknown }): boolean {
-  if (!proxy.name || !proxy.server || !proxy.port) return false;
-  if (!proxy.type) return false;
-  if (proxy.type === 'ss' && typeof proxy.cipher === 'string' && proxy.cipher.startsWith('2022-blake3')) {
-    const pw = String(proxy.password || '');
-    // 兼容 base64 与 base64url（- _ 替代 + /）编码的 SS2022 密钥
-    if (!/^[A-Za-z0-9+/\-_]+=*$/.test(pw) || pw.length < 20) return false;
-  }
-  return true;
 }

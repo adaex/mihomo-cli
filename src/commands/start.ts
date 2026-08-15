@@ -1,22 +1,31 @@
+import { colors } from '../colors.js';
 import { hasKernel } from '../config.js';
 import { AUTO_CLEAN_COOLDOWN_HOURS, DEFAULT_TEST_CONCURRENCY, DEFAULT_TEST_TIMEOUT } from '../constants.js';
 import { isDaemonEnabled } from '../daemon.js';
+import { CliError } from '../errors.js';
 import { PATHS } from '../paths.js';
 import * as processManager from '../process.js';
 import { createProgressPrinter, formatCleanSummary, formatTestSummary } from '../progress.js';
 import * as runtime from '../runtime.js';
 import { readSubscriptionCache, saveSubscriptionCache } from '../settings.js';
 import * as subscription from '../subscription.js';
-import { CliError, colors, hasFlag, parseIntArg, sleep } from '../utils.js';
+import { hasFlag, parseIntArg, sleep } from '../utils.js';
 import { printStatus } from './status.js';
 import { handleStopResult } from './stop.js';
 
 export async function cmdStart(args: string[]): Promise<void> {
+  // args[1] 为非 flag token 时才是模式参数；拼错模式名（如 start tn）必须报错，
+  // 不能静默按 Mixed 启动（用户会误以为已切到 TUN）。参数校验先于环境检查（内核/订阅）
+  const modeToken = args[1] && !args[1].startsWith('-') ? args[1].toLowerCase() : undefined;
+  if (modeToken !== undefined && modeToken !== 'tun' && modeToken !== 'mixed') {
+    throw new CliError(`未知的启动模式: ${args[1]}`, { hint: '用法: mihomo start [tun|mixed]（默认 mixed）' });
+  }
+  const targetMode = modeToken === 'tun' ? 'tun' : 'mixed';
+
   if (!hasKernel()) {
     throw new CliError('未找到内核，请运行 "mihomo kernel"');
   }
 
-  const targetMode = args[1] === 'tun' ? 'tun' : 'mixed';
   const daemonEnabled = isDaemonEnabled();
 
   if (targetMode === 'tun' && daemonEnabled) {
