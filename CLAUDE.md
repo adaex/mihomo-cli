@@ -22,7 +22,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/index.ts`             | main()、信号处理、从注册表分发命令 |
 | `src/types.ts`             | 所有类型定义（集中管理）          |
 | `src/constants.ts`         | 默认配置、UI URLs、镜像列表、控制器地址 |
-| `src/utils.ts`             | 颜色、格式化、flag 解析、HTTP、escapeRegExp/shellQuote |
+| `src/utils.ts`             | 颜色、格式化、flag 解析、HTTP、escapeRegExp/shellQuote、CliError |
 | `src/paths.ts`             | 路径常量、目录管理                |
 | `src/settings.ts`          | settings.json 读写、订阅缓存     |
 | `src/config.ts`            | 配置构建、YAML 解析/序列化、内核版本 |
@@ -36,6 +36,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/kernel.ts`            | GitHub Releases 检查、下载        |
 | `src/overwrite.ts`         | 覆写配置合并                      |
 | `src/commands/registry.ts` | 命令注册表（name/别名/handler/argv 改写/help 用法），路由与帮助的单一真相源 |
+| `src/commands/shared.ts`   | 命令层公共工具：dispatchSubcommand 子命令分发、requireRunning、restartToApply |
 | `src/commands/*.ts`        | 各命令处理器（每命令一个文件）    |
 
 ### 命令处理器
@@ -133,9 +134,14 @@ npm run typecheck      # 类型检查
 npm run check          # Biome lint + format 检查
 npm run check:fix      # 自动修复
 npm run format         # 格式化代码
+npm test               # node:test 单测（*.spec.ts，零新增依赖，经 tsx）
 ```
 
-无测试框架。
+测试仅覆盖高危纯函数（覆写合并/配置校验/名称归一/URL 遮蔽等），非全量。文件命名 `*.spec.ts`（勿用 `*.test.ts`，会与 test.ts/test-instance.ts 冲突）。
+
+### 错误处理
+
+命令层与数据层的预期错误一律 `throw new CliError(msg, { label?, hint?, exitCode? })`，由 `index.ts` 的 `main().catch` 单点渲染（`label:` 前缀 + hint 多行 + exitCode）并 `runCleanup()`。**不在命令逻辑里 `console.error + process.exit`**。仅两类 exit 保留：信号/全局处理器、`viewLogWithTail` 的 tail 事件回调（main 已 resolve，无法收口）。catch 后重标签需先 `if (e instanceof CliError) throw e`（防双重包裹）。detached/事件回调中不得抛 CliError。
 
 ---
 

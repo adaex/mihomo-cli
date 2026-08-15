@@ -20,6 +20,7 @@
     "check:fix": "biome check --fix .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"src/**/*.spec.ts\"",
     "prepare": "husky"
   },
   "keywords": [
