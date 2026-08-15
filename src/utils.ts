@@ -183,6 +183,20 @@ export function isProcessRunning(pid: number): boolean {
   }
 }
 
+/**
+ * 校验 pid 对应进程的命令行是否包含指定子串（防 PID 复用误杀：pid 文件残留后该 pid 可能已被
+ * 系统分配给无关进程）。读不到命令行时保守返回 false。
+ */
+export function isProcessCommandMatching(pid: number, needle: string): boolean {
+  if (!pid) return false;
+  try {
+    const result = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8', timeout: 5000 });
+    return (result.stdout || '').includes(needle);
+  } catch {
+    return false;
+  }
+}
+
 export function isProcessRoot(pid: number): boolean {
   if (!pid) return false;
   try {
@@ -194,7 +208,9 @@ export function isProcessRoot(pid: number): boolean {
 }
 
 export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
-  const { timeout = 60_000 } = options;
+  const { timeout = 60_000, secret } = options;
+  // 访问带鉴权的 external-controller 时附带 Bearer token；secret 为空则退化为无鉴权（订阅下载等外部 HTTP 不受影响）
+  const authHeaders: Record<string, string> = secret ? { Authorization: `Bearer ${secret}` } : {};
 
   return {
     async get<T = string>(url: string, config?: { responseType?: 'text' | 'json'; signal?: AbortSignal }): Promise<HttpResponse<T>> {
@@ -204,7 +220,7 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
       try {
         const response = await fetch(url, {
           signal,
-          headers: { 'User-Agent': `mihomo-cli/${VERSION}` },
+          headers: { 'User-Agent': `mihomo-cli/${VERSION}`, ...authHeaders },
         });
         if (!response.ok) {
           const error: Error & { response?: { status: number; data?: Record<string, unknown> } } = new Error(`HTTP ${response.status}`);

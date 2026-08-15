@@ -139,7 +139,8 @@ export async function downloadKernel(
   }
 
   const downloadUrl = withMirror(asset.browser_download_url, mirror);
-  const tempPath = path.join(DIRS.kernel, asset.name);
+  // basename 剥离 asset.name 里的任何目录成分：API 响应/镜像若被篡改带 ../ 可写出 kernel 目录外
+  const tempPath = path.join(DIRS.kernel, path.basename(asset.name));
   const sizeMB = (asset.size / 1024 / 1024).toFixed(2);
 
   if (mirror && progressCallback) {

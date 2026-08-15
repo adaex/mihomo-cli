@@ -284,6 +284,8 @@ export interface ProxyTestSummary {
 
 export interface HttpClientOptions {
   timeout?: number;
+  /** external-controller 访问密钥；设置后所有请求带 Authorization: Bearer <secret> */
+  secret?: string;
 }
 
 export interface HttpResponse<T = string> {

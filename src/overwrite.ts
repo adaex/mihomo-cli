@@ -261,7 +261,8 @@ export function loadOverwriteFile(): OverwriteFileEntry[] {
     const filePath = path.join(dir, file);
     try {
       const content = fs.readFileSync(filePath, 'utf8');
-      const parsed = yaml.load(content) as Record<string, unknown> | null;
+      // 别名上限防 YAML 炸弹 DoS（同 config.ts SAFE_YAML_LOAD_OPTIONS，此处内联避免与 config 循环依赖）
+      const parsed = yaml.load(content, { maxAliases: 200 }) as Record<string, unknown> | null;
       // 顶层数组/标量不是合法覆写文件（解构会得到数字键），直接跳过并告警
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         // match 是元数据键：抽成结构化字段并从 config 剥离，确保它永不进入最终 mihomo 配置。

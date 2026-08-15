@@ -490,7 +490,9 @@ export async function testSubscriptionProxies(
     return { total: 0, alive: 0, dead: 0, results: [] };
   }
 
-  const client = createHttpClient({ timeout: timeout + 3000 });
+  // 走主实例（默认 CONTROLLER_BASE_URL）时附带 controller_secret；隔离测试实例自身无 secret，不带
+  const secret = apiBase === CONTROLLER_BASE_URL ? readSettings().controller_secret : undefined;
+  const client = createHttpClient({ timeout: timeout + 3000, secret });
   const results: ProxyTestResult[] = new Array(proxies.length);
   let completedCount = 0;
   let nextIndex = 0;

@@ -11,7 +11,7 @@ This file provides guidance to Claude Code when working with this repository.
 - **构建**: `tsup` → `dist/index.js` (单文件打包)
 - **开发运行**: `tsx src/index.ts`
 - **别名**: `mihomo` (推荐), `mhm`, `mh`, `mihomo-cli`
-- **运行时**: Node.js >= 22.22.1
+- **运行时**: Node.js >= 22.22.1（`engines` 声明的最低运行版本；`@types/node`/`typescript` 跟随最新，故类型面版本高于运行时下限，属有意为之）
 
 ---
 
@@ -28,8 +28,11 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/config.ts`            | 配置构建、YAML 解析/序列化、内核版本 |
 | `src/subscription.ts`      | 订阅下载、流量解析、自动更新      |
 | `src/process.ts`           | 进程启动/停止、PID 管理、日志轮转 |
+| `src/daemon.ts`            | launchd 保活：开机自启/崩溃重启、热重载、状态查询 |
 | `src/runtime.ts`           | 运行时门面：收敛普通进程/保活双轨（模式、状态、启停） |
 | `src/lifecycle.ts`         | 退出清理注册表（信号/异常退出前杀掉测试实例） |
+| `src/test-instance.ts`     | 隔离测速实例（独立端口，不动主实例）withTestInstance |
+| `src/progress.ts`          | 测速进度打印、结果汇总格式化      |
 | `src/kernel.ts`            | GitHub Releases 检查、下载        |
 | `src/overwrite.ts`         | 覆写配置合并                      |
 | `src/commands/registry.ts` | 命令注册表（name/别名/handler/argv 改写/help 用法），路由与帮助的单一真相源 |
@@ -46,9 +49,11 @@ This file provides guidance to Claude Code when working with this repository.
 | `commands/log.ts`             | log, logs                      |
 | `commands/ui.ts`              | ui                             |
 | `commands/kernel.ts`          | kernel                         |
-| `commands/subscription.ts`    | subscription (add/update/use/remove/list/test/clean/web) |
+| `commands/subscription.ts`    | subscription (add/update/use/remove/list/web) |
+| `commands/test.ts`            | test, clean（经主实例测速）    |
 | `commands/overwrite.ts`       | overwrite (on/off/list)        |
 | `commands/directory.ts`       | directory (open/list)          |
+| `commands/daemon.ts`          | daemon (on/off/status)         |
 | `commands/reset.ts`           | reset                          |
 | `commands/update.ts`          | update                         |
 
@@ -100,7 +105,7 @@ This file provides guidance to Claude Code when working with this repository.
 import fs from 'node:fs';
 import path from 'node:path';
 
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 
 import { PATHS } from './paths.js';
 ```
@@ -170,7 +175,7 @@ subscriptions/          # 订阅配置和缓存
 kernel/                 # 内核二进制
 logs/                   # 当前日志 + 归档日志
 data/                   # mihomo 运行数据
-runtime/                # pid, config.yaml
+runtime/                # pid, config.yaml, 分阶段调试文件(1.subscription/2.overwrite/3.system.yaml)
 ```
 
 ---

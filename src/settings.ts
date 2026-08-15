@@ -105,6 +105,12 @@ function writeSubscriptionCache(cache: SubscriptionCache): void {
   atomicWriteFileSync(PATHS.subscriptionsCacheFile, JSON.stringify(cache, null, 2), { mode: 0o600 });
 }
 
+/**
+ * 更新单个订阅的缓存条目（读全量→合并该条→写全量）。
+ * 必须保持全程同步、读写之间不得插入 await：并行更新（autoUpdateStaleSubscription 的
+ * Promise.all）依赖 Node 单线程下本函数不可被中断，才能避免「A 读旧全量、B 读旧全量、
+ * B 写覆盖掉 A 的改动」的读-改-写丢失。临时文件踩踏另由 atomicWriteFileSync 的唯一临时名解决。
+ */
 export function saveSubscriptionCache(subName: string, data: Partial<SubscriptionCacheEntry>): void {
   const cache = readSubscriptionCache();
   cache[subName] = { ...cache[subName], ...data };

@@ -56,9 +56,12 @@ export function ensureDirs(): void {
 /**
  * 原子写文件：先写同目录临时文件再 rename（POSIX 下 rename 原子）。
  * 避免写入中途崩溃/磁盘满导致目标文件被截断为空或半截内容。
+ * 临时名带 pid + 进程内自增序号：同一进程并发写同一目标（如 Promise.all 更新缓存）
+ * 时各自落到独立临时文件，避免同名临时文件互相踩踏导致内容交错或 rename ENOENT。
  */
+let atomicWriteSeq = 0;
 export function atomicWriteFileSync(filePath: string, content: string, options?: { mode?: number }): void {
-  const tmp = `${filePath}.${process.pid}.tmp`;
+  const tmp = `${filePath}.${process.pid}.${atomicWriteSeq++}.tmp`;
   try {
     fs.writeFileSync(tmp, content, options);
     fs.renameSync(tmp, filePath);

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { CONTROLLER_BASE_URL, LAUNCH_DAEMON_LABEL } from './constants.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
 import { cleanupOldLogs, getMihomoPids, MAIN_INSTANCE_PATTERN, SUDO_TIMEOUT_MS } from './process.js';
+import { readSettings } from './settings.js';
 import type { DaemonStatus } from './types.js';
 import { formatLocalTimestamp, isProcessRoot, shellQuote } from './utils.js';
 
@@ -232,10 +233,14 @@ export function disableDaemon(): void {
 async function tryHotReload(): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HOT_RELOAD_TIMEOUT_MS);
+  // 配置了 controller_secret 时必须带 Bearer，否则内核返回 401 → 热重载恒失败回退 sudo 重启
+  const secret = readSettings().controller_secret;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (secret) headers.Authorization = `Bearer ${secret}`;
   try {
     const res = await fetch(`${CONTROLLER_BASE_URL}/configs?force=true`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: '{}',
       signal: controller.signal,
     });

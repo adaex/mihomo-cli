@@ -582,7 +582,8 @@ export function getLogPathByName(name: string): string | null {
 
 export function openUrl(url: string): boolean {
   try {
-    const child = spawn('open', [url], { stdio: 'ignore', detached: true });
+    // `--` 终止选项解析：url 可能来自订阅响应头 web_page_url（服务器可控），以 `-` 开头会被 open 当选项
+    const child = spawn('open', ['--', url], { stdio: 'ignore', detached: true });
     child.unref();
     child.on('error', () => {});
     return true;

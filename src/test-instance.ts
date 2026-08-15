@@ -7,7 +7,7 @@ import { TEST_CONFIG } from './constants.js';
 import { registerCleanup } from './lifecycle.js';
 import { PATHS, rmrf, USER_DATA_DIR } from './paths.js';
 import { readSubscriptionRawConfig } from './settings.js';
-import { createHttpClient, isProcessRunning, isProxyValid, sleep, sleepSync } from './utils.js';
+import { createHttpClient, isProcessCommandMatching, isProcessRunning, isProxyValid, sleep, sleepSync } from './utils.js';
 
 const TEST_DIR = path.join(USER_DATA_DIR, 'test');
 const TEST_DIRS = {
@@ -127,7 +127,7 @@ function stopTestInstance(): void {
   } catch {
     return;
   }
-  if (pid > 0 && isProcessRunning(pid)) {
+  if (pid > 0 && isProcessRunning(pid) && isProcessCommandMatching(pid, TEST_PATHS.configFile)) {
     process.kill(pid, 'SIGKILL');
     for (let i = 0; i < 20; i++) {
       if (!isProcessRunning(pid)) break;

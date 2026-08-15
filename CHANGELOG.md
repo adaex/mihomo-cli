@@ -1,5 +1,25 @@
 # Changelog
 
+## [3.4.0] - 2026-08-15
+
+### 修复
+
+- **配置 `controller_secret` 后测速与热重载失效** - 访问 external-controller 的 HTTP 客户端从不发送 `Authorization`，设置密钥后 `test`/`clean`（走主实例）所有节点返回 401 被判失败，保活的配置热重载也恒 401 回退到 sudo 重启。现测速（主实例）与热重载请求均携带 `Bearer <secret>`；隔离测速实例自身无密钥，不受影响
+- **并行更新订阅时缓存临时文件互相踩踏** - `atomicWriteFileSync` 的临时文件名仅含 pid，同进程 `Promise.all` 并行更新多个订阅时写向同名临时文件，导致内容交错或 `rename` 失败。临时名改为 pid + 进程内自增序号，各写入落到独立临时文件
+
+### 安全
+
+- **YAML 别名炸弹 DoS 防护（回归修复）** - 解析订阅/覆写/运行时配置的 `yaml.load` 未设别名上限，js-yaml 默认无限制，恶意配置可借指数级别名膨胀耗尽内存/CPU。现统一设 `maxAliases` 上限
+- **序列化对歧义标量加引号** - 配置序列化改用会给 `on`/`off`/`yes`/`no` 等歧义标量加引号的默认 schema。此前裸输出的 `name: on` 虽被 mihomo（go-yaml v3）读作字符串，但流经 PyYAML 等 YAML 1.1 工具会被误解析为布尔，造成静默的配置损坏
+- **内核下载文件名路径穿越防护** - 下载内核时临时路径直接拼接 GitHub API 返回的 asset 名，被篡改的响应/镜像可借 `../` 写出内核目录之外。现用 `basename` 剥离目录成分
+- **`open` 命令 URL 参数注入防护** - 打开订阅页面/日志文件时，服务器可控的 URL（订阅响应头 `web_page_url`）若以 `-` 开头会被 `open` 当作选项。现加 `--` 终止选项解析
+- **测速实例终止前校验进程身份** - 停止隔离测速实例时按 pid 文件裸值 `SIGKILL`，pid 被系统复用后可能误杀无关进程。现杀进程前校验其命令行确属该测速实例
+
+### 变更
+
+- **覆写 `~proxies` 注入的节点纳入 include-all 排除** - `~key` 就地合并在同名节点不存在时会追加新节点，此前只有 `+proxies`/`proxies+` 注入的节点会从 `include-all` 分组排除，`~proxies` 追加的节点会被重复纳入。现一并排除
+- **依赖升级** - `js-yaml` 5.2.1 → 5.3.0（修复 flow collections 指数解析 DoS）、`esbuild` 经 overrides 提升至 0.28.2（修复 dev server 任意文件读取）、`@types/node` → 26、`@biomejs/biome` → 2.5.8、`lint-staged`/`tsx` 跟随最新；`npm audit` 无告警
+
 ## [3.3.0] - 2026-08-15
 
 ### 新增

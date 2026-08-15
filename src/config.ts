@@ -9,12 +9,24 @@ import { readSettings } from './settings.js';
 import type { BuildConfigResult, ConfigInfo, OverwriteScope, ParsedProxy, ParsedProxyGroup } from './types.js';
 import { escapeRegExp } from './utils.js';
 
+/**
+ * 安全 YAML 解析选项:限制别名展开次数,防御远程订阅/覆写里的 YAML 别名炸弹(alias bomb)DoS。
+ * js-yaml 5 默认 maxAliases=-1(无限制),恶意配置可借指数级别名膨胀撑爆内存/CPU。
+ * 所有解析不可信来源(订阅、覆写、运行时配置)的 yaml.load 都应带上此选项。
+ */
+export const SAFE_YAML_LOAD_OPTIONS: yaml.LoadOptions = { maxAliases: 200 };
+
+/** 统一入口:带别名上限的 yaml.load,替代裸 yaml.load。 */
+export function loadYamlSafe(content: string): unknown {
+  return yaml.load(content, SAFE_YAML_LOAD_OPTIONS);
+}
+
 export function parseYamlOrJson(content: string, errorMsg?: string): Record<string, unknown> {
   if (!content?.trim()) {
     throw new Error(`${errorMsg || '内容'}为空`);
   }
   try {
-    const result = yaml.load(content);
+    const result = loadYamlSafe(content);
     if (result != null && typeof result === 'object' && !Array.isArray(result)) return result as Record<string, unknown>;
   } catch {
     // fall through to JSON
@@ -26,16 +38,25 @@ export function parseYamlOrJson(content: string, errorMsg?: string): Record<stri
   }
 }
 
-/** 统一的 YAML 序列化选项:2 空格缩进、不折行、CORE_SCHEMA(避免 js-yaml 5 对特殊值的额外转义)。 */
+/**
+ * 统一的 YAML 序列化选项:2 空格缩进、不折行。
+ * 用默认 DUMP_SCHEMA(不显式指定 schema):对歧义标量(on/off/yes/no/y/n/true/null 等)加引号。
+ * 关键原因:节点名/分组名等 string 字段的值可能恰好是 `on`/`off`。裸输出 `name: on` 在 mihomo
+ * (go-yaml v3,仅 typed bool 才认 1.1 布尔)下虽仍读作字符串,但流经 PyYAML 等 YAML 1.1 工具会被
+ * 误解析成布尔 true,造成静默的配置损坏。加引号后在 1.1/1.2 解析器下含义唯一,mihomo 处理带引号
+ * 字符串无副作用。(此前用 CORE_SCHEMA 省引号,反而丢了这层跨解析器安全。)
+ */
 export function dumpYaml(obj: unknown): string {
-  return yaml.dump(obj, { indent: 2, lineWidth: -1, schema: yaml.CORE_SCHEMA });
+  return yaml.dump(obj, { indent: 2, lineWidth: -1 });
 }
 
 function collectOverwriteProxyNames(overwriteFiles: { config: Record<string, unknown> }[]): string[] {
   const names: string[] = [];
   for (const file of overwriteFiles) {
     for (const [key, value] of Object.entries(file.config)) {
-      if ((key === '+proxies' || key === 'proxies+') && Array.isArray(value)) {
+      // +proxies/proxies+（前置/追加）与 ~proxies（按 name 就地合并，同名不存在时也会追加新节点）
+      // 都会向节点列表注入新节点，需一并从 include-all 分组排除，避免被重复纳入
+      if ((key === '+proxies' || key === 'proxies+' || key === '~proxies') && Array.isArray(value)) {
         for (const proxy of value) {
           if (proxy && typeof proxy === 'object' && 'name' in proxy) {
             const name = (proxy as { name: unknown }).name;
@@ -287,7 +308,7 @@ export function getConfigInfo(): ConfigInfo | null {
 
   try {
     const content = fs.readFileSync(PATHS.configFile, 'utf8');
-    const cfg = yaml.load(content) as Record<string, unknown> | null;
+    const cfg = loadYamlSafe(content) as Record<string, unknown> | null;
     if (!cfg) return null;
 
     const proxies = cfg.proxies as unknown[] | undefined;
