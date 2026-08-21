@@ -11,11 +11,13 @@ import { requireRunning } from './shared.js';
 import { handleStopResult } from './stop.js';
 
 export async function cmdTest(args: string[]): Promise<void> {
-  requireRunning();
-  const activeSub = subscription.requireActiveSubscription('没有活跃订阅');
-
+  // 参数校验先于环境检查：拼错的选项应立刻报错，而不是先抱怨 mihomo 未运行
+  // （与 start 的模式参数校验同口径）
   const timeout = parseIntArg(args, '-t', '--timeout', DEFAULT_TEST_TIMEOUT);
   const concurrency = parseIntArg(args, '-j', '--concurrency', DEFAULT_TEST_CONCURRENCY);
+
+  requireRunning();
+  const activeSub = subscription.requireActiveSubscription('没有活跃订阅');
 
   console.log(`测试 "${activeSub.name}" 节点连通性...`);
   console.log(`超时: ${timeout}ms  并发: ${concurrency}`);
@@ -34,12 +36,13 @@ export async function cmdTest(args: string[]): Promise<void> {
 }
 
 export async function cmdClean(args: string[]): Promise<void> {
-  requireRunning();
-  const activeSub = subscription.requireActiveSubscription('没有活跃订阅');
-
+  // 同 cmdTest：先校验参数再查运行状态
   const timeout = parseIntArg(args, '-t', '--timeout', DEFAULT_TEST_TIMEOUT);
   const concurrency = parseIntArg(args, '-j', '--concurrency', DEFAULT_TEST_CONCURRENCY);
   const rounds = parseIntArg(args, '-r', '--rounds', subscription.DEFAULT_CLEAN_ROUNDS);
+
+  requireRunning();
+  const activeSub = subscription.requireActiveSubscription('没有活跃订阅');
 
   console.log(`清理 "${activeSub.name}" 失败节点...`);
   console.log(`超时: ${timeout}ms  并发: ${concurrency}`);

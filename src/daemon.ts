@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { CONTROLLER_BASE_URL, LAUNCH_DAEMON_LABEL } from './constants.js';
+import { CONTROLLER_BASE_URL, isValidDaemonLabel, LAUNCH_DAEMON_LABEL, RAW_DAEMON_LABEL_INPUT } from './constants.js';
 import { CliError } from './errors.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
 import { cleanupOldLogs, getMihomoPids, isProcessRoot, MAIN_INSTANCE_PATTERN, SUDO_TIMEOUT_MS } from './process.js';
@@ -12,6 +12,25 @@ import { formatLocalTimestamp, shellQuote } from './utils.js';
 
 /** launchd 服务目标：root 级 LaunchDaemon 用系统域 system/<label>（无需 uid） */
 const SERVICE_TARGET = `system/${LAUNCH_DAEMON_LABEL}`;
+
+/**
+ * 校验 MIHOMO_CLI_DAEMON_LABEL：非法 label 经 path.join 折叠 `..` 后会让
+ * `sudo install -o root` 与 `sudo rm -f` 落到 /Library/LaunchDaemons 之外的任意路径
+ * （`../../etc/sudoers.d/evil` → `/etc/sudoers.d/evil.plist`）——提权原语。
+ * constants 已把非法值回退为默认标签，此处在真正执行 root 写/删前拒绝并告知用户，
+ * 避免「设了变量却静默作用到生产 plist」的隐蔽行为。
+ */
+function assertDaemonLabelSafe(): void {
+  if (RAW_DAEMON_LABEL_INPUT !== undefined && !isValidDaemonLabel(RAW_DAEMON_LABEL_INPUT)) {
+    throw new CliError(`MIHOMO_CLI_DAEMON_LABEL 无效: "${RAW_DAEMON_LABEL_INPUT}"`, {
+      label: '配置错误',
+      hint: [
+        '只允许字母、数字、点、下划线、短横线，且不能含 ".."。',
+        '该值会成为 /Library/LaunchDaemons/ 下的 plist 文件名，并作为 root 写入/删除的目标路径。',
+      ],
+    });
+  }
+}
 /** 热重载（PUT /configs）超时 */
 const HOT_RELOAD_TIMEOUT_MS = 5000;
 /** bootstrap/kickstart/RunAtLoad 后，等待 launchd 拉起进程再查询 PID/状态的时间 */
@@ -144,6 +163,7 @@ export function isDaemonRunning(status: DaemonStatus): boolean {
  * 前置：内核与运行时配置须已就绪（由调用方负责生成 config.yaml）。
  */
 export function enableDaemon(): void {
+  assertDaemonLabelSafe();
   if (!fs.existsSync(PATHS.mihomoBinary)) {
     throw new CliError('未找到 mihomo 内核，请先下载内核');
   }
@@ -197,6 +217,7 @@ export function enableDaemon(): void {
  * 幂等：plist 不存在直接返回，不弹 sudo。不自动 pkill（避免误杀手动实例），仅残留时提示。
  */
 export function disableDaemon(): void {
+  assertDaemonLabelSafe();
   if (!isDaemonEnabled()) return;
 
   const target = shellQuote(SERVICE_TARGET);
@@ -265,7 +286,7 @@ async function tryHotReload(): Promise<boolean> {
  */
 export async function restartDaemon(): Promise<void> {
   if (!fs.existsSync(PATHS.launchDaemonPlist)) {
-    throw new Error('保活未启用，无法重启');
+    throw new CliError('保活未启用，无法重启', { hint: '启用保活: mihomo daemon on' });
   }
 
   if (!logOversized() && (await tryHotReload())) return;

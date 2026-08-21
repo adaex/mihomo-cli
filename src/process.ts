@@ -32,11 +32,18 @@ export function isProcessRunning(pid: number): boolean {
 /**
  * 校验 pid 对应进程的命令行是否包含指定子串（防 PID 复用误杀：pid 文件残留后该 pid 可能已被
  * 系统分配给无关进程）。读不到命令行时保守返回 false。
+ *
+ * 必须带 `-ww`：BSD/macOS 的 ps 即使 stdout 不是终端也会把 command 列截断到 79 列。
+ * 主实例的 needle 是 binary 路径（偏移 0，截不掉），但测速实例的 needle 是
+ * `<home>/.mihomo-cli/test/runtime/config.yaml`，在 `<binary> -d <data> -f <config>` 里
+ * 起始偏移随用户名增长（alice 为 80、jonathan.smith 为 98），常见家目录下均越过 79 列
+ * → 匹配恒 false → stopTestInstance 跳过 SIGKILL 却仍删 pid 文件，内核残留占着
+ * 27890/29090 端口且再无记录，下次 sub test 直接启动失败。
  */
 export function isProcessCommandMatching(pid: number, needle: string): boolean {
   if (!pid) return false;
   try {
-    const result = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8', timeout: PS_TIMEOUT_MS });
+    const result = spawnSync('ps', ['-ww', '-p', String(pid), '-o', 'command='], { encoding: 'utf8', timeout: PS_TIMEOUT_MS });
     return (result.stdout || '').includes(needle);
   } catch {
     return false;

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { suggestSimilar } from './utils.js';
+import { CliError } from './errors.js';
+import { parseIntArg, suggestSimilar } from './utils.js';
 
 const TOKENS = ['start', 'stop', 'status', 'subscription', 'sub', 'test', 'clean', 'ui'];
 
@@ -30,5 +31,42 @@ describe('suggestSimilar', () => {
   it('至多返回 3 个候选', () => {
     const many = ['abc', 'abd', 'abe', 'abf', 'abg'];
     assert.ok(suggestSimilar('abx', many).length <= 3);
+  });
+});
+
+describe('parseIntArg 范围与格式校验', () => {
+  const T = (args: string[]) => parseIntArg(args, '-t', '--timeout', 2000);
+
+  it('合法正整数（空格形式）', () => {
+    assert.equal(T(['x', '-t', '3000']), 3000);
+  });
+
+  it('合法正整数（= 形式）', () => {
+    assert.equal(T(['x', '--timeout=3000']), 3000);
+  });
+
+  it('缺省返回默认值', () => {
+    assert.equal(T(['x']), 2000);
+  });
+
+  it('无关 flag 不受影响', () => {
+    assert.equal(T(['x', '-o', '-s']), 2000);
+  });
+
+  // 以下此前会静默取到危险值：0 让测速起 0 个 worker 报「全部失败」，'5s' 静默取 5ms
+  for (const bad of ['0', '-1', '5s', 'abc', '', '1.5', ' ']) {
+    it(`拒绝非法值 ${JSON.stringify(bad)}`, () => {
+      assert.throws(
+        () => T(['x', '-t', bad]),
+        (e: unknown) => e instanceof CliError,
+      );
+    });
+  }
+
+  it('缺少值时报错', () => {
+    assert.throws(
+      () => T(['x', '-t']),
+      (e: unknown) => e instanceof CliError,
+    );
   });
 });

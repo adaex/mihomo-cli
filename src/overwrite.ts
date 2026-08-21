@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import * as yaml from 'js-yaml';
+import { CliError } from './errors.js';
 import { USER_DATA_DIR } from './paths.js';
 import { readSettings, writeSettings } from './settings.js';
 import type { OverwriteFileEntry, OverwriteListResult, OverwriteMatch, OverwriteScope, ParsedOverrideKey } from './types.js';
@@ -80,6 +81,22 @@ export function deepMergeWithOverrides(target: unknown, override: unknown): Reco
     const existingValue = result[key];
 
     if (arrayMergeByName) {
+      // ~key 只对「按 name 索引的数组」有意义。目标已存在且不是数组时，此前会静默包成
+      // 单元素数组（`~dns: {enable: true}` 把映射 dns 变成 [{enable:true}]，丢掉原有字段，
+      // 且 mihomo 要求 dns 是映射 → 生成非法配置）。改为报错，避免静默损坏。
+      // 目标不存在（undefined）时放行：那是「新增数组」的正常用法。
+      if (existingValue !== undefined && !Array.isArray(existingValue)) {
+        throw new CliError(
+          `覆写键 "${rawKey}" 的 ~ 语义只适用于数组，但 "${key}" 当前是${existingValue === null ? ' null' : typeof existingValue === 'object' ? '映射' : `标量（${typeof existingValue}）`}`,
+          {
+            label: '覆写配置错误',
+            hint: [
+              `~${key} 用于按 name 就地合并数组元素（如 ~proxy-groups）。`,
+              `若要覆盖非数组的 ${key}，请用 ${key}!（强制覆盖）或直接写 ${key}（深度合并）。`,
+            ],
+          },
+        );
+      }
       // 按 name 就地 patch：在已有数组里找同名元素只合并其字段（保留其余字段与其余元素），
       // 找不到同名则追加。必须复制数组，禁止原地改写 target（否则会污染 subscriptionConfig）。
       const existingArr = Array.isArray(existingValue) ? existingValue : [];
@@ -99,6 +116,17 @@ export function deepMergeWithOverrides(target: unknown, override: unknown): Reco
     }
 
     if (arrayPrepend || arrayAppend) {
+      // 同 ~key：+key/key+ 是数组拼接语义，目标已存在且非数组时报错而非静默包成数组
+      // （`log-level+: debug` 曾把字符串 log-level 变成 ["debug"]，mihomo 无法解析）
+      if (existingValue !== undefined && !Array.isArray(existingValue)) {
+        throw new CliError(
+          `覆写键 "${rawKey}" 的数组拼接语义只适用于数组，但 "${key}" 当前是${existingValue === null ? ' null' : typeof existingValue === 'object' ? '映射' : `标量（${typeof existingValue}）`}`,
+          {
+            label: '覆写配置错误',
+            hint: [`+${key} / ${key}+ 用于向数组前置/追加元素（如 rules+）。`, `若要替换非数组的 ${key}，请直接写 ${key}: <值>。`],
+          },
+        );
+      }
       const existingArr = Array.isArray(existingValue) ? existingValue : [];
       const overrideArr = Array.isArray(value) ? value : [value];
 
@@ -188,12 +216,27 @@ function summarizeMatch(match?: OverwriteMatch): string | undefined {
   return parts.length > 0 ? parts.join(', ') : undefined;
 }
 
-/** 拆分逗号分隔的多 URL（内联，避免依赖 subscription.ts 造成循环引用）。 */
+/**
+ * 拆分逗号分隔的多 URL（内联，避免依赖 subscription.ts 造成循环引用）。
+ * 与 subscription.splitUrls 同口径：仅当切分后每段都是合法 http(s) URL 才视为多源，
+ * 否则原样返回（`?flag=clash,meta` 是单条 URL，逗号属于其 query）。
+ */
 function splitUrlsLocal(url: string): string[] {
-  return url
+  const isValidHttp = (u: string): boolean => {
+    try {
+      const parsed = new URL(u.trim());
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  };
+  if (!url.includes(',')) return [url.trim()];
+  const parts = url
     .split(',')
     .map(u => u.trim())
     .filter(Boolean);
+  if (parts.length > 1 && parts.every(isValidHttp)) return parts;
+  return [url.trim()];
 }
 
 /** hostname 后缀匹配：host 完全等于 domain，或为其子域（.domain 结尾）。 */
@@ -214,7 +257,12 @@ function matchesScope(match: OverwriteMatch | undefined, scope?: OverwriteScope)
 
   if (match.subscription) {
     const names = Array.isArray(match.subscription) ? match.subscription : [match.subscription];
-    if (!scope?.subName || !names.includes(scope.subName)) return false;
+    // 大小写不敏感：与 findSubscriptionFuzzy（sub use/test/... 的解析口径）一致。
+    // 订阅名允许大写（SAFE_NAME_RE 含 \w），此前精确比对会让 `match: {subscription: home}`
+    // 匹配不上订阅 Home，而 `sub use home` 却能切过去——同一名称两套规则，是配置陷阱
+    if (!scope?.subName) return false;
+    const subName = scope.subName.toLowerCase();
+    if (!names.some(n => n.toLowerCase() === subName)) return false;
   }
 
   if (match['url-domain']) {

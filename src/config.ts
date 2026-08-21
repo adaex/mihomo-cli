@@ -3,6 +3,7 @@ import fs from 'node:fs';
 
 import * as yaml from 'js-yaml';
 import { BASE_CONFIG, TUN_CONFIG } from './constants.js';
+import { CliError } from './errors.js';
 import { applyOverwrite, filterOverwriteFilesByScope, isOverwriteEnabled, loadOverwriteFile } from './overwrite.js';
 import { atomicWriteFileSync, ensureDirs, PATHS } from './paths.js';
 import { readSettings } from './settings.js';
@@ -70,14 +71,19 @@ function collectOverwriteProxyNames(overwriteFiles: { config: Record<string, unk
   return names;
 }
 
-function excludeOverwriteProxiesFromIncludeAll(config: Record<string, unknown>, overwriteFiles: { config: Record<string, unknown> }[]): void {
+/** 导出供单测：注入节点需从 include-all 分组排除，且排除模式必须整名锚定（见函数内注释） */
+export function excludeOverwriteProxiesFromIncludeAll(config: Record<string, unknown>, overwriteFiles: { config: Record<string, unknown> }[]): void {
   const injectedNames = collectOverwriteProxyNames(overwriteFiles);
   if (injectedNames.length === 0) return;
 
   const groups = config['proxy-groups'] as Array<Record<string, unknown>> | undefined;
   if (!groups) return;
 
-  const excludePattern = injectedNames.map(n => escapeRegExp(n)).join('|');
+  // 锚定为整名精确匹配：mihomo 的 exclude-filter 是无锚点正则搜索（Go regexp.MatchString），
+  // 裸拼接会把「名字包含注入名」的订阅节点一起排除——注入名为 HK 时 HK-01/HK-02 也被踢出 include-all
+  // 分组。本函数只为排除「自己注入的那个节点」，故用 ^(?:...)$ 收窄为整名相等。
+  // 与订阅自带 exclude-filter 拼接安全：| 优先级最低，^(?:...)$ 自成独立分支，不影响原有语义。
+  const excludePattern = `^(?:${injectedNames.map(n => escapeRegExp(n)).join('|')})$`;
 
   for (const group of groups) {
     if (!group['include-all'] && !group['include-all-proxies']) continue;
@@ -126,7 +132,68 @@ export function getRuleTarget(rule: string): string {
   return last;
 }
 
+/**
+ * 校验顶层配置段的形态，把 YAML 笔误转成可读的 CliError。
+ * 不做则后续断言（`as ParsedProxy[]` 等）会在解引用时抛裸 TypeError，
+ * 经 main().catch 当成程序 bug 打印堆栈——而这实际是用户配置问题
+ * （典型：`rules: MATCH,DIRECT` 漏写 `-`；列表里留了空项产生 null 元素）。
+ */
+function assertConfigShape(config: Record<string, unknown>): void {
+  const listSections: { key: string; label: string; needsName: boolean }[] = [
+    { key: 'proxies', label: '节点', needsName: true },
+    { key: 'proxy-groups', label: '代理组', needsName: true },
+    { key: 'rules', label: '规则', needsName: false },
+  ];
+
+  for (const { key, label, needsName } of listSections) {
+    const value = config[key];
+    if (value === undefined || value === null) continue;
+
+    if (!Array.isArray(value)) {
+      throw new CliError(`${key} 必须是列表，当前为 ${typeof value === 'object' ? '映射' : typeof value}`, {
+        label: '配置错误',
+        hint: [
+          `${label}段（${key}）需写成 YAML 列表，每项以 "- " 开头。`,
+          `例如: ${key}:`,
+          key === 'rules' ? '        - MATCH,DIRECT' : '        - {name: xxx, ...}',
+        ],
+      });
+    }
+
+    for (let i = 0; i < value.length; i++) {
+      const item = value[i];
+      if (item === null || item === undefined) {
+        throw new CliError(`${key}[${i}] 为空`, {
+          label: '配置错误',
+          hint: [`${label}段（${key}）第 ${i + 1} 项是空值，通常是列表里留了空的 "- " 行。`],
+        });
+      }
+      if (needsName) {
+        if (typeof item !== 'object' || Array.isArray(item)) {
+          throw new CliError(`${key}[${i}] 必须是映射`, {
+            label: '配置错误',
+            hint: [`${label}段（${key}）第 ${i + 1} 项应为 {name: ..., ...} 形式，当前是 ${Array.isArray(item) ? '列表' : typeof item}。`],
+          });
+        }
+        const name = (item as Record<string, unknown>).name;
+        if (typeof name !== 'string' || name === '') {
+          throw new CliError(`${key}[${i}] 缺少有效的 name`, {
+            label: '配置错误',
+            hint: [`${label}段（${key}）第 ${i + 1} 项没有 name 字段（或为空），mihomo 会拒绝启动。`],
+          });
+        }
+      } else if (typeof item !== 'string') {
+        throw new CliError(`${key}[${i}] 必须是字符串`, {
+          label: '配置错误',
+          hint: [`${label}段（${key}）第 ${i + 1} 项应为形如 "MATCH,DIRECT" 的字符串，当前是 ${typeof item}。`],
+        });
+      }
+    }
+  }
+}
+
 export function validateConfig(config: Record<string, unknown>): string[] {
+  assertConfigShape(config);
   const warnings: string[] = [];
 
   const proxies = (config.proxies || []) as ParsedProxy[];

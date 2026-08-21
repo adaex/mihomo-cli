@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    # macOS runner：本项目仅支持 macOS（package.json 的 os 字段 + index.ts 平台守卫），
+    # 在 ubuntu 上 npm ci 会因 os 不匹配失败，且平台相关行为无法真实验证
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          # 与 package.json engines 的下限一致
+          node-version: '22.22.1'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint + format check
+        run: npm run check
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build

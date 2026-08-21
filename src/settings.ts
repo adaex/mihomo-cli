@@ -10,21 +10,33 @@ export function readSettings(): Settings {
   if (settingsCache !== null) return settingsCache;
   ensureDirs();
   if (fs.existsSync(PATHS.settingsFile)) {
+    let parsed: unknown;
     try {
-      const content = fs.readFileSync(PATHS.settingsFile, 'utf8');
-      settingsCache = JSON.parse(content) as Settings;
-      return settingsCache;
+      parsed = JSON.parse(fs.readFileSync(PATHS.settingsFile, 'utf8'));
     } catch {
-      // 损坏文件先备份再回退默认，避免下次 writeSettings 覆盖丢失原始内容
-      try {
-        fs.copyFileSync(PATHS.settingsFile, `${PATHS.settingsFile}.bak`);
-        console.warn(`警告: settings.json 格式损坏，已备份到 ${PATHS.settingsFile}.bak，使用默认设置`);
-      } catch {
-        console.warn('警告: settings.json 格式损坏，使用默认设置');
-      }
-      settingsCache = {};
-      return settingsCache;
+      return recoverCorruptedSettings();
     }
+    // 合法 JSON 但不是对象（null / [] / 123 / "hi"）同样视为损坏：
+    // 此前直接赋给 settingsCache，null 会让 getSubscriptions() 抛裸 TypeError + 堆栈，
+    // 字符串会被 writeSettings 展开成 {"0":"h","1":"i",...}，且 settingsCache=null
+    // 使缓存判定恒失效、每次调用都重新读盘
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return recoverCorruptedSettings();
+    }
+    settingsCache = parsed as Settings;
+    return settingsCache;
+  }
+  settingsCache = {};
+  return settingsCache;
+}
+
+/** 损坏的 settings.json 先备份（保留原始内容供人工恢复）再回退默认值。 */
+function recoverCorruptedSettings(): Settings {
+  try {
+    fs.copyFileSync(PATHS.settingsFile, `${PATHS.settingsFile}.bak`);
+    console.warn(`警告: settings.json 格式损坏，已备份到 ${PATHS.settingsFile}.bak，使用默认设置`);
+  } catch {
+    console.warn('警告: settings.json 格式损坏，使用默认设置');
   }
   settingsCache = {};
   return settingsCache;
@@ -46,14 +58,8 @@ export function invalidateSettingsCache(): void {
   settingsCache = null;
 }
 
-export function maskUrl(url: string): string {
-  if (!url) return url;
-  if (url.includes(',')) {
-    return url
-      .split(',')
-      .map(u => maskUrl(u.trim()))
-      .join(', ');
-  }
+/** 遮蔽单条 URL 里的敏感信息（query token / userinfo / 路径型令牌）。 */
+function maskSingleUrl(url: string): string {
   try {
     const parsed = new URL(url);
     const tokenKeys = ['token', 'key', 'secret', 'pass', 'password', 'auth', 'access_token', 'api_key'];
@@ -77,6 +83,44 @@ export function maskUrl(url: string): string {
     }
     return url;
   }
+}
+
+/** 是否为逗号分隔的多源订阅：切分后每段都是合法 http(s) URL 且不止一段。 */
+function looksLikeMultiUrl(url: string): boolean {
+  if (!url.includes(',')) return false;
+  const parts = url
+    .split(',')
+    .map(u => u.trim())
+    .filter(Boolean);
+  if (parts.length < 2) return false;
+  return parts.every(p => {
+    try {
+      const u = new URL(p);
+      return u.protocol === 'http:' || u.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * 遮蔽 URL 中的敏感信息，支持逗号分隔的多源订阅。
+ * 关键：只有「每段都是合法 URL」才按多源切分。无条件按逗号切分会把
+ * `?nodes=us,hk&token=xxx` 劈开，两段都不含可识别的 token 参数 → 密钥明文输出。
+ * 反之只看「整体能否解析」也不行：真多源 `https://a/s,https://b/s` 整体亦可解析
+ * （逗号是合法 path 字符），会导致第二段的 token 完全不被遮蔽。
+ * 判据与 subscription.isMultiUrl 保持一致。
+ */
+export function maskUrl(url: string): string {
+  if (!url) return url;
+
+  if (looksLikeMultiUrl(url)) {
+    return url
+      .split(',')
+      .map(u => maskSingleUrl(u.trim()))
+      .join(', ');
+  }
+  return maskSingleUrl(url);
 }
 
 // === Subscription cache ===
@@ -120,9 +164,23 @@ export function saveSubscriptionCache(subName: string, data: Partial<Subscriptio
 
 // === Subscription list ===
 
+/**
+ * 订阅列表的唯一读取入口。
+ * 校验必须在此收口：settings.json 被手改成 `{"subscriptions":"oops"}` 时，
+ * 下游的 `[...(settings.subscriptions || [])]` 会把字符串按字符展开，写出
+ * `["o","o","p","s",{...}]` 这种垃圾列表且不报错，后续所有 s.name 都是 undefined。
+ * 非数组一律视为空列表；顺带滤掉缺 name/url 的残缺条目。
+ */
 export function getSubscriptions(): Subscription[] {
   const settings = readSettings();
-  return settings.subscriptions || [];
+  const subs = settings.subscriptions;
+  if (!Array.isArray(subs)) {
+    if (subs !== undefined) {
+      console.warn('警告: settings.json 的 subscriptions 不是列表，已忽略（可用 mihomo sub add 重新添加）');
+    }
+    return [];
+  }
+  return subs.filter(s => s != null && typeof s === 'object' && typeof s.name === 'string' && typeof s.url === 'string');
 }
 
 export function getSubscriptionsWithCache(): SubscriptionWithCache[] {
@@ -145,7 +203,8 @@ function validateSubscriptionName(name: string): void {
 export function addSubscription(url: string, name = 'default'): void {
   validateSubscriptionName(name);
   const settings = readSettings();
-  const subs = [...(settings.subscriptions || [])];
+  // 经 getSubscriptions 而非直读：非数组的 subscriptions 会被字符串展开成垃圾列表
+  const subs = [...getSubscriptions()];
   if (subs.some(s => s.name === name)) {
     throw new CliError(`订阅 "${name}" 已存在，请换个名称（mihomo sub add <url> <名称>），或先删除（mihomo sub remove ${name}）`);
   }
@@ -159,7 +218,7 @@ export function addSubscription(url: string, name = 'default'): void {
 
 export function removeSubscription(name: string): string | null {
   const settings = readSettings();
-  const subs = [...(settings.subscriptions || [])];
+  const subs = [...getSubscriptions()];
   const idx = subs.findIndex(s => s.name === name);
   if (idx < 0) return null;
 
@@ -193,7 +252,7 @@ export function removeSubscription(name: string): string | null {
 
 export function setDefaultSubscription(name: string): boolean {
   const settings = readSettings();
-  const subs = settings.subscriptions || [];
+  const subs = getSubscriptions();
   const idx = subs.findIndex(s => s.name === name);
   if (idx < 0) return false;
   if (settings.active_subscription === name) return true;

@@ -15,8 +15,8 @@ import {
 import * as subscription from '../subscription.js';
 import { withTestInstance } from '../test-instance.js';
 import type { Subscription } from '../types.js';
-import { formatBytes, formatDate, formatTimestamp, getNonFlagArg, parseIntArg, suggestSimilar } from '../utils.js';
-import { dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
+import { formatBytes, formatDate, formatTimestamp, getNonFlagArg, hasFlag, parseIntArg, suggestSimilar } from '../utils.js';
+import { confirmPrompt, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 function githubRepoUrl(rawUrl: string): string | null {
   const match = rawUrl.match(/raw\.githubusercontent\.com\/([^/]+\/[^/]+)/);
@@ -133,12 +133,16 @@ async function subAdd(args: string[]): Promise<void> {
     // 否则重名错误会触发 removeSubscription 误删用户既有的同名订阅
     addSubscription(normalizedUrl, name);
     try {
-      setDefaultSubscription(name);
       const info = await subscription.downloadMergedSubscription(urls, name);
+      // 切换放在下载成功后：若放在前面，回滚的 removeSubscription 会把 active 落到 subs[0]
+      // 而非用户原来的选择（settings.ts 的 active 兜底逻辑），静默切错订阅
+      setDefaultSubscription(name);
       console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)}, 合并 ${urls.length} 源)`);
     } catch (e) {
       // 下载失败回滚：不留"已入库但无配置"的半成品订阅（否则 start 会直接报错）
       removeSubscription(name);
+      // 保留原 CliError 的 hint（如订阅无效时服务端返回的原因），仅换标签
+      if (e instanceof CliError) throw new CliError(e.message, { label: '添加失败', hint: e.hint });
       throw new CliError((e as Error).message, { label: '添加失败' });
     }
   } else {
@@ -149,14 +153,17 @@ async function subAdd(args: string[]): Promise<void> {
     // 同上：入库在 try 外，回滚仅覆盖下载失败
     addSubscription(url, name);
     try {
-      setDefaultSubscription(name);
       const info = await subscription.downloadSubscription(url, name);
+      // 同上：切换必须在下载成功后，否则回滚会把 active 落到 subs[0] 而非用户原选择
+      setDefaultSubscription(name);
       const repoUrl = githubRepoUrl(url);
       if (repoUrl) saveSubscriptionCache(name, { web_page_url: repoUrl });
       console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)})`);
     } catch (e) {
       // 下载失败回滚：不留"已入库但无配置"的半成品订阅（否则 start 会直接报错）
       removeSubscription(name);
+      // 保留原 CliError 的 hint（如订阅无效时服务端返回的原因），仅换标签
+      if (e instanceof CliError) throw new CliError(e.message, { label: '添加失败', hint: e.hint });
       throw new CliError((e as Error).message, { label: '添加失败' });
     }
   }
@@ -277,8 +284,9 @@ async function subWeb(args: string[]): Promise<void> {
   }
 }
 
-function subRemove(args: string[]): void {
-  const name = args[2];
+async function subRemove(args: string[]): Promise<void> {
+  // 用 getNonFlagArg 而非 args[2]：允许 -y 出现在名称之前（`sub remove -y foo`）
+  const name = getNonFlagArg(args, 2);
   const subs = getSubscriptions();
 
   if (!name) {
@@ -288,6 +296,26 @@ function subRemove(args: string[]): void {
   }
 
   const target = subscription.resolveSubscription(subs, name);
+
+  // 删除不可恢复（订阅条目 + 原始配置 + 缓存），而 resolveSubscription 接受子串模糊匹配：
+  // `sub remove air` 会命中 production-airport。精确同名视为用户意图明确，直接删；
+  // 模糊命中时先展示将删除的完整名称并要求确认（-y/--yes 跳过，供脚本使用）
+  const isExact = target.name === name;
+  const skipConfirm = hasFlag(args, '-y', '--yes');
+  if (!isExact && !skipConfirm) {
+    // 非交互环境无法应答，直接报错而非「不删除却 exit=0」——后者会让脚本误判成功
+    if (!process.stdin.isTTY) {
+      throw new CliError(`模糊匹配到 "${target.name}"，非交互环境需确认`, {
+        label: '已取消',
+        hint: [`请用完整名称: mihomo sub remove ${target.name}`, `或跳过确认: mihomo sub remove ${name} -y`],
+      });
+    }
+    console.log(`将删除订阅 "${target.name}" (模糊匹配 "${name}")`);
+    if (!(await confirmPrompt('此操作不可恢复，确认?'))) {
+      console.log('已取消');
+      return;
+    }
+  }
 
   const switchedTo = removeSubscription(target.name);
   console.log(`已删除订阅 "${target.name}"`);

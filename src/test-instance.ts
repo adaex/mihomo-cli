@@ -12,8 +12,10 @@ import { isProcessCommandMatching, isProcessRunning } from './process.js';
 import { readSubscriptionRawConfig } from './settings.js';
 import { sleep, sleepSync } from './utils.js';
 
-/** 节点字段有效性校验：缺 name/server/port/type 视为无效；SS2022 密钥需为合法 base64 且足够长 */
-function isProxyValid(proxy: { name: string; [k: string]: unknown }): boolean {
+/** 节点字段有效性校验：非映射/缺 name/server/port/type 视为无效；SS2022 密钥需为合法 base64 且足够长 */
+function isProxyValid(proxy: { name: string; [k: string]: unknown } | null | undefined): boolean {
+  // 订阅或覆写里的空列表项会产生 null 元素，直接解引用会抛裸 TypeError
+  if (proxy === null || typeof proxy !== 'object') return false;
   if (!proxy.name || !proxy.server || !proxy.port) return false;
   if (!proxy.type) return false;
   if (proxy.type === 'ss' && typeof proxy.cipher === 'string' && proxy.cipher.startsWith('2022-blake3')) {
@@ -105,6 +107,9 @@ async function startTestInstance(): Promise<void> {
 
   const pid = child.pid;
   if (!pid) throw new CliError('测试实例启动失败：无法创建进程（内核二进制可能不可执行）');
+  // 先记进内存再写盘：清理闭包若只认 pid 文件，spawn 与 writeFileSync 之间的 SIGINT
+  // 会让 stopTestInstance 读不到文件而直接 return，detached 子进程泄漏且无处可查
+  spawnedTestPid = pid;
   fs.writeFileSync(TEST_PATHS.pidFile, pid.toString(), { mode: 0o600 });
 
   const client = createHttpClient({ timeout: 2000 });
@@ -135,13 +140,24 @@ async function startTestInstance(): Promise<void> {
   }
 }
 
+/**
+ * 本进程 spawn 出的测速实例 pid（内存记录）。
+ * pid 文件之外的第二来源：spawn 成功但 pid 文件尚未写入时被 Ctrl+C 中断，
+ * 只靠文件的清理逻辑会漏掉这个 detached 子进程。
+ */
+let spawnedTestPid: number | null = null;
+
 function stopTestInstance(): void {
-  let pid: number;
+  let pid: number | null = null;
   try {
-    pid = parseInt(fs.readFileSync(TEST_PATHS.pidFile, 'utf8').trim(), 10);
+    const fromFile = parseInt(fs.readFileSync(TEST_PATHS.pidFile, 'utf8').trim(), 10);
+    if (fromFile > 0) pid = fromFile;
   } catch {
-    return;
+    /* 文件不存在/不可读时回退到内存记录 */
   }
+  if (pid === null) pid = spawnedTestPid;
+  if (pid === null) return;
+
   if (pid > 0 && isProcessRunning(pid) && isProcessCommandMatching(pid, TEST_PATHS.configFile)) {
     process.kill(pid, 'SIGKILL');
     for (let i = 0; i < 20; i++) {
@@ -149,6 +165,7 @@ function stopTestInstance(): void {
       sleepSync(100);
     }
   }
+  spawnedTestPid = null;
   try {
     fs.unlinkSync(TEST_PATHS.pidFile);
   } catch {

@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import readline from 'node:readline';
 import { colors } from '../colors.js';
 import { clearKernelVersionCache, hasKernel } from '../config.js';
 import { disableDaemon, isDaemonEnabled } from '../daemon.js';
@@ -9,6 +8,7 @@ import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import * as processManager from '../process.js';
 import { invalidateSettingsCache, writeSettings } from '../settings.js';
 import type { ResetTarget } from '../types.js';
+import { confirmPrompt } from './shared.js';
 
 const RESET_TARGETS: ResetTarget[] = [
   {
@@ -46,7 +46,10 @@ const RESET_TARGETS: ResetTarget[] = [
     id: 'settings',
     aliases: ['setting', 'settings', 'config'],
     label: '设置',
-    paths: () => [PATHS.settingsFile],
+    // 同时删 .bak：readSettings 遇格式损坏会备份原文件（settings.ts），里面含
+    // controller_secret 与订阅 URL 的 token。只删主文件会让 "已重置: 设置" 名不副实，
+    // 凭据仍明文留在数据目录（cache.json.bak 在 subscriptions/ 内，随整目录删除，无需单列）
+    paths: () => [PATHS.settingsFile, `${PATHS.settingsFile}.bak`],
     needsStop: false,
   },
   {
@@ -100,18 +103,10 @@ function resolveResetTargets(names: string[]): { matched: ResetTarget[]; unmatch
       unmatched.push(name);
     }
   }
+  // 按注册表顺序执行，与用户输入顺序无关：subs 的 onAfter 会 writeSettings 重建 settings.json，
+  // 若 settings 排在 subs 之前被删，文件会被重建成 {}，"已重置: 设置" 与实际不符
+  matched.sort((a, b) => RESET_TARGETS.indexOf(a) - RESET_TARGETS.indexOf(b));
   return { matched, unmatched };
-}
-
-async function confirmPrompt(question: string): Promise<boolean> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await new Promise<string>(resolve => {
-    rl.question(`${question} (y/N) `, a => {
-      rl.close();
-      resolve(a);
-    });
-  });
-  return answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes';
 }
 
 export async function cmdReset(args: string[]): Promise<void> {
@@ -185,9 +180,15 @@ export async function cmdReset(args: string[]): Promise<void> {
 
   console.log(`将删除: ${targets.map(t => t.label).join('、')}`);
 
-  if (!skipConfirm && !(await confirmPrompt('确认?'))) {
-    console.log('已取消');
-    return;
+  if (!skipConfirm) {
+    // 非交互环境无法应答：报错退出而非静默「已取消」，避免脚本误判重置已完成
+    if (!process.stdin.isTTY) {
+      throw new CliError('非交互环境无法确认', { label: '已取消', hint: ['跳过确认请加 -y: mihomo reset ... -y'] });
+    }
+    if (!(await confirmPrompt('确认?'))) {
+      console.log('已取消');
+      return;
+    }
   }
 
   // 确认后再执行破坏性操作。保活开启时必须先卸载（使 KeepAlive 失效），
@@ -198,17 +199,31 @@ export async function cmdReset(args: string[]): Promise<void> {
     try {
       disableDaemon();
     } catch (e) {
-      console.error(`${colors.red('保活关闭已取消，重置中止:')} ${(e as Error).message.split('\n')[0]}`);
-      return;
+      if (e instanceof CliError) throw e;
+      throw new CliError((e as Error).message.split('\n')[0], { label: '保活关闭已取消，重置中止' });
     }
   }
 
   if (needsStop && processManager.getMihomoPids().length > 0) {
     console.log('停止进程...');
-    processManager.cleanupAll();
+    const cleanup = processManager.cleanupAll();
     for (let i = 0; i < processManager.PROCESS_WAIT_ATTEMPTS; i++) {
       if (processManager.getMihomoPids().length === 0) break;
       await new Promise(r => setTimeout(r, processManager.PROCESS_WAIT_INTERVAL));
+    }
+    // 必须确认真的停了才继续删数据：cleanupAll 遇 root 实例（TUN）走 sudo pkill，
+    // 用户取消密码或 kill 失败时它只把 pid 记进 failed 并返回，此前被整个丢弃 →
+    // 残留的 root 代理进程会继续跑在已删除的配置上，且用户毫不知情
+    const remaining = processManager.getMihomoPids();
+    if (remaining.length > 0) {
+      throw new CliError(remaining.join(', '), {
+        label: '进程未能停止，重置中止',
+        hint: [
+          `未终止的进程: ${remaining.join(', ')}${cleanup.failed > 0 ? `（${cleanup.failed} 个终止失败）` : ''}`,
+          '请手动运行: sudo pkill -9 mihomo',
+          '否则残留进程会继续使用即将删除的配置。',
+        ],
+      });
     }
   }
 

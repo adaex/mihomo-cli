@@ -1,6 +1,6 @@
 {
   "name": "mihomo-cli",
-  "version": "3.6.0",
+  "version": "3.7.0",
   "type": "module",
   "description": "A terminal-based mihomo (Clash.Meta) client for macOS",
   "bin": {
@@ -21,6 +21,7 @@
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"src/**/*.spec.ts\"",
+    "prepublishOnly": "npm run build",
     "prepare": "husky"
   },
   "keywords": [
@@ -41,6 +42,9 @@
   "engines": {
     "node": ">=22.22.1"
   },
+  "os": [
+    "darwin"
+  ],
   "dependencies": {
     "compare-versions": "^6.1.0",
     "js-yaml": "^5.2.1"

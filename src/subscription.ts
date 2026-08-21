@@ -59,8 +59,21 @@ export function resolveUpdateInterval(url: string, cachedInterval?: number | nul
 
 const HTTP_CLIENT = createHttpClient({ timeout: 60_000 });
 
+/**
+ * 是否为逗号分隔的多源订阅。
+ * 判据：按逗号切分后每段都是合法 http(s) URL 且不止一段。
+ * 不能只看「整体能否解析」——`https://a.com/s,https://b.com/s` 整体也能被 URL 解析
+ * （逗号是合法 path 字符），那样真多源会被误判成单源。
+ * 也不能只看「含逗号」——`?flag=clash,meta` 是单条 URL，切开后第二段不合法，
+ * 会让 `sub add` 报「无效的 URL: meta」而无法添加。
+ */
 export function isMultiUrl(url: string): boolean {
-  return url.includes(',');
+  if (!url.includes(',')) return false;
+  const parts = url
+    .split(',')
+    .map(u => u.trim())
+    .filter(Boolean);
+  return parts.length > 1 && parts.every(isValidHttpUrl);
 }
 
 /** 校验是否为合法 http(s) 订阅 URL：必须 http/https 协议且能被 URL 解析（排除 httpfoo://、http-evil 等）。 */
@@ -73,7 +86,9 @@ export function isValidHttpUrl(url: string): boolean {
   }
 }
 
+/** 拆分多源订阅；非多源（含 query 里带逗号的单条 URL）原样返回单元素数组。 */
 export function splitUrls(url: string): string[] {
+  if (!isMultiUrl(url)) return [url.trim()];
   return url
     .split(',')
     .map(u => u.trim())
@@ -231,6 +246,36 @@ export function resolveSubscription<T extends Subscription>(subs: T[], pattern: 
   return pickSingleSubscription(findSubscriptionFuzzy(subs, pattern), pattern);
 }
 
+/**
+ * 校验下载内容确实是一份订阅配置，而非机场返回的错误/配额 JSON。
+ * 必须在写盘前调用：saveSubscriptionRawConfig 是原子覆盖、无备份，一旦写入
+ * `{"error":"quota exceeded"}` 这类「合法对象但无节点」的响应，磁盘上原本可用的
+ * 订阅就被不可恢复地覆盖，而流程仍报「已更新 (0 节点)」，随后 mihomo 带零节点启动 → 断网。
+ * 判据放宽到三类来源之一存在即可（proxies / proxy-groups / proxy-providers），
+ * 避免误伤纯 provider 型订阅。
+ */
+function assertLooksLikeSubscription(parsed: Record<string, unknown>, maskedUrl: string): void {
+  const hasProxies = Array.isArray(parsed.proxies) && parsed.proxies.length > 0;
+  const hasGroups = Array.isArray(parsed['proxy-groups']) && (parsed['proxy-groups'] as unknown[]).length > 0;
+  const providers = parsed['proxy-providers'];
+  const hasProviders = providers != null && typeof providers === 'object' && Object.keys(providers as object).length > 0;
+
+  if (hasProxies || hasGroups || hasProviders) return;
+
+  // 服务端常把错误信息放在这些字段，取出来直接展示比「无节点」更有助排查
+  const serverMsg = ['error', 'message', 'msg', 'info'].map(k => parsed[k]).find(v => typeof v === 'string' && v.length > 0) as string | undefined;
+
+  throw new CliError('订阅内容不含任何节点来源（proxies / proxy-groups / proxy-providers 均为空）', {
+    label: '订阅无效',
+    hint: [
+      ...(serverMsg ? [`服务端返回: ${serverMsg}`] : []),
+      `URL: ${maskedUrl}`,
+      '常见原因：订阅链接过期、流量耗尽、需要重新获取订阅地址。',
+      '磁盘上原有的订阅配置未被覆盖。',
+    ],
+  });
+}
+
 export async function downloadSubscription(url: string, subName = 'default', signal?: AbortSignal, persist = true): Promise<DownloadResult> {
   let response: HttpResponse<string>;
   try {
@@ -253,6 +298,8 @@ export async function downloadSubscription(url: string, subName = 'default', sig
 
   const parsed = parseYamlOrJson(content, '订阅内容') as Record<string, unknown>;
   if (!parsed) throw new Error('订阅内容为空');
+
+  assertLooksLikeSubscription(parsed, maskUrl(url));
 
   if (persist) {
     saveSubscriptionRawConfig(subName, content);
@@ -292,11 +339,15 @@ export async function downloadMergedSubscription(urls: string[], subName: string
     }),
   );
 
-  for (const r of responses) {
-    if (r.error) {
-      const maskedUrl = maskUrl(r.url);
-      throw new Error(`合并订阅第 ${r.index + 1} 个 URL 获取失败: ${r.error.message}\n  URL: ${maskedUrl}`);
-    }
+  // 优先报非 abort 的真实错误：任一 URL 失败会 internal.abort() 取消其余请求，
+  // 若按顺序取第一个 error，报出的往往是被连带取消的那条（"This operation was aborted"），
+  // 真正的 403/token 过期被隐藏，用户会去排查错误的订阅源
+  const failures = responses.filter(r => r.error);
+  if (failures.length > 0) {
+    const isAbort = (e: Error) => e.name === 'AbortError' || /abort/i.test(e.message);
+    const real = failures.find(r => !isAbort(r.error as Error)) ?? failures[0];
+    const maskedUrl = maskUrl(real.url);
+    throw new Error(`合并订阅第 ${real.index + 1} 个 URL 获取失败: ${(real.error as Error).message}\n  URL: ${maskedUrl}`);
   }
 
   const parsed = responses.map((r, i) => {
@@ -321,6 +372,8 @@ export async function downloadMergedSubscription(urls: string[], subName: string
   base.proxies = baseProxies;
 
   const mergedContent = dumpYaml(base);
+  // 同单源：合并结果无任何节点来源时不写盘，避免覆盖掉磁盘上可用的旧配置
+  assertLooksLikeSubscription(base, urls.map(u => maskUrl(u)).join(', '));
   if (persist) {
     saveSubscriptionRawConfig(subName, mergedContent);
   }

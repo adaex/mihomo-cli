@@ -1,12 +1,14 @@
 # mihomo-cli
 
-一个基于命令行的 mihomo (Clash.Meta) 客户端，专为 macOS 设计。Windows / Linux 正在适配中，敬请期待。
+一个基于命令行的 mihomo (Clash.Meta) 客户端，**仅支持 macOS**。
+
+进程保活依赖 launchd、目录/UI 打开依赖 `open`、提权依赖 `sudo`，均无其他平台实现，故在非 macOS 上会直接报错退出而非部分可用。Windows / Linux 适配尚无时间表。
 
 ## 功能特性
 
 - 🌐 **订阅管理** - 添加/更新订阅，支持流量统计和到期时间显示
 - 🔄 **自动更新** - 启动时自动检查并更新过期订阅
-- 🔍 **模糊匹配** - `sub use` / `sub web` 支持订阅名称模糊匹配
+- 🔍 **模糊匹配** - `sub use` / `web` / `update` / `remove` / `test` / `clean` 均支持订阅名称模糊匹配（大小写不敏感）
 - 🧹 **节点测速清理** - `test` 快速测试、`clean` 清理并重启；`sub test/clean` 独立进程测试任意订阅
 - 📝 **覆写配置** - 在订阅基础上进行自定义覆写，支持强制覆盖、数组合并、按 name 就地 patch、按订阅限定作用域
 - 🔄 **智能重启** - `sub use` 切换订阅、`ow on/off` 切换覆写后自动重启
@@ -88,8 +90,10 @@ mihomo ui yacd     # YACD
 | `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式（`-s` 跳过更新，`-u` 更新超时，`-r` 清理轮次，`-t` 超时，`-j` 并发，`--no-clean` 跳过启动自动清理） |
 | `mihomo stop`               | 停止代理                                                                     |
 | `mihomo status`             | 查看运行状态（含订阅流量、到期时间）                                         |
-| `mihomo log`                | 实时查看日志 (`-o` 用系统编辑器打开)                                         |
+| `mihomo log`                | 实时查看日志 (`-o` 用系统默认程序打开)                                       |
 | `mihomo logs`               | 列出所有日志（当前 + 历史归档）                                              |
+| `mihomo logs current`       | 查看当前日志（等同 `logs 0`）                                                |
+| `mihomo logs <名称/子串>`   | 按文件名或子串查看指定归档日志                                               |
 | `mihomo logs <编号>`        | 查看指定日志（`0`=当前日志，`1+`=归档日志，支持 `-n N` 指定行数、`-o` 打开） |
 
 ### 订阅管理
@@ -101,10 +105,10 @@ mihomo ui yacd     # YACD
 | `mihomo sub add <url> [name]` | 添加订阅并自动切换（支持逗号分隔多 URL 合并，名称不可重复） |
 | `mihomo sub update`           | 更新所有订阅                           |
 | `mihomo sub update <name>`    | 更新指定订阅（支持模糊匹配）           |
-| `mihomo sub remove <name>`    | 删除订阅（支持模糊匹配）               |
-| `mihomo sub web [name]`       | 打开订阅页面（无参打开默认）           |
+| `mihomo sub remove <name>`    | 删除订阅（别名 `rm`/`delete`；精确名直接删，模糊匹配需确认，`-y` 跳过） |
+| `mihomo sub web [name]`       | 打开订阅页面（别名 `open`，无参打开默认，支持模糊匹配） |
 | `mihomo sub test [name]`      | 测试节点连通性（独立隔离实例，无需运行主实例，`-t` 超时，`-j` 并发） |
-| `mihomo sub clean [name]`     | 测速并清理失败节点（独立实例，不动主实例，`-r` 轮数，默认2）|
+| `mihomo sub clean [name]`     | 测速并清理失败节点（独立实例，不动主实例，`-r` 轮数默认 2，`-t` 超时，`-j` 并发） |
 | `mihomo test`                 | 测试当前节点（经运行中的主实例，`-t` 超时，`-j` 并发） |
 | `mihomo clean`                | 清理失败节点并重启（经主实例，`-t` 超时，`-j` 并发，`-r` 轮数） |
 
@@ -112,9 +116,9 @@ mihomo ui yacd     # YACD
 
 | 命令                           | 说明                       |
 | ------------------------------ | -------------------------- |
-| `mihomo ow` / `mihomo ow list` | 查看覆写配置状态和文件列表 |
-| `mihomo ow on`                 | 启用覆写配置（自动重启）   |
-| `mihomo ow off`                | 禁用覆写配置（自动重启）   |
+| `mihomo ow` / `mihomo ow list`   | 查看覆写配置状态和文件列表（别名 `enable`/`disable` 亦可用于开关） |
+| `mihomo ow on`                   | 启用覆写配置（**默认已启用**，自动重启）                          |
+| `mihomo ow off`                  | 禁用覆写配置（自动重启）                                          |
 
 ### 其他命令
 
@@ -125,8 +129,8 @@ mihomo ui yacd     # YACD
 | `mihomo update`                   | 更新 mihomo-cli（先查 npm 最新版，已是最新则跳过重装）              |
 | `mihomo ui [zash\|dash\|yacd]`    | 打开 Web UI                                                         |
 | `mihomo dir`                      | 显示数据目录位置                                                    |
-| `mihomo dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `kernel` 等）                 |
-| `mihomo reset [目标...] [--full] [-y]` | 重置用户数据（可用目标：`subs`, `logs`, `kernel`, `overwrites` 等；`--full` 删全部，`-y` 跳过确认） |
+| `mihomo dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `data`, `runtime`, `kernel`）  |
+| `mihomo reset [目标...] [--full] [-y]` | 重置用户数据（可用目标：`subs`, `logs`, `data`, `runtime`, `settings`, `kernel`, `overwrites`, `daemon`；`--full` 删全部，`-y` 跳过确认） |
 | `mihomo version`                  | 显示版本信息                                                        |
 | `mihomo help`                     | 显示帮助信息                                                        |
 
@@ -138,6 +142,8 @@ mihomo ui yacd     # YACD
 - `mihomo`
 - `mhm`
 - `mh`
+
+子命令组亦有别名：`subscription` = `sub`/`subs`/`subscriptions`，`directory` = `dir`/`dirs`/`directories`，`overwrite` = `ow`
 
 ### 快捷命令
 
@@ -235,6 +241,35 @@ mihomo kernel --mirror-all hk.gh-proxy.org
 - 同一订阅 12 小时内只自动清理一次（冷却记录在订阅缓存），避免每次启动都全量测速
 - `--no-clean` 可跳过；随时可用 `mihomo clean` / `mihomo sub clean` 手动清理
 
+## 选项写法
+
+带值选项支持三种等价写法，长短选项对应关系：
+
+| 短 | 长 | 用途 | 默认 |
+| --- | --- | --- | --- |
+| `-t` | `--timeout` | 测速超时（ms） | 2000 |
+| `-j` | `--concurrency` | 测速并发数 | 100 |
+| `-r` | `--rounds` | 清理时失败节点重试轮数 | 2 |
+| `-u` | `--update-timeout` | 启动时自动更新订阅超时（ms） | 10000 |
+| `-n` | `--lines` | 日志显示行数 | 100 |
+
+```bash
+mihomo test -t 3000          # 短选项 + 空格
+mihomo test --timeout 3000   # 长选项 + 空格
+mihomo test --timeout=3000   # 长选项 + 等号
+```
+
+布尔开关：`-s`（跳过订阅更新）、`--no-update`、`--no-clean`、`-y`/`--yes`（跳过确认）、`-o`（用系统默认程序打开）。
+
+上述数值选项只接受 **>= 1 的整数**，非法值（`0`、负数、`5s`、`abc`）会直接报错而非静默取默认值——避免 `-j 0` 之类静默产出"全部节点失败"的假结果。
+
+## 数据保护
+
+- **订阅内容校验**：下载到的内容必须含 `proxies` / `proxy-groups` / `proxy-providers` 之一才写盘。机场返回配额或错误 JSON（如 `{"error":"quota exceeded"}`）时报错并**保留磁盘上原有的可用配置**，不会被覆盖
+- **`sub add` 失败回滚**：下载失败时移除半成品订阅，且不改动当前活跃订阅
+- **`settings.json` 损坏恢复**：格式损坏（含合法 JSON 但非对象的情况）时自动备份为 `.bak` 并回退默认设置
+- **`reset` 停止确认**：需要停止进程的重置会先确认进程真的已终止，未能停止时中止重置而非留下孤儿进程跑在已删配置上
+
 ## 数据目录
 
 用户数据存储位置（与安装位置分离，更新不丢失）：
@@ -255,7 +290,10 @@ mihomo kernel --mirror-all hk.gh-proxy.org
 ├── data/                 # mihomo 运行数据（GeoIP 等，由内核自行管理）
 └── runtime/              # 运行时临时文件（stop 自动清除）
     ├── pid               # 进程 PID
-    └── config.yaml       # 运行时生成的配置
+    ├── config.yaml       # 运行时生成的配置
+    ├── 1.subscription.yaml   # 分阶段调试：订阅原始配置
+    ├── 2.overwrite.yaml      # 分阶段调试：应用覆写后
+    └── 3.system.yaml         # 分阶段调试：合并系统配置后
 ```
 
 可通过环境变量 `MIHOMO_CLI_DIR` 自定义数据目录位置。
@@ -270,7 +308,7 @@ mihomo kernel --mirror-all hk.gh-proxy.org
    - `overwrite.yaml` — 主覆写文件
    - `overwrite.dns.yaml` — 按功能拆分的扩展文件（`overwrite.*.yaml` 格式）
 2. `overwrite.yaml` 始终最先加载，扩展文件按文件名排序加载
-3. 使用 `mihomo ow on` 启用覆写配置（会自动重启）
+3. 覆写**默认即启用**，放好文件后重启生效（`mihomo start`）；如曾 `ow off` 禁用过，用 `mihomo ow on` 重新启用（会自动重启）
 
 ### 特殊语法
 
@@ -286,14 +324,16 @@ mihomo kernel --mirror-all hk.gh-proxy.org
 
 `~key` 用于**只修改数组里某一个元素的部分字段**，而不动其余元素、也不必复制整个元素。以 `name` 为主键匹配：命中同名元素则深度合并该元素，找不到则追加。典型用途：修改订阅下发的某个 `proxy-group` 的字段（如默认选中的节点），订阅更新后依然生效。
 
+> `~key` / `+key` / `key+` 都是**数组语义**：若目标键已存在且不是数组（如 `~dns` 作用于映射、`log-level+` 作用于字符串），会直接报错而非静默包成单元素数组——后者会丢掉原有字段并生成 mihomo 无法解析的配置。要覆盖非数组值请用 `key!`（强制覆盖）或直接写 `key`（深度合并）。
+
 ### 作用域限定（match）
 
 在覆写文件顶部加 `match:` 块，可让该文件**只对指定订阅生效**（无 `match` 则全局生效）。所列条件需全部满足（AND），条件值为数组时其内部为 OR：
 
 | 匹配键        | 作用                          |
 | ------------- | ----------------------------- |
-| `subscription` | 按订阅名精确匹配              |
-| `url-domain`   | 按订阅 URL 的 hostname 后缀匹配 |
+| `subscription` | 按订阅名匹配（大小写不敏感，与 `sub use` 口径一致） |
+| `url-domain`   | 按订阅 URL 的 hostname 后缀匹配（大小写不敏感） |
 
 ### 示例
 
@@ -364,7 +404,7 @@ sudo pkill -9 mihomo
 
 ## 安全特性
 
-- **URL 脱敏**：订阅 URL 中的 token、key、password 等敏感参数（含 query、userinfo 及路径型令牌）自动替换为 `***`
+- **URL 脱敏**：订阅 URL 中的 token、key、password 等敏感参数（含 query、userinfo 及路径型令牌）自动替换为 `***`。逗号分隔的多源订阅逐段脱敏；query 内含逗号的单条 URL 不会被误拆（否则参数被劈开会导致 token 漏脱敏）
 - **文件权限**：配置文件使用 `0o600` 权限（仅所有者可读可写），目录使用 `0o700` 权限
 - **入站默认关闭**：订阅/覆写未指定时 `allow-lan` 默认 `false`；如需局域网设备连入代理端口，可在订阅或覆写中显式开启
 - **信号处理**：优雅处理 SIGINT/SIGTERM 信号

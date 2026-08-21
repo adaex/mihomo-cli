@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { normalizeProxyNamesBeforeSave } from './subscription.js';
+import { isMultiUrl, normalizeProxyNamesBeforeSave, splitUrls } from './subscription.js';
 import type { ParsedSubscription } from './types.js';
 
 describe('normalizeProxyNamesBeforeSave', () => {
@@ -60,5 +60,31 @@ describe('normalizeProxyNamesBeforeSave', () => {
     // 'HK' 已被首个占用，第二个裁剪后会撞名，保留原名
     assert.equal(parsed.proxies[0].name, 'HK');
     assert.equal(parsed.proxies[1].name, 'HK_github.com/foo');
+  });
+});
+
+describe('isMultiUrl / splitUrls 逗号判据', () => {
+  it('query 含逗号的单条 URL 视为单源（否则 sub add 报「无效的 URL」无法添加）', () => {
+    const url = 'https://x.com/api?flag=clash,meta&token=T';
+    assert.equal(isMultiUrl(url), false);
+    assert.deepEqual(splitUrls(url), [url]);
+  });
+
+  it('真多源正确识别与拆分', () => {
+    const url = 'https://a.com/s,https://b.com/s';
+    assert.equal(isMultiUrl(url), true);
+    assert.deepEqual(splitUrls(url), ['https://a.com/s', 'https://b.com/s']);
+  });
+
+  it('多源带空格', () => {
+    assert.deepEqual(splitUrls('https://a.com/s, https://b.com/s'), ['https://a.com/s', 'https://b.com/s']);
+  });
+
+  it('无逗号即单源', () => {
+    assert.equal(isMultiUrl('https://a.com/s'), false);
+  });
+
+  it('部分片段非法时不视为多源（整体当单条处理）', () => {
+    assert.equal(isMultiUrl('https://a.com/s,notaurl'), false);
   });
 });

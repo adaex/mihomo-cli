@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { colors } from '../colors.js';
+import { CliError } from '../errors.js';
 import { isOverwriteEnabled, listOverwriteFile, setOverwriteEnabled } from '../overwrite.js';
+import { suggestSimilar } from '../utils.js';
 import { dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 function printOverwriteList(): void {
@@ -57,14 +59,29 @@ async function setOverwrite(enabled: boolean, args: string[]): Promise<void> {
 const SUBCOMMANDS: SubCommand[] = [
   { name: 'on', aliases: ['enable'], handler: args => setOverwrite(true, args) },
   { name: 'off', aliases: ['disable'], handler: args => setOverwrite(false, args) },
+  // list 显式注册：onUnknown 生效后，未注册的子命令会报错，不能再靠 fallback 兜住 `ow list`
+  {
+    name: 'list',
+    handler: () => {
+      console.log('');
+      printOverwriteList();
+    },
+  },
 ];
 
 export async function cmdOverwrite(args: string[]): Promise<void> {
-  // 无 action 或未知 action 均回落到列表视图（保持现状：ow 任意参数都显示状态）
   await dispatchSubcommand(args, SUBCOMMANDS, {
+    // 无子命令 → 列表；未知子命令 → 报错（与 sub/daemon 同构，避免 `ow onn` 静默当成 list）
     fallback: () => {
       console.log('');
       printOverwriteList();
+    },
+    onUnknown: action => {
+      const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
+      const suggestion = suggestSimilar(action, names);
+      throw new CliError(`未知的覆写子命令: ${action}`, {
+        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '', '可用子命令: on, off, list'],
+      });
     },
   });
 }

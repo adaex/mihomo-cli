@@ -1,5 +1,52 @@
 # Changelog
 
+## [3.7.0] - 2026-08-22
+
+### 修复
+
+- **错误响应体绕过大小上限，可致 OOM** - `!response.ok` 分支直接 `await response.json()`，不经流式大小检查。实测 60MB 错误体使客户端 RSS 增长 303MB——攻击者只需返回非 2xx 即可绕过 50MB 防护。现错误体限量 64KB 读取（仅用于诊断），修后 RSS 增长 9MB
+- **机场返回错误 JSON 会覆盖磁盘上可用的订阅** - 下载后只要内容能解析成对象就原子覆盖写盘。机场返回 `{"error":"quota exceeded"}` 之类响应时报「已更新 (0 节点)」，把原本可用的订阅**不可恢复地覆盖**，随后 mihomo 带零节点启动导致断网；且这在 `start` 的自动更新路径上，用户无操作即触发。现写盘前要求 `proxies`/`proxy-groups`/`proxy-providers` 至少其一非空，并提取服务端错误信息作为提示
+- **`ps` 输出截断致测速实例泄漏并占用端口** - `isProcessCommandMatching` 未带 `-ww`，BSD/macOS 的 `ps` 即使 stdout 非终端也把 command 列截断到 79 列。测速实例的匹配串（`test/runtime/config.yaml`）起始偏移随用户名增长（`alice` 为 80、`jonathan.smith` 为 98），常见家目录下均越界 → 匹配恒失败 → `stopTestInstance` 跳过 SIGKILL 却仍删 pid 文件，内核残留占着 27890/29090 且再无记录，下次 `sub test` 直接启动失败
+- **`sub add` 失败时劫持当前活跃订阅** - `setDefaultSubscription` 在下载之前执行，回滚时 `removeSubscription` 把活跃订阅落到列表首项而非用户原选择。复现：活跃为 `work`、列表为 `[airport-a, work]`，添加一个不可达 URL 失败后活跃变成 `airport-a`，下次 `start` 静默连错机场。现切换移到下载成功之后
+- **`MIHOMO_CLI_DAEMON_LABEL` 未校验导致 root 任意路径写** - 该值经 `path.join` 拼成 plist 路径后，是 `sudo install -m 644 -o root` 的写入目标与 `sudo rm -f` 的删除目标，而 `path.join` 会折叠 `..`（`../../etc/sudoers.d/evil` → `/etc/sudoers.d/evil.plist`），内容还部分可控。现加字符集校验：非法值回退默认标签，并在 `enableDaemon`/`disableDaemon` 入口报错
+- **覆写注入节点的 `exclude-filter` 误排除同前缀节点** - mihomo 的 `exclude-filter` 是无锚点正则搜索。注入名为 `HK` 的节点后，订阅里的 `HK-01`/`HK-02` 全被踢出 `include-all` 分组。现改为 `^(?:...)$` 整名锚定
+- **覆写 YAML 笔误抛裸 `TypeError` 并打印堆栈** - `validateConfig` 的类型断言无校验，四种常见笔误会崩溃：`proxies` 含空列表项、`rules` 漏写 `-` 成标量、`proxy-groups` 写成映射、`rules` 含非字符串。用户配置错误被当成程序 bug。现全部转为带修正提示的 `CliError`
+- **`~key`/`+key` 作用于非数组时静默损坏配置** - 静默包成单元素数组：`~dns: {enable: true}` 把映射 `dns` 变成 `[{enable: true}]` 并丢掉原有字段，而 mihomo 要求 `dns` 是映射；`log-level+: debug` → `["debug"]` 同理。现报错并提示改用 `key!` 或直接写 `key`；目标不存在时仍放行（新增数组的正常用法）
+- **`maskUrl` 逗号切分致 token 明文泄漏** - 无条件按逗号切分，`?nodes=us,hk&token=SECRET` 被劈开后两段都识别不出 token 参数，密钥明文输出。同一根因还让 query 含逗号的合法单 URL（`?flag=clash,meta`）被误判多源、`sub add` 报「无效的 URL」而无法添加。现统一判据为「切分后每段都是合法 http(s) URL 且不止一段」
+- **`settings.json` 为合法 JSON 但非对象时绕过损坏恢复** - `null`/`[]`/`123`/`"hi"` 都直接进缓存，不备份不告警：`null` 让 `getSubscriptions()` 抛裸 `TypeError` 且缓存判定恒失效，字符串被展开成 `{"0":"h","1":"i",...}`。现一并走备份+回退分支
+- **`subscriptions` 非数组时被按字符展开** - 手改成 `"oops"` 后 `addSubscription` 写出 `["o","o","p","s",{...}]` 且不报错。现在唯一读取入口 `getSubscriptions()` 收口校验，并滤掉缺 name/url 的残缺条目
+- **`reset` 忽略停止进程的结果** - root 实例（TUN）下走 `sudo pkill`，用户取消密码时失败的 pid 被静默丢弃，仍继续删除数据，留下孤儿 root 进程跑在已删配置上。现删数据前复查并中止
+- **`reset --full` 残留含密钥的备份文件** - `settings.json.bak`（损坏恢复时生成）带 `controller_secret` 与订阅 token 明文留下，与「已重置: 设置」矛盾。现纳入删除路径
+- **`reset` 结果依赖参数顺序** - `subs` 目标的后置钩子会重建 `settings.json`，故 `reset settings subs` 留下 `{}` 而 `reset subs settings` 才真删。现按注册表顺序执行
+- **`match` 的订阅名匹配与 `sub use` 口径不一致** - `sub use home` 能切到订阅 `Home`（模糊匹配大小写不敏感），但 `match: {subscription: home}` 精确比对匹配不上。现统一为大小写不敏感
+- **`parseIntArg` 接受危险值** - 无范围校验：`-j 0` 让测速起 0 个 worker、结果全空洞、被报成「所有节点失败」（伪造结果）；`-t 5s` 静默取 5ms 让全部节点超时。现非正整数一律报错，并把 `test`/`clean` 的参数校验移到运行状态检查之前
+- **合并订阅的错误指向被连带取消的 URL** - 任一 URL 失败即中断其余请求，按顺序取第一个错误报出的往往是被取消的那条，真正的 403/token 过期被隐藏。现优先报非取消类错误
+- **`dir` 子命令的错误绕过统一渲染** - `cmdDirectory` 用 `void` 丢弃 async 分发的 Promise，`dir open <未知目标>` 抛的错误退化成「未处理的 Promise 拒绝」，丢掉标签颜色与可用目标列表
+- **`ow`/`dir` 未知子命令静默回落** - `ow onn` 静默打印列表且退出码 0（对比 `sub adz` 会报错并给纠错建议）。现补齐纠错提示
+- **测速实例的 pid 记录时机存在泄漏窗口** - spawn 与写 pid 文件之间被 Ctrl+C 中断时，只认 pid 文件的清理逻辑会漏掉 detached 子进程。现增加内存记录作为第二来源
+- **`reset` 保活取消路径退出码为 0** - `console.error` + `return` 使「重置中止」被脚本误判成功，且绕过统一渲染
+- **`mihomo on`/`off` 丢弃启动选项** - 唯二不透传后续参数的快捷命令，`mihomo on -s` 静默吞掉 `-s`，而 README 声明其与 `ow on` 等价
+- **`restartDaemon` 抛裸 `Error`** - 最后一处未迁移的数据层预期错误
+
+### 新增
+
+- **平台守卫** - `package.json` 声明 `"os": ["darwin"]`，`main()` 开头校验平台（豁免 `help`/`version`，`MIHOMO_CLI_ALLOW_ANY_PLATFORM=1` 为开发逃生阀）。此前非 macOS 上是「部分成功」：`status`/`sub` 看着正常，`daemon on` 输完 root 密码才撞 `/Library/LaunchDaemons`，`ui` 报告成功却什么都没打开（`open` 命令缺失被吞掉，且 Debian 的 `open` 指向 `run-mailcap` 会把 URL 当附件处理）。守卫先于目录创建，避免在不支持的平台留下数据目录
+- **`sub remove` 模糊匹配需确认** - 精确名称直接删除；模糊命中时展示完整名称并要求确认（`-y`/`--yes` 跳过）。此前 `sub remove air` 会无提示删掉 `production-airport`
+- **`subs` 别名** - 与 `directory` 的 `dirs` 对称，落地命名规范的「简写复数」档
+- **GitHub Actions CI** - 在 `macos-latest` 上跑 typecheck / lint / test / build
+- **`prepublishOnly` 钩子** - `dist/` 被 gitignore 且此前无发布钩子，漏跑构建即发布陈旧或缺失产物
+
+### 变更
+
+- **破坏性操作在非交互环境报错而非静默取消** - `reset`（无 `-y`）与 `sub remove`（模糊匹配）在管道/CI 下此前打印「已取消」并退出 0，脚本会误判操作已完成。现报错退出 1 并提示加 `-y` 或用完整名称
+- **`confirmPrompt` 收敛到 `commands/shared.ts`** 并增加 TTY 守卫（此前在非交互环境会挂住等输入）
+
+### 内部
+
+- **单测从 55 增至 101** - 新增覆盖：配置形态校验、`exclude-filter` 锚定、覆写数组语义误用、`match` 大小写、`parseIntArg` 边界、多源 URL 逗号判据
+- **`CODE_REVIEW.md` 重写** - 上一轮（v2.9.x 基线）的「仍待处理」清单已逐项复核：#12/#14 实际已修复，#10 的后果比原描述严重（是 token 泄漏而非仅显示切碎），#17 的建议不可行——上游 v1.19.30 的 127 个资产中零 checksum 文件，故真实缺口是下载地址的 host 未钉死。新增 9 项待处理（tar symlink 致任意文件 chmod 755、热重载信任任意 9090 响应、`Subscription-Userinfo` 边界等）
+- **`README.md` / `CLAUDE.md` 校正** - 平台说明从「Windows / Linux 正在适配中」改为「仅支持 macOS」（此前无对应代码）；覆写实为默认启用（此前文档教用户先 `ow on`）；`log -o` 是系统默认程序而非编辑器；补齐 `logs current`、长选项、`reset`/`dir open` 完整目标列表、分阶段调试文件；新增「选项写法」「数据保护」两节
+
 ## [3.6.0] - 2026-08-15
 
 ### 修复

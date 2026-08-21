@@ -1,6 +1,7 @@
 import { CliError } from '../errors.js';
 import { DIRECTORY_TARGETS, DIRS, PATHS, USER_DATA_DIR } from '../paths.js';
 import * as processManager from '../process.js';
+import { suggestSimilar } from '../utils.js';
 import { dispatchSubcommand, type SubCommand } from './shared.js';
 
 function openDirectory(args: string[]): void {
@@ -66,9 +67,28 @@ function printDirectoryInfo(): void {
   console.log('');
 }
 
-const SUBCOMMANDS: SubCommand[] = [{ name: 'open', handler: openDirectory }];
+const SUBCOMMANDS: SubCommand[] = [
+  { name: 'open', handler: openDirectory },
+  { name: 'list', handler: printDirectoryInfo },
+];
 
-export function cmdDirectory(args: string[]): void {
-  // 无 action 或未知 action 均回落到目录信息展示（保持现状）
-  void dispatchSubcommand(args, SUBCOMMANDS, { fallback: printDirectoryInfo });
+export async function cmdDirectory(args: string[]): Promise<void> {
+  // 无子命令 → 目录信息；未知子命令 → 报错（与 sub/daemon 同构，避免 `dir opn` 静默当成 list）
+  // 必须 await/返回 Promise：dispatchSubcommand 是 async，若用 void 丢弃，onUnknown 抛的
+  // CliError 会变成未处理的 Promise 拒绝，绕过 main().catch 的统一渲染（丢 label/hint）
+  await dispatchSubcommand(args, SUBCOMMANDS, {
+    fallback: printDirectoryInfo,
+    onUnknown: action => {
+      const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
+      const suggestion = suggestSimilar(action, names);
+      throw new CliError(`未知的目录子命令: ${action}`, {
+        hint: [
+          ...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []),
+          '',
+          '可用子命令: open, list',
+          '打开指定目录: mihomo dir open <target>',
+        ],
+      });
+    },
+  });
 }

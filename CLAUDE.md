@@ -27,7 +27,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/errors.ts`            | CliError、TimeoutError、withTimeout |
 | `src/http.ts`              | HTTP 客户端（超时、响应体大小上限、Bearer） |
 | `src/paths.ts`             | 路径常量、目录管理                |
-| `src/settings.ts`          | settings.json 读写、订阅缓存     |
+| `src/settings.ts`          | settings.json 读写（含损坏恢复）、订阅缓存、订阅列表增删、URL 遮蔽 |
 | `src/config.ts`            | 配置构建、YAML 解析/序列化、内核版本 |
 | `src/subscription.ts`      | 订阅下载、流量解析、自动更新      |
 | `src/process.ts`           | 进程启动/停止、PID 管理、日志轮转、进程探测（isProcess*） |
@@ -39,7 +39,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/kernel.ts`            | GitHub Releases 检查、下载        |
 | `src/overwrite.ts`         | 覆写配置合并                      |
 | `src/commands/registry.ts` | 命令注册表（name/别名/handler/argv 改写/help 用法），路由与帮助的单一真相源 |
-| `src/commands/shared.ts`   | 命令层公共工具：dispatchSubcommand 子命令分发、requireRunning、restartToApply |
+| `src/commands/shared.ts`   | 命令层公共工具：dispatchSubcommand 子命令分发、confirmPrompt、requireRunning、restartToApply |
 | `src/commands/*.ts`        | 各命令处理器（每命令一个文件）    |
 
 ### 命令处理器
@@ -53,7 +53,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `commands/log.ts`             | log, logs                      |
 | `commands/ui.ts`              | ui                             |
 | `commands/kernel.ts`          | kernel                         |
-| `commands/subscription.ts`    | subscription (add/update/use/remove/list/web) |
+| `commands/subscription.ts`    | subscription (list/add/update/use/remove/web/test/clean) |
 | `commands/test.ts`            | test, clean（经主实例测速）    |
 | `commands/overwrite.ts`       | overwrite (on/off/list)        |
 | `commands/directory.ts`       | directory (open/list)          |
@@ -68,7 +68,7 @@ This file provides guidance to Claude Code when working with this repository.
 ### 命令别名优先级（高 → 低）
 
 1. 简写单数: `sub`, `dir`, `ow`
-2. 简写复数: `dirs`
+2. 简写复数: `subs`, `dirs`
 3. 全称单数: `subscription`, `directory`, `overwrite`
 4. 全称复数: `subscriptions`, `directories`
 
@@ -140,11 +140,44 @@ npm run format         # 格式化代码
 npm test               # node:test 单测（*.spec.ts，零新增依赖，经 tsx）
 ```
 
-测试仅覆盖高危纯函数（覆写合并/配置校验/名称归一/URL 遮蔽等），非全量。文件命名 `*.spec.ts`（勿用 `*.test.ts`，会与 test.ts/test-instance.ts 冲突）。
+测试仅覆盖高危纯函数（覆写合并/配置校验/名称归一/URL 遮蔽/参数校验等），非全量。文件命名 `*.spec.ts`（勿用 `*.test.ts`，会与 test.ts/test-instance.ts 冲突）。
+
+CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.yml`）——因 `os: ["darwin"]`，ubuntu runner 上 `npm ci` 会平台不匹配失败。
 
 ### 错误处理
 
 命令层与数据层的预期错误一律 `throw new CliError(msg, { label?, hint?, exitCode? })`，由 `index.ts` 的 `main().catch` 单点渲染（`label:` 前缀 + hint 多行 + exitCode）并 `runCleanup()`。**不在命令逻辑里 `console.error + process.exit`**。仅两类 exit 保留：信号/全局处理器、`viewLogWithTail` 的 tail 事件回调（main 已 resolve，无法收口）。catch 后重标签需先 `if (e instanceof CliError) throw e`（防双重包裹）。detached/事件回调中不得抛 CliError。
+
+模块顶层（import 阶段求值）也不得抛 CliError——早于 `main().catch` 注册，会直接打印堆栈。需校验的环境变量在**使用点**校验（如 `MIHOMO_CLI_DAEMON_LABEL` 由 `constants.ts` 静默回退默认值 + `daemon.ts` 写操作入口 `assertDaemonLabelSafe()` 抛错）。
+
+`dispatchSubcommand` 是 async，命令 handler 必须 `await`/返回其 Promise。用 `void` 丢弃会让子命令抛的 CliError 变成未处理的 Promise 拒绝、绕过统一渲染。
+
+给某命令补 `onUnknown` 时，原先靠 `fallback` 兜住的隐式子命令（如 `ow list`/`dir list`）必须显式注册，否则会被判为未知子命令。
+
+### 平台守卫
+
+`main()` 开头（`ensureDirs()` 之前）校验 `process.platform === 'darwin'`，`package.json` 声明 `"os": ["darwin"]`。豁免 `help`/`version`；`MIHOMO_CLI_ALLOW_ANY_PLATFORM=1` 为开发逃生阀。守卫必须先于 `ensureDirs`，避免在不支持的平台创建数据目录。
+
+原因：launchd 保活、`open`、`sudo`、BSD 专有命令语法（`stat -f%z`、`ps -o command=`）均无其他平台实现，且 `openUrl` 吞掉 ENOENT 后恒返回 true，非 macOS 上会「报告成功但什么都没做」。
+
+### 平台命令细节
+
+`ps -o command=` 必须带 `-ww`：BSD/macOS 即使 stdout 非 tty 也把该列截断到 79 列，needle 偏移靠后的匹配（测速实例的 config 路径）会恒失败。同理写 BSD/GNU 都要跑的脚本时留意 `stat -f%z`（GNU 为 `-c%s`）。
+
+### 数据写盘前置校验
+
+- **订阅内容**：`saveSubscriptionRawConfig` 是原子覆盖、无备份。写盘前必须经 `assertLooksLikeSubscription`（要求 `proxies`/`proxy-groups`/`proxy-providers` 至少其一非空），否则机场返回的配额/错误 JSON 会不可恢复地覆盖可用订阅
+- **订阅列表**：一律经 `getSubscriptions()` 读取，不直接访问 `settings.subscriptions`——非数组值会被展开运算符按字符展开成垃圾列表
+- **URL 逗号**：逗号在 query/path 中合法。多源判据统一为「切分后每段都是合法 http(s) URL 且不止一段」，三处实现需同步（`settings.maskUrl`、`subscription.isMultiUrl`/`splitUrls`、`overwrite.splitUrlsLocal`）。只看「含逗号」会泄漏 token，只看「整体可解析」会漏遮蔽真多源
+- **`writeFileSync` 的 `mode`** 仅在创建新文件时生效；对可能已存在的文件（sudo 中间脚本）需显式 `chmodSync`
+
+### 覆写语义
+
+`~key` / `+key` / `key+` 是数组语义，目标**已存在且非数组**时抛 `CliError` 而非静默包成单元素数组（会丢字段并生成 mihomo 无法解析的配置）；目标不存在时放行（新增数组的正常用法）。
+
+`exclude-filter` 在 mihomo 侧是无锚点正则搜索，注入节点的排除模式必须 `^(?:...)$` 整名锚定，否则会连带排除名字包含它的订阅节点。
+
+`match` 的订阅名匹配大小写不敏感，与 `findSubscriptionFuzzy` 口径一致。
 
 ---
 

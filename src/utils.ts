@@ -1,4 +1,5 @@
 import { DEFAULT_MIRROR } from './constants.js';
+import { CliError } from './errors.js';
 import type { MirrorArg } from './types.js';
 
 /**
@@ -73,17 +74,36 @@ export function hasFlag(args: string[] | undefined, short: string, long?: string
   return !!args && (args.includes(short) || (long !== undefined && args.includes(long)));
 }
 
+/**
+ * 解析整数选项。全部调用点（-t 超时 / -j 并发 / -r 轮次 / -n 行数 / -u 更新超时）
+ * 语义上都是正整数，故 <1、非数字、带尾随垃圾（`5s`）一律抛错而非静默取值：
+ * `-j 0` 会让测速起 0 个 worker，结果数组全是空洞，被报成「所有节点失败」（伪造结果）；
+ * `-t 5s` 静默取 5（ms）会让全部节点超时。宁可报错也不给用户一个看似成功的错误结果。
+ */
 export function parseIntArg(args: string[] | undefined, short: string, long: string, defaultValue: number): number {
   if (!args) return defaultValue;
+
+  const parse = (raw: string, flag: string): number => {
+    // 只接受纯十进制整数：parseInt('5s') === 5 会静默吞掉单位
+    if (!/^\d+$/.test(raw.trim())) {
+      throw new CliError(`选项 ${flag} 需要正整数，收到 "${raw}"`, { hint: [`例如: ${flag} ${defaultValue}`] });
+    }
+    const val = Number(raw);
+    if (!Number.isSafeInteger(val) || val < 1) {
+      throw new CliError(`选项 ${flag} 需要 >= 1 的整数，收到 "${raw}"`, { hint: [`例如: ${flag} ${defaultValue}`] });
+    }
+    return val;
+  };
+
   for (let i = 0; i < args.length; i++) {
     if (args[i] === short || args[i] === long) {
       if (i + 1 < args.length) {
-        const val = parseInt(args[i + 1], 10);
-        return Number.isNaN(val) ? defaultValue : val;
+        return parse(args[i + 1], args[i]);
       }
-    } else if (args[i].startsWith(`${long}=`)) {
-      const val = parseInt(args[i].slice(long.length + 1), 10);
-      if (!Number.isNaN(val)) return val;
+      throw new CliError(`选项 ${args[i]} 缺少值`, { hint: [`例如: ${args[i]} ${defaultValue}`] });
+    }
+    if (args[i].startsWith(`${long}=`)) {
+      return parse(args[i].slice(long.length + 1), long);
     }
   }
   return defaultValue;

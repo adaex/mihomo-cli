@@ -47,3 +47,23 @@ describe('maskUrl', () => {
     assert.equal(maskUrl(''), '');
   });
 });
+
+describe('maskUrl 逗号：区分「多源订阅」与「query 含逗号的单条 URL」', () => {
+  it('query 含逗号的单条 URL 不切分，token 正确遮蔽（此前明文泄漏）', () => {
+    // 旧行为按逗号无条件切分 → token= 落到第二段，两段都识别不出 token 参数 → 明文输出
+    const masked = maskUrl('https://x.com/api?nodes=us,hk&token=SUPERSECRET1');
+    assert.ok(!masked.includes('SUPERSECRET1'), `token 不应明文出现: ${masked}`);
+    assert.ok(masked.includes('token=***'));
+  });
+
+  it('真多源仍逐段遮蔽（不能只看整体可解析——逗号是合法 path 字符）', () => {
+    const masked = maskUrl('https://a.com/s?token=AAA111,https://b.com/s?key=BBB222');
+    assert.ok(!masked.includes('AAA111'), `第一段 token 应遮蔽: ${masked}`);
+    assert.ok(!masked.includes('BBB222'), `第二段 key 应遮蔽: ${masked}`);
+  });
+
+  it('三源逐段处理', () => {
+    const masked = maskUrl('https://a.com/s?token=T1,https://b.com/s?token=T2,https://c.com/s?token=T3');
+    for (const t of ['T1', 'T2', 'T3']) assert.ok(!masked.includes(`token=${t}`), `${t} 应遮蔽: ${masked}`);
+  });
+});
