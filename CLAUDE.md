@@ -234,16 +234,35 @@ runtime/                # pid, config.yaml, 分阶段调试文件(1.subscription
 
 ### 检查清单（发布前必须完成）
 
+- [ ] `npm run typecheck && npm test && npm run check` 全绿（CI 也会跑，但发布不经 CI）
 - [ ] 所有新增功能已在 `README.md` 中说明
 - [ ] 命令列表与实际代码一致
 - [ ] `CHANGELOG.md` 已更新
+- [ ] 若本轮改了 `CODE_REVIEW.md` 涉及的代码，同步更新该文档的状态
 
 ### 步骤
 
 1. 更新 `package.json` 中的 `version`
 2. 在 `CHANGELOG.md` 顶部添加新版本记录
 3. **检查并更新 `README.md`**（新增功能、命令变更、示例）
-4. 构建: `npm run build`
+4. 构建: `npm run build`（`prepublishOnly` 已兜底，此步为提前验证）
 5. 提交: `git add . && git commit -m "chore: 发布 vX.Y.Z"`
 6. 发布: `npm publish`
 7. 推送: `git push`
+
+### 发布结果核实
+
+`npm publish` 打印 `+ mihomo-cli@X.Y.Z` **不代表已生效**，而 `npm view` / registry 元数据 JSON 的 CDN 同步可滞后数分钟，期间仍显示旧版本。核实要直接查版本文档与产物：
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://registry.npmjs.org/mihomo-cli/X.Y.Z
+curl -s -o /tmp/t.tgz -w "%{http_code} %{size_download}\n" \
+  https://registry.npmjs.org/mihomo-cli/-/mihomo-cli-X.Y.Z.tgz
+```
+
+两者 200 且字节数与本地 `npm pack --dry-run` 一致即已落地。重跑 `npm publish` 得到 `403 You cannot publish over the previously published versions` 同样是"已成功"的证据（不是失败）。
+
+### 交互确认与退出码
+
+破坏性操作（`reset`、`sub remove` 模糊匹配）在非 TTY 下**必须抛 `CliError` 退出 1**，不能打印"已取消"后 `return`——退出 0 会让脚本把"什么都没做"误判成执行成功。`confirmPrompt`（`commands/shared.ts`）自带 `!process.stdin.isTTY` 守卫返回 false，调用方需自行区分这两种语义。
+
