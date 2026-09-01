@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import * as yaml from 'js-yaml';
-import { colors } from './colors.js';
 import { deepMergeWithOverrides } from './overwrite.js';
 import { USER_DATA_DIR } from './paths.js';
 import { validateSshName } from './settings.js';
@@ -163,34 +162,4 @@ export function ensureSshConfigFile(tunnel: SshConfig): boolean {
   fs.mkdirSync(USER_DATA_DIR, { recursive: true, mode: 0o700 });
   fs.writeFileSync(filePath, renderSshConfigTemplate(tunnel), { mode: 0o600 });
   return true;
-}
-
-/**
- * 找出 v3.8 遗留的 `overwrite.tunnel-*.yaml`。它们仍会被 overwrite 机制加载并注入
- * 名为 `Tunnel-<名字>-Host` 的旧节点，与新的 `Ssh-<名字>-Host` 并存、指向同一端口。
- * 不代删（里面可能有用户手写的分流规则），只用于告警。
- */
-export function findLegacySshOverwriteFiles(): string[] {
-  if (!fs.existsSync(USER_DATA_DIR)) return [];
-  try {
-    return fs
-      .readdirSync(USER_DATA_DIR)
-      .filter(f => /^overwrite\.tunnel-.+\.ya?ml$/.test(f))
-      .map(f => path.join(USER_DATA_DIR, f));
-  } catch {
-    return [];
-  }
-}
-
-/**
- * 提示上述遗留文件。住在本模块（而非命令层）是因为 `start` 与 `ssh` 两条命令都要用，
- * 而命令层之间不能互相 import（shared → start 是既定的单向依赖）。
- */
-export function warnLegacySshOverwriteFiles(): void {
-  const legacy = findLegacySshOverwriteFiles();
-  if (legacy.length === 0) return;
-  console.warn(colors.yellow('警告: 发现旧版本的隧道覆写文件，它们仍在生效并会注入重复节点'));
-  for (const file of legacy) console.warn(colors.gray(`  ${file}`));
-  console.warn(colors.gray('  新版隧道节点已由 CLI 自动注入，分流规则请迁到 ssh.<名字>.yaml 后删除上述文件'));
-  console.warn('');
 }

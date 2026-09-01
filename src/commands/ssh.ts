@@ -2,7 +2,7 @@ import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { getSshTunnels } from '../settings.js';
 import * as ssh from '../ssh.js';
-import { ensureSshConfigFile, getSshConfigPath, warnLegacySshOverwriteFiles } from '../ssh-config.js';
+import { ensureSshConfigFile, getSshConfigPath } from '../ssh-config.js';
 import type { SshConfig, SshStatus } from '../types.js';
 import { getNonFlagArg, hasFlag, parseStringArg, suggestSimilar } from '../utils.js';
 import { confirmPrompt, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
@@ -45,7 +45,6 @@ async function printSshList(): Promise<void> {
     console.log(colors.gray('  例如: mihomo ssh add work --host m4 --port 1080'));
     console.log(colors.gray('  隧道把内网出口暴露为本地 SOCKS5，配合 ssh.<名字>.yaml 分流内网域名'));
     console.log('');
-    warnLegacySshOverwriteFiles();
     return;
   }
 
@@ -67,7 +66,6 @@ async function printSshList(): Promise<void> {
   console.log('启动: mihomo ssh up [名字]      停止: mihomo ssh down [名字]');
   console.log('状态: mihomo ssh status         删除: mihomo ssh rm <名字>');
   console.log('');
-  warnLegacySshOverwriteFiles();
 }
 
 async function sshAdd(args: string[]): Promise<void> {

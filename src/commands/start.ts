@@ -9,7 +9,6 @@ import { createProgressPrinter, formatCleanSummary, formatTestSummary } from '..
 import * as runtime from '../runtime.js';
 import { readSubscriptionCache, saveSubscriptionCache } from '../settings.js';
 import { startAutoSshTunnels } from '../ssh.js';
-import { warnLegacySshOverwriteFiles } from '../ssh-config.js';
 import * as subscription from '../subscription.js';
 import { hasFlag, parseIntArg, sleep } from '../utils.js';
 import { printStatus } from './status.js';
@@ -126,8 +125,6 @@ export async function cmdStart(args: string[]): Promise<void> {
   // 反之隧道失败不影响内核——它只影响内网分流那部分规则，其余流量照常走订阅节点。
   if (!skipSsh) {
     await startAutoSshTunnelsWithWarning();
-    // 旧版覆写文件仍会注入重复节点，而用户未必会主动跑 `mihomo ssh` 看到提示
-    warnLegacySshOverwriteFiles();
   }
 
   const cleanThreshold = subscription.isGithubUrl(sub.url) ? subscription.AUTO_CLEAN_THRESHOLD_GITHUB : subscription.AUTO_CLEAN_THRESHOLD;

@@ -90,7 +90,7 @@ describe('文件名双向隔离', () => {
     });
   }
 
-  for (const name of ['overwrite.yaml', 'overwrite.dns.yaml', 'overwrite.tunnel-work.yaml']) {
+  for (const name of ['overwrite.yaml', 'overwrite.dns.yaml', 'overwrite.ssh.yaml']) {
     it(`isOverwriteFilename 匹配 ${name}，isSshFilename 不匹配`, () => {
       assert.ok(isOverwriteFilename(name));
       assert.ok(!isSshFilename(name));

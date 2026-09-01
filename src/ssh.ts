@@ -6,7 +6,7 @@ import path from 'node:path';
 import { BASE_CONFIG, CONTROLLER_PORT, TEST_CONFIG, TEST_CONTROLLER_ADDR } from './constants.js';
 import { CliError } from './errors.js';
 import { registerCleanup } from './lifecycle.js';
-import { atomicWriteFileSync, DIRS, ensureDirs, rmrf, USER_DATA_DIR } from './paths.js';
+import { atomicWriteFileSync, DIRS, ensureDirs } from './paths.js';
 import { isProcessCommandMatching, isProcessRunning } from './process.js';
 import { getSshTunnels, updateSettings, validateSshName } from './settings.js';
 import type { Settings, SshConfig, SshRuntime, SshStatus } from './types.js';
@@ -522,64 +522,4 @@ export function stopAllSshTunnels(): string[] {
     if (!result.notRunning) stopped.push(tunnel.name);
   }
   return stopped;
-}
-
-// === v3.8 遗留数据清理 ===
-
-/**
- * 停掉 v3.8 遗留的隧道进程并删除旧运行态目录 `<数据目录>/tunnel/`。
- *
- * 本轮改名把运行态挪到 `ssh/`，旧目录里那些 PID 就此失联——ssh 进程会继续占着端口
- * 跑下去，而 CLI 再无任何路径能停掉它们（新版本按新目录找，什么都找不到）。
- * 这正是 `reset` 的 onBefore 一直在防的场景，故升级时必须主动收尾一次。
- *
- * 幂等：目录不存在直接返回。杀进程沿用「存活 + 命令行匹配」双条件，防 PID 复用误杀。
- */
-export function cleanupLegacySshRuntime(): void {
-  const legacyDir = path.join(USER_DATA_DIR, 'tunnel');
-  if (!fs.existsSync(legacyDir)) return;
-
-  const stopped: string[] = [];
-  try {
-    for (const file of fs.readdirSync(legacyDir)) {
-      if (!file.endsWith('.json')) continue;
-      let pid = 0;
-      let port = 0;
-      try {
-        const parsed = JSON.parse(fs.readFileSync(path.join(legacyDir, file), 'utf8')) as Partial<SshRuntime>;
-        if (Number.isInteger(parsed.pid)) pid = parsed.pid as number;
-        if (Number.isInteger(parsed.port)) port = parsed.port as number;
-      } catch {
-        continue; // 文件损坏：没有可信 PID，只能跳过（随目录一起删掉）
-      }
-      // 端口缺失时无法构造 needle，宁可不杀也不误杀无关进程
-      if (pid <= 0 || port <= 0 || !isSshProcessAlive(pid, port)) continue;
-
-      try {
-        process.kill(pid, 'SIGTERM');
-      } catch {
-        /* 已经没了 */
-      }
-      for (let i = 0; i < STOP_WAIT_ATTEMPTS; i++) {
-        if (!isProcessRunning(pid)) break;
-        sleepSync(STOP_WAIT_INTERVAL);
-      }
-      if (isProcessRunning(pid) && isProcessCommandMatching(pid, commandNeedle(port))) {
-        try {
-          process.kill(pid, 'SIGKILL');
-        } catch {
-          /* ignore */
-        }
-      }
-      stopped.push(file.replace(/\.json$/, ''));
-    }
-  } catch {
-    /* 读目录失败：下面仍尝试删掉它 */
-  }
-
-  rmrf(legacyDir);
-
-  if (stopped.length > 0) {
-    console.log(`已停止旧版本遗留的 ssh 隧道: ${stopped.join(', ')}（运行态目录已迁至 ssh/）`);
-  }
 }
