@@ -198,8 +198,8 @@ socks5 节点由 CLI 依据 `mihomo ssh add` 记录的 host/port **自动注入*
 ```yaml
 # 取消注释并改成你的内网域名/网段
 +rules:
-  - DOMAIN-SUFFIX,example.internal,Ssh-work
-  - IP-CIDR,10.0.0.0/8,Ssh-work
+  - DOMAIN-SUFFIX,example.internal,SSH-Work
+  - IP-CIDR,10.0.0.0/8,SSH-Work
 ```
 
 该文件生成后**完全由你维护**，CLI 不会再改写；`ssh rm` 也不会删它（`reset ssh` 会）。改完执行 `mihomo start` 生效。

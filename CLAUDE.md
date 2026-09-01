@@ -33,7 +33,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/process.ts`           | 进程启动/停止、PID 管理、日志轮转、进程探测（isProcess*） |
 | `src/daemon.ts`            | launchd 保活：开机自启/崩溃重启、热重载、状态查询 |
 | `src/runtime.ts`           | 运行时门面：收敛普通进程/保活双轨（模式、状态、启停） |
-| `src/ssh.ts`               | ssh -D 隧道进程侧：运行态文件、端口探测、启停、旧数据清理 |
+| `src/ssh.ts`               | ssh -D 隧道进程侧：运行态文件、端口探测、启停 |
 | `src/ssh-config.ts`        | ssh 隧道配置侧：ssh.*.yaml 加载、节点合成、与主配置合并（独立于 ow 开关） |
 | `src/lifecycle.ts`         | 退出清理注册表（信号/异常退出前杀掉测试实例） |
 | `src/test-instance.ts`     | 隔离测速实例（独立端口，不动主实例）withTestInstance |

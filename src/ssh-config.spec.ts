@@ -14,14 +14,14 @@ describe('applySshConfig 合并顺序', () => {
   // 顺序一旦写反，用户在 ssh.<名字>.yaml 里手写同名节点就能改掉端口，
   // 配置与 `mihomo ssh` 显示的端口对不上，退回改造前的两份真相
   it('用户手写同名节点不能覆盖 CLI 注入的端口', () => {
-    const result = applySshConfig({}, [file({ '~proxies': [{ name: 'Ssh-work-Host', port: 9999 }] })], [tunnel()]);
+    const result = applySshConfig({}, [file({ '~proxies': [{ name: 'SSH-Work-Host', port: 9999 }] })], [tunnel()]);
     const proxies = result.proxies as Array<Record<string, unknown>>;
     assert.equal(proxies.length, 1, '同名只应留一条');
     assert.equal(proxies[0].port, 1080, '端口须以 settings 为准，而非用户文件里的 9999');
   });
 
   it('用户手写同名节点不能覆盖 server（防绕过 127.0.0.1 绑定）', () => {
-    const result = applySshConfig({}, [file({ '~proxies': [{ name: 'Ssh-work-Host', server: '0.0.0.0' }] })], [tunnel()]);
+    const result = applySshConfig({}, [file({ '~proxies': [{ name: 'SSH-Work-Host', server: '0.0.0.0' }] })], [tunnel()]);
     const proxies = result.proxies as Array<Record<string, unknown>>;
     assert.equal(proxies[0].server, '127.0.0.1');
   });
@@ -31,19 +31,19 @@ describe('applySshConfig 合并顺序', () => {
     const proxies = result.proxies as Array<Record<string, unknown>>;
     assert.deepEqual(
       proxies.map(p => p.name),
-      ['Sub-A', 'Ssh-work-Host'],
+      ['Sub-A', 'SSH-Work-Host'],
     );
   });
 
   it('用户文件里的分组与规则照常生效', () => {
     const result = applySshConfig(
       { rules: ['MATCH,DIRECT'] },
-      [file({ '~proxy-groups': [{ name: 'Ssh-work', proxies: ['Ssh-work-Host'] }], '+rules': ['DOMAIN-SUFFIX,x.internal,Ssh-work'] })],
+      [file({ '~proxy-groups': [{ name: 'SSH-Work', proxies: ['SSH-Work-Host'] }], '+rules': ['DOMAIN-SUFFIX,x.internal,SSH-Work'] })],
       [tunnel()],
     );
     assert.equal((result['proxy-groups'] as unknown[]).length, 1);
     // +rules 是前置插入，用户规则须排在订阅的 MATCH 兜底之前，否则永不命中
-    assert.deepEqual(result.rules, ['DOMAIN-SUFFIX,x.internal,Ssh-work', 'MATCH,DIRECT']);
+    assert.deepEqual(result.rules, ['DOMAIN-SUFFIX,x.internal,SSH-Work', 'MATCH,DIRECT']);
   });
 
   it('无隧道时不改动配置（也不产生空 proxies 键）', () => {
@@ -62,7 +62,7 @@ describe('applySshConfig 合并顺序', () => {
     const proxies = result.proxies as Array<Record<string, unknown>>;
     assert.deepEqual(
       proxies.map(p => p.name),
-      ['Ssh-work-Host', 'Ssh-home-Host'],
+      ['SSH-Work-Host', 'SSH-Home-Host'],
     );
     assert.deepEqual(
       proxies.map(p => p.port),
@@ -114,14 +114,14 @@ describe('注入节点从 include-all 分组排除', () => {
     };
     excludeOverwriteProxiesFromIncludeAll(config, [], collectSshProxyNames([tunnel()]));
     const pattern = (config['proxy-groups'][0] as Record<string, unknown>)['exclude-filter'] as string;
-    assert.deepEqual(excludedBy(pattern, ['Ssh-work-Host', 'Ssh-work-Host-2', 'HK-01']), ['Ssh-work-Host']);
+    assert.deepEqual(excludedBy(pattern, ['SSH-Work-Host', 'SSH-Work-Host-2', 'HK-01']), ['SSH-Work-Host']);
   });
 
   it('与覆写注入的节点名合并到同一条模式里', () => {
     const config = { 'proxy-groups': [{ name: 'AUTO', 'include-all': true }] };
     excludeOverwriteProxiesFromIncludeAll(config, [{ config: { '~proxies': [{ name: 'Manual' }] } }], collectSshProxyNames([tunnel()]));
     const pattern = (config['proxy-groups'][0] as Record<string, unknown>)['exclude-filter'] as string;
-    assert.deepEqual(excludedBy(pattern, ['Manual', 'Ssh-work-Host', 'Other']), ['Manual', 'Ssh-work-Host']);
+    assert.deepEqual(excludedBy(pattern, ['Manual', 'SSH-Work-Host', 'Other']), ['Manual', 'SSH-Work-Host']);
   });
 
   it('无任何注入节点时不写 exclude-filter', () => {
@@ -147,8 +147,8 @@ describe('renderSshConfigTemplate', () => {
 
   it('分组引用 CLI 注入的节点名并带 DIRECT 兜底', () => {
     const groups = parsed['~proxy-groups'] as Array<Record<string, unknown>>;
-    assert.equal(groups[0].name, 'Ssh-work');
-    assert.deepEqual(groups[0].proxies, ['Ssh-work-Host', 'DIRECT']);
+    assert.equal(groups[0].name, 'SSH-Work');
+    assert.deepEqual(groups[0].proxies, ['SSH-Work-Host', 'DIRECT']);
   });
 
   it('规则段默认注释掉（CLI 无从知道用户的内网域名）', () => {

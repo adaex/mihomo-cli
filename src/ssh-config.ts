@@ -32,13 +32,22 @@ export function getSshConfigPath(name: string): string {
   return path.join(USER_DATA_DIR, `ssh.${name}.yaml`);
 }
 
-/** 注入节点名。整名唯一，供分组引用与 include-all 排除共用。 */
+/**
+ * 隧道名首字母大写，供展示型的节点/分组名使用。
+ * 名字已过 SAFE_NAME_RE（仅字母数字下划线短横线与中文），不含代理对字符，
+ * 故 charAt(0) 安全；中文名 toUpperCase 无变化，原样返回。
+ */
+function capitalize(name: string): string {
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+/** 注入节点名。整名唯一，供分组引用与 include-all 排除共用。SSH 是协议缩写，恒全大写。 */
 export function getSshProxyName(name: string): string {
-  return `Ssh-${name}-Host`;
+  return `SSH-${capitalize(name)}-Host`;
 }
 
 export function getSshGroupName(name: string): string {
-  return `Ssh-${name}`;
+  return `SSH-${capitalize(name)}`;
 }
 
 /**
