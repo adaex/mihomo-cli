@@ -24,6 +24,10 @@
 
   暂不做自动重连保活：断线依靠 `ServerAliveInterval` 让进程自退，再用 `tunnel status` 查出来
 
+### 修复
+
+- **`reset --full` 会留下空的 `settings.json`** - 新增的 `tunnel` 目标其 `onAfter` 会 `writeSettings` 清空隧道列表，若排在 `settings` 之后就会把刚删掉的文件重建成 `{}`，与「已重置: 设置」矛盾。现移到 `settings` 之前（与 `subs` 同理），并加单测锁定该顺序约束——这是 v3.7.0 已修过一次的同类问题（当时是参数顺序），换个目标又复发了
+
 ## [3.7.0] - 2026-08-22
 
 ### 修复

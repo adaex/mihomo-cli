@@ -11,7 +11,12 @@ import { stopAllTunnels } from '../tunnel.js';
 import type { ResetTarget } from '../types.js';
 import { confirmPrompt } from './shared.js';
 
-const RESET_TARGETS: ResetTarget[] = [
+/**
+ * 重置目标注册表。**顺序即执行顺序**（`resolveResetTargets` 会按本数组排序），
+ * 带 `onAfter: writeSettings` 的目标必须排在 `settings` 之前，否则会把刚删掉的
+ * settings.json 重建成 `{}`——`subs` 与 `tunnel` 都受此约束，有单测锁定。
+ */
+export const RESET_TARGETS: ResetTarget[] = [
   {
     id: 'subs',
     aliases: ['sub', 'subs', 'subscription', 'subscriptions'],
@@ -42,6 +47,21 @@ const RESET_TARGETS: ResetTarget[] = [
     label: '运行时',
     paths: () => [DIRS.runtime],
     needsStop: true,
+  },
+  {
+    // 隧道要在删 pid 文件之前先停进程（onBefore）：文件一删就再也找不到那些 ssh 进程，
+    // 它们会继续占着端口跑下去，且 CLI 无任何路径能停掉。
+    // **必须排在 settings 之前**：onAfter 会 writeSettings 重建 settings.json，
+    // 排在 settings 之后会让 `reset --full` 留下一个 {}（同 subs 的处理，见执行顺序注释）
+    id: 'tunnel',
+    aliases: ['tunnel', 'tunnels', 'ssh'],
+    label: '隧道',
+    paths: () => [DIRS.tunnel],
+    needsStop: false,
+    onBefore: () => stopAllTunnels(),
+    // 同步清空 settings 里的隧道列表：只删运行态会留下「列表在但状态没了」的半重置状态。
+    // 覆写文件不动——那是用户维护的资产，由 overwrites target 负责
+    onAfter: () => writeSettings({ tunnels: undefined }),
   },
   {
     id: 'settings',
@@ -77,19 +97,6 @@ const RESET_TARGETS: ResetTarget[] = [
         .map(f => `${dir}/${f}`);
     },
     needsStop: false,
-  },
-  {
-    // 隧道要在删 pid 文件之前先停进程（onBefore）：文件一删就再也找不到那些 ssh 进程，
-    // 它们会继续占着端口跑下去，且 CLI 无任何路径能停掉
-    id: 'tunnel',
-    aliases: ['tunnel', 'tunnels', 'ssh'],
-    label: '隧道',
-    paths: () => [DIRS.tunnel],
-    needsStop: false,
-    onBefore: () => stopAllTunnels(),
-    // 同步清空 settings 里的隧道列表：只删运行态会留下「列表在但状态没了」的半重置状态。
-    // 覆写文件不动——那是用户维护的资产，由 overwrites target 负责
-    onAfter: () => writeSettings({ tunnels: undefined }),
   },
   {
     id: 'daemon',
