@@ -127,16 +127,16 @@ mihomo ui yacd     # YACD
 | --------------------------------- | ------------------------------------------------------------------- |
 | `mihomo kernel [--mirror [镜像]]` | 更新内核（默认直连，`--mirror` 使用镜像；更新后运行中实例需重启生效） |
 | `mihomo daemon [on\|off\|status]` | 进程保活：开机自启 + 崩溃自动重启（仅 Mixed 模式，on/off 需管理员密码）  |
-| `mihomo tunnel`                   | 列出 ssh 隧道及真实状态（别名 `ssh`/`tunnels`）                     |
-| `mihomo tunnel add <名字> --host <主机> --port <端口> [--no-auto]` | 添加隧道并生成覆写模板（默认随 start 拉起） |
-| `mihomo tunnel up\|down [名字]`   | 启动/停止隧道（无参即全部）                                          |
-| `mihomo tunnel status [名字]`     | 查看隧道状态（真实探测端口，能识别「假活」）                          |
-| `mihomo tunnel rm <名字> [-y]`    | 删除隧道（不删覆写文件）                                             |
+| `mihomo ssh`                      | 列出 ssh 隧道及真实状态                                              |
+| `mihomo ssh add <名字> --host <主机> --port <端口> [--no-auto]` | 添加隧道并生成配置模板（默认随 start 拉起） |
+| `mihomo ssh up\|down [名字]`      | 启动/停止隧道（无参即全部）                                          |
+| `mihomo ssh status [名字]`        | 查看隧道状态（真实探测端口，能识别「假活」）                          |
+| `mihomo ssh rm <名字> [-y]`       | 删除隧道（不删配置文件）                                             |
 | `mihomo update`                   | 更新 mihomo-cli（先查 npm 最新版，已是最新则跳过重装）              |
 | `mihomo ui [zash\|dash\|yacd]`    | 打开 Web UI                                                         |
 | `mihomo dir`                      | 显示数据目录位置                                                    |
 | `mihomo dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `data`, `runtime`, `kernel`）  |
-| `mihomo reset [目标...] [--full] [-y]` | 重置用户数据（可用目标：`subs`, `logs`, `data`, `runtime`, `settings`, `kernel`, `overwrites`, `daemon`, `tunnel`；`--full` 删全部，`-y` 跳过确认） |
+| `mihomo reset [目标...] [--full] [-y]` | 重置用户数据（可用目标：`subs`, `logs`, `data`, `runtime`, `settings`, `kernel`, `overwrites`, `daemon`, `ssh`；`--full` 删全部，`-y` 跳过确认） |
 | `mihomo version`                  | 显示版本信息                                                        |
 | `mihomo help`                     | 显示帮助信息                                                        |
 
@@ -149,7 +149,7 @@ mihomo ui yacd     # YACD
 - `mhm`
 - `mh`
 
-子命令组亦有别名：`subscription` = `sub`/`subs`/`subscriptions`，`directory` = `dir`/`dirs`/`directories`，`overwrite` = `ow`，`tunnel` = `ssh`/`tunnels`（`tun` 已被 TUN 模式占用）
+子命令组亦有别名：`subscription` = `sub`/`subs`/`subscriptions`，`directory` = `dir`/`dirs`/`directories`，`overwrite` = `ow`（`ssh` 无别名，`tun` 已被 TUN 模式占用）
 
 ### 快捷命令
 
@@ -181,37 +181,41 @@ mihomo ui yacd     # YACD
 
 ## ssh 隧道出口
 
-把一台可 ssh 登录的机器（如公司内网的机器）变成本地 SOCKS5 出口，配合覆写规则即可只让内网域名走它，其余流量照常走订阅节点。本功能负责的是 **ssh 进程的生命周期管理**——隧道断了 mihomo 并不知情，会一直往死端口送流量。
+把一台可 ssh 登录的机器（如公司内网的机器）变成本地 SOCKS5 出口，配合分流规则即可只让内网域名走它，其余流量照常走订阅节点。本功能负责的是 **ssh 进程的生命周期管理**——隧道断了 mihomo 并不知情，会一直往死端口送流量。
 
 ```bash
-mihomo tunnel add work --host m4 --port 1080   # m4 是 ~/.ssh/config 里的别名
-mihomo tunnel up work                          # 启动
-mihomo tunnel status                           # 查看状态（真实探测端口）
-mihomo tunnel down work                        # 停止
+mihomo ssh add work --host m4 --port 1080   # m4 是 ~/.ssh/config 里的别名
+mihomo ssh up work                          # 启动
+mihomo ssh status                           # 查看状态（真实探测端口）
+mihomo ssh down work                        # 停止
 ```
 
-`add` 会生成一份覆写模板 `overwrite.tunnel-<名字>.yaml`，其中已建好 socks5 节点与分组，
+socks5 节点由 CLI 依据 `mihomo ssh add` 记录的 host/port **自动注入**，无需也不要手写——端口只有一个真相，改端口重新 `add` 即可，配置会自动跟上。
+
+`add` 会生成一份配置模板 `ssh.<名字>.yaml`，其中已建好代理分组，
 **分流规则留白待你填写**（CLI 无从知道你的内网域名）：
 
 ```yaml
 # 取消注释并改成你的内网域名/网段
 +rules:
-  - DOMAIN-SUFFIX,example.internal,Tunnel-work
-  - IP-CIDR,10.0.0.0/8,Tunnel-work
+  - DOMAIN-SUFFIX,example.internal,Ssh-work
+  - IP-CIDR,10.0.0.0/8,Ssh-work
 ```
 
-该文件生成后**完全由你维护**，CLI 不会再改写；`tunnel rm` 也不会删它。改完执行 `mihomo start` 生效。
+该文件生成后**完全由你维护**，CLI 不会再改写；`ssh rm` 也不会删它（`reset ssh` 会）。改完执行 `mihomo start` 生效。
+
+它支持与覆写文件相同的 `~`/`+` 语法，但**独立于覆写开关**：`mihomo ow off` 只关覆写，内网分流照常工作——覆写是可选调优，内网出口是刚需。同理 `reset ow` 不会删 `ssh.*.yaml`。
 
 ### 与 start / stop 的联动
 
-隧道默认带 `auto` 标记，`mihomo start` 会顺带拉起、`mihomo stop` 会连带停止（`--no-tunnel` 可跳过；`add` 时加 `--no-auto` 则不参与）。
+隧道默认带 `auto` 标记，`mihomo start` 会顺带拉起、`mihomo stop` 会连带停止（`--no-ssh` 可跳过；`add` 时加 `--no-auto` 则不参与）。
 
 - **隧道起不来不会让 `start` 失败**——它只影响内网分流那部分规则，其余流量正常，但会打印显眼的黄色警告并附上 ssh 给出的原因
-- **`stop` 只停自己起的**：手动 `tunnel up` 起的隧道不会被 `mihomo stop` 带走，避免下次 start 又起一个而累积僵尸进程
+- **`stop` 只停自己起的**：手动 `ssh up` 起的隧道不会被 `mihomo stop` 带走，避免下次 start 又起一个而累积僵尸进程
 
 ### 状态的三种形态
 
-`tunnel status` 会**真实探测端口是否在监听**，而不是只看进程在不在：
+`ssh status` 会**真实探测端口是否在监听**，而不是只看进程在不在：
 
 | 状态 | 含义 |
 | --- | --- |
@@ -221,11 +225,11 @@ mihomo tunnel down work                        # 停止
 
 ### 安全边界
 
-- `-D` **恒绑 `127.0.0.1`**，不提供绑定地址开关：绑 `0.0.0.0` 会让同一 WiFi 下任何设备都能经本机进入内网
+- `-D` **恒绑 `127.0.0.1`**，不提供绑定地址开关：绑 `0.0.0.0` 会让同一 WiFi 下任何设备都能经本机进入内网。在 `ssh.<名字>.yaml` 里手写同名节点也改不掉——CLI 注入恒排在用户配置之后
 - ssh 参数固定带 `ExitOnForwardFailure`/`BatchMode`/`ConnectTimeout`/`ServerAlive*`，分别防「假活」、无 TTY 挂死、久等、断线后端口成僵尸
 - `--host` 拒绝以 `-` 开头的值（`-oProxyCommand=...` 会被 ssh 当选项解析，等同任意命令执行）
 
-> 暂不做自动重连保活。断线依靠 `ServerAliveInterval` 让 ssh 进程自行退出，再用 `tunnel status` 查出来。
+> 暂不做自动重连保活。断线依靠 `ServerAliveInterval` 让 ssh 进程自行退出，再用 `ssh status` 查出来。
 
 ## 进程保活
 
@@ -333,7 +337,7 @@ mihomo test --timeout=3000   # 长选项 + 等号
 ├── settings.json         # 用户设置（订阅列表等）
 ├── overwrite.yaml        # 覆写配置（主文件，可选）
 ├── overwrite.*.yaml      # 覆写配置（扩展文件，如 overwrite.dns.yaml）
-├── overwrite.tunnel-*.yaml   # 隧道覆写（首次由 tunnel add 生成，此后由你维护）
+├── ssh.*.yaml            # ssh 隧道分流配置（首次由 ssh add 生成，此后由你维护）
 ├── subscriptions/
 │   ├── cache.json        # 订阅动态缓存（更新时间、流量、到期时间等）
 │   └── <name>.yaml       # 订阅原始配置
@@ -342,9 +346,9 @@ mihomo test --timeout=3000   # 长选项 + 等号
 ├── logs/
 │   ├── mihomo.log        # 当前日志
 │   ├── mihomo.YYYY-MM-DD_HH-MM-SS.log  # 归档日志
-│   └── tunnel-<name>.log # 隧道 ssh 输出（每次启动覆写）
+│   └── ssh-<name>.log    # 隧道 ssh 输出（每次启动覆写）
 ├── data/                 # mihomo 运行数据（GeoIP 等，由内核自行管理）
-├── tunnel/               # 隧道运行态（stop 不清除，故不放在 runtime/）
+├── ssh/                  # 隧道运行态（stop 不清除，故不放在 runtime/）
 │   └── <name>.json       # PID、谁启动的、启动时间
 └── runtime/              # 运行时临时文件（stop 自动清除）
     ├── pid               # 进程 PID

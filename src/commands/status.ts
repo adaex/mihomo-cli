@@ -4,9 +4,9 @@ import { isDaemonEnabled } from '../daemon.js';
 import { isOverwriteEnabled, listOverwriteFile } from '../overwrite.js';
 import * as processManager from '../process.js';
 import { getRunningState } from '../runtime.js';
-import { getSubscriptionsWithCache } from '../settings.js';
+import { getSshTunnels, getSubscriptionsWithCache } from '../settings.js';
+import { getAllSshStatus } from '../ssh.js';
 import { formatProxySummary, getActiveSubscription } from '../subscription.js';
-import { getAllTunnelStatus, getTunnels } from '../tunnel.js';
 import { formatBytes, formatTimestamp } from '../utils.js';
 
 export async function printStatus(): Promise<void> {
@@ -88,11 +88,11 @@ export async function printStatus(): Promise<void> {
     console.log(`${colors.gray('保活: ')}${colors.green('已启用')} ${colors.gray('(开机自启 + 崩溃重启)')}`);
   }
 
-  // 隧道段：无隧道配置时零开销（不进 getAllTunnelStatus，也就不做任何端口探测）——
+  // 隧道段：无隧道配置时零开销（不进 getAllSshStatus，也就不做任何端口探测）——
   // printStatus 同时是裸 `mihomo` 的入口，不能因为这个功能变慢
-  const tunnels = getTunnels();
+  const tunnels = getSshTunnels();
   if (tunnels.length > 0) {
-    const statuses = await getAllTunnelStatus();
+    const statuses = await getAllSshStatus();
     const parts = statuses.map(s => {
       const label = `${s.config.name}:${s.config.port}`;
       if (s.state === 'running') return colors.green(label);

@@ -112,7 +112,7 @@ export function parseIntArg(args: string[] | undefined, short: string, long: str
 /**
  * 解析字符串选项（`--host m4` 与 `--host=m4` 两形式）。未提供返回 null。
  * 与 parseIntArg 一样对「有选项名但缺值」抛错，而非静默取 undefined——
- * `tunnel add work --host` 若静默通过，会在后面报一个与真实原因无关的错。
+ * `ssh add work --host` 若静默通过，会在后面报一个与真实原因无关的错。
  */
 export function parseStringArg(args: string[] | undefined, long: string, short?: string): string | null {
   if (!args) return null;
@@ -158,7 +158,7 @@ const VALUE_FLAGS: ReadonlySet<string> = new Set([
  */
 export function extractStartOptions(args: string[] | undefined): string[] {
   if (!args) return [];
-  const BOOL_FLAGS = new Set(['-s', '--no-update', '--no-clean', '--no-tunnel']);
+  const BOOL_FLAGS = new Set(['-s', '--no-update', '--no-clean', '--no-ssh']);
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];

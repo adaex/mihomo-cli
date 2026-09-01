@@ -6,17 +6,18 @@ import path from 'node:path';
 import { BASE_CONFIG, CONTROLLER_PORT, TEST_CONFIG, TEST_CONTROLLER_ADDR } from './constants.js';
 import { CliError } from './errors.js';
 import { registerCleanup } from './lifecycle.js';
-import { atomicWriteFileSync, DIRS, ensureDirs, USER_DATA_DIR } from './paths.js';
+import { atomicWriteFileSync, DIRS, ensureDirs, rmrf, USER_DATA_DIR } from './paths.js';
 import { isProcessCommandMatching, isProcessRunning } from './process.js';
-import { readSettings, SAFE_NAME_RE, updateSettings } from './settings.js';
-import type { Settings, TunnelConfig, TunnelRuntime, TunnelStatus } from './types.js';
+import { getSshTunnels, updateSettings, validateSshName } from './settings.js';
+import type { Settings, SshConfig, SshRuntime, SshStatus } from './types.js';
 import { sleepSync } from './utils.js';
 
 /**
- * ssh -D 动态转发隧道的生命周期管理。
+ * ssh -D 动态转发隧道的**进程侧**：启停与真实状态。
  *
- * 只做一件事：管住 `ssh -D` 进程的启停与真实状态。分流本身完全交给覆写机制
- * （生成的 overwrite.tunnel-<name>.yaml 由用户维护），本模块不碰路由逻辑。
+ * 配置侧（ssh.<name>.yaml 的加载、节点合成、与主配置合并）在 ssh-config.ts。
+ * 分家是为了依赖方向：config.ts 要用配置侧，而本模块依赖 process.ts、
+ * process.ts 又依赖 config.ts——不拆会成环。
  *
  * 放 src/ 而非 commands/：commands 的 start/stop/status 三处都要用它，
  * 放命令层会造成命令层互相 import。
@@ -54,12 +55,6 @@ function getReservedPorts(): Map<number, string> {
 
 // === 名称与参数校验 ===
 
-export function validateTunnelName(name: string): void {
-  if (!name || !SAFE_NAME_RE.test(name)) {
-    throw new CliError(`隧道名称无效: "${name}"，只允许字母、数字、下划线、短横线和中文（最长 64 字符）`);
-  }
-}
-
 /**
  * ssh 目标主机校验。**以 `-` 开头会被 ssh 当选项解析**，
  * `--host -oProxyCommand=<任意命令>` 即任意命令执行——这是本模块最重要的一条校验。
@@ -67,9 +62,9 @@ export function validateTunnelName(name: string): void {
  */
 const SAFE_HOST_RE = /^[A-Za-z0-9][A-Za-z0-9._@-]*$/;
 
-export function validateTunnelHost(host: string): void {
+export function validateSshHost(host: string): void {
   if (!host) {
-    throw new CliError('缺少 --host', { hint: ['例如: mihomo tunnel add work --host m4 --port 1080'] });
+    throw new CliError('缺少 --host', { hint: ['例如: mihomo ssh add work --host m4 --port 1080'] });
   }
   if (host.startsWith('-')) {
     throw new CliError(`主机名无效: "${host}"`, {
@@ -86,7 +81,7 @@ export function validateTunnelHost(host: string): void {
 }
 
 /** 端口校验：上界、与 mihomo 自身端口冲突、与其他隧道重复。`exclude` 为改动自身时跳过的隧道名。 */
-export function validateTunnelPort(port: number, exclude?: string): void {
+export function validateSshPort(port: number, exclude?: string): void {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new CliError(`端口无效: ${port}，需为 1-65535 的整数`);
   }
@@ -97,7 +92,7 @@ export function validateTunnelPort(port: number, exclude?: string): void {
       hint: ['请换一个端口，例如 1080。'],
     });
   }
-  const conflict = getTunnels().find(t => t.port === port && t.name !== exclude);
+  const conflict = getSshTunnels().find(t => t.port === port && t.name !== exclude);
   if (conflict) {
     throw new CliError(`端口 ${port} 已被隧道 "${conflict.name}" 使用`, { label: '端口冲突' });
   }
@@ -105,78 +100,61 @@ export function validateTunnelPort(port: number, exclude?: string): void {
 
 // === 隧道列表（settings.json） ===
 
-/**
- * 隧道列表的唯一读取入口。校验必须在此收口：settings.json 被手改成
- * `{"tunnels":"oops"}` 时，下游的展开运算符会把字符串按字符展开成垃圾列表且不报错
- * （与 getSubscriptions 同一教训）。
- */
-export function getTunnels(): TunnelConfig[] {
-  const settings = readSettings();
-  const tunnels = settings.tunnels;
-  if (!Array.isArray(tunnels)) {
-    if (tunnels !== undefined) {
-      console.warn('警告: settings.json 的 tunnels 不是列表，已忽略（可用 mihomo tunnel add 重新添加）');
-    }
-    return [];
-  }
-  return tunnels.filter(t => t != null && typeof t === 'object' && typeof t.name === 'string' && typeof t.host === 'string' && Number.isInteger(t.port));
+export function findSshTunnel(name: string): SshConfig | undefined {
+  return getSshTunnels().find(t => t.name === name);
 }
 
-export function findTunnel(name: string): TunnelConfig | undefined {
-  return getTunnels().find(t => t.name === name);
-}
-
-export function addTunnel(config: TunnelConfig): void {
-  validateTunnelName(config.name);
-  validateTunnelHost(config.host);
-  validateTunnelPort(config.port);
+export function addSshTunnel(config: SshConfig): void {
+  validateSshName(config.name);
+  validateSshHost(config.host);
+  validateSshPort(config.port);
   // 经 updateSettings：隧道与订阅同住 settings.json，慢速 `sub add` 期间执行本命令，
   // 此前会被对方拿陈旧缓存全量写回抹掉，而这里已经打印过「已添加」
   let duplicate = false;
   updateSettings(() => {
-    const tunnels = [...getTunnels()];
+    const tunnels = [...getSshTunnels()];
     if (tunnels.some(t => t.name === config.name)) {
       duplicate = true;
       return {};
     }
     tunnels.push(config);
-    return { tunnels } as Partial<Settings>;
+    return { ssh: tunnels } as Partial<Settings>;
   });
   if (duplicate) {
-    throw new CliError(`隧道 "${config.name}" 已存在，请换个名称，或先删除（mihomo tunnel rm ${config.name}）`);
+    throw new CliError(`隧道 "${config.name}" 已存在，请换个名称，或先删除（mihomo ssh rm ${config.name}）`);
   }
 }
 
 /** 从设置中移除隧道条目。不存在返回 false；**不删覆写文件**（那是用户维护的资产）。 */
-export function removeTunnel(name: string): boolean {
+export function removeSshTunnel(name: string): boolean {
   let found = false;
   updateSettings(() => {
-    const tunnels = [...getTunnels()];
+    const tunnels = [...getSshTunnels()];
     const idx = tunnels.findIndex(t => t.name === name);
     if (idx < 0) return {};
     found = true;
     tunnels.splice(idx, 1);
-    return { tunnels } as Partial<Settings>;
+    return { ssh: tunnels } as Partial<Settings>;
   });
   if (!found) return false;
-  clearTunnelRuntime(name);
+  clearSshRuntime(name);
   return true;
 }
 
 // === 运行态文件 ===
 
-function getTunnelRuntimePath(name: string): string {
-  // 二次校验防路径穿越：名字正常经 addTunnel 校验，但 settings.json 可被手改成 ../ 之类
-  validateTunnelName(name);
-  return path.join(DIRS.tunnel, `${name}.json`);
+function getSshRuntimePath(name: string): string {
+  // 二次校验防路径穿越：名字正常经 addSshTunnel 校验，但 settings.json 可被手改成 ../ 之类
+  validateSshName(name);
+  return path.join(DIRS.ssh, `${name}.json`);
 }
 
-function readTunnelRuntime(name: string): TunnelRuntime | null {
+function readSshRuntime(name: string): SshRuntime | null {
   try {
-    const raw = fs.readFileSync(getTunnelRuntimePath(name), 'utf8');
+    const raw = fs.readFileSync(getSshRuntimePath(name), 'utf8');
     const parsed = JSON.parse(raw) as unknown;
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    const r = parsed as Partial<TunnelRuntime>;
+    const r = parsed as Partial<SshRuntime>;
     if (!Number.isInteger(r.pid) || (r.pid as number) <= 0) return null;
     return {
       pid: r.pid as number,
@@ -189,14 +167,14 @@ function readTunnelRuntime(name: string): TunnelRuntime | null {
   }
 }
 
-function writeTunnelRuntime(name: string, runtime: TunnelRuntime): void {
+function writeSshRuntime(name: string, runtime: SshRuntime): void {
   ensureDirs();
-  atomicWriteFileSync(getTunnelRuntimePath(name), JSON.stringify(runtime, null, 2), { mode: 0o600 });
+  atomicWriteFileSync(getSshRuntimePath(name), JSON.stringify(runtime, null, 2), { mode: 0o600 });
 }
 
-function clearTunnelRuntime(name: string): void {
+function clearSshRuntime(name: string): void {
   try {
-    fs.rmSync(getTunnelRuntimePath(name), { force: true });
+    fs.rmSync(getSshRuntimePath(name), { force: true });
   } catch {
     /* ignore：名字非法时路径本就不该存在 */
   }
@@ -205,7 +183,7 @@ function clearTunnelRuntime(name: string): void {
 // === ssh 进程 ===
 
 /**
- * ssh 参数。六个 `-o` 一个都不能少，各自防的失败模式见 docs/tunnel-requirement.md：
+ * ssh 参数。六个 `-o` 一个都不能少，各自防的失败模式见 docs/ssh-requirement.md：
  * - ExitOnForwardFailure: 「连上了但转发没建起来」的假活
  * - BatchMode:            无 TTY 时任何交互提示都会挂死
  * - ConnectTimeout:       网络半死不活时久等，期间看着还活着
@@ -216,7 +194,7 @@ function clearTunnelRuntime(name: string): void {
  *
  * 返回 argv 数组供 spawn 直接使用（不经 shell，无注入面）。
  */
-export function buildSshArgs(tunnel: Pick<TunnelConfig, 'host' | 'port'>): string[] {
+export function buildSshArgs(tunnel: Pick<SshConfig, 'host' | 'port'>): string[] {
   return [
     '-D',
     `127.0.0.1:${tunnel.port}`,
@@ -244,13 +222,13 @@ function commandNeedle(port: number): string {
   return `-D 127.0.0.1:${port}`;
 }
 
-export function getTunnelLogPath(name: string): string {
-  validateTunnelName(name);
-  return path.join(DIRS.logs, `tunnel-${name}.log`);
+export function getSshLogPath(name: string): string {
+  validateSshName(name);
+  return path.join(DIRS.logs, `ssh-${name}.log`);
 }
 
 /** 进程是否为本隧道的 ssh：存活 + 命令行匹配双条件（防 PID 复用误杀，同 process.ts 口径） */
-function isTunnelProcessAlive(pid: number, port: number): boolean {
+function isSshProcessAlive(pid: number, port: number): boolean {
   return isProcessRunning(pid) && isProcessCommandMatching(pid, commandNeedle(port));
 }
 
@@ -276,9 +254,9 @@ export function isPortListening(port: number, timeoutMs = PORT_PROBE_TIMEOUT_MS)
   });
 }
 
-export async function getTunnelStatus(config: TunnelConfig): Promise<TunnelStatus> {
-  const runtime = readTunnelRuntime(config.name);
-  const alive = runtime !== null && isTunnelProcessAlive(runtime.pid, runtime.port || config.port);
+export async function getSshStatus(config: SshConfig): Promise<SshStatus> {
+  const runtime = readSshRuntime(config.name);
+  const alive = runtime !== null && isSshProcessAlive(runtime.pid, runtime.port || config.port);
 
   if (!alive) {
     return { config, state: 'stopped', pid: null, started_by: null, started_at: null };
@@ -290,17 +268,17 @@ export async function getTunnelStatus(config: TunnelConfig): Promise<TunnelStatu
   return {
     config,
     state: listening ? 'running' : 'dead-port',
-    pid: (runtime as TunnelRuntime).pid,
-    started_by: (runtime as TunnelRuntime).started_by,
-    started_at: (runtime as TunnelRuntime).started_at || null,
+    pid: (runtime as SshRuntime).pid,
+    started_by: (runtime as SshRuntime).started_by,
+    started_at: (runtime as SshRuntime).started_at || null,
   };
 }
 
-export async function getAllTunnelStatus(): Promise<TunnelStatus[]> {
-  return Promise.all(getTunnels().map(getTunnelStatus));
+export async function getAllSshStatus(): Promise<SshStatus[]> {
+  return Promise.all(getSshTunnels().map(getSshStatus));
 }
 
-export interface StartTunnelResult {
+export interface StartSshResult {
   /** 已经在跑，本次未启动 */
   alreadyRunning: boolean;
   pid: number;
@@ -312,23 +290,23 @@ export interface StartTunnelResult {
  *
  * 失败一律抛 CliError，由调用方决定是致命还是仅告警（`start` 里只告警）。
  */
-export async function startTunnel(name: string, options: { startedBy: 'auto' | 'manual' }): Promise<StartTunnelResult> {
-  const config = findTunnel(name);
+export async function startSshTunnel(name: string, options: { startedBy: 'auto' | 'manual' }): Promise<StartSshResult> {
+  const config = findSshTunnel(name);
   if (!config) {
-    throw new CliError(`未找到隧道 "${name}"`, { hint: ['查看全部隧道: mihomo tunnel'] });
+    throw new CliError(`未找到隧道 "${name}"`, { hint: ['查看全部隧道: mihomo ssh'] });
   }
 
-  const existing = readTunnelRuntime(name);
-  if (existing && isTunnelProcessAlive(existing.pid, existing.port || config.port)) {
+  const existing = readSshRuntime(name);
+  if (existing && isSshProcessAlive(existing.pid, existing.port || config.port)) {
     // started_by 单向提升：manual 永不降级为 auto，因为「用户显式要过它」不该被 stop 带走
     if (options.startedBy === 'manual' && existing.started_by === 'auto') {
-      writeTunnelRuntime(name, { ...existing, started_by: 'manual' });
+      writeSshRuntime(name, { ...existing, started_by: 'manual' });
     }
     return { alreadyRunning: true, pid: existing.pid };
   }
 
   // 陈旧状态文件（进程已退出）先清掉，避免下面失败时留下误导性记录
-  if (existing) clearTunnelRuntime(name);
+  if (existing) clearSshRuntime(name);
 
   // 起之前先检测端口占用，不盲启后失败——盲启的表现是 ssh 因 ExitOnForwardFailure 立刻退出，
   // 错误信息埋在日志里，远不如这里直接说清楚
@@ -340,7 +318,7 @@ export async function startTunnel(name: string, options: { startedBy: 'auto' | '
   }
 
   ensureDirs();
-  const logPath = getTunnelLogPath(name);
+  const logPath = getSshLogPath(name);
   // 'w' 截断重建：日志只保留本次会话，既便于定位本次失败，也不会无限增长
   const logFd = fs.openSync(logPath, 'w');
 
@@ -363,7 +341,7 @@ export async function startTunnel(name: string, options: { startedBy: 'auto' | '
     throw new CliError('无法创建 ssh 进程', { label: '启动隧道失败', hint: ['请确认已安装 ssh 客户端。'] });
   }
 
-  writeTunnelRuntime(name, {
+  writeSshRuntime(name, {
     pid,
     started_by: options.startedBy,
     started_at: new Date().toISOString(),
@@ -373,7 +351,7 @@ export async function startTunnel(name: string, options: { startedBy: 'auto' | '
   // 仅在「等待转发建立」这段窗口内注册清理：此时隧道尚未确认可用，用户按 Ctrl+C
   // 意味着放弃本次启动。SIGINT 处理器走 process.exit(130) 会跳过 finally，
   // 此前会留下一个孤儿 ssh 进程 + 一份声称健康的运行态文件（实测持久残留，
-  // 不会自愈），随后 `tunnel up` 报「已在运行」、`status` 报「假活」，自相矛盾。
+  // 不会自愈），随后 `ssh up` 报「已在运行」、`status` 报「假活」，自相矛盾。
   //
   // 一旦转发建立成功就立刻注销——那之后隧道必须活过 CLI 退出（本模块的既定语义）。
   const unregisterCleanup = registerCleanup(() => {
@@ -382,7 +360,7 @@ export async function startTunnel(name: string, options: { startedBy: 'auto' | '
     } catch {
       /* 进程可能已自行退出 */
     }
-    clearTunnelRuntime(name);
+    clearSshRuntime(name);
   });
 
   // 等转发真正建起来：进程活着不等于端口在监听（ssh 要先完成认证与通道协商）
@@ -402,7 +380,7 @@ export async function startTunnel(name: string, options: { startedBy: 'auto' | '
   }
 
   // 到这里说明失败了：要么进程已退出，要么进程在但端口始终不通
-  clearTunnelRuntime(name);
+  clearSshRuntime(name);
   if (isProcessRunning(pid)) {
     try {
       process.kill(pid, 'SIGKILL');
@@ -431,7 +409,7 @@ export function readLogTail(logPath: string, maxLines = 5): string[] {
   }
 }
 
-export interface StopTunnelResult {
+export interface StopSshResult {
   /** 本来就没在跑 */
   notRunning: boolean;
   pid: number | null;
@@ -442,19 +420,19 @@ export interface StopTunnelResult {
  * 直接 SIGKILL 可能留下半开连接。（现有代码对内核一律裸 SIGKILL，但内核是自己的进程，
  * 语义不同。）
  */
-export function stopTunnel(name: string): StopTunnelResult {
-  const config = findTunnel(name);
-  const runtime = readTunnelRuntime(name);
+export function stopSshTunnel(name: string): StopSshResult {
+  const config = findSshTunnel(name);
+  const runtime = readSshRuntime(name);
   if (!runtime) {
-    clearTunnelRuntime(name);
+    clearSshRuntime(name);
     return { notRunning: true, pid: null };
   }
 
   const port = runtime.port || config?.port || 0;
   const { pid } = runtime;
 
-  if (!isTunnelProcessAlive(pid, port)) {
-    clearTunnelRuntime(name);
+  if (!isSshProcessAlive(pid, port)) {
+    clearSshRuntime(name);
     return { notRunning: true, pid: null };
   }
 
@@ -481,13 +459,13 @@ export function stopTunnel(name: string): StopTunnelResult {
     }
   }
 
-  clearTunnelRuntime(name);
+  clearSshRuntime(name);
   return { notRunning: false, pid };
 }
 
 // === start / stop 联动 ===
 
-export interface AutoTunnelOutcome {
+export interface AutoSshOutcome {
   name: string;
   ok: boolean;
   alreadyRunning?: boolean;
@@ -499,12 +477,12 @@ export interface AutoTunnelOutcome {
  * **不抛错**——隧道失败只影响内网分流那部分规则，让整个 start 失败是过度反应。
  * 逐条返回结果，由调用方显眼地告警。
  */
-export async function startAutoTunnels(): Promise<AutoTunnelOutcome[]> {
-  const outcomes: AutoTunnelOutcome[] = [];
-  for (const tunnel of getTunnels()) {
+export async function startAutoSshTunnels(): Promise<AutoSshOutcome[]> {
+  const outcomes: AutoSshOutcome[] = [];
+  for (const tunnel of getSshTunnels()) {
     if (!tunnel.auto) continue;
     try {
-      const result = await startTunnel(tunnel.name, { startedBy: 'auto' });
+      const result = await startSshTunnel(tunnel.name, { startedBy: 'auto' });
       outcomes.push({ name: tunnel.name, ok: true, alreadyRunning: result.alreadyRunning });
     } catch (e) {
       outcomes.push({
@@ -519,15 +497,15 @@ export async function startAutoTunnels(): Promise<AutoTunnelOutcome[]> {
 
 /**
  * 停止由 `start` 顺带拉起的隧道，供 `mihomo stop` 调用。
- * **只停 started_by === 'auto' 的**——手动 `tunnel up` 起的不该被 `stop` 带走，
+ * **只停 started_by === 'auto' 的**——手动 `ssh up` 起的不该被 `stop` 带走，
  * 否则下次 start 又起一个，累积僵尸进程。
  */
-export function stopAutoTunnels(): string[] {
+export function stopAutoSshTunnels(): string[] {
   const stopped: string[] = [];
-  for (const tunnel of getTunnels()) {
-    const runtime = readTunnelRuntime(tunnel.name);
+  for (const tunnel of getSshTunnels()) {
+    const runtime = readSshRuntime(tunnel.name);
     if (runtime?.started_by !== 'auto') continue;
-    const result = stopTunnel(tunnel.name);
+    const result = stopSshTunnel(tunnel.name);
     if (!result.notRunning) stopped.push(tunnel.name);
   }
   return stopped;
@@ -537,68 +515,71 @@ export function stopAutoTunnels(): string[] {
  * 停止全部隧道，不论 started_by。供 `reset` 使用：删掉运行态文件后就再也找不到
  * 那些 ssh 进程，它们会继续占着端口跑下去且 CLI 无路径可停，故必须在删除前停干净。
  */
-export function stopAllTunnels(): string[] {
+export function stopAllSshTunnels(): string[] {
   const stopped: string[] = [];
-  for (const tunnel of getTunnels()) {
-    const result = stopTunnel(tunnel.name);
+  for (const tunnel of getSshTunnels()) {
+    const result = stopSshTunnel(tunnel.name);
     if (!result.notRunning) stopped.push(tunnel.name);
   }
   return stopped;
 }
 
-// === 覆写文件模板 ===
-
-export function getTunnelOverwritePath(name: string): string {
-  validateTunnelName(name);
-  return path.join(USER_DATA_DIR, `overwrite.tunnel-${name}.yaml`);
-}
+// === v3.8 遗留数据清理 ===
 
 /**
- * 覆写模板正文。用 `~proxies` / `~proxy-groups`（按 name 就地合并）而非 `+proxies`：
- * 只有 `~` 是**顺序无关**的——它按 name 在数组里定位，无论本文件在字母序里排第几，
- * 同名节点都会被合并。`+proxies` 依赖「本文件恰好排在冲突文件之后」，
- * 用户再加个 overwrite.zzz.yaml 就压过去了。
+ * 停掉 v3.8 遗留的隧道进程并删除旧运行态目录 `<数据目录>/tunnel/`。
  *
- * 手写字符串而非 dumpYaml：模板要带解释性注释。name 已过 SAFE_NAME_RE、
- * port 是整数，无 YAML 转义风险。
+ * 本轮改名把运行态挪到 `ssh/`，旧目录里那些 PID 就此失联——ssh 进程会继续占着端口
+ * 跑下去，而 CLI 再无任何路径能停掉它们（新版本按新目录找，什么都找不到）。
+ * 这正是 `reset` 的 onBefore 一直在防的场景，故升级时必须主动收尾一次。
+ *
+ * 幂等：目录不存在直接返回。杀进程沿用「存活 + 命令行匹配」双条件，防 PID 复用误杀。
  */
-export function renderTunnelOverwrite(tunnel: TunnelConfig): string {
-  const proxyName = `Tunnel-${tunnel.name}-Host`;
-  const groupName = `Tunnel-${tunnel.name}`;
-  return `# mihomo-cli 隧道覆写（tunnel: ${tunnel.name}）
-# 本文件由 mihomo-cli 首次创建，之后完全由你维护——CLI 不会再改写或删除它。
-#
-# ~ 是「按 name 就地合并」语义：与其他覆写文件中的同名节点/分组合并，
-# 不依赖文件加载顺序（+proxies 则依赖字母序，会被后来的文件压过去）。
+export function cleanupLegacySshRuntime(): void {
+  const legacyDir = path.join(USER_DATA_DIR, 'tunnel');
+  if (!fs.existsSync(legacyDir)) return;
 
-~proxies:
-  - name: ${proxyName}
-    type: socks5
-    server: 127.0.0.1
-    port: ${tunnel.port}
+  const stopped: string[] = [];
+  try {
+    for (const file of fs.readdirSync(legacyDir)) {
+      if (!file.endsWith('.json')) continue;
+      let pid = 0;
+      let port = 0;
+      try {
+        const parsed = JSON.parse(fs.readFileSync(path.join(legacyDir, file), 'utf8')) as Partial<SshRuntime>;
+        if (Number.isInteger(parsed.pid)) pid = parsed.pid as number;
+        if (Number.isInteger(parsed.port)) port = parsed.port as number;
+      } catch {
+        continue; // 文件损坏：没有可信 PID，只能跳过（随目录一起删掉）
+      }
+      // 端口缺失时无法构造 needle，宁可不杀也不误杀无关进程
+      if (pid <= 0 || port <= 0 || !isSshProcessAlive(pid, port)) continue;
 
-~proxy-groups:
-  - name: ${groupName}
-    type: select
-    proxies:
-      - ${proxyName}
-      - DIRECT
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch {
+        /* 已经没了 */
+      }
+      for (let i = 0; i < STOP_WAIT_ATTEMPTS; i++) {
+        if (!isProcessRunning(pid)) break;
+        sleepSync(STOP_WAIT_INTERVAL);
+      }
+      if (isProcessRunning(pid) && isProcessCommandMatching(pid, commandNeedle(port))) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          /* ignore */
+        }
+      }
+      stopped.push(file.replace(/\.json$/, ''));
+    }
+  } catch {
+    /* 读目录失败：下面仍尝试删掉它 */
+  }
 
-# 取消注释并填入需要走隧道的内网域名/网段（CLI 无从知道你的内网地址）：
-# +rules:
-#   - DOMAIN-SUFFIX,example.internal,${groupName}
-#   - IP-CIDR,10.0.0.0/8,${groupName}
-`;
-}
+  rmrf(legacyDir);
 
-/**
- * 仅当文件不存在时生成模板，返回是否新建。
- * 绝不覆盖已有文件——它是用户维护的资产，覆盖等于不可恢复地丢掉用户写的分流规则。
- */
-export function ensureTunnelOverwriteFile(tunnel: TunnelConfig): boolean {
-  const filePath = getTunnelOverwritePath(tunnel.name);
-  if (fs.existsSync(filePath)) return false;
-  ensureDirs();
-  atomicWriteFileSync(filePath, renderTunnelOverwrite(tunnel), { mode: 0o600 });
-  return true;
+  if (stopped.length > 0) {
+    console.log(`已停止旧版本遗留的 ssh 隧道: ${stopped.join(', ')}（运行态目录已迁至 ssh/）`);
+  }
 }

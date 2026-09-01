@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CliError } from './errors.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './paths.js';
-import type { Settings, Subscription, SubscriptionCache, SubscriptionCacheEntry, SubscriptionWithCache } from './types.js';
+import type { Settings, SshConfig, Subscription, SubscriptionCache, SubscriptionCacheEntry, SubscriptionWithCache } from './types.js';
 
 let settingsCache: Settings | null = null;
 
@@ -46,10 +46,10 @@ function recoverCorruptedSettings(): Settings {
  * 写入设置。**持跨进程锁 + 先丢缓存重读盘再合并**：`settingsCache` 是进程级的，
  * 而两个 CLI 进程会并发跑（慢速 `sub add` 跨整个网络下载期间，用户在另一个终端
  * 做别的操作是日常）。此前拿启动时的陈旧缓存做全量合并写回，会把对方刚落盘的
- * 改动整块抹掉，且写入方收到的是成功回执——实测 `tunnel add` 打印「已添加」后，
+ * 改动整块抹掉，且写入方收到的是成功回执——实测 `ssh add` 打印「已添加」后，
  * 隧道被并发的 `sub add` 抹成 null（订阅与隧道同在一个文件，互不相干的命令互相摧毁）。
  *
- * 本函数只安全用于「单键/整值替换」。**数组类改动（subscriptions/tunnels）必须走
+ * 本函数只安全用于「单键/整值替换」。**数组类改动（subscriptions/ssh）必须走
  * `updateSettings`**：调用方若在锁外用陈旧数组算好再传进来，重读也无从恢复对方的条目。
  */
 export function writeSettings(settings: Partial<Settings>): Settings {
@@ -74,12 +74,12 @@ function writeSettingsUnlocked(settings: Partial<Settings>): Settings {
  * 读-改-写的唯一正确入口：**持跨进程锁**，丢缓存 → 读盘上最新 → 由 mutator 基于
  * 最新算出改动 → 写回 → 放锁。
  *
- * 数组类改动（subscriptions / tunnels）必须用它而不是 `writeSettings`：
+ * 数组类改动（subscriptions / ssh）必须用它而不是 `writeSettings`：
  * 后者虽也重读，但读与写之间仍有窗口，两个进程照样能交错（实测 6 个并发
  * `sub add` 仍丢 3 条）。只有把整个读-改-写圈进锁里才真正安全。
  *
  * mutator 必须同步、且不得再调用本函数或 `writeSettings`（锁不可重入，会死等到
- * 强夺陈旧锁）。mutator 内部读 `getSubscriptions()`/`getTunnels()` 是安全的：
+ * 强夺陈旧锁）。mutator 内部读 `getSubscriptions()`/`getSshTunnels()` 是安全的：
  * 缓存已在进锁后清掉，它们读到的是盘上最新。
  */
 export function updateSettings(mutate: (current: Settings) => Partial<Settings>): Settings {
@@ -243,10 +243,35 @@ export function getSubscriptionsWithCache(): SubscriptionWithCache[] {
 
 /**
  * 名称白名单：字母数字下划线短横线与中文，最长 64。同时用于订阅名与隧道名——
- * 两者都会被拼进文件路径（subscriptions/<name>.yaml、overwrite.tunnel-<name>.yaml），
- * 共用一条规则避免两套口径漂移。刻意不含 `.`，以免破坏覆写文件名的分段结构。
+ * 两者都会被拼进文件路径（subscriptions/<name>.yaml、ssh.<name>.yaml），
+ * 共用一条规则避免两套口径漂移。刻意不含 `.`，以免破坏 ssh/覆写文件名的分段结构。
  */
 export const SAFE_NAME_RE = /^[\w\-\p{Unified_Ideograph}]{1,64}$/u;
+
+/**
+ * 隧道列表的唯一读取入口，与 getSubscriptions 同构、同一教训：settings.json 被手改成
+ * `{"ssh":"oops"}` 时，下游的展开运算符会把字符串按字符展开成垃圾列表且不报错。
+ *
+ * 住在 settings.ts 而非 ssh.ts：ssh-config.ts（配置合并，被 config.ts 依赖）也要读它，
+ * 放 ssh.ts 会让 config.ts 经 ssh.ts → process.ts 绕回 config.ts 形成循环依赖。
+ */
+export function getSshTunnels(): SshConfig[] {
+  const settings = readSettings();
+  const tunnels = settings.ssh;
+  if (!Array.isArray(tunnels)) {
+    if (tunnels !== undefined) {
+      console.warn('警告: settings.json 的 ssh 不是列表，已忽略（可用 mihomo ssh add 重新添加）');
+    }
+    return [];
+  }
+  return tunnels.filter(t => t != null && typeof t === 'object' && typeof t.name === 'string' && typeof t.host === 'string' && Number.isInteger(t.port));
+}
+
+export function validateSshName(name: string): void {
+  if (!name || !SAFE_NAME_RE.test(name)) {
+    throw new CliError(`隧道名称无效: "${name}"，只允许字母、数字、下划线、短横线和中文（最长 64 字符）`);
+  }
+}
 
 function validateSubscriptionName(name: string): void {
   if (!name || !SAFE_NAME_RE.test(name)) {

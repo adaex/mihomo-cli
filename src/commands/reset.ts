@@ -7,14 +7,15 @@ import { isOverwriteFilename } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import * as processManager from '../process.js';
 import { invalidateSettingsCache, writeSettings } from '../settings.js';
-import { stopAllTunnels } from '../tunnel.js';
+import { stopAllSshTunnels } from '../ssh.js';
+import { isSshFilename } from '../ssh-config.js';
 import type { ResetTarget } from '../types.js';
 import { confirmPrompt } from './shared.js';
 
 /**
  * 重置目标注册表。**顺序即执行顺序**（`resolveResetTargets` 会按本数组排序），
  * 带 `onAfter: writeSettings` 的目标必须排在 `settings` 之前，否则会把刚删掉的
- * settings.json 重建成 `{}`——`subs` 与 `tunnel` 都受此约束，有单测锁定。
+ * settings.json 重建成 `{}`——`subs` 与 `ssh` 都受此约束，有单测锁定。
  */
 export const RESET_TARGETS: ResetTarget[] = [
   {
@@ -53,15 +54,25 @@ export const RESET_TARGETS: ResetTarget[] = [
     // 它们会继续占着端口跑下去，且 CLI 无任何路径能停掉。
     // **必须排在 settings 之前**：onAfter 会 writeSettings 重建 settings.json，
     // 排在 settings 之后会让 `reset --full` 留下一个 {}（同 subs 的处理，见执行顺序注释）
-    id: 'tunnel',
-    aliases: ['tunnel', 'tunnels', 'ssh'],
+    id: 'ssh',
+    aliases: ['ssh'],
     label: '隧道',
-    paths: () => [DIRS.tunnel],
+    // 连 ssh.*.yaml 一并删：它们既不匹配 isOverwriteFilename（不归 overwrites 目标），
+    // 本目标又只管运行态的话，`reset --full` 会留下配置文件，与「删全部」的承诺不符。
+    // 单条 `ssh rm` 则刻意不删该文件（用户手写的分流规则不可恢复），两者语义不同
+    paths: () => {
+      const files = fs.existsSync(USER_DATA_DIR)
+        ? fs
+            .readdirSync(USER_DATA_DIR)
+            .filter(isSshFilename)
+            .map(f => `${USER_DATA_DIR}/${f}`)
+        : [];
+      return [DIRS.ssh, ...files];
+    },
     needsStop: false,
-    onBefore: () => stopAllTunnels(),
-    // 同步清空 settings 里的隧道列表：只删运行态会留下「列表在但状态没了」的半重置状态。
-    // 覆写文件不动——那是用户维护的资产，由 overwrites target 负责
-    onAfter: () => writeSettings({ tunnels: undefined }),
+    onBefore: () => stopAllSshTunnels(),
+    // 同步清空 settings 里的隧道列表：只删运行态会留下「列表在但状态没了」的半重置状态
+    onAfter: () => writeSettings({ ssh: undefined }),
   },
   {
     id: 'settings',
@@ -169,8 +180,8 @@ export async function cmdReset(args: string[]): Promise<void> {
     targets = matched;
   } else {
     // 留空 = 只删「可再生成的运行数据」，保留用户配置资产（设置/内核/覆写/保活/隧道）。
-    // 隧道条目在 settings.json 里、且关联用户手写的覆写文件，与 settings 同档，不该被裸 reset 带走
-    targets = RESET_TARGETS.filter(t => !['settings', 'kernel', 'overwrites', 'daemon', 'tunnel'].includes(t.id));
+    // 隧道条目在 settings.json 里、且关联用户手写的 ssh.<名字>.yaml，与 settings 同档，不该被裸 reset 带走
+    targets = RESET_TARGETS.filter(t => !['settings', 'kernel', 'overwrites', 'daemon', 'ssh'].includes(t.id));
   }
 
   for (const t of targets) {

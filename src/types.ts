@@ -11,14 +11,14 @@ export interface Settings {
   overwrite_enabled?: boolean;
   /** external-controller 访问密钥（可选，多用户环境建议设置）；不设置则控制器无鉴权 */
   controller_secret?: string;
-  tunnels?: TunnelConfig[];
+  ssh?: SshConfig[];
 }
 
-// === Tunnel (ssh -D 动态转发) ===
+// === ssh 隧道 (ssh -D 动态转发) ===
 
-export interface TunnelConfig {
+export interface SshConfig {
   name: string;
-  /** ssh 目标主机（别名或 user@host）；恒不以 `-` 开头，见 tunnel.ts 的校验 */
+  /** ssh 目标主机（别名或 user@host）；恒不以 `-` 开头，见 ssh.ts 的校验 */
   host: string;
   /** 本地 SOCKS5 监听端口，恒绑 127.0.0.1 */
   port: number;
@@ -27,12 +27,12 @@ export interface TunnelConfig {
 }
 
 /**
- * 隧道运行态。存 `<USER_DATA_DIR>/tunnel/<name>.json`，**不能放 DIRS.runtime**——
+ * 隧道运行态。存 `<USER_DATA_DIR>/ssh/<name>.json`，**不能放 DIRS.runtime**——
  * process.ts 的 clearRuntime() 会在 stop() 成功路径 rmrf 整个 runtime 目录。
  */
-export interface TunnelRuntime {
+export interface SshRuntime {
   pid: number;
-  /** 谁起的：auto = start 顺带拉起（stop 可连带停），manual = 用户显式 tunnel up（stop 不碰） */
+  /** 谁起的：auto = start 顺带拉起（stop 可连带停），manual = 用户显式 ssh up（stop 不碰） */
   started_by: 'auto' | 'manual';
   started_at: string;
   /** 起进程时用的端口，用于校验状态文件与当前配置是否已漂移 */
@@ -40,14 +40,24 @@ export interface TunnelRuntime {
 }
 
 /** 三态运行状况：进程在但端口不通即「假活」，正是 ExitOnForwardFailure 要防的形态 */
-export type TunnelState = 'running' | 'dead-port' | 'stopped';
+export type SshState = 'running' | 'dead-port' | 'stopped';
 
-export interface TunnelStatus {
-  config: TunnelConfig;
-  state: TunnelState;
+export interface SshStatus {
+  config: SshConfig;
+  state: SshState;
   pid: number | null;
   started_by: 'auto' | 'manual' | null;
   started_at: string | null;
+}
+
+/**
+ * 一个 `ssh.<名字>.yaml` 文件的解析结果。与 OverwriteFileEntry 刻意分开：
+ * ssh 配置不受 overwrite 开关约束，也不支持 match 作用域块。
+ */
+export interface SshFileEntry {
+  name: string;
+  path: string;
+  config: Record<string, unknown>;
 }
 
 // === Subscription Cache ===
@@ -101,6 +111,7 @@ export interface BuildConfigResult {
   config: Record<string, unknown>;
   subscriptionConfig: Record<string, unknown>;
   overwriteFiles: OverwriteFileEntry[];
+  sshFiles: SshFileEntry[];
   systemConfig: Record<string, unknown>;
   warnings: string[];
 }

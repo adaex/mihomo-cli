@@ -5,12 +5,12 @@ import { cmdKernel } from './kernel.js';
 import { cmdLog, cmdLogs } from './log.js';
 import { cmdOverwrite } from './overwrite.js';
 import { cmdReset } from './reset.js';
+import { cmdSsh } from './ssh.js';
 import { cmdStart } from './start.js';
 import { printStatus } from './status.js';
 import { cmdStop } from './stop.js';
 import { cmdSubscription } from './subscription.js';
 import { cmdClean, cmdTest } from './test.js';
-import { cmdTunnel } from './tunnel.js';
 import { cmdUI } from './ui.js';
 import { cmdUpdate } from './update.js';
 
@@ -186,17 +186,18 @@ export const COMMANDS: Command[] = [
     usage: ['daemon on|off               开机自启 + 崩溃重启（仅 Mixed，需管理员密码）', 'daemon status               查看保活状态'],
   },
   {
-    // 别名不能用 tun——已被 TUN 模式快捷命令占用（注册表重复 token 会在模块加载期直接抛错）
-    name: 'tunnel',
-    aliases: ['ssh', 'tunnels'],
-    handler: cmdTunnel,
+    // 无别名：`tun` 被 TUN 模式快捷命令占用，`ssh` 本身已够短。
+    // （注册表重复 token 会在模块加载期直接抛错）
+    name: 'ssh',
+    aliases: [],
+    handler: cmdSsh,
     group: 'system',
     usage: [
-      'tunnel                      列出 ssh 隧道（别名 ssh）',
-      'tunnel add <名字> --host <主机> --port <端口> [--no-auto]',
-      'tunnel up|down [名字]       启动/停止隧道（无参即全部）',
-      'tunnel status [名字]        查看隧道状态（真实探测端口）',
-      'tunnel rm <名字> [-y]       删除隧道（不删覆写文件）',
+      'ssh                         列出 ssh 隧道',
+      'ssh add <名字> --host <主机> --port <端口> [--no-auto]',
+      'ssh up|down [名字]          启动/停止隧道（无参即全部）',
+      'ssh status [名字]           查看隧道状态（真实探测端口）',
+      'ssh rm <名字> [-y]          删除隧道（不删配置文件）',
     ],
   },
   {

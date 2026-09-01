@@ -6,7 +6,8 @@ import { BASE_CONFIG, TUN_CONFIG } from './constants.js';
 import { CliError } from './errors.js';
 import { applyOverwrite, filterOverwriteFilesByScope, isOverwriteEnabled, loadOverwriteFile } from './overwrite.js';
 import { atomicWriteFileSync, ensureDirs, PATHS } from './paths.js';
-import { readSettings } from './settings.js';
+import { getSshTunnels, readSettings } from './settings.js';
+import { applySshConfig, collectSshProxyNames, loadSshConfigFiles, renderSshProxy } from './ssh-config.js';
 import type { BuildConfigResult, ConfigInfo, OverwriteScope, ParsedProxy, ParsedProxyGroup } from './types.js';
 import { escapeRegExp } from './utils.js';
 
@@ -72,8 +73,14 @@ function collectOverwriteProxyNames(overwriteFiles: { config: Record<string, unk
 }
 
 /** 导出供单测：注入节点需从 include-all 分组排除，且排除模式必须整名锚定（见函数内注释） */
-export function excludeOverwriteProxiesFromIncludeAll(config: Record<string, unknown>, overwriteFiles: { config: Record<string, unknown> }[]): void {
-  const injectedNames = collectOverwriteProxyNames(overwriteFiles);
+export function excludeOverwriteProxiesFromIncludeAll(
+  config: Record<string, unknown>,
+  overwriteFiles: { config: Record<string, unknown> }[],
+  extraNames: string[] = [],
+): void {
+  // extraNames 是 CLI 内建注入的 ssh 节点：它们不来自任何覆写文件的键，
+  // collectOverwriteProxyNames 扫不到，漏掉会让它们被 include-all 分组重复纳入
+  const injectedNames = [...collectOverwriteProxyNames(overwriteFiles), ...extraNames];
   if (injectedNames.length === 0) return;
 
   const groups = config['proxy-groups'] as Array<Record<string, unknown>> | undefined;
@@ -322,13 +329,20 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   const overwriteFiles = filterOverwriteFilesByScope(allFiles, scope);
   const withOverwrites = applyOverwrite(subscriptionConfig, overwriteFiles);
 
-  if (overwriteFiles.length > 0) {
-    excludeOverwriteProxiesFromIncludeAll(withOverwrites, overwriteFiles);
+  // ssh 隧道刻意不走 overwrite 开关：覆写是可选调优，内网分流是刚需，
+  // `ow off` 不该连带把隧道节点从配置里摘掉（进程还跑着，配置里却没有出口）
+  const sshTunnels = getSshTunnels();
+  const sshFiles = sshTunnels.length > 0 ? loadSshConfigFiles() : [];
+  const withSsh = applySshConfig(withOverwrites, sshFiles, sshTunnels);
+
+  const sshProxyNames = collectSshProxyNames(sshTunnels);
+  if (overwriteFiles.length > 0 || sshProxyNames.length > 0) {
+    excludeOverwriteProxiesFromIncludeAll(withSsh, overwriteFiles, sshProxyNames);
   }
 
   const systemConfig: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(BASE_CONFIG)) {
-    if (!(key in withOverwrites)) {
+    if (!(key in withSsh)) {
       systemConfig[key] = value;
     }
   }
@@ -337,13 +351,13 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   // allow-lan 不锁定——订阅/覆写显式提供时按其值（见入站需求），未提供时由上面的 BASE_CONFIG 循环兜底为 false。
   systemConfig['external-controller'] = BASE_CONFIG['external-controller'];
   systemConfig['mixed-port'] = BASE_CONFIG['mixed-port'];
-  delete withOverwrites['mixed-port'];
-  delete withOverwrites.port;
-  delete withOverwrites['socks-port'];
-  delete withOverwrites['external-ui'];
-  delete withOverwrites['external-ui-name'];
-  delete withOverwrites['external-ui-url'];
-  delete withOverwrites.secret;
+  delete withSsh['mixed-port'];
+  delete withSsh.port;
+  delete withSsh['socks-port'];
+  delete withSsh['external-ui'];
+  delete withSsh['external-ui-name'];
+  delete withSsh['external-ui-url'];
+  delete withSsh.secret;
   const controllerSecret = readSettings().controller_secret;
   if (controllerSecret) {
     systemConfig.secret = controllerSecret;
@@ -351,7 +365,7 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
 
   if (mode === 'tun') {
     systemConfig.tun = TUN_CONFIG.tun;
-    const subDns = (withOverwrites.dns || {}) as Record<string, unknown>;
+    const subDns = (withSsh.dns || {}) as Record<string, unknown>;
     const dns: Record<string, unknown> = {};
     if (!('enable' in subDns)) dns.enable = true;
     if (!('enhanced-mode' in subDns)) dns['enhanced-mode'] = 'fake-ip';
@@ -361,17 +375,17 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
     }
   } else {
     // Mixed 模式（含保活）不保留订阅/覆写自带的 tun 字段，避免未要求 TUN 却被静默按 TUN 启动
-    delete withOverwrites.tun;
+    delete withSsh.tun;
   }
 
-  const merged = { ...withOverwrites, ...systemConfig };
+  const merged = { ...withSsh, ...systemConfig };
 
   if (systemConfig.dns) {
-    merged.dns = { ...((withOverwrites.dns || {}) as Record<string, unknown>), ...(systemConfig.dns as Record<string, unknown>) };
+    merged.dns = { ...((withSsh.dns || {}) as Record<string, unknown>), ...(systemConfig.dns as Record<string, unknown>) };
   }
 
   const mergedDns = (merged.dns || {}) as Record<string, unknown>;
-  if (mergedDns['enhanced-mode'] === 'fake-ip' && !('sniffer' in withOverwrites)) {
+  if (mergedDns['enhanced-mode'] === 'fake-ip' && !('sniffer' in withSsh)) {
     merged.sniffer = {
       enable: true,
       sniff: {
@@ -385,7 +399,7 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
 
   const warnings = validateConfig(merged);
 
-  return { config: merged, subscriptionConfig, overwriteFiles, systemConfig, warnings };
+  return { config: merged, subscriptionConfig, overwriteFiles, sshFiles, systemConfig, warnings };
 }
 
 export function writeMihomoConfig(configObj: Record<string, unknown>): void {
@@ -407,6 +421,20 @@ export function writeDebugConfig(buildResult: BuildConfigResult): void {
   fs.writeFileSync(PATHS.configStage2Overwrite, overwriteContent, { mode: 0o600 });
 
   fs.writeFileSync(PATHS.configStage3System, dumpYaml(buildResult.systemConfig), { mode: 0o600 });
+
+  // ssh 自成一个 stage：它与 overwrite 是两条独立管线（不受 ow off 约束），
+  // 混进 stage2 会让「覆写已禁用」的调试输出里出现内容，反而误导排查
+  const sshMerged: Record<string, unknown> = {};
+  for (const f of buildResult.sshFiles) {
+    Object.assign(sshMerged, f.config);
+  }
+  const sshTunnels = getSshTunnels();
+  if (sshTunnels.length > 0) {
+    // 一并写出 CLI 注入的节点：它不在任何文件里，只看用户文件会以为节点凭空出现
+    sshMerged['~proxies'] = sshTunnels.map(renderSshProxy);
+  }
+  const sshContent = Object.keys(sshMerged).length > 0 ? dumpYaml(sshMerged) : '# 未配置 ssh 隧道\n';
+  fs.writeFileSync(PATHS.configStage4Ssh, sshContent, { mode: 0o600 });
 }
 
 export function hasConfig(): boolean {

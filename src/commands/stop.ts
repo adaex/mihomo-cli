@@ -2,7 +2,7 @@ import { colors } from '../colors.js';
 import { isDaemonEnabled } from '../daemon.js';
 import { CliError } from '../errors.js';
 import * as processManager from '../process.js';
-import { stopAutoTunnels } from '../tunnel.js';
+import { stopAutoSshTunnels } from '../ssh.js';
 import type { StopResult } from '../types.js';
 import { hasFlag } from '../utils.js';
 
@@ -14,11 +14,11 @@ export function handleStopResult(result: StopResult): void {
 }
 
 /**
- * 停止随 start 拉起的隧道。只停 started_by === 'auto' 的——手动 `tunnel up` 起的
+ * 停止随 start 拉起的隧道。只停 started_by === 'auto' 的——手动 `ssh up` 起的
  * 不该被 `stop` 带走，否则下次 start 又起一个，累积僵尸进程。
  */
-function stopAutoTunnelsWithLog(): void {
-  const stopped = stopAutoTunnels();
+function stopAutoSshTunnelsWithLog(): void {
+  const stopped = stopAutoSshTunnels();
   if (stopped.length > 0) {
     console.log(`${colors.green('已停止隧道')}: ${stopped.join(', ')}`);
   }
@@ -33,14 +33,14 @@ export async function cmdStop(args: string[]): Promise<void> {
     return;
   }
 
-  const skipTunnel = hasFlag(args, '--no-tunnel');
+  const skipSsh = hasFlag(args, '--no-ssh');
   const pids = processManager.getMihomoPids();
 
   if (pids.length === 0) {
     console.log(colors.yellow('不在运行'));
-    // 不能在这里 return 就完事：内核没跑不代表隧道没跑（例如内核崩了、或只跑了 tunnel up），
+    // 不能在这里 return 就完事：内核没跑不代表隧道没跑（例如内核崩了、或只跑了 ssh up），
     // 隧道清理必须在此分支之外照常进行
-    if (!skipTunnel) stopAutoTunnelsWithLog();
+    if (!skipSsh) stopAutoSshTunnelsWithLog();
     return;
   }
 
@@ -48,5 +48,5 @@ export async function cmdStop(args: string[]): Promise<void> {
   handleStopResult(processManager.stop());
   console.log(colors.green('已停止进程'));
 
-  if (!skipTunnel) stopAutoTunnelsWithLog();
+  if (!skipSsh) stopAutoSshTunnelsWithLog();
 }

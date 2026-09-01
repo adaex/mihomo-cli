@@ -33,7 +33,8 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/process.ts`           | 进程启动/停止、PID 管理、日志轮转、进程探测（isProcess*） |
 | `src/daemon.ts`            | launchd 保活：开机自启/崩溃重启、热重载、状态查询 |
 | `src/runtime.ts`           | 运行时门面：收敛普通进程/保活双轨（模式、状态、启停） |
-| `src/tunnel.ts`            | ssh -D 隧道：配置增删、运行态文件、端口探测、启停、覆写模板 |
+| `src/ssh.ts`               | ssh -D 隧道进程侧：运行态文件、端口探测、启停、旧数据清理 |
+| `src/ssh-config.ts`        | ssh 隧道配置侧：ssh.*.yaml 加载、节点合成、与主配置合并（独立于 ow 开关） |
 | `src/lifecycle.ts`         | 退出清理注册表（信号/异常退出前杀掉测试实例） |
 | `src/test-instance.ts`     | 隔离测速实例（独立端口，不动主实例）withTestInstance |
 | `src/progress.ts`          | 测速进度打印、结果汇总格式化      |
@@ -59,7 +60,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `commands/overwrite.ts`       | overwrite (on/off/list)        |
 | `commands/directory.ts`       | directory (open/list)          |
 | `commands/daemon.ts`          | daemon (on/off/status)         |
-| `commands/tunnel.ts`          | tunnel (list/add/up/down/status/rm)，别名 `ssh` |
+| `commands/ssh.ts`             | ssh (list/add/up/down/status/rm)，无别名 |
 | `commands/reset.ts`           | reset                          |
 | `commands/update.ts`          | update                         |
 
@@ -162,8 +163,8 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 `hasFlag`/`parseIntArg`/`parseStringArg` 只管解析，**新选项还要登记到 `utils.ts` 的两张表**，否则在真实用法里静默失效：
 
-- **布尔选项 → `extractStartOptions` 的 `BOOL_FLAGS`**：不登记则 `sub use foo --no-tunnel` 触发的重启会丢掉该选项（`ow on/off`、`sub use` 都经 `restartToApply` 重新调 `cmdStart`）
-- **带值选项 → `VALUE_FLAGS`**：不登记则 `getNonFlagArg` 会把选项的值误当位置参数（`tunnel add x --port 1080` 里的 `1080` 被当成隧道名）
+- **布尔选项 → `extractStartOptions` 的 `BOOL_FLAGS`**：不登记则 `sub use foo --no-ssh` 触发的重启会丢掉该选项（`ow on/off`、`sub use` 都经 `restartToApply` 重新调 `cmdStart`）
+- **带值选项 → `VALUE_FLAGS`**：不登记则 `getNonFlagArg` 会把选项的值误当位置参数（`ssh add x --port 1080` 里的 `1080` 被当成隧道名）
 
 两者都是「不报错但行为不对」的失效方式，写完选项顺手 grep 一下这两张表。
 
@@ -186,9 +187,9 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 ### settings.json 的读-改-写必须持锁
 
-`settings.json` 同时装订阅与隧道，而多个 CLI 进程会并发跑（慢速 `sub add` 跨整个网络下载期间，用户在另一个终端操作是日常）。`readSettings` 又有进程级缓存，拿陈旧缓存全量写回会把对方刚落盘的改动整块抹掉——**且写入方收到的是成功回执**（实测 `tunnel add` 打印「已添加」后被并发的 `sub add` 抹成 null）。
+`settings.json` 同时装订阅与隧道，而多个 CLI 进程会并发跑（慢速 `sub add` 跨整个网络下载期间，用户在另一个终端操作是日常）。`readSettings` 又有进程级缓存，拿陈旧缓存全量写回会把对方刚落盘的改动整块抹掉——**且写入方收到的是成功回执**（实测 `ssh add` 打印「已添加」后被并发的 `sub add` 抹成 null）。
 
-- **数组类改动（`subscriptions`/`tunnels`）一律走 `updateSettings(mutate)`**：它持 `withFileLock` 完成「丢缓存 → 读盘上最新 → mutator 算改动 → 写回」。只在 `writeSettings` 里重读盘**不够**，读与写之间仍有窗口（实测 6 并发仍丢 3 条）
+- **数组类改动（`subscriptions`/`ssh`）一律走 `updateSettings(mutate)`**：它持 `withFileLock` 完成「丢缓存 → 读盘上最新 → mutator 算改动 → 写回」。只在 `writeSettings` 里重读盘**不够**，读与写之间仍有窗口（实测 6 并发仍丢 3 条）
 - `writeSettings` 只安全用于单键/整值替换
 - mutator 必须同步，且不得再调 `updateSettings`/`writeSettings`——**锁不可重入**，会死等到强夺陈旧锁
 - 锁超过 10s 视为持锁进程已崩溃并强夺：宁可退回竞态，也不能让一次崩溃永久锁死 CLI
@@ -244,30 +245,61 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 settings.json           # 用户设置
 overwrite.yaml          # 覆写配置（主文件，可选）
 overwrite.*.yaml        # 覆写配置（扩展文件，如 overwrite.dns.yaml）
+ssh.*.yaml              # ssh 隧道分流配置（独立于 overwrite 开关，见下）
 subscriptions/          # 订阅配置和缓存
 kernel/                 # 内核二进制
-logs/                   # 当前日志 + 归档日志 + tunnel-<名字>.log
+logs/                   # 当前日志 + 归档日志 + ssh-<名字>.log
 data/                   # mihomo 运行数据
-runtime/                # pid, config.yaml, 分阶段调试文件(1.subscription/2.overwrite/3.system.yaml)
-tunnel/                 # 隧道运行态 <名字>.json（刻意不放 runtime/，见下）
+runtime/                # pid, config.yaml, 分阶段调试文件(1.subscription/2.overwrite/3.system/4.ssh.yaml)
+ssh/                    # 隧道运行态 <名字>.json（刻意不放 runtime/，见下）
 ```
 
-### ssh 隧道（tunnel）
+### ssh 隧道
 
-隧道运行态放 `tunnel/` 而非 `runtime/`：`clearRuntime()` 会 `rmrf` 整个 runtime 目录，
+命令名、类型名、目录名、settings 字段一律 `ssh`，**无 `tunnel` 别名**（v3.9.0 起）。
+`tun` 是 TUN 模式的快捷命令，与本功能无关，改动时勿误伤。
+
+隧道运行态放 `ssh/` 而非 `runtime/`：`clearRuntime()` 会 `rmrf` 整个 runtime 目录，
 而 `stop()` 成功路径必调它——放那里会让「谁起的」标记随 `mihomo stop` 一起消失。
 
-`started_by` 区分 `auto`（`start` 拉起，`stop` 可连带停）与 `manual`（`tunnel up` 起，`stop` 不碰），
+`started_by` 区分 `auto`（`start` 拉起，`stop` 可连带停）与 `manual`（`ssh up` 起，`stop` 不碰），
 **单向提升**：manual 永不降级为 auto，否则用户手动起的隧道会被下一次 `stop` 误杀。
 
 三条不可退让的约束：`-D` 恒绑 `127.0.0.1`（绑 `0.0.0.0` 会让同网段设备经本机进内网）；
 `--host` 拒绝 `-` 开头（`-oProxyCommand=...` 即任意命令执行）；
 状态判定必须**真实探测端口**而非只看进程在不在（否则识别不出「进程在、转发已死」的假活）。
 
-覆写模板用 `~proxies`/`~proxy-groups` 而非 `+proxies`：`~` 按 name 定位，
-同名只留一条。但它是**字段级合并**，后加载的文件仍会覆盖同名字段——
-「同名时 tunnel 优先」只在用户不主动声明同名节点时成立。模板仅在**文件不存在时**生成，
-生成后完全由用户维护，`tunnel rm` 也不删它。
+#### 配置侧与进程侧分家
+
+`ssh-config.ts`（纯数据：文件加载、节点合成、合并）与 `ssh.ts`（进程启停）必须分开：
+`config.ts` 要在 `buildConfig` 里调配置侧，而 `ssh.ts` 依赖 `process.ts`、`process.ts` 又依赖
+`config.ts`——合在一起就是循环依赖。`ssh-config.ts` 因此只许依赖纯数据层。
+
+#### 节点由 CLI 内建注入，且必须最后合并
+
+socks5 节点**不写进用户文件**，由 `renderSshProxy` 依据 settings 的 host/port 合成。
+此前节点写在覆写模板里，与 settings 构成两份真相：`ssh rm` 后换端口 `add`，
+模板已存在故不重建，配置仍指向旧端口，**静默失效**。
+
+`applySshConfig` 内部顺序**不可调换**：先合用户 `ssh.*.yaml`，再注入 CLI 节点。
+`~proxies` 是字段级合并且后合并者胜——顺序写反的话，用户手写同名节点就能改掉
+port/server（连 `127.0.0.1` 绑定都能绕过），又退回两份真相。有单测锁定。
+
+#### 独立于 overwrite 开关
+
+`ow off` 只关覆写，ssh 分流照常——覆写是可选调优，内网出口是刚需。落点在 `buildConfig`：
+ssh 层不看 `isOverwriteEnabled()`。**不能复用 `applyOverwrite`**，它开头就有
+`if (!isOverwriteEnabled()) return`，传了 preloadedFiles 也会被旁路；直接用
+`deepMergeWithOverrides`。文件名 `ssh.*.yaml` 与 `isOverwriteFilename` 的
+`overwrite.*.yaml` 互不匹配（有双向单测），故 `reset ow` 也不会删它。
+
+内建注入的节点名要经 `excludeOverwriteProxiesFromIncludeAll` 的 `extraNames` 参数
+排除出 include-all 分组，否则被重复纳入。
+
+#### 文件归属
+
+模板仅在**文件不存在时**生成，生成后完全由用户维护。`ssh rm` **不删**该文件
+（可能有手写分流规则）；但 `reset ssh` / `reset --full` **要删**，否则「删全部」名不副实。
 
 ---
 

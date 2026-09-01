@@ -5,6 +5,7 @@ import { printStatus } from './commands/status.js';
 import { CliError } from './errors.js';
 import { isSilentSigint, runCleanup } from './lifecycle.js';
 import { ensureDirs } from './paths.js';
+import { cleanupLegacySshRuntime } from './ssh.js';
 import { suggestSimilar } from './utils.js';
 
 process.on('SIGINT', () => {
@@ -95,6 +96,9 @@ async function main(): Promise<void> {
   // 守卫先于 ensureDirs：不支持的平台上不应在用户家目录留下数据目录
   assertSupportedPlatform(command.name);
   ensureDirs();
+  // v3.8 的隧道运行态在 tunnel/，本版本已迁到 ssh/。旧目录里的 PID 就此失联，
+  // 那些 ssh 进程会继续占着端口且再无路径可停，故升级后首次运行时主动收尾（幂等）
+  cleanupLegacySshRuntime();
 
   // rewrite 把顶层快捷命令(tun/use/on/off/open)映射为子命令形式;其余命令原样透传。
   await command.handler(command.rewrite ? command.rewrite(args) : args);
