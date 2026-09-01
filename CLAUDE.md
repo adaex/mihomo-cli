@@ -301,15 +301,17 @@ tunnel/                 # 隧道运行态 <名字>.json（刻意不放 runtime/�
 
 ### 发布结果核实
 
-`npm publish` 打印 `+ mihomo-cli@X.Y.Z` **不代表已生效**，而 `npm view` / registry 元数据 JSON 的 CDN 同步可滞后数分钟，期间仍显示旧版本。核实要直接查版本文档与产物：
+**`npm publish` 不报错即视为发布成功，就此收工，不等 CDN 落地。**
+
+registry 的 CDN 同步可滞后数分钟：期间版本文档与产物 URL 都是 404、`npm view` 的 `latest` 仍是旧版本、重跑 `npm publish` 会得到 `409 Cannot publish over previously staged version`（staged ≠ published，说明还在处理队列）。这些都**不是**失败信号，只是还没同步完，不必守着等它变 200。
+
+若确实需要确认某个版本已对外可见（比如要通知别人升级），再查：
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" https://registry.npmjs.org/mihomo-cli/X.Y.Z
-curl -s -o /tmp/t.tgz -w "%{http_code} %{size_download}\n" \
-  https://registry.npmjs.org/mihomo-cli/-/mihomo-cli-X.Y.Z.tgz
 ```
 
-两者 200 且字节数与本地 `npm pack --dry-run` 一致即已落地。重跑 `npm publish` 得到 `403 You cannot publish over the previously published versions` 同样是"已成功"的证据（不是失败）。
+200 即已落地。重跑 `npm publish` 得到 `403 You cannot publish over the previously published versions` 同样是已落地的证据。
 
 ### 交互确认与退出码
 
