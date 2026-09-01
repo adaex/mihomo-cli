@@ -156,6 +156,15 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 给某命令补 `onUnknown` 时，原先靠 `fallback` 兜住的隐式子命令（如 `ow list`/`dir list`）必须显式注册，否则会被判为未知子命令。
 
+### 新增命令行选项要同步 utils.ts
+
+`hasFlag`/`parseIntArg`/`parseStringArg` 只管解析，**新选项还要登记到 `utils.ts` 的两张表**，否则在真实用法里静默失效：
+
+- **布尔选项 → `extractStartOptions` 的 `BOOL_FLAGS`**：不登记则 `sub use foo --no-tunnel` 触发的重启会丢掉该选项（`ow on/off`、`sub use` 都经 `restartToApply` 重新调 `cmdStart`）
+- **带值选项 → `VALUE_FLAGS`**：不登记则 `getNonFlagArg` 会把选项的值误当位置参数（`tunnel add x --port 1080` 里的 `1080` 被当成隧道名）
+
+两者都是「不报错但行为不对」的失效方式，写完选项顺手 grep 一下这两张表。
+
 ### 平台守卫
 
 `main()` 开头（`ensureDirs()` 之前）校验 `process.platform === 'darwin'`，`package.json` 声明 `"os": ["darwin"]`。豁免 `help`/`version`；`MIHOMO_CLI_ALLOW_ANY_PLATFORM=1` 为开发逃生阀。守卫必须先于 `ensureDirs`，避免在不支持的平台创建数据目录。
