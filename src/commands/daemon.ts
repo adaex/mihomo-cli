@@ -2,6 +2,7 @@ import { colors } from '../colors.js';
 import { hasKernel } from '../config.js';
 import { DAEMON_BOOT_WAIT_MS, disableDaemon, enableDaemon, getDaemonStatus, isDaemonEnabled, isDaemonRunning } from '../daemon.js';
 import { CliError } from '../errors.js';
+import { getMihomoPids, isProcessRoot } from '../process.js';
 import * as subscription from '../subscription.js';
 import { sleep, suggestSimilar } from '../utils.js';
 import { dispatchSubcommand, type SubCommand } from './shared.js';
@@ -57,7 +58,11 @@ async function daemonOn(): Promise<void> {
 }
 
 function daemonOff(): void {
-  if (!isDaemonEnabled()) {
+  // 判据与 disableDaemon 一致：plist 不在**且**没有 root 内核在跑，才算已关闭。
+  // 只看 plist 会在「用户手动 sudo rm 掉 plist 但任务仍装载」时谎报「已是关闭状态」，
+  // 而 KeepAlive 仍在把内核拉起，用户没有任何途径卸载它
+  const residualRootKernel = getMihomoPids().some(isProcessRoot);
+  if (!isDaemonEnabled() && !residualRootKernel) {
     console.log('保活已是关闭状态');
     console.log('');
     printDaemonStatus();

@@ -115,18 +115,33 @@ function saveSubscriptionConfig(subName: string, parsed: ParsedSubscription): vo
   saveSubscriptionRawConfig(subName, dumpYaml(parsed.raw));
 }
 
-function parseUserInfo(header: string | null): UserInfo | null {
+/**
+ * 解析 `Subscription-Userinfo` 头。**只接受有限非负数，其余按「该字段缺失」处理**
+ * （不落盘），而不是塞 0 或原样收下：
+ * - `expire=abc` 此前塞 0，而 `formatTimestamp(0)` 特判返回「永久」——垃圾值被
+ *   展示成「永久有效」，正好是最误导用户的方向
+ * - `total=1e999` 是 Infinity，`JSON.stringify` 写成 `"total":null`
+ * - `upload=-5` 原样入库会让用量百分比失真
+ *
+ * 无任何有效字段时返回 null（而非 `{}`）：`{}` 是 truthy，会让调用方误以为拿到了
+ * 流量信息，进而用四个 undefined 覆盖掉缓存里已有的值（见 saveSubscriptionMeta）。
+ */
+export function parseUserInfo(header: string | null): UserInfo | null {
   if (!header) return null;
   const info: Record<string, number> = {};
-  const parts = header.split(';').map(p => p.trim());
-  for (const part of parts) {
-    const [key, val] = part.split('=').map(s => s.trim());
-    if (key && val !== undefined) {
-      const numVal = parseFloat(val);
-      info[key] = Number.isNaN(numVal) ? 0 : numVal;
-    }
+  let hasAny = false;
+  for (const part of header.split(';')) {
+    const [rawKey, rawVal] = part.split('=');
+    const key = rawKey?.trim();
+    const val = rawVal?.trim();
+    if (!key || val === undefined || val === '') continue;
+    const numVal = Number(val);
+    // Number('') 是 0、Number('12abc') 是 NaN；只收有限非负数
+    if (!Number.isFinite(numVal) || numVal < 0) continue;
+    info[key] = numVal;
+    hasAny = true;
   }
-  return info as UserInfo;
+  return hasAny ? (info as UserInfo) : null;
 }
 
 /**
@@ -166,14 +181,21 @@ function extractSubscriptionMeta(headers: Headers | undefined): SubscriptionMeta
   };
 }
 
-/** 将元信息组装为缓存对象并写入订阅缓存（下载/合并下载共用） */
+/**
+ * 将元信息组装为缓存对象并写入订阅缓存（下载/合并下载共用）。
+ *
+ * 四个流量字段**逐个判断存在性**再赋值，不能整块赋：`saveSubscriptionCache` 用
+ * `{...old, ...data}` 合并，显式的 `undefined` 会覆盖掉旧值。机场返回只带 upload
+ * 的部分头时，整块赋会让 total/expire 凭空消失（到期日不翼而飞）。
+ */
 function saveSubscriptionMeta(subName: string, meta: SubscriptionMeta): void {
   const cacheData: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (meta.userInfo) {
-    cacheData.upload = meta.userInfo.upload;
-    cacheData.download = meta.userInfo.download;
-    cacheData.total = meta.userInfo.total;
-    cacheData.expire = meta.userInfo.expire;
+    const { upload, download, total, expire } = meta.userInfo;
+    if (upload !== undefined) cacheData.upload = upload;
+    if (download !== undefined) cacheData.download = download;
+    if (total !== undefined) cacheData.total = total;
+    if (expire !== undefined) cacheData.expire = expire;
   }
   if (meta.updateInterval) cacheData.update_interval = meta.updateInterval;
   if (meta.webPageUrl) cacheData.web_page_url = meta.webPageUrl;
@@ -426,6 +448,10 @@ function needsAutoUpdate(sub: SubscriptionWithCache): boolean {
   if (!sub.updated_at) return true;
   const lastUpdate = new Date(sub.updated_at).getTime();
   if (Number.isNaN(lastUpdate)) return true;
+  // 未来时间戳（系统时钟被改过、跨时区调时、缓存被手改）会让下面的差值恒为负，
+  // needsAutoUpdate 恒 false —— 订阅从此永不自动更新，静默过期到失联。
+  // 视为「缓存不可信」立即更新，顺带把 updated_at 纠正回当前时间。
+  if (lastUpdate > Date.now()) return true;
   // 防御历史坏缓存：update_interval 为 0/负数/非数时回退默认值
   const intervalHours = resolveUpdateInterval(sub.url, sub.update_interval);
   const intervalMs = intervalHours * 60 * 60 * 1000;

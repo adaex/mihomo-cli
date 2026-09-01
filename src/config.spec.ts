@@ -112,6 +112,78 @@ describe('validateConfig', () => {
   });
 });
 
+describe('validateConfig 级联删除的空洞（此前全部静默通过）', () => {
+  it('proxy 与 proxy-group 同名时告警（mihomo 会因重复名拒绝加载）', () => {
+    const config = {
+      proxies: [{ name: 'HK', server: 's', port: 1, type: 'ss' }],
+      'proxy-groups': [{ name: 'HK', type: 'select', proxies: ['DIRECT'] }],
+    };
+    const warnings = validateConfig(config);
+    assert.ok(
+      warnings.some(w => w.includes('名称冲突') && w.includes('HK')),
+      `应告警名称冲突，实际: ${JSON.stringify(warnings)}`,
+    );
+  });
+
+  it('use 引用不存在的 provider 时移除并告警', () => {
+    const config = {
+      proxies: [{ name: 'a', server: 's', port: 1, type: 'ss' }],
+      'proxy-groups': [{ name: 'G', type: 'select', proxies: ['a'], use: ['ghost-provider'] }],
+    };
+    const warnings = validateConfig(config);
+    const groups = config['proxy-groups'] as Array<{ use: string[] }>;
+    assert.deepEqual(groups[0].use, []);
+    assert.ok(warnings.some(w => w.includes('provider')));
+  });
+
+  it('use 引用真实存在的 provider 时保留', () => {
+    const config = {
+      'proxy-providers': { mysub: { type: 'http', url: 'https://x' } },
+      proxies: [],
+      'proxy-groups': [{ name: 'G', type: 'select', proxies: [], use: ['mysub'] }],
+    };
+    const warnings = validateConfig(config);
+    const groups = config['proxy-groups'] as Array<{ use: string[] }>;
+    assert.deepEqual(groups[0].use, ['mysub'], '真实 provider 不应被移除');
+    assert.equal(groups.length, 1, '有有效 use 的组不应被删');
+    assert.equal(warnings.length, 0);
+  });
+
+  it('节点池为空 + include-all 的空组被移除（此前保留，实际无任何出口）', () => {
+    const config = {
+      proxies: [],
+      'proxy-groups': [{ name: 'AUTO', type: 'select', proxies: [], 'include-all': true }],
+      rules: ['MATCH,AUTO'],
+    };
+    validateConfig(config);
+    assert.equal((config['proxy-groups'] as unknown[]).length, 0, '空组应被移除');
+    assert.equal((config.rules as unknown[]).length, 0, '指向空组的规则应连带移除');
+  });
+
+  it('节点池非空 + include-all 的组保留（不能误删正常配置）', () => {
+    const config = {
+      proxies: [{ name: 'HK-01', server: 's', port: 1, type: 'ss' }],
+      'proxy-groups': [{ name: 'AUTO', type: 'select', proxies: [], 'include-all': true }],
+      rules: ['MATCH,AUTO'],
+    };
+    const warnings = validateConfig(config);
+    assert.equal((config['proxy-groups'] as unknown[]).length, 1);
+    assert.equal((config.rules as unknown[]).length, 1);
+    assert.equal(warnings.length, 0);
+  });
+
+  it('group.proxies 写成字符串时按单元素处理并告警（此前整体跳过、非法结构落盘）', () => {
+    const config = {
+      proxies: [],
+      'proxy-groups': [{ name: 'G', type: 'select', proxies: 'DIRECT' }],
+    };
+    const warnings = validateConfig(config);
+    const groups = config['proxy-groups'] as Array<{ proxies: unknown }>;
+    assert.deepEqual(groups[0].proxies, ['DIRECT']);
+    assert.ok(warnings.some(w => w.includes('应为列表')));
+  });
+});
+
 describe('validateConfig 形态校验（YAML 笔误转 CliError）', () => {
   // 这些输入此前会抛裸 TypeError，经 main().catch 当成程序 bug 打印堆栈
   const malformed: { label: string; config: Record<string, unknown> }[] = [

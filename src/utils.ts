@@ -225,18 +225,39 @@ export function suggestSimilar(input: string, candidates: readonly string[]): st
   return scored.slice(0, 3).map(s => s.name);
 }
 
+/**
+ * 归一化 `--mirror` 的值为 `https://host/` 形式。
+ *
+ * 用 `URL` 解析并**白名单 scheme**，不能只看 `startsWith('http')`：后者放行
+ * `httpfoo://x`（原样留下非法 scheme）、放行明文 `http://`（镜像会中转内核二进制，
+ * 该产物随后以 root 运行，不能走明文），还会把 `ftp://e.test` 拼成
+ * `https://ftp://e.test/` 这种畸形串。裸主机名（`gh.example.com`）补 https。
+ */
 function normalizeMirrorUrl(val: string): string | null {
   if (!val) return null;
   if (val === 'direct' || val === 'no' || val === 'none') return null;
 
-  let url = val;
-  if (!url.startsWith('http')) {
-    url = `https://${url}`;
+  // 无 scheme 的裸主机名补 https；有 scheme 的必须是 https
+  const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(val) ? val : `https://${val}`;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(withScheme);
+  } catch {
+    throw new CliError(`镜像地址无效: "${val}"`, {
+      label: '参数错误',
+      hint: ['格式如: --mirror https://gh-proxy.org/ 或 --mirror gh-proxy.org', '不使用镜像: --no-mirror'],
+    });
   }
-  if (!url.endsWith('/')) {
-    url += '/';
+  if (parsed.protocol !== 'https:') {
+    throw new CliError(`镜像地址必须使用 https: "${val}"`, {
+      label: '参数错误',
+      hint: ['镜像会中转内核二进制，该产物随后以 root 运行，不允许明文传输。'],
+    });
   }
-  return url;
+
+  const url = parsed.toString();
+  return url.endsWith('/') ? url : `${url}/`;
 }
 
 export function parseMirrorArg(args: string[] | undefined): MirrorArg {

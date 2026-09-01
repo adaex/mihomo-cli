@@ -1,14 +1,69 @@
 # 代码审查：潜在风险与优化项
 
-> 本轮审查：2026-08-22（v3.6.0 代码基线）
-> 范围：全部 `src/`（core + commands）+ 文档一致性 + 平台假设
-> 上一轮：2026-05-07（v2.9.x），其"仍待处理"清单已在本轮逐项复核，结论见文末
+> 本轮审查：2026-09-01（v3.8.0 代码基线）
+> 范围：全部 `src/`（core + commands）；重点复核上一轮「仍待处理」9 项
+> 上一轮：2026-08-22（v3.6.0）
 
-**维护约定**：本文档标注"仍待处理"的条目会随代码演进失效——上一轮清单跨越 v3.0～v3.6 六个版本未更新，复核后发现 7 项里 2 项早已修复、2 项判断有误。改动涉及本文条目时同步更新状态；下轮审查前先复核全部"仍待处理"，不要直接沿用。审查结论要给复现步骤而非静态推测：本轮 5 项高危全部实际复现过，其中 2 项的真实后果比首轮描述严重。
+**维护约定**：本文档标注"仍待处理"的条目会随代码演进失效——上上轮清单跨越 v3.0～v3.6 六个版本未更新，复核后发现 7 项里 2 项早已修复、2 项判断有误。改动涉及本文条目时同步更新状态；下轮审查前先复核全部"仍待处理"，不要直接沿用。审查结论要给复现步骤而非静态推测。
 
 ---
 
-## 本轮已修复
+## 本轮（v3.8.0）已修复
+
+上一轮「仍待处理」9 项全部处理完毕，另修 1 项本轮新发现的高危。每条都经实际复现确认并在修复后回归验证。
+
+### 新发现高危：`settings.json` 并发写静默丢数据
+
+- **位置**：`settings.ts` 的 `settingsCache`（进程级缓存）+ `writeSettings`（全量合并写回）
+- **机制**：无任何跨进程锁（全仓 `flock`/`O_EXCL` 此前零命中）。两个 CLI 进程各自读到旧全量、各自写回，后写者把先写者的条目整块抹掉——**而先写者已经打印了「已添加」**
+- **实测**（修复前）：
+  - 6 个并发 `sub add` → 期望 7 条，实际 4 条，3 条静默丢失
+  - 慢速 `sub add`（跨网络下载）期间执行 `tunnel add` → `tunnel add` 报告成功，最终 `tunnels: null`。订阅与隧道同住一个文件，**互不相干的命令互相摧毁**
+- **触发条件很日常**：机场慢时 `sub add` 要跑十几秒，用户在另一个终端标签做别的操作即可
+- **修法**：新增 `paths.withFileLock`（`O_EXCL` 建锁文件，POSIX 下创建即原子）+ `settings.updateSettings`（持锁完成读-改-写）。所有数组类改动（`addSubscription`/`removeSubscription`/`addTunnel`/`removeTunnel`）改走后者
+  - 仅「写前重读盘」不够：读与写之间仍有窗口，实测仍丢 3 条。必须把整个读-改-写圈进锁里
+  - 陈旧锁（>10s，持锁进程崩溃）会被强夺，避免一次崩溃让后续所有命令永久卡死
+- **回归验证**：6 并发全部保留；`tunnel add` 不再被抹；陈旧锁场景 0.045s 完成不卡死；`paths.spec.ts` 6 个单测锁定（含用真实子进程验证互斥）
+
+### 上轮「仍待处理」逐项修复
+
+| 上轮编号 | 问题 | 修法 |
+| --- | --- | --- |
+| 1 | 内核下载来源未钉死（比无 checksum 更实际的缺口） | 新增 `assertTrustedAssetUrl`：下载 host 白名单（github.com 等四个）+ 强制 https，**校验在加镜像前缀之前**（加了前缀就看不出原始 host）。curl 补 `--proto '=https' --proto-redir '=https'`（实测 `-L` 会跟随 302 降级到明文 http 并落盘）与 `--max-filesize`。下载后比对 `asset.size`（此前该值只用于显示） |
+| 2 | tar 解压守卫漏 symlink 成员 → 任意文件 chmod 755 | 双守卫：`-tzf` 查路径穿越（条目名干净，含空格文件名也可靠）+ `-tvzf` 首字符查条目类型，拒绝 `l`/`h` 等非普通文件；解压加 `--no-same-owner`；`findBinaryInDir` 的 `statSync` 改 `lstatSync` 并只认普通文件。实测攻击归档已被挡下，正常归档不误拒 |
+| 3 | `Subscription-Userinfo` 解析边界 | `parseUserInfo` 只收有限非负数，其余按缺失处理；无有效 kv 返回 null（此前返回 `{}` 是 truthy）。`saveSubscriptionMeta` 四字段改逐个判存在性再赋值。`UserInfo` 类型改为全可选——声明为必填会让「缺字段」在类型层面不可见 |
+| 4 | sudo 中间脚本 `writeFileSync` 的 mode 不重放 | `daemon.ts` / `process.ts` 两处写完显式 `chmodSync(0o700)`。实测 0666 残留文件重写后仍是 0666，而该文件下一步就交给 sudo 执行 |
+| 5 | `restartDaemon` 热重载信任 9090 上的任意响应 | `tryHotReload` 先确认 `isDaemonRunning`，再探 `/version` 确认应答方是 mihomo（返回体带 version 字段），才发 PUT |
+| 6 | `daemon off` 在 plist 被手动删除后是静默 no-op | 判据从「plist 是否存在」改为「plist 不在**且**无 root 内核在跑」。数据层 `disableDaemon` 与命令层 `daemonOff` 两处同步（只改一处会被另一处的守卫短路） |
+| 7 | `daemon on` 遗留 root 属主 pid 文件 | `enableDaemon` 的 sudo 脚本在 `pkill` 后补 `rm -f <pidFile>` |
+| 8 | `__proto__` 作订阅名致缓存永久写不进 | `readSubscriptionCache` 返回 `Object.create(null)`，并把 `JSON.parse` 结果拷进无原型对象（直接返回会重新踩回设置原型的坑） |
+| 9 | 级联删除的空洞（4 项，均无告警） | proxy 与 group 同名 → 告警（不自动删，删哪个都可能不对）；`use` 引用不存在的 provider → 移除并告警；节点池为空 + `include-all` 的空组 → 移除（此前保留但实际无出口）；`group.proxies` 是字符串 → 按单元素处理并告警（此前整体跳过、非法结构落盘）。6 个新单测锁定，含「正常配置不产生告警」的回归用例 |
+
+另修：`needsAutoUpdate` 未来时间戳（时钟被改过/跨时区调时）会让差值恒为负 → 订阅永不自动更新、静默过期失联，现视为缓存不可信立即更新；`normalizeMirrorUrl` 从 `startsWith('http')` 改为 `URL` 解析 + https 白名单（此前放行 `httpfoo://x`、明文 `http://`，并把 `ftp://e.test` 拼成 `https://ftp://e.test/`）；`startTunnel` 在等待转发建立的窗口内注册一次性清理——此前 Ctrl+C 会留下孤儿 ssh + 一份声称健康的运行态文件（实测持久残留不自愈，`tunnel up` 报「已在运行」而 `status` 报「假活」，自相矛盾），成功后立即注销以保持「隧道活过 CLI 退出」的既定语义。
+
+---
+
+## 本轮复核：文档已过期的条目
+
+- **匿名节点 collapse（上轮「仍待处理 9」的子项）已失效**：上轮称无 `name` 元素会被去重折叠、告警显示 `"undefined"`。实测现在 `assertConfigShape` 会抛 `CliError: proxies[0] 缺少有效的 name` 并带 hint，该路径走不到。条目已删
+
+---
+
+## 本轮验证为健壮、无需改动
+
+避免下轮重复排查：
+
+- **YAML 安全**：无原型污染（`__proto__` 只作自有属性）；别名炸弹不放大——解析共享引用，`dumpYaml` 保留锚点，9^7 叶子的归档输出仅 826 字节
+- **隧道三条红线**：`-D` 恒绑 `127.0.0.1`、host 校验（`-oProxyCommand=id`/`h;id`/`h$(id)`/换行注入全部拒绝）、状态真实探测端口——均正确实现
+- **`started_by` 单向提升**：只有 auto→manual 一条路径
+- **PID 复用**：`isRunning` 与 `cleanupAll` 都走命令行匹配，不裸信 PID 文件
+- **两张 flag 表无漂移**：12 个带值选项全在 `VALUE_FLAGS`，`cmdStart` 的 3 个布尔选项全在 `BOOL_FLAGS`
+- **非 TTY 退出码**：`reset` 与 `sub remove` 模糊匹配都正确抛 `CliError` 退 1
+- **HTTP 超时覆盖响应体读取**（abort 中断流）；覆写加载顺序确定（显式 sort，`LC_ALL=C` 下一致）
+
+---
+
+## 上一轮（v3.6.0）已修复
 
 按严重度排列。每条都经实际复现确认，非静态推测。
 
@@ -53,85 +108,11 @@
 
 ---
 
-## 仍待处理
-
-按建议优先级排列。均为已确认存在、但需权衡或成本较高的项。
-
-### 1. 内核下载缺完整性校验（供应链）
-
-- **位置**：`kernel.ts` 下载 → 解压 → `chmod 755` 全链路
-- **现状**：无 SHA256/签名。产物在 TUN/daemon 下**以 root 运行**
-- **上一轮建议不可行**：已核实上游 v1.19.30 release 共 127 个资产，**零 checksum 文件**（全为 `.gz`/`.deb`/`.rpm`）。`kernel.ts` 注释「上游 release 不提供 checksums」是准确的，上一轮报告的假设有误
-- **现有防护**（不弱）：`tar -tzf` 预检路径穿越、`gzip -dc` 走 buffer 不用 shell 重定向、下载后跑 `-v` 自检并在失败时删文件
-- **可行加固**（按性价比排序）：
-  1. 把 `browser_download_url` 的 host 钉死为 `github.com`（只允许镜像做 URL 前缀），并强制 https。`--mirror-all` 下 API 也走镜像，故镜像可返回指向任意主机的下载地址，而 `withMirror` 对非 github URL 原样放行——这是比"无 checksum"更实际的缺口
-  2. 比对 `asset.size`：该值已从 API 取到但仅用于显示
-  3. `normalizeMirrorUrl` 加 scheme 白名单（当前接受 `http://` 明文与 `httpfoo://`）
-  4. 自检强度有限：一行 `#!/bin/sh; echo "Mihomo Meta v1.19.16"` 的脚本即可通过 `-v` 正则
-
-### 2. tar 解压守卫漏 symlink 成员 → 任意文件 chmod 755
-
-- **位置**：`kernel.ts` 路径穿越守卫 + `findBinaryInDir` + `chmodSync`
-- **机制**：守卫只拒绝绝对路径和含 `..` 的**条目名**。名为 `mihomo`、linkname 指向任意路径的 symlink 成员条目名合法，直接通过；`findBinaryInDir` 用 `statSync`（跟随符号链接）把它当二进制返回，`chmodSync(targetPath, 0o755)` 沿链接作用到目标
-- **实测**：`chmod 600` 的受害文件被改成 755。（GNU tar 拒绝「symlink + 经其写文件」的两段式写入，故写内容不成立；chmod 原语成立）
-- **修法**：用 `tar -tvzf` 检查条目类型或加 `-h`/`--no-same-owner` 拒绝非普通文件，遍历改 `lstatSync`
-
-### 3. `Subscription-Userinfo` 解析边界
-
-- **位置**：`subscription.ts` `parseUserInfo` + `settings.ts` `saveSubscriptionMeta`
-- **三个已确认的边界**：
-  - `total=Infinity` → `JSON.stringify` 写成 `"total":null`
-  - `expire=abc` → 塞 0，而 `formatTimestamp(0)` 特判返回「永久」——垃圾值被展示成「永久有效」，正好是最误导的方向
-  - 负数不过滤：`upload=-5` 原样入库，百分比失真
-- **更严重的关联项**：`parseUserInfo` 对无 `=` 的头（如 `garbage`）返回 `{}`（truthy），于是四个字段全 `undefined`，`{...old, ...new}` 后 `JSON.stringify` 丢键 → **已有 upload/download/total/expire 全部被抹掉**；缺字段场景同理会静默清除旧值（旧缓存有 `expire`、新响应头无 → 到期日凭空消失）
-- **修法**：只接受有限非负数，其余按缺失处理（不落盘）；`parts` 无有效 kv 时返回 null；只赋 `!== undefined` 的字段
-
-### 4. TUN 中间脚本 TOCTOU + `writeFileSync` 的 mode 不重放
-
-- **位置**：`process.ts` `launch-tun.sh` 生成/执行、`daemon.ts` `daemon-*.sh`
-- **两个事实**：`writeFileSync(..., {mode})` 的 mode **仅在创建新文件时生效**——前次崩溃残留同名文件时复用其权限位（实测重写 0666 文件后仍是 0666）；`ensureDirs` 在目录已存在时跳过 `mkdirSync`，故 `runtime/` 的 0700 对既存目录不生效（实测 0777 目录保持 0777）
-- **两个 sudo 执行点都不验证「执行的就是刚写的那个文件」**（无 `O_EXCL`、非 fd-based exec）
-- **前提**：需要 `runtime/` 写权限（正常 0700），故属防御纵深而非直接可利用
-- **修法**：写后显式 `chmodSync`，或用随机临时名 + `O_EXCL`
-
-### 5. `restartDaemon` 热重载信任 9090 上的任意响应
-
-- **位置**：`daemon.ts` `tryHotReload` / `restartDaemon`
-- **机制**：只确认 plist **文件存在**，随后 `PUT /configs` 到固定地址，`status === 204 || res.ok` 即返回成功并跳过 kickstart。无任何校验确认应答方是 launchd 托管的 root 内核
-- **后果**：9090 被其他服务占用（另一个 Clash、开发服务器）且对该 PUT 返回 2xx 时，CLI 打印「已重启 (保活)」而 daemon 内核仍跑旧配置——配置变更静默未生效
-
-### 6. `daemon off` 在 plist 被手动删除后是静默 no-op
-
-- **位置**：`daemon.ts` `disableDaemon` 的 `isDaemonEnabled()` 守卫（仅 `existsSync`）
-- **场景**：用户 `sudo rm` plist（自然的手动清理尝试）但任务仍处 bootstrapped，`disableDaemon` 直接返回，永不执行 `launchctl bootout`。`cmdStop` 随后也走非 daemon 路径，`cleanupAll` 杀掉 root 进程后 `KeepAlive` 立即拉起 → 永远停在「仍有进程残留」，且 CLI 无任何路径可 `bootout`
-
-### 7. `daemon on` 遗留 root 属主 pid 文件，阻塞后续 `start`
-
-- **位置**：`daemon.ts` `enableDaemon` 的脚本 `pkill` 后未 `rm -f <pidFile>`
-- **序列**：`start tun`（root pid 文件）→ `daemon on`（TUN 进程被杀，root pid 文件留下）→ `daemon off`（只 chown `logFile`/`dataDir`，不含 pid 文件）→ `start` 撞上 `hasRootResidue()` 拒绝启动，需手动 `sudo rm`。用户有提示引导，但这个死胡同完全由 CLI 自身的 on/off 循环造成
-
-### 8. `__proto__` 作订阅名致缓存永久写不进
-
-- **位置**：`settings.ts` `SAFE_NAME_RE`（`\w` 含下划线）+ `readSubscriptionCache`
-- **机制**：`__proto__`/`constructor`/`prototype` 均通过名称校验（**路径穿越本身已挡住**，上一轮的穿越修复有效）。但 `cache[subName] = {...}` 对 `__proto__` 是设置原型而非自有属性 → `cache.json` 落盘为 `{}` → `updated_at` 永远缺失 → `needsAutoUpdate` 恒 true，**每次 start 都重新下载该订阅**（跨进程无原型污染，JSON 序列化即丢失）
-- **修法**：`readSubscriptionCache` 用 `Object.create(null)` 或 `Map`；名称校验拒绝这三个保留名
-
-### 9. 其他确认存在的小项
-
-- **级联删除仍有空洞**（`config.ts`，均无告警）：proxy 与 proxy-group **同名**时两者都留下（`validNames` 是合并 Set，冲突不可见）→ mihomo 报重复名错误；`use: ['ghost-provider']` 引用不存在的 provider 从不校验，且 `use` 计入 `hasOtherSource` 使该组免于删除；所有 proxy 删完 + 组带 `include-all: true` → 空组保留且 `MATCH,AUTO` 留存；组的 `proxies` 是**字符串**而非列表时被 `Array.isArray` 守卫整体跳过
-- **`~proxies` 元素缺 `name` collapse**（`overwrite.ts` + `config.ts`）：无 name 元素的 `name === undefined`，`deduplicateByName` 比较时全部相撞，两个匿名注入节点只活一个，告警显示 `移除了 1 个重名节点: "undefined"`
-- **TUN 丢弃用户 `tun` 子键**（`config.ts`）：`systemConfig.tun = TUN_CONFIG.tun` 整体覆盖，覆写里的 `device`/`mtu` 全丢。与 `dns` 的逐键合并风格不一致，且 `tun` 子键未列入 CLAUDE.md 的锁定键清单
-- **`key!` 与 `~`/`+` 组合语义矛盾无提示**（`overwrite.ts`）：`~proxies!` 走 merge（`forceOverwrite` 成死代码），`+proxies!` 走 prepend；两者都绕过 `collectOverwriteProxyNames` 的字面量匹配 → `exclude-filter` 不生效 → 注入节点在 `include-all` 组里被计两次
-- **`ensureDirs` 无 memo**（`paths.ts`）：15 个调用点，纯性能项（`existsSync` 短路后约 5 次 stat）
-- **`.bak` 备份不指定 mode**（`settings.ts`）：`copyFileSync` 继承源权限，无下限保证
-- **重复输出**（`process.ts` + `commands/stop.ts`）：数据层 `console.log` 残留 PID 建议后返回，`handleStopResult` 又抛携带同样 PID 与 hint 的 `CliError`
-- **`url-domain: '.example.com'`（前导点）匹配不到任何东西**：fail-closed，覆写被静默跳过而非报错
-
----
-
 ## 平台假设
 
-**全仓无平台守卫**（本轮已加，见下）。此前 `process.platform !== 'darwin'` 零命中、`package.json` 无 `os` 字段。
+> 本节记录于 v3.6.0 那轮；其中的「本轮已加」指 v3.6.0。平台守卫现已长期存在。
+
+**全仓曾无平台守卫**（v3.6.0 补上）。此前 `process.platform !== 'darwin'` 零命中、`package.json` 无 `os` 字段。
 
 macOS 硬依赖清单：
 
@@ -142,7 +123,7 @@ macOS 硬依赖清单：
 
 **已可移植（值得肯定）**：`kernel.ts` 的资产选择用真实 `process.platform` + arch 映射，无硬编码 darwin；全部用户数据路径经 `os.homedir()` + `path.join`；**零网络重配**（`networksetup`/`scutil`/`route`/`pfctl` 全零命中），TUN 路由完全委托内核。
 
-本轮已加：`package.json` 的 `"os": ["darwin"]` + `index.ts` `main()` 开头的平台守卫（豁免 `help`/`version`，留 `MIHOMO_CLI_ALLOW_ANY_PLATFORM=1` 开发逃生阀，守卫先于 `ensureDirs` 以免在不支持的平台污染家目录）。此前 Linux 上的实际表现是「部分成功」：`status`/`sub` 看着正常 → `daemon on` 输完 root 密码才撞 `/Library/LaunchDaemons` → `ui` 报成功却什么都没打开。快速失败严格优于这种静默误行为。
+v3.6.0 已加：`package.json` 的 `"os": ["darwin"]` + `index.ts` `main()` 开头的平台守卫（豁免 `help`/`version`，留 `MIHOMO_CLI_ALLOW_ANY_PLATFORM=1` 开发逃生阀，守卫先于 `ensureDirs` 以免在不支持的平台污染家目录）。此前 Linux 上的实际表现是「部分成功」：`status`/`sub` 看着正常 → `daemon on` 输完 root 密码才撞 `/Library/LaunchDaemons` → `ui` 报成功却什么都没打开。快速失败严格优于这种静默误行为。
 
 ---
 
@@ -171,7 +152,8 @@ macOS 硬依赖清单：
 
 ## 测试与工程
 
-- 单测从 55 增至 101（`npm test`，`node:test` 经 tsx，零新增依赖）。本轮新增覆盖：配置形态校验、`exclude-filter` 锚定、覆写数组语义误用、`match` 大小写、`parseIntArg` 边界、逗号判据
-- 覆盖面仍窄：`process.ts`/`subscription.ts` 这两个最大模块（各约 700 行、且是跑 `sudo` 与杀进程的地方）零单测。这是 CLAUDE.md 明确的取舍（「仅覆盖高危纯函数」），但值得记录
-- 本轮加了 GitHub Actions CI（`macos-latest`，因 `os: ["darwin"]` 后 ubuntu 上 `npm ci` 会平台不匹配失败），跑 typecheck/lint/test/build
-- 本轮加了 `prepublishOnly: npm run build`：`dist/` 被 gitignore 且此前无发布钩子，漏跑 build 即发布陈旧或缺失产物
+- 单测 165（v3.6.0 时 101）。v3.8.0 本轮新增：`withFileLock` 的 6 项（含用真实子进程验证跨进程互斥、陈旧锁强夺、异常路径释放）、`parseUserInfo` 边界 8 项、级联删除空洞 6 项（含「正常配置不产生告警」的回归用例）
+- 覆盖面仍窄：`process.ts`/`subscription.ts` 这两个最大模块（各约 700 行、且是跑 `sudo` 与杀进程的地方）几乎零单测。这是 CLAUDE.md 明确的取舍（「仅覆盖高危纯函数」），但值得记录
+- **注意 `biome check .` 在 worktree 里会检查 0 个文件**：`biome.json` 的 `files.includes` 排除了 `**/.claude`，而 worktree 建在 `.claude/worktrees/` 下。在 worktree 中改动后要显式跑 `npx biome check src/`，否则格式问题会漏到提交（本轮踩过）
+- v3.6.0 加的 GitHub Actions CI（`macos-latest`，因 `os: ["darwin"]` 后 ubuntu 上 `npm ci` 会平台不匹配失败）跑 typecheck/lint/test/build
+- v3.6.0 加的 `prepublishOnly: npm run build`：`dist/` 被 gitignore 且此前无发布钩子，漏跑 build 即发布陈旧或缺失产物

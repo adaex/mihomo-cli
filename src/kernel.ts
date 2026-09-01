@@ -21,6 +21,36 @@ function withMirror(url: string, mirror: string | null): string {
   return url;
 }
 
+/** 允许直接下载内核产物的上游 host（GitHub release 资产的真实落点）。 */
+const ALLOWED_ASSET_HOSTS = new Set(['github.com', 'api.github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com']);
+
+/**
+ * 校验 release 资产的下载地址确实指向 GitHub，且是 https。
+ *
+ * 为什么必须有：`--mirror-all` 下连 API 都走镜像，于是 `browser_download_url`
+ * 完全由镜像说了算；而 `withMirror` 对非 github 的 URL **原样放行**，镜像只要
+ * 返回一个指向自己主机的地址，就能让 CLI 下载任意二进制。该产物随后被 `chmod 755`，
+ * 并在 TUN / daemon 模式下**以 root 运行**——这是比「无 checksum」更实际的缺口
+ * （上游 release 确实不提供 checksums，无法做哈希校验，故把来源钉死是主要防线）。
+ *
+ * 校验必须针对**加镜像前**的上游 URL：加了前缀后整串以镜像域名开头，无从判断来源。
+ */
+function assertTrustedAssetUrl(rawUrl: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error(`内核下载地址无法解析: ${rawUrl}`);
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`内核下载地址必须是 https: ${rawUrl}`);
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (!ALLOWED_ASSET_HOSTS.has(host)) {
+    throw new Error(`内核下载地址的主机不在白名单内: ${host}\n  仅允许: ${[...ALLOWED_ASSET_HOSTS].join(', ')}`);
+  }
+}
+
 function getArch(): string {
   const arch = process.arch;
   if (arch === 'arm64') return 'arm64';
@@ -97,19 +127,31 @@ export async function checkUpdate(mirror: string | null): Promise<KernelUpdateIn
   };
 }
 
+/**
+ * 在解压目录里找内核二进制。
+ *
+ * 用 `lstatSync` 而非 `statSync`：后者**跟随符号链接**。归档里一个名为 `mihomo`、
+ * linkname 指向 `/任意/路径` 的 symlink 成员，条目名合法（不含 `..`、非绝对路径）
+ * 故能通过解压前的路径穿越守卫，随后被当成二进制返回，最终 `chmodSync(target, 0o755)`
+ * 沿链接作用到受害文件——实测把 `chmod 600` 的文件改成了 755。
+ * 用 lstat 后 symlink 既不会被当目录递归，也不会被当二进制返回。
+ */
 function findBinaryInDir(dir: string, maxDepth = 4): string | null {
   if (maxDepth <= 0) return null;
   const files = fs.readdirSync(dir);
 
   for (const f of files) {
     const fullPath = path.join(dir, f);
-    const stat = fs.statSync(fullPath);
+    const stat = fs.lstatSync(fullPath);
 
     if (stat.isDirectory()) {
       const found = findBinaryInDir(fullPath, maxDepth - 1);
       if (found) return found;
       continue;
     }
+
+    // 只认普通文件：symlink / fifo / socket 等一律跳过
+    if (!stat.isFile()) continue;
 
     if (f === 'mihomo') return fullPath;
     if (f.includes('mihomo') && !f.endsWith('.gz')) return fullPath;
@@ -138,6 +180,8 @@ export async function downloadKernel(
     throw new Error(`未找到匹配的内核文件\n  平台: ${platform}, 架构: ${arch}${hint}`);
   }
 
+  // 先钉死上游来源，再套镜像前缀（顺序不可换：加了前缀就看不出原始 host 了）
+  assertTrustedAssetUrl(asset.browser_download_url);
   const downloadUrl = withMirror(asset.browser_download_url, mirror);
   // basename 剥离 asset.name 里的任何目录成分：API 响应/镜像若被篡改带 ../ 可写出 kernel 目录外
   const tempPath = path.join(DIRS.kernel, path.basename(asset.name));
@@ -151,9 +195,29 @@ export async function downloadKernel(
     progressCallback(`下载内核: ${asset.name} (${sizeMB} MB)`);
   }
 
+  // --proto '=https' / --proto-redir '=https': curl -L 默认跟随任意协议的重定向,
+  // 实测会跟着 302 降级到明文 http 并把响应落盘。产物随后以 root 运行,
+  // 故全链路(含重定向)强制 https。--max-filesize 防止被喂超大文件撑爆磁盘。
+  const maxBytes = Number.isFinite(asset.size) && asset.size > 0 ? Math.floor(asset.size * 2 + 1024 * 1024) : 512 * 1024 * 1024;
   const curlResult = spawnSync(
     'curl',
-    ['-L', '--progress-bar', '--connect-timeout', '30', '--max-time', String(Math.floor(KERNEL_DOWNLOAD_TIMEOUT / 1000)), '-o', tempPath, downloadUrl],
+    [
+      '-L',
+      '--proto',
+      '=https',
+      '--proto-redir',
+      '=https',
+      '--max-filesize',
+      String(maxBytes),
+      '--progress-bar',
+      '--connect-timeout',
+      '30',
+      '--max-time',
+      String(Math.floor(KERNEL_DOWNLOAD_TIMEOUT / 1000)),
+      '-o',
+      tempPath,
+      downloadUrl,
+    ],
     { stdio: 'inherit' },
   );
 
@@ -177,6 +241,24 @@ export async function downloadKernel(
     throw new Error('下载失败: 文件未生成');
   }
 
+  // 比对 API 声明的资产大小：`asset.size` 此前只用于显示。不匹配说明下载被截断
+  // （网络中断留下半个文件）或内容被替换。无 checksum 可校验时这是唯一的完整性信号——
+  // 强度有限（攻击者可填充到同样字节数），但能挡住截断与不等长的偷换。
+  // 要求精确相等：release 资产是不可变的，字节数不该有任何偏差。
+  if (Number.isFinite(asset.size) && asset.size > 0) {
+    const actual = fs.statSync(tempPath).size;
+    if (actual !== asset.size) {
+      try {
+        fs.unlinkSync(tempPath);
+      } catch {
+        /* ignore */
+      }
+      throw new Error(
+        `下载的文件大小与 release 元数据不符（期望 ${asset.size} 字节，实际 ${actual} 字节）\n  可能是下载被截断或内容被替换，请重试或改用 --no-mirror 直连`,
+      );
+    }
+  }
+
   if (progressCallback) {
     progressCallback('解压内核...');
   }
@@ -186,17 +268,38 @@ export async function downloadKernel(
 
   try {
     if (tempPath.endsWith('.tar.gz') || tempPath.endsWith('.tgz')) {
-      // 路径穿越防护：解压前列出条目，拒绝绝对路径或含 .. 的成员（恶意镜像可借此写出 extractPath 之外）
+      // 两道守卫，各用一种列表格式（刻意分开：-tv 的条目名在含空格的文件名下无法可靠切出，
+      // 而 -t 又不带类型信息，硬从 -tv 里解析名字会误判）：
+      //
+      // 1) -tzf 给出干净的条目名（一行一个，无附加列）→ 查路径穿越
       const listResult = spawnSync('tar', ['-tzf', tempPath], { encoding: 'utf8', timeout: 60_000 });
       if (listResult.error) throw listResult.error;
       if (listResult.status !== 0) throw new Error(`tar 列表退出码 ${listResult.status}`);
-      const entries = (listResult.stdout || '').split('\n').filter(Boolean);
-      for (const entry of entries) {
+      for (const entry of (listResult.stdout || '').split('\n').filter(Boolean)) {
         if (entry.startsWith('/') || entry.split('/').includes('..')) {
           throw new Error(`归档含非法路径条目: ${entry}`);
         }
       }
-      const tarResult = spawnSync('tar', ['-xzf', tempPath, '-C', extractPath], { stdio: ['ignore', 'ignore', 'inherit'], timeout: 60_000 });
+
+      // 2) -tvzf 的首列权限串首字符给出条目类型 → 拒绝符号/硬链接成员。
+      // 名为 mihomo、linkname 指向任意路径的 symlink 条目名完全合法，能通过上面的路径检查，
+      // 后续却会让 chmod 755 沿链接作用到受害文件（findBinaryInDir 的 lstat 是第二道防线）
+      const typeResult = spawnSync('tar', ['-tvzf', tempPath], { encoding: 'utf8', timeout: 60_000 });
+      if (typeResult.error) throw typeResult.error;
+      if (typeResult.status !== 0) throw new Error(`tar 列表退出码 ${typeResult.status}`);
+      for (const line of (typeResult.stdout || '').split('\n').filter(Boolean)) {
+        const typeChar = line[0];
+        // - 普通文件、d 目录；l 符号链接、h 硬链接及其余特殊类型一律拒绝
+        if (typeChar !== '-' && typeChar !== 'd') {
+          throw new Error(`归档含非普通文件条目（类型 "${typeChar}"）: ${line}`);
+        }
+      }
+
+      // --no-same-owner: 即便前面漏判也不让归档改变属主
+      const tarResult = spawnSync('tar', ['--no-same-owner', '-xzf', tempPath, '-C', extractPath], {
+        stdio: ['ignore', 'ignore', 'inherit'],
+        timeout: 60_000,
+      });
       if (tarResult.error) throw tarResult.error;
       if (tarResult.status !== 0) throw new Error(`tar 退出码 ${tarResult.status}`);
     } else if (tempPath.endsWith('.gz')) {

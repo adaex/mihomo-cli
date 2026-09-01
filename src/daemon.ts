@@ -110,6 +110,10 @@ function runSudoScript(scriptBody: string, opts: SudoScriptOptions): void {
   ensureDirs();
   const scriptPath = path.join(DIRS.runtime, opts.file);
   fs.writeFileSync(scriptPath, scriptBody, { mode: 0o700 });
+  // writeFileSync 的 mode 只在**创建新文件**时生效：前次崩溃残留的同名文件会保留
+  // 其原有权限位（实测重写 0666 文件后仍是 0666），而本文件下一步就交给 sudo 执行。
+  // 显式 chmod 才能保证「只有属主可写」，避免他人预置/篡改脚本内容。
+  fs.chmodSync(scriptPath, 0o700);
 
   try {
     const result = spawnSync('sudo', [scriptPath], { stdio: 'inherit', timeout: SUDO_TIMEOUT_MS });
@@ -179,6 +183,7 @@ export function enableDaemon(): void {
   const plistDest = shellQuote(PATHS.launchDaemonPlist);
   const stage = shellQuote(stagePath);
   const pattern = shellQuote(MAIN_INSTANCE_PATTERN);
+  const pidFile = shellQuote(PATHS.pidFile);
 
   // 顺序关键：先 bootout 卸载旧任务（使 KeepAlive 失效）→ root 身份 pkill 清残留
   // （替代 JS cleanupAll，普通用户杀不掉 root 进程）→ install 到系统目录 → bootstrap。
@@ -186,6 +191,10 @@ export function enableDaemon(): void {
     '#!/bin/bash',
     `launchctl bootout ${target} 2>/dev/null || true`,
     `pkill -9 -f ${pattern} 2>/dev/null || true`,
+    // 一并清掉 pid 文件：`start tun` 留下的是 **root 属主**的 pid 文件，普通用户删不掉。
+    // 不删会让后续 `daemon off` → `start` 撞上 hasRootResidue() 的拒绝启动，
+    // 而这个死胡同完全由 CLI 自身的 on/off 循环造成
+    `rm -f ${pidFile}`,
     'sleep 0.2',
     `install -m 644 -o root -g wheel ${stage} ${plistDest} || exit 2`,
     `launchctl bootstrap system ${plistDest} || { launchctl bootout ${target} 2>/dev/null; rm -f ${plistDest}; exit 3; }`,
@@ -214,11 +223,22 @@ export function enableDaemon(): void {
 /**
  * 停用保活：单次 sudo 脚本卸载任务、删 plist、并把 root 属主的日志/数据归还当前用户
  * （修复"启用→关闭→用户态 start 对 root 属主 logFile 追加 EACCES"的权限冲突）。
- * 幂等：plist 不存在直接返回，不弹 sudo。不自动 pkill（避免误杀手动实例），仅残留时提示。
+ * 不自动 pkill（避免误杀手动实例），仅残留时提示。
+ *
+ * 幂等的判据是「plist 不在 **且** 没有 root 内核在跑」，不能只看 plist：
+ * 用户 `sudo rm` 掉 plist（很自然的手动清理尝试）后任务仍处 bootstrapped 状态，
+ * 只看文件会直接返回、永不执行 `launchctl bootout`，于是 KeepAlive 继续把内核拉起——
+ * `stop` 杀掉后立刻重生，用户陷入「永远停不掉且 CLI 无路可走」的死胡同。
  */
 export function disableDaemon(): void {
   assertDaemonLabelSafe();
-  if (!isDaemonEnabled()) return;
+  const plistExists = isDaemonEnabled();
+  const rootKernelRunning = getMihomoPids().some(isProcessRoot);
+  if (!plistExists && !rootKernelRunning) return;
+  if (!plistExists) {
+    console.log('未找到 plist，但检测到 root 内核在运行（可能 plist 被手动删除而任务仍装载）');
+    console.log('将执行 launchctl bootout 卸载残留任务');
+  }
 
   const target = shellQuote(SERVICE_TARGET);
   const plistDest = shellQuote(PATHS.launchDaemonPlist);
@@ -253,6 +273,12 @@ export function disableDaemon(): void {
  * 而 configFile 在 runtime/ 下会被拒成 400；空 body 重载 `-f` 文件天然规避该限制。
  */
 async function tryHotReload(): Promise<boolean> {
+  // 先确认 9090 上确实是 launchd 托管的 root 内核，再把配置变更托付给它。
+  // 只看 plist 存在 + PUT 返回 2xx 是不够的：9090 被其他服务占用（另一个 Clash、
+  // 开发服务器）且对该 PUT 返回 2xx 时，CLI 会打印「已重启 (保活)」而 daemon 内核
+  // 仍跑旧配置——配置变更静默未生效，是最难排查的一类失败。
+  if (!isDaemonRunning(getDaemonStatus())) return false;
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HOT_RELOAD_TIMEOUT_MS);
   // 配置了 controller_secret 时必须带 Bearer，否则内核返回 401 → 热重载恒失败回退 sudo 重启
@@ -260,6 +286,13 @@ async function tryHotReload(): Promise<boolean> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (secret) headers.Authorization = `Bearer ${secret}`;
   try {
+    // /version 是 mihomo 特有端点，返回体带 version 字段；用它确认应答方是 mihomo
+    // 而非碰巧监听同端口的其他程序（后者极可能对未知路径的 PUT 也返回 2xx）
+    const probe = await fetch(`${CONTROLLER_BASE_URL}/version`, { headers, signal: controller.signal });
+    if (!probe.ok) return false;
+    const info = (await probe.json()) as { version?: unknown };
+    if (typeof info?.version !== 'string') return false;
+
     const res = await fetch(`${CONTROLLER_BASE_URL}/configs?force=true`, {
       method: 'PUT',
       headers,

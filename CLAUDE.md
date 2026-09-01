@@ -144,6 +144,8 @@ npm test               # node:test 单测（*.spec.ts，零新增依赖，经 ts
 
 测试仅覆盖高危纯函数（覆写合并/配置校验/名称归一/URL 遮蔽/参数校验等），非全量。文件命名 `*.spec.ts`（勿用 `*.test.ts`，会与 test.ts/test-instance.ts 冲突）。
 
+**在 worktree 里 `npm run check` 是空转**：`biome.json` 的 `files.includes` 排除 `**/.claude`，而 worktree 建在 `.claude/worktrees/` 下，于是它「Checked 0 files」直接通过。worktree 中改完要显式跑 `npx biome check src/`（修复加 `--write`），否则格式问题会一路漏到提交。
+
 CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.yml`）——因 `os: ["darwin"]`，ubuntu runner 上 `npm ci` 会平台不匹配失败。
 
 ### 错误处理
@@ -181,6 +183,24 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 - **订阅列表**：一律经 `getSubscriptions()` 读取，不直接访问 `settings.subscriptions`——非数组值会被展开运算符按字符展开成垃圾列表
 - **URL 逗号**：逗号在 query/path 中合法。多源判据统一为「切分后每段都是合法 http(s) URL 且不止一段」，三处实现需同步（`settings.maskUrl`、`subscription.isMultiUrl`/`splitUrls`、`overwrite.splitUrlsLocal`）。只看「含逗号」会泄漏 token，只看「整体可解析」会漏遮蔽真多源
 - **`writeFileSync` 的 `mode`** 仅在创建新文件时生效；对可能已存在的文件（sudo 中间脚本）需显式 `chmodSync`
+
+### settings.json 的读-改-写必须持锁
+
+`settings.json` 同时装订阅与隧道，而多个 CLI 进程会并发跑（慢速 `sub add` 跨整个网络下载期间，用户在另一个终端操作是日常）。`readSettings` 又有进程级缓存，拿陈旧缓存全量写回会把对方刚落盘的改动整块抹掉——**且写入方收到的是成功回执**（实测 `tunnel add` 打印「已添加」后被并发的 `sub add` 抹成 null）。
+
+- **数组类改动（`subscriptions`/`tunnels`）一律走 `updateSettings(mutate)`**：它持 `withFileLock` 完成「丢缓存 → 读盘上最新 → mutator 算改动 → 写回」。只在 `writeSettings` 里重读盘**不够**，读与写之间仍有窗口（实测 6 并发仍丢 3 条）
+- `writeSettings` 只安全用于单键/整值替换
+- mutator 必须同步，且不得再调 `updateSettings`/`writeSettings`——**锁不可重入**，会死等到强夺陈旧锁
+- 锁超过 10s 视为持锁进程已崩溃并强夺：宁可退回竞态，也不能让一次崩溃永久锁死 CLI
+
+### 内核下载的来源信任
+
+上游 release 不提供 checksums（127 个资产实测，注释属实），故**把来源钉死是主要防线**，不是可选加固：
+
+- `assertTrustedAssetUrl` 必须在**加镜像前缀之前**调用——加了前缀整串就以镜像域名开头，无从判断原始 host
+- `--mirror-all` 下连 API 都走镜像，`browser_download_url` 完全由镜像说了算，而 `withMirror` 对非 github URL 原样放行
+- curl 必须带 `--proto '=https' --proto-redir '=https'`：`-L` 默认跟随任意协议重定向，实测会降级到明文 http 并落盘。产物随后 `chmod 755` 并在 TUN/daemon 下**以 root 运行**
+- tar 守卫要同时查**路径**（`-tzf`，条目名干净）与**类型**（`-tvzf` 首字符，拒 `l`/`h`）：symlink 成员的条目名完全合法，能过路径检查却让 `chmod 755` 沿链接作用到任意文件。遍历用 `lstatSync` 不用 `statSync`
 
 ### 覆写语义
 

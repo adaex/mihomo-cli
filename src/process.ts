@@ -284,6 +284,9 @@ function createTunLaunchScript(): string {
 
   const scriptPath = path.join(DIRS.runtime, 'launch-tun.sh');
   fs.writeFileSync(scriptPath, scriptContent, { mode: 0o700 });
+  // mode 只在创建新文件时生效，残留的同名文件会保留旧权限（可能是 0666）。
+  // 本脚本下一步交给 sudo 执行，必须显式收紧到仅属主可写。
+  fs.chmodSync(scriptPath, 0o700);
   return scriptPath;
 }
 

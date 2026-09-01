@@ -217,6 +217,22 @@ export function validateConfig(config: Record<string, unknown>): string[] {
   }
 
   const validNames = new Set([...BUILTIN_PROXY_NAMES, ...proxyDedup.names, ...groupDedup.names]);
+
+  // proxy 与 proxy-group 同名：validNames 是合并 Set，冲突在其中不可见，两者都被留下，
+  // 而 mihomo 启动时会因重复名直接报错。这里只告警不自动删——删哪个都可能不是用户想要的
+  for (const name of groupDedup.names) {
+    if (proxyDedup.names.has(name)) {
+      warnings.push(`名称冲突: "${name}" 同时是节点和分组名，mihomo 会拒绝加载（请重命名其一）`);
+    }
+  }
+
+  // proxy-providers 里声明的 provider 名，用于校验分组的 use 引用
+  const providerNames = new Set<string>(
+    config['proxy-providers'] && typeof config['proxy-providers'] === 'object' && !Array.isArray(config['proxy-providers'])
+      ? Object.keys(config['proxy-providers'] as Record<string, unknown>)
+      : [],
+  );
+
   const activeGroups = groupDedup.result;
   const removedGroups = new Set<string>();
   let changed = true;
@@ -225,15 +241,42 @@ export function validateConfig(config: Record<string, unknown>): string[] {
     changed = false;
     for (const group of activeGroups) {
       if (removedGroups.has(group.name)) continue;
+
+      // proxies 写成标量（漏了列表缩进）时此前被整体跳过，非法结构原样落盘。
+      // 转成单元素列表继续走后续校验，并告警提示用户改正
+      if (group.proxies !== undefined && !Array.isArray(group.proxies)) {
+        if (typeof group.proxies === 'string') {
+          warnings.push(`proxy-group "${group.name}": proxies 应为列表，已按单元素处理（"${group.proxies}"）`);
+          group.proxies = [group.proxies];
+        } else {
+          warnings.push(`proxy-group "${group.name}": proxies 不是列表，已忽略该字段`);
+          group.proxies = [];
+        }
+      }
       if (!Array.isArray(group.proxies)) continue;
 
+      // use 引用不存在的 provider：此前从不校验，且 use 计入 hasOtherSource 使该组免于删除，
+      // 于是生成的配置引用了不存在的 provider，mihomo 报错
+      if (Array.isArray(group.use)) {
+        const ghosts = group.use.filter(u => typeof u === 'string' && !providerNames.has(u));
+        if (ghosts.length > 0) {
+          group.use = group.use.filter(u => providerNames.has(u as string));
+          warnings.push(`proxy-group "${group.name}": 移除了不存在的 provider 引用 ${ghosts.map(n => `"${n}"`).join(', ')}`);
+        }
+      }
+
       const invalid = group.proxies.filter(name => !validNames.has(name));
-      if (invalid.length === 0) continue;
+      if (invalid.length > 0) {
+        group.proxies = group.proxies.filter(name => validNames.has(name));
+        warnings.push(`proxy-group "${group.name}": 移除了不存在的引用 ${invalid.map(n => `"${n}"`).join(', ')}`);
+      }
 
-      group.proxies = group.proxies.filter(name => validNames.has(name));
-      warnings.push(`proxy-group "${group.name}": 移除了不存在的引用 ${invalid.map(n => `"${n}"`).join(', ')}`);
-
-      const hasOtherSource = group.use || group['include-all'] || group['include-all-proxies'];
+      // include-all* 只在确有节点可纳入时才算有效来源：proxies 全空 + 节点池为空时，
+      // 该组实际没有任何出口，留着会让 MATCH,<组名> 指向一个空组（表现为完全不通）
+      const hasUse = Array.isArray(group.use) ? group.use.length > 0 : Boolean(group.use);
+      const includesAll = Boolean(group['include-all'] || group['include-all-proxies']);
+      const includeAllUsable = includesAll && proxyDedup.result.length > 0;
+      const hasOtherSource = hasUse || includeAllUsable;
       if (group.proxies.length === 0 && !hasOtherSource) {
         removedGroups.add(group.name);
         validNames.delete(group.name);

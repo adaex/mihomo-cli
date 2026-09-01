@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CliError } from './errors.js';
-import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
+import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './paths.js';
 import type { Settings, Subscription, SubscriptionCache, SubscriptionCacheEntry, SubscriptionWithCache } from './types.js';
 
 let settingsCache: Settings | null = null;
@@ -42,8 +42,24 @@ function recoverCorruptedSettings(): Settings {
   return settingsCache;
 }
 
+/**
+ * 写入设置。**持跨进程锁 + 先丢缓存重读盘再合并**：`settingsCache` 是进程级的，
+ * 而两个 CLI 进程会并发跑（慢速 `sub add` 跨整个网络下载期间，用户在另一个终端
+ * 做别的操作是日常）。此前拿启动时的陈旧缓存做全量合并写回，会把对方刚落盘的
+ * 改动整块抹掉，且写入方收到的是成功回执——实测 `tunnel add` 打印「已添加」后，
+ * 隧道被并发的 `sub add` 抹成 null（订阅与隧道同在一个文件，互不相干的命令互相摧毁）。
+ *
+ * 本函数只安全用于「单键/整值替换」。**数组类改动（subscriptions/tunnels）必须走
+ * `updateSettings`**：调用方若在锁外用陈旧数组算好再传进来，重读也无从恢复对方的条目。
+ */
 export function writeSettings(settings: Partial<Settings>): Settings {
   ensureDirs();
+  return withFileLock(PATHS.settingsFile, () => writeSettingsUnlocked(settings));
+}
+
+/** `writeSettings` 的锁内实现。锁不可重入，故持锁路径（updateSettings）只能调它。 */
+function writeSettingsUnlocked(settings: Partial<Settings>): Settings {
+  settingsCache = null;
   const existing = readSettings();
   const merged = { ...existing, ...settings } as Record<string, unknown>;
   for (const key of Object.keys(settings)) {
@@ -52,6 +68,27 @@ export function writeSettings(settings: Partial<Settings>): Settings {
   atomicWriteFileSync(PATHS.settingsFile, JSON.stringify(merged, null, 2), { mode: 0o600 });
   settingsCache = merged as Settings;
   return settingsCache;
+}
+
+/**
+ * 读-改-写的唯一正确入口：**持跨进程锁**，丢缓存 → 读盘上最新 → 由 mutator 基于
+ * 最新算出改动 → 写回 → 放锁。
+ *
+ * 数组类改动（subscriptions / tunnels）必须用它而不是 `writeSettings`：
+ * 后者虽也重读，但读与写之间仍有窗口，两个进程照样能交错（实测 6 个并发
+ * `sub add` 仍丢 3 条）。只有把整个读-改-写圈进锁里才真正安全。
+ *
+ * mutator 必须同步、且不得再调用本函数或 `writeSettings`（锁不可重入，会死等到
+ * 强夺陈旧锁）。mutator 内部读 `getSubscriptions()`/`getTunnels()` 是安全的：
+ * 缓存已在进锁后清掉，它们读到的是盘上最新。
+ */
+export function updateSettings(mutate: (current: Settings) => Partial<Settings>): Settings {
+  ensureDirs();
+  return withFileLock(PATHS.settingsFile, () => {
+    settingsCache = null;
+    const current = readSettings();
+    return writeSettingsUnlocked(mutate(current));
+  });
 }
 
 export function invalidateSettingsCache(): void {
@@ -125,12 +162,24 @@ export function maskUrl(url: string): string {
 
 // === Subscription cache ===
 
+/**
+ * 读订阅缓存。返回**无原型对象**（`Object.create(null)`）：订阅名会作为键使用，
+ * 而 `__proto__` / `constructor` / `prototype` 都通过 `SAFE_NAME_RE` 校验。
+ * 普通对象上 `cache['__proto__'] = {...}` 是**设置原型而非自有属性**，
+ * `JSON.stringify` 后落盘为 `{}` → `updated_at` 永远缺失 → `needsAutoUpdate` 恒 true
+ * → 每次 `start` 都重新下载该订阅。无原型对象上这三个名字都是普通键。
+ */
 export function readSubscriptionCache(): SubscriptionCache {
   ensureDirs();
+  const empty = (): SubscriptionCache => Object.create(null) as SubscriptionCache;
   if (fs.existsSync(PATHS.subscriptionsCacheFile)) {
     try {
       const content = fs.readFileSync(PATHS.subscriptionsCacheFile, 'utf8');
-      return JSON.parse(content) as SubscriptionCache;
+      const parsed = JSON.parse(content) as unknown;
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return empty();
+      // 拷进无原型对象：JSON.parse 的结果仍是普通对象，直接返回会让后续
+      // cache['__proto__'] = ... 重新踩回设置原型的坑
+      return Object.assign(empty(), parsed);
     } catch {
       // 与 settings.json 一致：损坏先备份再回退默认，避免下次写入覆盖丢失原始内容
       try {
@@ -139,10 +188,10 @@ export function readSubscriptionCache(): SubscriptionCache {
       } catch {
         console.warn('警告: 订阅缓存格式损坏，已忽略');
       }
-      return {};
+      return empty();
     }
   }
-  return {};
+  return empty();
 }
 
 function writeSubscriptionCache(cache: SubscriptionCache): void {
@@ -207,36 +256,50 @@ function validateSubscriptionName(name: string): void {
 
 export function addSubscription(url: string, name = 'default'): void {
   validateSubscriptionName(name);
-  const settings = readSettings();
-  // 经 getSubscriptions 而非直读：非数组的 subscriptions 会被字符串展开成垃圾列表
-  const subs = [...getSubscriptions()];
-  if (subs.some(s => s.name === name)) {
+  // 经 updateSettings：列表必须基于盘上最新计算，否则并发的另一个 CLI 进程
+  // 刚添加的订阅会被本次的陈旧数组覆盖掉（对方却已打印「已添加」）
+  let duplicate = false;
+  updateSettings(settings => {
+    // 经 getSubscriptions 而非直读：非数组的 subscriptions 会被字符串展开成垃圾列表
+    const subs = [...getSubscriptions()];
+    if (subs.some(s => s.name === name)) {
+      duplicate = true;
+      return {};
+    }
+    subs.push({ name, url });
+    const updates: Partial<Settings> = { subscriptions: subs };
+    if (!settings.active_subscription && subs.length === 1) {
+      updates.active_subscription = name;
+    }
+    return updates;
+  });
+  // 抛错移到 mutator 外：mutator 内抛会让 updateSettings 半途退出，语义不清
+  if (duplicate) {
     throw new CliError(`订阅 "${name}" 已存在，请换个名称（mihomo sub add <url> <名称>），或先删除（mihomo sub remove ${name}）`);
   }
-  subs.push({ name, url });
-  const updates: Partial<Settings> = { subscriptions: subs };
-  if (!settings.active_subscription && subs.length === 1) {
-    updates.active_subscription = name;
-  }
-  writeSettings(updates);
 }
 
 export function removeSubscription(name: string): string | null {
-  const settings = readSettings();
-  const subs = [...getSubscriptions()];
-  const idx = subs.findIndex(s => s.name === name);
-  if (idx < 0) return null;
-
-  subs.splice(idx, 1);
-  const updates: Partial<Settings> = { subscriptions: subs };
-
   let switchedTo: string | null = null;
-  if (settings.active_subscription === name) {
-    switchedTo = subs.length > 0 ? subs[0].name : null;
-    updates.active_subscription = switchedTo ?? undefined;
-  }
+  let found = false;
 
-  writeSettings(updates);
+  updateSettings(settings => {
+    const subs = [...getSubscriptions()];
+    const idx = subs.findIndex(s => s.name === name);
+    if (idx < 0) return {};
+    found = true;
+
+    subs.splice(idx, 1);
+    const updates: Partial<Settings> = { subscriptions: subs };
+
+    if (settings.active_subscription === name) {
+      switchedTo = subs.length > 0 ? subs[0].name : null;
+      updates.active_subscription = switchedTo ?? undefined;
+    }
+    return updates;
+  });
+
+  if (!found) return null;
 
   const cache = readSubscriptionCache();
   if (cache[name]) {

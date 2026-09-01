@@ -5,9 +5,10 @@ import path from 'node:path';
 
 import { BASE_CONFIG, CONTROLLER_PORT, TEST_CONFIG, TEST_CONTROLLER_ADDR } from './constants.js';
 import { CliError } from './errors.js';
+import { registerCleanup } from './lifecycle.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, USER_DATA_DIR } from './paths.js';
 import { isProcessCommandMatching, isProcessRunning } from './process.js';
-import { readSettings, SAFE_NAME_RE, writeSettings } from './settings.js';
+import { readSettings, SAFE_NAME_RE, updateSettings } from './settings.js';
 import type { Settings, TunnelConfig, TunnelRuntime, TunnelStatus } from './types.js';
 import { sleepSync } from './utils.js';
 
@@ -129,21 +130,35 @@ export function addTunnel(config: TunnelConfig): void {
   validateTunnelName(config.name);
   validateTunnelHost(config.host);
   validateTunnelPort(config.port);
-  const tunnels = [...getTunnels()];
-  if (tunnels.some(t => t.name === config.name)) {
+  // 经 updateSettings：隧道与订阅同住 settings.json，慢速 `sub add` 期间执行本命令，
+  // 此前会被对方拿陈旧缓存全量写回抹掉，而这里已经打印过「已添加」
+  let duplicate = false;
+  updateSettings(() => {
+    const tunnels = [...getTunnels()];
+    if (tunnels.some(t => t.name === config.name)) {
+      duplicate = true;
+      return {};
+    }
+    tunnels.push(config);
+    return { tunnels } as Partial<Settings>;
+  });
+  if (duplicate) {
     throw new CliError(`隧道 "${config.name}" 已存在，请换个名称，或先删除（mihomo tunnel rm ${config.name}）`);
   }
-  tunnels.push(config);
-  writeSettings({ tunnels } as Partial<Settings>);
 }
 
 /** 从设置中移除隧道条目。不存在返回 false；**不删覆写文件**（那是用户维护的资产）。 */
 export function removeTunnel(name: string): boolean {
-  const tunnels = [...getTunnels()];
-  const idx = tunnels.findIndex(t => t.name === name);
-  if (idx < 0) return false;
-  tunnels.splice(idx, 1);
-  writeSettings({ tunnels } as Partial<Settings>);
+  let found = false;
+  updateSettings(() => {
+    const tunnels = [...getTunnels()];
+    const idx = tunnels.findIndex(t => t.name === name);
+    if (idx < 0) return {};
+    found = true;
+    tunnels.splice(idx, 1);
+    return { tunnels } as Partial<Settings>;
+  });
+  if (!found) return false;
   clearTunnelRuntime(name);
   return true;
 }
@@ -339,7 +354,8 @@ export async function startTunnel(name: string, options: { startedBy: 'auto' | '
   child.on('error', () => {});
   fs.closeSync(logFd);
 
-  // 不注册 registerCleanup：那是「随 CLI 退出而死」的语义，而隧道必须在 CLI 退出后继续存活
+  // unref：隧道必须能活过 CLI 退出，不能作为子进程被父进程的生命周期拴住。
+  // （启动等待窗口内另有一次性的 registerCleanup 兜底，见下方注释）
   child.unref();
 
   const pid = child.pid;
@@ -354,13 +370,35 @@ export async function startTunnel(name: string, options: { startedBy: 'auto' | '
     port: config.port,
   });
 
-  // 等转发真正建起来：进程活着不等于端口在监听（ssh 要先完成认证与通道协商）
-  for (let i = 0; i < START_WAIT_ATTEMPTS; i++) {
-    if (!isProcessRunning(pid)) break;
-    if (await isPortListening(config.port)) {
-      return { alreadyRunning: false, pid };
+  // 仅在「等待转发建立」这段窗口内注册清理：此时隧道尚未确认可用，用户按 Ctrl+C
+  // 意味着放弃本次启动。SIGINT 处理器走 process.exit(130) 会跳过 finally，
+  // 此前会留下一个孤儿 ssh 进程 + 一份声称健康的运行态文件（实测持久残留，
+  // 不会自愈），随后 `tunnel up` 报「已在运行」、`status` 报「假活」，自相矛盾。
+  //
+  // 一旦转发建立成功就立刻注销——那之后隧道必须活过 CLI 退出（本模块的既定语义）。
+  const unregisterCleanup = registerCleanup(() => {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      /* 进程可能已自行退出 */
     }
-    await new Promise(resolve => setTimeout(resolve, START_WAIT_INTERVAL));
+    clearTunnelRuntime(name);
+  });
+
+  // 等转发真正建起来：进程活着不等于端口在监听（ssh 要先完成认证与通道协商）
+  try {
+    for (let i = 0; i < START_WAIT_ATTEMPTS; i++) {
+      if (!isProcessRunning(pid)) break;
+      if (await isPortListening(config.port)) {
+        unregisterCleanup();
+        return { alreadyRunning: false, pid };
+      }
+      await new Promise(resolve => setTimeout(resolve, START_WAIT_INTERVAL));
+    }
+  } finally {
+    // 无论成功返回、抛错还是循环走完，都要摘掉清理注册（成功路径上隧道要活过 CLI；
+    // 失败路径下面会显式收尸，留着会造成重复 kill）
+    unregisterCleanup();
   }
 
   // 到这里说明失败了：要么进程已退出，要么进程在但端口始终不通

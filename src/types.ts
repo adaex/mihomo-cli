@@ -82,12 +82,17 @@ export interface DownloadResult {
   username: string | null;
 }
 
+/**
+ * `Subscription-Userinfo` 头解析结果。四个字段都是**可选**的：机场可能只返回其中
+ * 几个，也可能返回垃圾值（被 parseUserInfo 按缺失丢弃）。声明为必填会让
+ * 「缺字段」在类型层面不可见，进而写出用 undefined 覆盖旧缓存的代码。
+ */
 export interface UserInfo {
-  upload: number;
-  download: number;
-  total: number;
-  expire: number;
-  [key: string]: number;
+  upload?: number;
+  download?: number;
+  total?: number;
+  expire?: number;
+  [key: string]: number | undefined;
 }
 
 // === Config Build ===
