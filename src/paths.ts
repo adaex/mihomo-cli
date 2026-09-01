@@ -20,6 +20,10 @@ export const DIRS = {
   logs: path.join(USER_DATA_DIR, 'logs'),
   data: path.join(USER_DATA_DIR, 'data'),
   runtime: path.join(USER_DATA_DIR, 'runtime'),
+  // 隧道运行态。刻意独立于 runtime/：clearRuntime() 会在 stop() 成功路径 rmrf 整个
+  // runtime 目录，隧道状态放那里会被 `mihomo stop` 连同 config.yaml 一起抹掉，
+  // 于是「谁起的」标记丢失、手动起的隧道再也无法被识别
+  tunnel: path.join(USER_DATA_DIR, 'tunnel'),
 } as const;
 
 export const PATHS = {

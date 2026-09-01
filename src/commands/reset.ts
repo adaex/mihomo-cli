@@ -7,6 +7,7 @@ import { isOverwriteFilename } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import * as processManager from '../process.js';
 import { invalidateSettingsCache, writeSettings } from '../settings.js';
+import { stopAllTunnels } from '../tunnel.js';
 import type { ResetTarget } from '../types.js';
 import { confirmPrompt } from './shared.js';
 
@@ -78,6 +79,19 @@ const RESET_TARGETS: ResetTarget[] = [
     needsStop: false,
   },
   {
+    // 隧道要在删 pid 文件之前先停进程（onBefore）：文件一删就再也找不到那些 ssh 进程，
+    // 它们会继续占着端口跑下去，且 CLI 无任何路径能停掉
+    id: 'tunnel',
+    aliases: ['tunnel', 'tunnels', 'ssh'],
+    label: '隧道',
+    paths: () => [DIRS.tunnel],
+    needsStop: false,
+    onBefore: () => stopAllTunnels(),
+    // 同步清空 settings 里的隧道列表：只删运行态会留下「列表在但状态没了」的半重置状态。
+    // 覆写文件不动——那是用户维护的资产，由 overwrites target 负责
+    onAfter: () => writeSettings({ tunnels: undefined }),
+  },
+  {
     id: 'daemon',
     aliases: ['daemon'],
     label: '保活',
@@ -147,7 +161,9 @@ export async function cmdReset(args: string[]): Promise<void> {
     }
     targets = matched;
   } else {
-    targets = RESET_TARGETS.filter(t => !['settings', 'kernel', 'overwrites', 'daemon'].includes(t.id));
+    // 留空 = 只删「可再生成的运行数据」，保留用户配置资产（设置/内核/覆写/保活/隧道）。
+    // 隧道条目在 settings.json 里、且关联用户手写的覆写文件，与 settings 同档，不该被裸 reset 带走
+    targets = RESET_TARGETS.filter(t => !['settings', 'kernel', 'overwrites', 'daemon', 'tunnel'].includes(t.id));
   }
 
   for (const t of targets) {
@@ -228,6 +244,7 @@ export async function cmdReset(args: string[]): Promise<void> {
   }
 
   for (const t of targets) {
+    t.onBefore?.();
     for (const p of t.paths()) {
       if (fs.existsSync(p)) {
         try {

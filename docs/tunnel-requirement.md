@@ -1,6 +1,7 @@
 # 需求：ssh 隧道出口（`tunnel` 子命令）
 
-> 状态：**待实现**。方案已定（见「为什么这么设计」），实现前需先给出设计再动手。
+> 状态：**已实现**（v3.8.0）。实现落点见 `src/tunnel.ts` + `src/commands/tunnel.ts`，
+> 五个设计问题的最终答复见文末「实现记录」。
 
 ## 一句话
 
@@ -58,6 +59,9 @@ mh tunnel rm <名字>
 否则下次 `up` 又起一个，累积僵尸进程。
 
 ## 覆写冲突：同名时 tunnel 优先
+
+> **实现后修正**：这条只在「用户不主动声明同名节点」时成立。`~` 保证同名只留一条，
+> 但字段层面仍是后加载者胜。详见文末「实现记录 2」。
 
 生成的覆写文件可能与用户已有配置声明同名的 proxies / proxy-groups
 （用户本机 `overwrite.seal.yaml` 就是同类出口）。规则是**同名时 tunnel 优先**，
@@ -135,3 +139,75 @@ mh tunnel rm <名字>
 3. 生成的覆写文件与用户手写的如何共存，`tunnel rm` 要不要删文件
 4. `tunnel` 的子命令别名怎么取（`tun` 已被 TUN 模式占用）
 5. `up` 里隧道失败的警告怎么呈现
+
+---
+
+## 实现记录
+
+### 1. 状态存哪 · `down` 怎么区分「谁起的」
+
+配置（`name`/`host`/`port`/`auto`）进 `settings.json` 的 `tunnels`；运行态
+（`pid`/`started_by`/`started_at`/`port`）进 **`<数据目录>/tunnel/<名字>.json`**，一条隧道一个文件。
+
+**运行态绝不能放 `runtime/`**：`process.ts` 的 `clearRuntime()` 会 `rmrf` 整个 runtime 目录，
+而 `stop()` 成功路径必调它——状态会连同 `config.yaml` 一起被抹掉，「谁起的」标记就此丢失。
+
+「谁起的」= `started_by: 'auto' | 'manual'`。`start` 拉起的记 auto，`tunnel up` 记 manual，
+`stop` 只停 auto。**单向提升**：`tunnel up` 一条已在跑的 auto 隧道会提升为 manual；
+manual 永不降级（用户显式要过它，就不该被 `stop` 带走）。`start` 遇到已在跑的隧道跳过且不改标记。
+
+PID 复用防护沿用「存活 + 命令行匹配」双条件，needle 取 `-D 127.0.0.1:<端口>`——
+紧跟 `ssh` 之后偏移极小，不会撞上 BSD `ps` 的 79 列截断（单测有断言）。
+
+### 2. 同名覆盖机制
+
+用 **`~proxies` / `~proxy-groups`**（按 name 就地合并）。它按 name 在数组里定位，
+不像 `+proxies` 那样并存两条再靠去重「保留第一个」——后者的胜负完全取决于文件加载顺序。
+
+**已实测的局限（重要）**：`~` 保证的是「同名只留一条」，**不保证 tunnel 的字段一定胜出**。
+造一个字母序更靠后的 `overwrite.zzz.yaml` 声明同名节点，实测后加载的文件会覆盖
+`server`/`port` 并残留自己的额外字段（如 `username`）。`~` 是**字段级合并**，
+当前覆写语法没有「按 name 整体替换」的写法（`~key!` 的 `!` 被分支优先级吞掉）。
+
+因此本需求「同名时 tunnel 优先」只在**用户不主动声明同名节点**时成立。
+好在覆写文件由用户维护、冲突可见（`mihomo ow` 能列出全部文件），
+真冲突时按原计划由用户自行处置。彻底解决需要扩展覆写语法，超出本需求范围。
+
+### 3. 生成文件与用户手写共存 · `rm` 是否删文件
+
+覆写文件**由用户维护**：CLI 只在文件不存在时生成模板（`add` 时建，`up` 时若缺失则补建），
+此后永不改写。模板只给 socks5 节点与 select 分组，**分流规则以注释形式留白**——
+CLI 无从知道用户的内网域名。
+
+**`tunnel rm` 不删覆写文件**，只删 settings 条目、停进程、清运行态，并打印文件路径提示自行处置。
+删用户手写的分流规则不可恢复。
+
+注意既有联动：`overwrite.tunnel-*.yaml` 会被 `isOverwriteFilename` 匹配，
+故 `reset ow` / `reset --full` 会连带删掉它（默认的 `mihomo reset` 不含 overwrites）。
+另新增了 `reset tunnel` 目标，它会先停进程再删运行态目录（`onBefore` 钩子）——
+反序会导致 ssh 进程失联、继续占着端口且 CLI 再也停不掉。
+
+### 4. 子命令别名
+
+注册 `tunnel` + **`ssh`** + `tunnels`。`tun` 已被 TUN 模式占用，
+且注册表的重复 token 校验是模块顶层 throw，撞车会「启动即炸」。
+归入 `system` 组，与 `daemon` 同档（都是管一个后台进程的生命周期）。
+
+### 5. 失败警告呈现
+
+沿用全仓最显眼的既有形态（`reset` 的运行中警告）：前后空行 + `colors.yellow('警告: ...')`，
+不引入 emoji 或新符号。不吞原因——ssh 的 stdout/stderr 重定向到
+`logs/tunnel-<名字>.log`（每次启动 `'w'` 截断，不会无限增长），失败时读尾部拼进提示。
+实测能如实带出 `ssh: Could not resolve hostname ...` 这类真实原因。
+`start` 收尾的 `printStatus()` 里还有隧道段，同一异常会二次可见。
+
+### 端到端实测结论
+
+localhost ssh 实测覆盖：真实启停、`lsof` 确认只绑 `127.0.0.1`（未绑 `0.0.0.0`）、
+端口占用时拒绝启动、`--host -oProxyCommand=...` 注入被拒（`/tmp/pwned` 未生成）、
+manual 隧道不被 `stop` 带走 / auto 隧道被带走、非交互 `rm` 退出码为 1、
+失败后不留陈旧状态文件。
+
+**「假活」检测的边界**：状态判定为「进程在 + 端口不通」。注意 `kill -STOP` 制造不出假活——
+socket 仍在内核 backlog 里可连，此时报「运行中」是正确的。真正的假活是
+ssh 进程活着但转发未建立（如认证挂起、`ProxyCommand` 卡住），实测该场景能正确报出。

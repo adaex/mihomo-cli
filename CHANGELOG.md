@@ -1,5 +1,29 @@
 # Changelog
 
+## [3.8.0] - 2026-09-01
+
+### 新增
+
+- **ssh 隧道出口（`tunnel` 子命令，别名 `ssh`）** - 管理 `ssh -D` 动态转发进程的生命周期，把可 ssh 登录的机器变成本地 SOCKS5 出口。分流仍交给覆写机制，本功能补的是「隧道断了 mihomo 不知情、会一直往死端口送流量」这一环
+
+  ```bash
+  mihomo tunnel add work --host m4 --port 1080
+  mihomo tunnel up|down|status [名字]
+  mihomo tunnel rm <名字>
+  ```
+
+  - **随 `start` 一并拉起**：默认带 `auto` 标记，`start` 顺带启动、`stop` 连带停止（`--no-tunnel` 跳过，`add --no-auto` 不参与）
+  - **隧道失败不影响内核启动**：只影响内网分流那部分规则，故仅打印显眼的黄色警告并附上 ssh 给出的原因，其余流量照常
+  - **`stop` 只停自己起的**：手动 `tunnel up` 起的隧道带 `manual` 标记，不会被 `mihomo stop` 带走，避免下次 start 又起一个而累积僵尸进程
+  - **`status` 真实探测端口**：能识别「进程还在但转发已死」的假活——那正是最误导的形态，此时 mihomo 仍在往死端口送流量
+  - **起之前先检测端口占用**，不盲启后失败
+  - **`add` 生成覆写模板** `overwrite.tunnel-<名字>.yaml`（已建好 socks5 节点与 select 分组，分流规则留白待填），生成后完全由用户维护，CLI 不再改写，`tunnel rm` 也不删它
+  - 新增 `reset tunnel` 目标（先停进程再删运行态，反序会导致 ssh 进程失联且再也停不掉）
+
+  安全边界：`-D` 恒绑 `127.0.0.1` 且不提供绑定地址开关（绑 `0.0.0.0` 会让同一 WiFi 下任何设备经本机进内网）；`--host` 拒绝 `-` 开头的值（`-oProxyCommand=...` 等同任意命令执行）；ssh 参数固定带 `ExitOnForwardFailure`/`BatchMode`/`ConnectTimeout`/`ServerAlive*`
+
+  暂不做自动重连保活：断线依靠 `ServerAliveInterval` 让进程自退，再用 `tunnel status` 查出来
+
 ## [3.7.0] - 2026-08-22
 
 ### 修复

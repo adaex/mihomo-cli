@@ -77,7 +77,7 @@ async function main(): Promise<void> {
   if (args.length === 0) {
     assertSupportedPlatform('status');
     ensureDirs();
-    printStatus();
+    await printStatus();
     printShortHelp();
     return;
   }

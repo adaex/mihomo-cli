@@ -110,11 +110,47 @@ export function parseIntArg(args: string[] | undefined, short: string, long: str
 }
 
 /**
- * 需要「跳过其后一个值」的选项名（空格分隔、带整数值），与全部 parseIntArg 调用一一对应。
+ * 解析字符串选项（`--host m4` 与 `--host=m4` 两形式）。未提供返回 null。
+ * 与 parseIntArg 一样对「有选项名但缺值」抛错，而非静默取 undefined——
+ * `tunnel add work --host` 若静默通过，会在后面报一个与真实原因无关的错。
+ */
+export function parseStringArg(args: string[] | undefined, long: string, short?: string): string | null {
+  if (!args) return null;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === long || (short !== undefined && args[i] === short)) {
+      if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
+        return args[i + 1];
+      }
+      throw new CliError(`选项 ${args[i]} 缺少值`, { hint: [`例如: ${long} <值>`] });
+    }
+    if (args[i].startsWith(`${long}=`)) {
+      const value = args[i].slice(long.length + 1);
+      if (!value) throw new CliError(`选项 ${long} 缺少值`, { hint: [`例如: ${long}=<值>`] });
+      return value;
+    }
+  }
+  return null;
+}
+
+/**
+ * 需要「跳过其后一个值」的选项名（空格分隔、带值），与全部 parseIntArg / parseStringArg 调用一一对应。
  * getNonFlagArg 识别位置参数时借此避免把 `-t 3000` 里的 `3000` 误当位置参数。
  * 注意：--mirror/--mirror-all 是可选值选项、只走 parseMirrorArg，故意不收录。
  */
-const VALUE_FLAGS: ReadonlySet<string> = new Set(['-t', '--timeout', '-j', '--concurrency', '-r', '--rounds', '-n', '--lines', '-u', '--update-timeout']);
+const VALUE_FLAGS: ReadonlySet<string> = new Set([
+  '-t',
+  '--timeout',
+  '-j',
+  '--concurrency',
+  '-r',
+  '--rounds',
+  '-n',
+  '--lines',
+  '-u',
+  '--update-timeout',
+  '--host',
+  '--port',
+]);
 
 /**
  * 从任意命令的 argv 中抽取 start 支持的启动选项（含其值），供 sub use / ow on|off 触发的重启透传。
@@ -122,7 +158,7 @@ const VALUE_FLAGS: ReadonlySet<string> = new Set(['-t', '--timeout', '-j', '--co
  */
 export function extractStartOptions(args: string[] | undefined): string[] {
   if (!args) return [];
-  const BOOL_FLAGS = new Set(['-s', '--no-update', '--no-clean']);
+  const BOOL_FLAGS = new Set(['-s', '--no-update', '--no-clean', '--no-tunnel']);
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];

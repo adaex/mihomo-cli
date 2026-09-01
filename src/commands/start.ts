@@ -9,9 +9,37 @@ import { createProgressPrinter, formatCleanSummary, formatTestSummary } from '..
 import * as runtime from '../runtime.js';
 import { readSubscriptionCache, saveSubscriptionCache } from '../settings.js';
 import * as subscription from '../subscription.js';
+import { startAutoTunnels } from '../tunnel.js';
 import { hasFlag, parseIntArg, sleep } from '../utils.js';
 import { printStatus } from './status.js';
 import { handleStopResult } from './stop.js';
+
+/**
+ * 拉起 auto 隧道。失败只告警不抛——隧道只影响内网分流那部分规则，
+ * 让整个 start 失败是过度反应。但告警必须显眼：前后留空行、黄色标题，
+ * 并附上 ssh 自己说的原因（否则用户只能去翻日志）。
+ */
+async function startAutoTunnelsWithWarning(): Promise<void> {
+  const outcomes = await startAutoTunnels();
+  if (outcomes.length === 0) return;
+
+  const started = outcomes.filter(o => o.ok && !o.alreadyRunning);
+  if (started.length > 0) {
+    console.log(`${colors.green('已启动隧道')}: ${started.map(o => o.name).join(', ')}`);
+  }
+
+  for (const failed of outcomes.filter(o => !o.ok)) {
+    console.log('');
+    console.log(colors.yellow(`警告: 隧道 "${failed.name}" 启动失败`));
+    console.log(colors.gray(`  ${failed.error?.message ?? '未知错误'}`));
+    for (const line of failed.error?.hint ?? []) {
+      if (line.trim()) console.log(colors.gray(line.startsWith('  ') ? line : `  ${line}`));
+    }
+    console.log(colors.gray('  内网分流规则将不可用，其余流量正常'));
+    console.log(colors.gray(`  排查: mihomo tunnel status ${failed.name}`));
+    console.log('');
+  }
+}
 
 export async function cmdStart(args: string[]): Promise<void> {
   // args[1] 为非 flag token 时才是模式参数；拼错模式名（如 start tn）必须报错，
@@ -37,6 +65,7 @@ export async function cmdStart(args: string[]): Promise<void> {
   const concurrency = parseIntArg(args, '-j', '--concurrency', DEFAULT_TEST_CONCURRENCY);
   const skipUpdate = hasFlag(args, '-s', '--no-update');
   const skipClean = hasFlag(args, '--no-clean');
+  const skipTunnel = hasFlag(args, '--no-tunnel');
   const updateTimeout = parseIntArg(args, '-u', '--update-timeout', subscription.DEFAULT_AUTO_UPDATE_TIMEOUT);
 
   const sub = subscription.requireActiveSubscription('没有订阅，请先添加订阅');
@@ -92,6 +121,12 @@ export async function cmdStart(args: string[]): Promise<void> {
     throw new CliError(lines[0], { label: '启动失败', hint: lines.slice(1) });
   }
 
+  // 隧道放在内核启动成功之后：内核失败就直接抛错，没必要再起隧道。
+  // 反之隧道失败不影响内核——它只影响内网分流那部分规则，其余流量照常走订阅节点。
+  if (!skipTunnel) {
+    await startAutoTunnelsWithWarning();
+  }
+
   const cleanThreshold = subscription.isGithubUrl(sub.url) ? subscription.AUTO_CLEAN_THRESHOLD_GITHUB : subscription.AUTO_CLEAN_THRESHOLD;
 
   if (!skipClean && configInfo.proxies > cleanThreshold) {
@@ -141,5 +176,5 @@ export async function cmdStart(args: string[]): Promise<void> {
     }
   }
 
-  printStatus();
+  await printStatus();
 }

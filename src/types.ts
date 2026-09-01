@@ -11,6 +11,43 @@ export interface Settings {
   overwrite_enabled?: boolean;
   /** external-controller 访问密钥（可选，多用户环境建议设置）；不设置则控制器无鉴权 */
   controller_secret?: string;
+  tunnels?: TunnelConfig[];
+}
+
+// === Tunnel (ssh -D 动态转发) ===
+
+export interface TunnelConfig {
+  name: string;
+  /** ssh 目标主机（别名或 user@host）；恒不以 `-` 开头，见 tunnel.ts 的校验 */
+  host: string;
+  /** 本地 SOCKS5 监听端口，恒绑 127.0.0.1 */
+  port: number;
+  /** true 时 `mihomo start` 顺带拉起、`mihomo stop` 连带停止 */
+  auto: boolean;
+}
+
+/**
+ * 隧道运行态。存 `<USER_DATA_DIR>/tunnel/<name>.json`，**不能放 DIRS.runtime**——
+ * process.ts 的 clearRuntime() 会在 stop() 成功路径 rmrf 整个 runtime 目录。
+ */
+export interface TunnelRuntime {
+  pid: number;
+  /** 谁起的：auto = start 顺带拉起（stop 可连带停），manual = 用户显式 tunnel up（stop 不碰） */
+  started_by: 'auto' | 'manual';
+  started_at: string;
+  /** 起进程时用的端口，用于校验状态文件与当前配置是否已漂移 */
+  port: number;
+}
+
+/** 三态运行状况：进程在但端口不通即「假活」，正是 ExitOnForwardFailure 要防的形态 */
+export type TunnelState = 'running' | 'dead-port' | 'stopped';
+
+export interface TunnelStatus {
+  config: TunnelConfig;
+  state: TunnelState;
+  pid: number | null;
+  started_by: 'auto' | 'manual' | null;
+  started_at: string | null;
 }
 
 // === Subscription Cache ===
@@ -233,6 +270,8 @@ export interface ResetTarget {
   label: string;
   paths: () => string[];
   needsStop: boolean;
+  /** 在删除 paths 之前执行。用于「删掉文件就再也做不成」的清理（如隧道要先读 pid 文件才能停进程） */
+  onBefore?: () => void;
   onAfter?: () => void;
   checkEmpty?: () => boolean;
   emptyMsg?: string;

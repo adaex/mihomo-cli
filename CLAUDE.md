@@ -33,6 +33,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/process.ts`           | 进程启动/停止、PID 管理、日志轮转、进程探测（isProcess*） |
 | `src/daemon.ts`            | launchd 保活：开机自启/崩溃重启、热重载、状态查询 |
 | `src/runtime.ts`           | 运行时门面：收敛普通进程/保活双轨（模式、状态、启停） |
+| `src/tunnel.ts`            | ssh -D 隧道：配置增删、运行态文件、端口探测、启停、覆写模板 |
 | `src/lifecycle.ts`         | 退出清理注册表（信号/异常退出前杀掉测试实例） |
 | `src/test-instance.ts`     | 隔离测速实例（独立端口，不动主实例）withTestInstance |
 | `src/progress.ts`          | 测速进度打印、结果汇总格式化      |
@@ -58,6 +59,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `commands/overwrite.ts`       | overwrite (on/off/list)        |
 | `commands/directory.ts`       | directory (open/list)          |
 | `commands/daemon.ts`          | daemon (on/off/status)         |
+| `commands/tunnel.ts`          | tunnel (list/add/up/down/status/rm)，别名 `ssh` |
 | `commands/reset.ts`           | reset                          |
 | `commands/update.ts`          | update                         |
 
@@ -215,10 +217,28 @@ overwrite.yaml          # 覆写配置（主文件，可选）
 overwrite.*.yaml        # 覆写配置（扩展文件，如 overwrite.dns.yaml）
 subscriptions/          # 订阅配置和缓存
 kernel/                 # 内核二进制
-logs/                   # 当前日志 + 归档日志
+logs/                   # 当前日志 + 归档日志 + tunnel-<名字>.log
 data/                   # mihomo 运行数据
 runtime/                # pid, config.yaml, 分阶段调试文件(1.subscription/2.overwrite/3.system.yaml)
+tunnel/                 # 隧道运行态 <名字>.json（刻意不放 runtime/，见下）
 ```
+
+### ssh 隧道（tunnel）
+
+隧道运行态放 `tunnel/` 而非 `runtime/`：`clearRuntime()` 会 `rmrf` 整个 runtime 目录，
+而 `stop()` 成功路径必调它——放那里会让「谁起的」标记随 `mihomo stop` 一起消失。
+
+`started_by` 区分 `auto`（`start` 拉起，`stop` 可连带停）与 `manual`（`tunnel up` 起，`stop` 不碰），
+**单向提升**：manual 永不降级为 auto，否则用户手动起的隧道会被下一次 `stop` 误杀。
+
+三条不可退让的约束：`-D` 恒绑 `127.0.0.1`（绑 `0.0.0.0` 会让同网段设备经本机进内网）；
+`--host` 拒绝 `-` 开头（`-oProxyCommand=...` 即任意命令执行）；
+状态判定必须**真实探测端口**而非只看进程在不在（否则识别不出「进程在、转发已死」的假活）。
+
+覆写模板用 `~proxies`/`~proxy-groups` 而非 `+proxies`：`~` 按 name 定位，
+同名只留一条。但它是**字段级合并**，后加载的文件仍会覆盖同名字段——
+「同名时 tunnel 优先」只在用户不主动声明同名节点时成立。模板仅在**文件不存在时**生成，
+生成后完全由用户维护，`tunnel rm` 也不删它。
 
 ---
 

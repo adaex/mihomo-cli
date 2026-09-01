@@ -192,7 +192,12 @@ export function getSubscriptionsWithCache(): SubscriptionWithCache[] {
   }));
 }
 
-const SAFE_NAME_RE = /^[\w\-\p{Unified_Ideograph}]{1,64}$/u;
+/**
+ * 名称白名单：字母数字下划线短横线与中文，最长 64。同时用于订阅名与隧道名——
+ * 两者都会被拼进文件路径（subscriptions/<name>.yaml、overwrite.tunnel-<name>.yaml），
+ * 共用一条规则避免两套口径漂移。刻意不含 `.`，以免破坏覆写文件名的分段结构。
+ */
+export const SAFE_NAME_RE = /^[\w\-\p{Unified_Ideograph}]{1,64}$/u;
 
 function validateSubscriptionName(name: string): void {
   if (!name || !SAFE_NAME_RE.test(name)) {
