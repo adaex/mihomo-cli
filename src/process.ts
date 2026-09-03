@@ -600,35 +600,6 @@ export function listLogs(): LogList {
   return result;
 }
 
-function isPathUnderDir(filePath: string, baseDir: string): boolean {
-  const resolvedPath = path.resolve(filePath);
-  const resolvedBase = path.resolve(baseDir);
-  return resolvedPath === resolvedBase || resolvedPath.startsWith(resolvedBase + path.sep);
-}
-
-export function getLogPathByName(name: string): string | null {
-  const logsDir = DIRS.logs;
-
-  let targetName = name;
-  if (!name.endsWith('.log')) targetName = `mihomo.${name}.log`;
-  if (!targetName.startsWith('mihomo.')) targetName = `mihomo.${targetName}`;
-
-  const filePath = path.join(logsDir, targetName);
-  if (fs.existsSync(filePath) && isPathUnderDir(filePath, logsDir)) return filePath;
-
-  if (fs.existsSync(logsDir)) {
-    const files = fs.readdirSync(logsDir);
-    for (const file of files) {
-      if (file.includes(name)) {
-        const candidatePath = path.join(logsDir, file);
-        if (isPathUnderDir(candidatePath, logsDir)) return candidatePath;
-      }
-    }
-  }
-
-  return null;
-}
-
 export function openUrl(url: string): boolean {
   try {
     // `--` 终止选项解析：url 可能来自订阅响应头 web_page_url（服务器可控），以 `-` 开头会被 open 当选项

@@ -103,7 +103,6 @@ export const COMMANDS: Command[] = [
       'subscription add <url> [name]  添加订阅',
       'subscription update [name]   更新订阅（无参更新所有）',
       'subscription remove <name>   删除订阅（模糊匹配需确认，-y 跳过）',
-      'subscription web [name]      打开订阅页面',
     ],
   },
   {
@@ -143,7 +142,7 @@ export const COMMANDS: Command[] = [
     aliases: ['dir', 'dirs', 'directories'],
     handler: cmdDirectory,
     group: 'config',
-    usage: ['directory                   显示数据目录位置（别名 dir）', 'directory open [target]     打开目录: root|subs|logs|runtime|...'],
+    usage: ['directory                   显示数据目录位置（别名 dir）', 'directory open [target]     打开目录: root|subs|logs|data|runtime|kernel'],
   },
   {
     name: 'open',

@@ -33,6 +33,15 @@
 - 删除死代码 `normalizeProxyNamesBeforeSave`（裁剪节点名里的 `_github.com/<repo>` 尾缀）：它只被 `clean` 的保存路径调用，随之失去入口
 - `start` 保留的选项：`-s`/`--no-update`、`-u`/`--update-timeout`、`--no-ssh`
 
+### 顺带清理
+
+同一轮里删掉的小块功能，都属于「有更好的现成替代，或与文档重复」：
+
+- **`sub web`**（打开机场页面）：依赖机场返回 `profile-web-page-url` 响应头，缓存里没有时还要**额外发一次订阅请求**只为读这个头。浏览器书签更直接。订阅列表里仍会展示机场下发的页面地址，只是不再代为打开
+- **`logs` 的按文件名/子串查找**：归档名是 `mihomo.<时间戳>.log`，没人会去敲；而支持子串匹配就得额外防路径穿越。现在只认 `0`/`current` 与列表序号，非法编号显式报错
+- **`dir list` 的硬编码目录树说明**：29 行 `console.log` 与 README 的「数据目录」章节重复且易失同步，改为从 `DIRECTORY_TARGETS` 生成
+- **死代码 `requireRunning`**：唯一调用方是本轮删掉的 `test`/`clean`
+
 ## [3.9.1] - 2026-09-01
 
 ### 变更

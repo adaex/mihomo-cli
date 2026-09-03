@@ -20,26 +20,22 @@ export function cmdLogs(args: string[]): void {
   const openInViewer = hasFlag(args, '-o', '--open');
 
   if (targetName) {
-    let logPath: string | null;
+    // 只认「当前」与列表序号：归档名是 mihomo.<时间戳>.log，没人会去敲它，
+    // 而支持按名/子串查找就得额外防路径穿越（历史上确实为此加过 isPathUnderDir）
+    let logPath: string;
 
     if (targetName === 'current' || targetName === '0') {
       logPath = processManager.getLogPath();
     } else {
       const parsedIdx = parseInt(targetName, 10);
-      if (!Number.isNaN(parsedIdx) && parsedIdx > 0 && String(parsedIdx) === targetName) {
-        const archiveLogs = processManager.listLogs();
-        const archive = archiveLogs.archives[parsedIdx - 1];
-        if (!archive) {
-          throw new CliError(`未找到日志 "${targetName}"`, { hint: '使用 "mihomo logs" 查看可用日志列表' });
-        }
-        logPath = archive.path;
-      } else {
-        logPath = processManager.getLogPathByName(targetName);
+      if (Number.isNaN(parsedIdx) || parsedIdx < 1 || String(parsedIdx) !== targetName) {
+        throw new CliError(`无效的日志编号 "${targetName}"`, { hint: '用法: mihomo logs <编号>（0=当前，1+=归档）；查看列表: mihomo logs' });
       }
-    }
-
-    if (!logPath) {
-      throw new CliError(`未找到日志 "${targetName}"`, { hint: '使用 "mihomo logs" 查看可用日志列表' });
+      const archive = processManager.listLogs().archives[parsedIdx - 1];
+      if (!archive) {
+        throw new CliError(`未找到日志 "${targetName}"`, { hint: '使用 "mihomo logs" 查看可用日志列表' });
+      }
+      logPath = archive.path;
     }
 
     if (openInViewer) {

@@ -53,7 +53,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `commands/log.ts`             | log, logs                      |
 | `commands/ui.ts`              | ui                             |
 | `commands/kernel.ts`          | kernel                         |
-| `commands/subscription.ts`    | subscription (list/add/update/use/remove/web) |
+| `commands/subscription.ts`    | subscription (list/add/update/use/remove) |
 | `commands/overwrite.ts`       | overwrite (on/off/list)        |
 | `commands/directory.ts`       | directory (open/list)          |
 | `commands/daemon.ts`          | daemon (on/off/status)         |

@@ -93,7 +93,6 @@ mihomo ui yacd     # YACD
 | `mihomo log`                | 实时查看日志 (`-o` 用系统默认程序打开)                                       |
 | `mihomo logs`               | 列出所有日志（当前 + 历史归档）                                              |
 | `mihomo logs current`       | 查看当前日志（等同 `logs 0`）                                                |
-| `mihomo logs <名称/子串>`   | 按文件名或子串查看指定归档日志                                               |
 | `mihomo logs <编号>`        | 查看指定日志（`0`=当前日志，`1+`=归档日志，支持 `-n N` 指定行数、`-o` 打开） |
 
 ### 订阅管理
@@ -106,7 +105,6 @@ mihomo ui yacd     # YACD
 | `mihomo sub update`           | 更新所有订阅                           |
 | `mihomo sub update <name>`    | 更新指定订阅（支持模糊匹配）           |
 | `mihomo sub remove <name>`    | 删除订阅（别名 `rm`/`delete`；精确名直接删，模糊匹配需确认，`-y` 跳过） |
-| `mihomo sub web [name]`       | 打开订阅页面（别名 `open`，无参打开默认，支持模糊匹配） |
 
 > 节点测速请用 `mihomo ui` 打开的 Web 面板（zash/metacubexd/yacd 均内置逐节点实时测延迟），
 > 或直接在订阅里配置 `url-test` 分组由内核自动选路——两者都比一次性的命令行快照更实时。

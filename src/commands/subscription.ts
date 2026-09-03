@@ -1,24 +1,10 @@
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
-import * as processManager from '../process.js';
 import * as runtime from '../runtime.js';
-import {
-  addSubscription,
-  getSubscriptions,
-  getSubscriptionsWithCache,
-  removeSubscription,
-  saveSubscriptionCache,
-  setDefaultSubscription,
-} from '../settings.js';
+import { addSubscription, getSubscriptions, getSubscriptionsWithCache, removeSubscription, setDefaultSubscription } from '../settings.js';
 import * as subscription from '../subscription.js';
 import { formatBytes, formatDate, formatTimestamp, getNonFlagArg, hasFlag, suggestSimilar } from '../utils.js';
 import { confirmPrompt, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
-
-function githubRepoUrl(rawUrl: string): string | null {
-  const match = rawUrl.match(/raw\.githubusercontent\.com\/([^/]+\/[^/]+)/);
-  if (match) return `https://github.com/${match[1]}`;
-  return null;
-}
 
 /** 订阅内容更新后，运行中的实例仍用旧配置，提示重启生效 */
 function printRestartHintIfRunning(): void {
@@ -73,7 +59,6 @@ function printSubscriptionList(): void {
   console.log('新增订阅: mihomo sub add <url> [name]');
   console.log('更新订阅: mihomo sub update [name]');
   console.log('删除订阅: mihomo sub remove <name>');
-  console.log('打开页面: mihomo sub web [name]');
   console.log('');
 }
 
@@ -97,8 +82,6 @@ async function subAdd(args: string[]): Promise<void> {
     // 切换放在下载成功后：若放在前面，回滚的 removeSubscription 会把 active 落到 subs[0]
     // 而非用户原来的选择（settings.ts 的 active 兜底逻辑），静默切错订阅
     setDefaultSubscription(name);
-    const repoUrl = githubRepoUrl(url);
-    if (repoUrl) saveSubscriptionCache(name, { web_page_url: repoUrl });
     console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)})`);
   } catch (e) {
     // 下载失败回滚：不留"已入库但无配置"的半成品订阅（否则 start 会直接报错）
@@ -183,45 +166,6 @@ async function subUse(args: string[]): Promise<void> {
   printSubscriptionList();
 }
 
-async function subWeb(args: string[]): Promise<void> {
-  const name = args[2];
-  const subs = getSubscriptionsWithCache();
-
-  if (subs.length === 0) {
-    throw new CliError('没有订阅');
-  }
-
-  let target: { url: string; name: string };
-  if (name) {
-    target = subscription.resolveSubscription(subs, name);
-  } else {
-    target = subscription.getActiveSubscription() || subs[0];
-  }
-
-  const cached = subs.find(s => s.name === target.name);
-  let webPageUrl = cached?.web_page_url;
-  if (!webPageUrl) {
-    console.log('订阅信息中缺少页面地址，正在查询订阅...');
-    try {
-      // persist=false：只取响应头里的页面地址，不覆盖已保存的订阅配置
-      const info = await subscription.downloadSubscription(target.url, target.name, undefined, false);
-      if (!info.webPageUrl) {
-        throw new CliError('该订阅没有提供页面地址');
-      }
-      webPageUrl = info.webPageUrl;
-    } catch (e) {
-      if (e instanceof CliError) throw e;
-      throw new CliError((e as Error).message, { label: '查询失败' });
-    }
-  }
-
-  console.log(`打开订阅页面: ${webPageUrl}`);
-  const opened = processManager.openUrl(webPageUrl as string);
-  if (!opened) {
-    console.log('请手动访问上面的地址');
-  }
-}
-
 async function subRemove(args: string[]): Promise<void> {
   // 用 getNonFlagArg 而非 args[2]：允许 -y 出现在名称之前（`sub remove -y foo`）
   const name = getNonFlagArg(args, 2);
@@ -270,7 +214,6 @@ const SUBCOMMANDS: SubCommand[] = [
   { name: 'add', handler: subAdd },
   { name: 'update', handler: subUpdate },
   { name: 'use', handler: subUse },
-  { name: 'web', aliases: ['open'], handler: subWeb },
   { name: 'remove', aliases: ['rm', 'delete'], handler: subRemove },
 ];
 
@@ -288,7 +231,7 @@ export async function cmdSubscription(args: string[]): Promise<void> {
       const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
       const suggestion = suggestSimilar(action, names);
       throw new CliError(`未知的订阅命令: ${action}`, {
-        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '用法: mihomo sub [list|use|add|update|remove|web]'],
+        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '用法: mihomo sub [list|use|add|update|remove]'],
       });
     },
   });

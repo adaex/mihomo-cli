@@ -1,5 +1,6 @@
+import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
-import { DIRECTORY_TARGETS, DIRS, PATHS, USER_DATA_DIR } from '../paths.js';
+import { DIRECTORY_TARGETS, USER_DATA_DIR } from '../paths.js';
 import * as processManager from '../process.js';
 import { suggestSimilar } from '../utils.js';
 import { dispatchSubcommand, type SubCommand } from './shared.js';
@@ -37,33 +38,22 @@ function openDirectory(args: string[]): void {
   throw new CliError(`未知的目录目标 "${target}"`, { hint });
 }
 
+/** 目录一览：路径从 DIRECTORY_TARGETS 生成，不再硬编码目录树说明（与 README 重复且易失同步）。 */
 function printDirectoryInfo(): void {
+  const entries = Object.entries(DIRECTORY_TARGETS).filter(([key]) => key !== 'root');
+  // 路径列按最长项对齐；padEnd 作用在无颜色的原串上，避免 ANSI 码算进宽度
+  const pathWidth = Math.max(...entries.map(([, val]) => (val.path as string).replace(USER_DATA_DIR, '.').length));
+
   console.log('');
-  console.log('数据目录位置:');
-  console.log(`  根目录: ${USER_DATA_DIR}`);
-  console.log(`  全局设置: ${PATHS.settingsFile}`);
-  console.log(`  内核目录: ${DIRS.kernel}`);
-  console.log(`  内核文件: ${PATHS.mihomoBinary}`);
-  console.log(`  订阅目录: ${DIRS.subscriptions}`);
-  console.log('    - cache.json (订阅缓存：更新时间、流量等)');
-  console.log('    - xxx.yaml (订阅原始配置)');
-  console.log(`  运行时目录: ${DIRS.runtime}`);
-  console.log('    - config.yaml (启动时生成，stop 自动清除)');
-  console.log('    - pid (PID 文件，stop 自动清除)');
-  console.log(`  日志文件: ${PATHS.logFile}`);
-  console.log(`  mihomo 数据: ${DIRS.data}`);
-  console.log('    - cache.db, Geo*.dat 等 (mihomo 自行管理)');
+  console.log(`数据目录: ${USER_DATA_DIR}`);
   console.log('');
-  console.log('打开目录:');
-  console.log('  mihomo dir open                打开根目录');
-  console.log('  mihomo dir open subs           打开订阅目录');
-  console.log('  mihomo dir open logs           打开日志目录');
-  console.log('  mihomo dir open data           打开 mihomo 数据目录');
-  console.log('  mihomo dir open runtime        打开运行时目录');
-  console.log('  mihomo dir open kernel         打开内核目录');
+  for (const [key, val] of entries) {
+    const rel = (val.path as string).replace(USER_DATA_DIR, '.');
+    console.log(`  ${key.padEnd(9)}${rel.padEnd(pathWidth + 2)}${colors.gray(val.label)}`);
+  }
   console.log('');
-  console.log('环境变量:');
-  console.log('  MIHOMO_CLI_DIR: 自定义根目录位置');
+  console.log(`打开目录: mihomo dir open [${Object.keys(DIRECTORY_TARGETS).join('|')}]`);
+  console.log(colors.gray('  自定义根目录: 环境变量 MIHOMO_CLI_DIR'));
   console.log('');
 }
 
