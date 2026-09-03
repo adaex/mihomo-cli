@@ -7,7 +7,7 @@ import { sleep } from './utils.js';
  * 运行时门面：收敛「普通进程(pidFile) vs launchd 托管(保活)」双轨的差异。
  *
  * 保活开启后,内核由系统 LaunchDaemon 托管、不写 pidFile,启动/重启/状态查询都与普通模式不同。
- * 命令层若各自 `if (isDaemonEnabled())` 分支处理,极易重复与不一致(历史上 clean 两分支输出就已分叉)。
+ * 命令层若各自 `if (isDaemonEnabled())` 分支处理,极易重复与不一致(历史上两分支输出就已分叉)。
  * 本模块把这三类差异各收敛为一个函数,命令层只调门面、不再关心底层是哪种运行时。
  *
  * 依赖方向:runtime → config/daemon/process(单向,四者均不反向依赖 runtime,无循环)。

@@ -59,14 +59,6 @@ async function setOverwrite(enabled: boolean, args: string[]): Promise<void> {
 const SUBCOMMANDS: SubCommand[] = [
   { name: 'on', aliases: ['enable'], handler: args => setOverwrite(true, args) },
   { name: 'off', aliases: ['disable'], handler: args => setOverwrite(false, args) },
-  // list 显式注册：onUnknown 生效后，未注册的子命令会报错，不能再靠 fallback 兜住 `ow list`
-  {
-    name: 'list',
-    handler: () => {
-      console.log('');
-      printOverwriteList();
-    },
-  },
 ];
 
 export async function cmdOverwrite(args: string[]): Promise<void> {
@@ -80,7 +72,7 @@ export async function cmdOverwrite(args: string[]): Promise<void> {
       const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
       const suggestion = suggestSimilar(action, names);
       throw new CliError(`未知的覆写子命令: ${action}`, {
-        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '', '可用子命令: on, off, list'],
+        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '', '可用子命令: on, off'],
       });
     },
   });

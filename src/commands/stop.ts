@@ -6,7 +6,7 @@ import { stopAutoSshTunnels } from '../ssh.js';
 import type { StopResult } from '../types.js';
 import { hasFlag } from '../utils.js';
 
-/** 检查停止结果：若有进程未终止则报错并退出。start/stop/clean 命令共用。 */
+/** 检查停止结果：若有进程未终止则报错并退出。start/stop 命令共用。 */
 export function handleStopResult(result: StopResult): void {
   if (result.remaining && result.remaining.length > 0) {
     throw new CliError(result.remaining.join(', '), { label: '部分进程未终止', hint: '请手动运行: sudo pkill -9 mihomo' });

@@ -105,14 +105,6 @@ export const COMMANDS: Command[] = [
       'subscription remove <name>   删除订阅（模糊匹配需确认，-y 跳过）',
     ],
   },
-  {
-    name: 'use',
-    aliases: [],
-    handler: cmdSubscription,
-    rewrite: args => ['sub', 'use', ...args.slice(1)],
-    group: 'subscription',
-    usage: [],
-  },
   // === 配置 ===
   {
     name: 'overwrite',
@@ -122,35 +114,11 @@ export const COMMANDS: Command[] = [
     usage: ['overwrite                   查看覆写状态（别名 ow）', 'overwrite on|off            启用/禁用覆写配置'],
   },
   {
-    name: 'on',
-    aliases: [],
-    handler: cmdOverwrite,
-    rewrite: args => ['ow', 'on', ...args.slice(1)],
-    group: 'config',
-    usage: [],
-  },
-  {
-    name: 'off',
-    aliases: [],
-    handler: cmdOverwrite,
-    rewrite: args => ['ow', 'off', ...args.slice(1)],
-    group: 'config',
-    usage: [],
-  },
-  {
     name: 'directory',
     aliases: ['dir', 'dirs', 'directories'],
     handler: cmdDirectory,
     group: 'config',
     usage: ['directory                   显示数据目录位置（别名 dir）', 'directory open [target]     打开目录: root|subs|logs|data|runtime|kernel'],
-  },
-  {
-    name: 'open',
-    aliases: [],
-    handler: cmdDirectory,
-    rewrite: args => ['dir', 'open', ...args.slice(1)],
-    group: 'config',
-    usage: [],
   },
   // === 系统 ===
   {
@@ -184,7 +152,7 @@ export const COMMANDS: Command[] = [
   },
   {
     name: 'update',
-    aliases: ['upd', 'upgrade'],
+    aliases: [],
     handler: cmdUpdate,
     group: 'system',
     usage: ['update                       更新 mihomo-cli (npm install -g)'],

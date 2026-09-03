@@ -101,10 +101,10 @@
 | 16 | `parseIntArg` 接受危险值 | `utils.ts` | 无范围校验：`-j 0` 让测速起 0 个 worker、结果数组全空洞、被报成「所有节点失败」（伪造结果；全死守卫拦住不删节点故无数据丢失）；`-t 5s` 静默取 5ms 让全部节点超时；`-t -1` 取 -1。全部 13 个调用点语义都是正整数，已改为非纯十进制整数或 `<1` 一律抛 `CliError`。连带把 `cmdTest`/`cmdClean` 的参数解析移到 `requireRunning` 之前（此前 `test -j 0` 只报「mihomo 未运行」） |
 | 17 | 合并订阅错误指向被连带取消的 URL | `subscription.ts` | 任一 URL 失败即 `internal.abort()`，按顺序取第一个 error 报出的往往是被取消的那条（`This operation was aborted`），真正的 403/token 过期被隐藏，用户去排查错误的订阅源。已改为优先报非 abort 错误 |
 | 18 | `cmdDirectory` 丢弃 Promise 致 `CliError` 绕过收口 | `commands/directory.ts` | `void dispatchSubcommand(...)` 使 `dir open <未知target>` 抛的 `CliError` 变成「未处理的 Promise 拒绝」，丢掉 label 颜色与 hint 列表。已改 async + await |
-| 19 | `ow`/`dir` 未知子命令静默回落 | `commands/overwrite.ts`、`directory.ts` | 只给 `fallback` 不给 `onUnknown`，`ow onn` 静默打印列表且 exit=0（对比 `sub adz` 会报错 + did-you-mean + exit=1）。已补 `onUnknown`；注意需同时显式注册 `list` 子命令，否则 `ow list` 会被判为未知 |
+| 19 | `ow`/`dir` 未知子命令静默回落 | `commands/overwrite.ts`、`directory.ts` | 只给 `fallback` 不给 `onUnknown`，`ow onn` 静默打印列表且 exit=0（对比 `sub adz` 会报错 + did-you-mean + exit=1）。已补 `onUnknown`（v3.11.0 起 `ow list`/`dir list` 作为冗余子命令一并移除，裸 `ow`/`dir` 仍走 fallback 展示列表） |
 | 20 | 测速实例 pid 记录时机的 SIGINT 泄漏窗口 | `test-instance.ts` | spawn 与写 pid 文件之间被 Ctrl+C 中断时，只认 pid 文件的清理逻辑漏掉 detached 子进程。已加模块级 `spawnedTestPid` 作第二来源 |
 | 21 | `reset` 保活取消路径 exit=0 | `commands/reset.ts` | `console.error` + `return` 使「重置中止」退出码为 0，且绕过统一渲染。违反项目错误约定（只豁免信号处理器与 `viewLogWithTail`）。已改 `CliError` |
-| 22 | `mihomo on`/`off` 丢弃启动选项 | `commands/registry.ts` | 唯二不透传 `...args.slice(1)` 的 rewrite，`mihomo on -s` 静默吞掉 `-s`，而 README 声明二者等价。已补透传 |
+| 22 | `mihomo on`/`off` 丢弃启动选项 | `commands/registry.ts` | 唯二不透传 `...args.slice(1)` 的 rewrite，`mihomo on -s` 静默吞掉 `-s`，而 README 声明二者等价。已补透传（v3.11.0 起 `on`/`off` 顶层命令已移除，用 `ow on`/`ow off`） |
 | 23 | `subs` 别名缺失 | `commands/registry.ts` | `directory` 有 `dirs` 但 `subscription` 无 `subs`，命名规范的「简写复数」档未落地。已补 |
 | 24 | `restartDaemon` 抛裸 `Error` | `daemon.ts` | 唯一遗留的数据层预期错误裸抛点。已改 `CliError` |
 

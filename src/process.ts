@@ -132,7 +132,7 @@ function checkStaleState(): StaleState {
 
 /**
  * 是否存在需要 root 权限清理的残留（root 属主进程或 root 属主 pid 文件）。
- * start/clean 等「隐式停止」场景先查它：有残留则报错引导，避免 stop() 内部 sudo 提权意外弹密码。
+ * start 等「隐式停止」场景先查它：有残留则报错引导，避免 stop() 内部 sudo 提权意外弹密码。
  */
 export function hasRootResidue(): boolean {
   return checkStaleState().needsSudo;

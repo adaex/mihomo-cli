@@ -222,12 +222,6 @@ export async function cmdSubscription(args: string[]): Promise<void> {
     // 无子命令 → 列表；未知子命令 → 报错
     fallback: printSubscriptionList,
     onUnknown: action => {
-      // v3.10.0 移除的子命令单独引导：泛化的 did-you-mean 会把 test 猜成 list，毫无帮助
-      if (action === 'test' || action === 'clean') {
-        throw new CliError(`sub ${action} 已移除（v3.10.0）`, {
-          hint: ['节点测速改用 Web 面板: mihomo ui（zash / metacubexd / yacd 均内置逐节点测延迟）', '自动选路请在订阅里配置 url-test 分组，由内核持续测速。'],
-        });
-      }
       const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
       const suggestion = suggestSimilar(action, names);
       throw new CliError(`未知的订阅命令: ${action}`, {

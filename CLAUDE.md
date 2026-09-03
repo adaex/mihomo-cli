@@ -54,8 +54,8 @@ This file provides guidance to Claude Code when working with this repository.
 | `commands/ui.ts`              | ui                             |
 | `commands/kernel.ts`          | kernel                         |
 | `commands/subscription.ts`    | subscription (list/add/update/use/remove) |
-| `commands/overwrite.ts`       | overwrite (on/off/list)        |
-| `commands/directory.ts`       | directory (open/list)          |
+| `commands/overwrite.ts`       | overwrite (on/off)             |
+| `commands/directory.ts`       | directory (open)               |
 | `commands/daemon.ts`          | daemon (on/off/status)         |
 | `commands/ssh.ts`             | ssh (list/add/up/down/status/rm)，无别名 |
 | `commands/reset.ts`           | reset                          |
@@ -154,7 +154,7 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 `dispatchSubcommand` 是 async，命令 handler 必须 `await`/返回其 Promise。用 `void` 丢弃会让子命令抛的 CliError 变成未处理的 Promise 拒绝、绕过统一渲染。
 
-给某命令补 `onUnknown` 时，原先靠 `fallback` 兜住的隐式子命令（如 `ow list`/`dir list`）必须显式注册，否则会被判为未知子命令。
+给某命令补 `onUnknown` 时，原先靠 `fallback` 兜住的隐式子命令必须显式注册，否则会被判为未知子命令。
 
 ### 新增命令行选项要同步 utils.ts
 

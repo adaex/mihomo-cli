@@ -24,7 +24,7 @@ export function cmdLogs(args: string[]): void {
     // 而支持按名/子串查找就得额外防路径穿越（历史上确实为此加过 isPathUnderDir）
     let logPath: string;
 
-    if (targetName === 'current' || targetName === '0') {
+    if (targetName === '0') {
       logPath = processManager.getLogPath();
     } else {
       const parsedIdx = parseInt(targetName, 10);

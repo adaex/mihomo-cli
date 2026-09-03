@@ -38,44 +38,7 @@ async function startAutoSshTunnelsWithWarning(): Promise<void> {
   }
 }
 
-/**
- * v3.10.0 随测速清理一并移除的选项。显式报错而非静默忽略：
- * 用户敲了 `--no-clean` 却拿到「照常启动」，属于「不报错但行为不对」——
- * 何况这些选项原本控制的是会改写订阅文件的行为，静默吞掉最容易被误解为仍然生效。
- */
-const REMOVED_OPTIONS: Record<string, string> = {
-  '-r': '--rounds',
-  '--rounds': '--rounds',
-  '-t': '--timeout',
-  '--timeout': '--timeout',
-  '-j': '--concurrency',
-  '--concurrency': '--concurrency',
-  '--no-clean': '--no-clean',
-};
-
-function assertNoRemovedOptions(args: string[]): void {
-  const hit = args.find(a => {
-    const name = a.startsWith('--') && a.includes('=') ? a.slice(0, a.indexOf('=')) : a;
-    return Object.hasOwn(REMOVED_OPTIONS, name);
-  });
-  if (!hit) return;
-  throw new CliError(`选项 ${hit} 已移除（v3.10.0，随节点测速清理一并删除）`, {
-    label: '参数错误',
-    hint: [
-      'start 不再在启动后自动测速清理节点，故超时/并发/轮次选项均已失效。',
-      '',
-      '节点测速请用 Web 面板: mihomo ui',
-      '自动选路请在订阅里配置 url-test 分组，由内核持续测速。',
-      '',
-      'start 现有选项: -s/--no-update, -u/--update-timeout <ms>, --no-ssh',
-    ],
-  });
-}
-
 export async function cmdStart(args: string[]): Promise<void> {
-  // 参数校验先于环境检查（内核/订阅），与模式参数同口径
-  assertNoRemovedOptions(args);
-
   // args[1] 为非 flag token 时才是模式参数；拼错模式名（如 start tn）必须报错，
   // 不能静默按 Mixed 启动（用户会误以为已切到 TUN）。
   const modeToken = args[1] && !args[1].startsWith('-') ? args[1].toLowerCase() : undefined;

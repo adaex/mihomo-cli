@@ -8,7 +8,7 @@
 
 - 🌐 **订阅管理** - 添加/更新订阅，支持流量统计和到期时间显示
 - 🔄 **自动更新** - 启动时自动检查并更新过期订阅
-- 🔍 **模糊匹配** - `sub use` / `web` / `update` / `remove` 均支持订阅名称模糊匹配（大小写不敏感）
+- 🔍 **模糊匹配** - `sub use` / `update` / `remove` 均支持订阅名称模糊匹配（大小写不敏感）
 - 📝 **覆写配置** - 在订阅基础上进行自定义覆写，支持强制覆盖、数组合并、按 name 就地 patch、按订阅限定作用域
 - 🔄 **智能重启** - `sub use` 切换订阅、`ow on/off` 切换覆写后自动重启
 - 🚀 **进程管理** - 启动/停止/切换模式，自动清理残留进程
@@ -92,7 +92,6 @@ mihomo ui yacd     # YACD
 | `mihomo status`             | 查看运行状态（含订阅流量、到期时间）                                         |
 | `mihomo log`                | 实时查看日志 (`-o` 用系统默认程序打开)                                       |
 | `mihomo logs`               | 列出所有日志（当前 + 历史归档）                                              |
-| `mihomo logs current`       | 查看当前日志（等同 `logs 0`）                                                |
 | `mihomo logs <编号>`        | 查看指定日志（`0`=当前日志，`1+`=归档日志，支持 `-n N` 指定行数、`-o` 打开） |
 
 ### 订阅管理
@@ -113,7 +112,7 @@ mihomo ui yacd     # YACD
 
 | 命令                           | 说明                       |
 | ------------------------------ | -------------------------- |
-| `mihomo ow` / `mihomo ow list`   | 查看覆写配置状态和文件列表（别名 `enable`/`disable` 亦可用于开关） |
+| `mihomo ow`                  | 查看覆写配置状态和文件列表（别名 `enable`/`disable` 亦可用于开关） |
 | `mihomo ow on`                   | 启用覆写配置（**默认已启用**，自动重启）                          |
 | `mihomo ow off`                  | 禁用覆写配置（自动重启）                                          |
 
@@ -153,13 +152,9 @@ mihomo ui yacd     # YACD
 
 | 快捷命令               | 等效于                     |
 | ---------------------- | -------------------------- |
-| `mihomo up`            | `mihomo start`（同样支持 `-s`/`-u`/`-r`/`-t`/`-j`）|
+| `mihomo up`            | `mihomo start`（同样支持 `-s`/`-u`）|
 | `mihomo down`          | `mihomo stop`              |
 | `mihomo tun`           | `mihomo start tun`         |
-| `mihomo use <name>`    | `mihomo sub use <name>`    |
-| `mihomo on` / `off`    | `mihomo ow on` / `ow off`  |
-| `mihomo open <target>` | `mihomo dir open <target>` |
-| `mihomo upd` / `upgrade` | `mihomo update`          |
 
 ## 模式说明
 
