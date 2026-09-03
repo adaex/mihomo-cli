@@ -35,11 +35,11 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/runtime.ts`           | 运行时门面：收敛普通进程/保活双轨（模式、状态、启停） |
 | `src/ssh.ts`               | ssh -D 隧道进程侧：运行态文件、端口探测、启停 |
 | `src/ssh-config.ts`        | ssh 隧道配置侧：ssh.*.yaml 加载、节点合成、与主配置合并（独立于 ow 开关） |
-| `src/lifecycle.ts`         | 退出清理注册表（信号/异常退出前杀掉测试实例） |
+| `src/lifecycle.ts`         | 退出清理注册表（信号/异常退出前清理 detached 子进程） |
 | `src/kernel.ts`            | GitHub Releases 检查、下载        |
 | `src/overwrite.ts`         | 覆写配置合并                      |
 | `src/commands/registry.ts` | 命令注册表（name/别名/handler/argv 改写/help 用法），路由与帮助的单一真相源 |
-| `src/commands/shared.ts`   | 命令层公共工具：dispatchSubcommand 子命令分发、confirmPrompt、requireRunning、restartToApply |
+| `src/commands/shared.ts`   | 命令层公共工具：dispatchSubcommand 子命令分发、confirmPrompt、restartToApply |
 | `src/commands/*.ts`        | 各命令处理器（每命令一个文件）    |
 
 ### 命令处理器
