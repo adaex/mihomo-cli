@@ -6,6 +6,8 @@
 
 **维护约定**：本文档标注"仍待处理"的条目会随代码演进失效——上上轮清单跨越 v3.0～v3.6 六个版本未更新，复核后发现 7 项里 2 项早已修复、2 项判断有误。改动涉及本文条目时同步更新状态；下轮审查前先复核全部"仍待处理"，不要直接沿用。审查结论要给复现步骤而非静态推测。
 
+> **v3.10.0 功能移除的影响**：节点测速清理（`test`/`clean`/`sub test`/`sub clean`、`test-instance.ts`、`progress.ts`）、多源合并订阅（`isMultiUrl`/`splitUrls`/`downloadMergedSubscription`）、`kernel --mirror-all` 均已删除。涉及这些代码的历史条目（本轮 #3、#9、#16、#20，以及 #7 中 `test-instance.ts` 的部分）**记录属实但代码已不存在**，无需复核。仍然有效的教训已提炼进 `CLAUDE.md`：`ps -ww` 的 79 列截断（改由 ssh 隧道命中）、`maskUrl` 不按逗号切分、`parseIntArg` 的范围校验。
+
 ---
 
 ## 本轮（v3.8.0）已修复

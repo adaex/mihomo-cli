@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 
-import { BASE_CONFIG, CONTROLLER_PORT, TEST_CONFIG, TEST_CONTROLLER_ADDR } from './constants.js';
+import { BASE_CONFIG, CONTROLLER_PORT } from './constants.js';
 import { CliError } from './errors.js';
 import { registerCleanup } from './lifecycle.js';
 import { atomicWriteFileSync, DIRS, ensureDirs } from './paths.js';
@@ -46,10 +46,6 @@ function getReservedPorts(): Map<number, string> {
   const mixedPort = Number(BASE_CONFIG['mixed-port']);
   if (Number.isInteger(mixedPort)) reserved.set(mixedPort, 'mihomo 混合代理端口');
   reserved.set(CONTROLLER_PORT, 'mihomo 控制器端口');
-  const testPort = Number(TEST_CONFIG['mixed-port']);
-  if (Number.isInteger(testPort)) reserved.set(testPort, '测速实例代理端口');
-  const testController = Number(TEST_CONTROLLER_ADDR.split(':')[1]);
-  if (Number.isInteger(testController)) reserved.set(testController, '测速实例控制器端口');
   return reserved;
 }
 

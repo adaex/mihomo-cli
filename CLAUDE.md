@@ -36,8 +36,6 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/ssh.ts`               | ssh -D 隧道进程侧：运行态文件、端口探测、启停 |
 | `src/ssh-config.ts`        | ssh 隧道配置侧：ssh.*.yaml 加载、节点合成、与主配置合并（独立于 ow 开关） |
 | `src/lifecycle.ts`         | 退出清理注册表（信号/异常退出前杀掉测试实例） |
-| `src/test-instance.ts`     | 隔离测速实例（独立端口，不动主实例）withTestInstance |
-| `src/progress.ts`          | 测速进度打印、结果汇总格式化      |
 | `src/kernel.ts`            | GitHub Releases 检查、下载        |
 | `src/overwrite.ts`         | 覆写配置合并                      |
 | `src/commands/registry.ts` | 命令注册表（name/别名/handler/argv 改写/help 用法），路由与帮助的单一真相源 |
@@ -55,8 +53,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `commands/log.ts`             | log, logs                      |
 | `commands/ui.ts`              | ui                             |
 | `commands/kernel.ts`          | kernel                         |
-| `commands/subscription.ts`    | subscription (list/add/update/use/remove/web/test/clean) |
-| `commands/test.ts`            | test, clean（经主实例测速）    |
+| `commands/subscription.ts`    | subscription (list/add/update/use/remove/web) |
 | `commands/overwrite.ts`       | overwrite (on/off/list)        |
 | `commands/directory.ts`       | directory (open/list)          |
 | `commands/daemon.ts`          | daemon (on/off/status)         |
@@ -143,7 +140,7 @@ npm run format         # 格式化代码
 npm test               # node:test 单测（*.spec.ts，零新增依赖，经 tsx）
 ```
 
-测试仅覆盖高危纯函数（覆写合并/配置校验/名称归一/URL 遮蔽/参数校验等），非全量。文件命名 `*.spec.ts`（勿用 `*.test.ts`，会与 test.ts/test-instance.ts 冲突）。
+测试仅覆盖高危纯函数（覆写合并/配置校验/URL 遮蔽/参数校验等），非全量。文件命名 `*.spec.ts`（勿用 `*.test.ts`）。
 
 **在 worktree 里 `npm run check` 是空转**：`biome.json` 的 `files.includes` 排除 `**/.claude`，而 worktree 建在 `.claude/worktrees/` 下，于是它「Checked 0 files」直接通过。worktree 中改完要显式跑 `npx biome check src/`（修复加 `--write`），否则格式问题会一路漏到提交。
 
@@ -176,13 +173,13 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 ### 平台命令细节
 
-`ps -o command=` 必须带 `-ww`：BSD/macOS 即使 stdout 非 tty 也把该列截断到 79 列，needle 偏移靠后的匹配（测速实例的 config 路径）会恒失败。同理写 BSD/GNU 都要跑的脚本时留意 `stat -f%z`（GNU 为 `-c%s`）。
+`ps -o command=` 必须带 `-ww`：BSD/macOS 即使 stdout 非 tty 也把该列截断到 79 列，needle 偏移靠后的匹配（如 ssh 隧道的 `-D 127.0.0.1:<port>`）会恒失败。同理写 BSD/GNU 都要跑的脚本时留意 `stat -f%z`（GNU 为 `-c%s`）。
 
 ### 数据写盘前置校验
 
 - **订阅内容**：`saveSubscriptionRawConfig` 是原子覆盖、无备份。写盘前必须经 `assertLooksLikeSubscription`（要求 `proxies`/`proxy-groups`/`proxy-providers` 至少其一非空），否则机场返回的配额/错误 JSON 会不可恢复地覆盖可用订阅
 - **订阅列表**：一律经 `getSubscriptions()` 读取，不直接访问 `settings.subscriptions`——非数组值会被展开运算符按字符展开成垃圾列表
-- **URL 逗号**：逗号在 query/path 中合法。多源判据统一为「切分后每段都是合法 http(s) URL 且不止一段」，三处实现需同步（`settings.maskUrl`、`subscription.isMultiUrl`/`splitUrls`、`overwrite.splitUrlsLocal`）。只看「含逗号」会泄漏 token，只看「整体可解析」会漏遮蔽真多源
+- **URL 逗号**：逗号在 query/path 中合法，一律**不切分**（v3.10.0 起，随多源合并订阅一并移除）。`maskUrl` 按整条 URL 遮蔽——按逗号切分会把 `?nodes=us,hk&token=xxx` 劈开，两段都识别不出 token 参数 → 密钥明文输出
 - **`writeFileSync` 的 `mode`** 仅在创建新文件时生效；对可能已存在的文件（sudo 中间脚本）需显式 `chmodSync`
 
 ### settings.json 的读-改-写必须持锁
@@ -199,7 +196,7 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 上游 release 不提供 checksums（127 个资产实测，注释属实），故**把来源钉死是主要防线**，不是可选加固：
 
 - `assertTrustedAssetUrl` 必须在**加镜像前缀之前**调用——加了前缀整串就以镜像域名开头，无从判断原始 host
-- `--mirror-all` 下连 API 都走镜像，`browser_download_url` 完全由镜像说了算，而 `withMirror` 对非 github URL 原样放行
+- GitHub API **恒直连**（v3.10.0 移除 `--mirror-all`），镜像只作用于产物下载。API 若走镜像，`browser_download_url` 就完全由镜像说了算，而 `withMirror` 对非 github URL 原样放行 —— `assertTrustedAssetUrl` 因此是纵深防御的第二道，不可省
 - curl 必须带 `--proto '=https' --proto-redir '=https'`：`-L` 默认跟随任意协议重定向，实测会降级到明文 http 并落盘。产物随后 `chmod 755` 并在 TUN/daemon 下**以 root 运行**
 - tar 守卫要同时查**路径**（`-tzf`，条目名干净）与**类型**（`-tvzf` 首字符，拒 `l`/`h`）：symlink 成员的条目名完全合法，能过路径检查却让 `chmod 755` 沿链接作用到任意文件。遍历用 `lstatSync` 不用 `statSync`
 

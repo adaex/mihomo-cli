@@ -10,16 +10,14 @@ export async function cmdKernel(args: string[]): Promise<void> {
   const effectiveMirror = mirrorInfo.mirror;
 
   if (effectiveMirror) {
-    const mirrorDesc = mirrorInfo.type === 'all' ? ' (API和下载均使用镜像)' : ' (下载时使用镜像)';
-    console.log(`镜像: ${effectiveMirror}${mirrorDesc}`);
+    console.log(`镜像: ${effectiveMirror} (仅下载走镜像，版本查询恒直连)`);
     console.log('');
   }
 
   console.log('检查内核更新...');
 
   try {
-    const apiMirror = mirrorInfo.type === 'all' ? effectiveMirror : null;
-    const info = await kernel.checkUpdate(apiMirror);
+    const info = await kernel.checkUpdate();
     console.log(`当前: ${info.current}`);
     console.log(`最新: ${info.latest}`);
 
@@ -49,8 +47,7 @@ export async function cmdKernel(args: string[]): Promise<void> {
       hint.push(
         '',
         '提示: 直连失败或下载过慢时可使用镜像:',
-        '  mihomo kernel --mirror [镜像]     # 下载走镜像（默认 v6.gh-proxy.org）',
-        '  mihomo kernel --mirror-all [镜像] # API 和下载都走镜像',
+        '  mihomo kernel --mirror [镜像]   # 下载走镜像（默认 v6.gh-proxy.org）',
         `  可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`,
       );
     }

@@ -1,5 +1,38 @@
 # Changelog
 
+## [3.10.0] - 2026-09-04
+
+一次功能瘦身：删掉三块「内核或 Web UI 已经做得更好、或维护成本高于价值」的功能，减少约 900 行代码。
+
+### 破坏性变更
+
+**不提供兼容别名，删掉的命令直接报「未知命令」。**
+
+- **移除节点测速与清理**：`test`、`clean`、`sub test`、`sub clean` 四个命令，以及 `start` 启动后的自动测速清理
+
+  替代：`mihomo ui` 打开的 Web 面板（zash / metacubexd / yacd）都内置逐节点实时测延迟，交互远好过终端进度条；要自动选路则在订阅里用 `url-test` 分组，由内核持续测速——两者都比 CLI 的一次性快照更实时。
+
+  移除的理由不止是重复：`clean` 会依据一次测速结果**永久改写磁盘上的订阅 YAML 删节点**，而测速失败常来自本地网络抖动、机场限速或被默认 100 并发打到风控，误删只能靠重下订阅恢复。`start` 里的自动清理更是隐式触发（节点数 > 100，GitHub 源 > 50），让一条 `mihomo start` 可能卡上几十秒、删掉节点、再重启一次内核。
+
+  连带移除：`-t/--timeout`、`-j/--concurrency`、`-r/--rounds`、`--no-clean` 选项，隔离测速实例（含其占用的 27890/29090 端口），以及订阅缓存里的 `last_auto_clean_at` 字段（残留在 cache.json 里无害，会被忽略）。
+
+- **移除多源合并订阅**：`sub add` 不再接受逗号分隔的多个 URL
+
+  已存在的多源订阅**会更新失败**（整串被当作单条 URL 请求）。请 `mihomo sub remove` 后按单条 URL 重新添加，多个来源改为添加多条订阅、用 `sub use` 切换。
+
+  该功能本身只有约 70 行，但「逗号是切分符还是 URL 的合法字符」这个判据需要在三处保持同步（`maskUrl`、`isMultiUrl`/`splitUrls`、`overwrite.splitUrlsLocal`），任一处走样就会漏遮蔽 token 或让合法订阅加不进来——历史上两种都发生过。维护成本远高于代码量。
+
+- **移除 `kernel --mirror-all`**：GitHub API 现在**恒直连**，`--mirror` 只作用于产物下载
+
+  `--mirror-all` 让镜像同时接管 API，于是 `browser_download_url` 完全由镜像说了算，而 `withMirror` 对非 GitHub 地址原样放行——镜像只要返回指向自己的地址，就能让 CLI 下载任意二进制。该产物随后 `chmod 755` 并在 TUN / 保活模式下**以 root 运行**。上游 release 不提供 checksums，把来源钉死是主要防线，不能自己拆掉。API 访问受限时请用系统代理，而不是让镜像决定下载什么。
+
+### 变更
+
+- `maskUrl` 不再按逗号切分，整条 URL 一次处理。逗号在 query 中合法，切开会让 `?nodes=us,hk&token=xxx` 的 token 参数识别不出而明文输出——实测新行为在各类含逗号的输入上均不泄漏
+- 删除 `src/test-instance.ts`、`src/progress.ts`、`src/commands/test.ts`
+- 删除死代码 `normalizeProxyNamesBeforeSave`（裁剪节点名里的 `_github.com/<repo>` 尾缀）：它只被 `clean` 的保存路径调用，随之失去入口
+- `start` 保留的选项：`-s`/`--no-update`、`-u`/`--update-timeout`、`--no-ssh`
+
 ## [3.9.1] - 2026-09-01
 
 ### 变更

@@ -69,6 +69,21 @@ function assertSupportedPlatform(commandName: string): void {
   });
 }
 
+/**
+ * v3.10.0 移除的顶层命令 → 引导文案。
+ * 走单独一张表而非泛化的 did-you-mean：后者会把 `test` 猜成 `reset`（编辑距离 2），
+ * 把想测速的用户指向一个删数据的命令，比不给建议更糟。
+ */
+const REMOVED_COMMANDS: Record<string, string[]> = {
+  test: ['节点测速改用 Web 面板: mihomo ui（zash / metacubexd / yacd 均内置逐节点测延迟）', '自动选路请在订阅里配置 url-test 分组，由内核持续测速。'],
+  clean: [
+    '按测速结果删节点的功能已移除：一次抖动就可能永久改写订阅文件，误删只能重下订阅。',
+    '失效节点交给内核的 url-test / fallback 分组自动绕开即可。',
+    '',
+    '查看节点延迟: mihomo ui',
+  ],
+};
+
 async function main(): Promise<void> {
   clearProxyEnv();
 
@@ -86,6 +101,9 @@ async function main(): Promise<void> {
   const command = findCommand(token);
 
   if (!command) {
+    if (Object.hasOwn(REMOVED_COMMANDS, token)) {
+      throw new CliError(`${token} 已移除（v3.10.0）`, { hint: REMOVED_COMMANDS[token] });
+    }
     const suggestion = suggestSimilar(token, allCommandTokens());
     throw new CliError(`未知命令: ${token}`, {
       hint: [suggestion.length > 0 ? `是否想输入: ${suggestion.join(' / ')}?` : '使用 "mihomo help" 查看帮助'],

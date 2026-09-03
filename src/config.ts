@@ -347,7 +347,7 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
     }
   }
 
-  // 系统锁定项：controller/端口固定是 UI、热重载、测速的统一依赖地址；secret 仅取自用户设置。
+  // 系统锁定项：controller/端口固定是 UI 与热重载的统一依赖地址；secret 仅取自用户设置。
   // allow-lan 不锁定——订阅/覆写显式提供时按其值（见入站需求），未提供时由上面的 BASE_CONFIG 循环兜底为 false。
   systemConfig['external-controller'] = BASE_CONFIG['external-controller'];
   systemConfig['mixed-port'] = BASE_CONFIG['mixed-port'];

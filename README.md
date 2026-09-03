@@ -8,8 +8,7 @@
 
 - 🌐 **订阅管理** - 添加/更新订阅，支持流量统计和到期时间显示
 - 🔄 **自动更新** - 启动时自动检查并更新过期订阅
-- 🔍 **模糊匹配** - `sub use` / `web` / `update` / `remove` / `test` / `clean` 均支持订阅名称模糊匹配（大小写不敏感）
-- 🧹 **节点测速清理** - `test` 快速测试、`clean` 清理并重启；`sub test/clean` 独立进程测试任意订阅
+- 🔍 **模糊匹配** - `sub use` / `web` / `update` / `remove` 均支持订阅名称模糊匹配（大小写不敏感）
 - 📝 **覆写配置** - 在订阅基础上进行自定义覆写，支持强制覆盖、数组合并、按 name 就地 patch、按订阅限定作用域
 - 🔄 **智能重启** - `sub use` 切换订阅、`ow on/off` 切换覆写后自动重启
 - 🚀 **进程管理** - 启动/停止/切换模式，自动清理残留进程
@@ -88,7 +87,7 @@ mihomo ui yacd     # YACD
 
 | 命令                        | 说明                                                                         |
 | --------------------------- | ---------------------------------------------------------------------------- |
-| `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式（`-s` 跳过更新，`-u` 更新超时，`-r` 清理轮次，`-t` 超时，`-j` 并发，`--no-clean` 跳过启动自动清理） |
+| `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式（`-s` 跳过订阅更新，`-u` 更新超时，`--no-ssh` 跳过拉起 ssh 隧道） |
 | `mihomo stop`               | 停止代理                                                                     |
 | `mihomo status`             | 查看运行状态（含订阅流量、到期时间）                                         |
 | `mihomo log`                | 实时查看日志 (`-o` 用系统默认程序打开)                                       |
@@ -103,15 +102,14 @@ mihomo ui yacd     # YACD
 | ----------------------------- | -------------------------------------- |
 | `mihomo sub`                  | 列出所有订阅（含流量、到期时间）       |
 | `mihomo sub use <name>`       | 切换当前订阅（支持模糊匹配，自动重启） |
-| `mihomo sub add <url> [name]` | 添加订阅并自动切换（支持逗号分隔多 URL 合并，名称不可重复） |
+| `mihomo sub add <url> [name]` | 添加订阅并自动切换（名称不可重复） |
 | `mihomo sub update`           | 更新所有订阅                           |
 | `mihomo sub update <name>`    | 更新指定订阅（支持模糊匹配）           |
 | `mihomo sub remove <name>`    | 删除订阅（别名 `rm`/`delete`；精确名直接删，模糊匹配需确认，`-y` 跳过） |
 | `mihomo sub web [name]`       | 打开订阅页面（别名 `open`，无参打开默认，支持模糊匹配） |
-| `mihomo sub test [name]`      | 测试节点连通性（独立隔离实例，无需运行主实例，`-t` 超时，`-j` 并发） |
-| `mihomo sub clean [name]`     | 测速并清理失败节点（独立实例，不动主实例，`-r` 轮数默认 2，`-t` 超时，`-j` 并发） |
-| `mihomo test`                 | 测试当前节点（经运行中的主实例，`-t` 超时，`-j` 并发） |
-| `mihomo clean`                | 清理失败节点并重启（经主实例，`-t` 超时，`-j` 并发，`-r` 轮数） |
+
+> 节点测速请用 `mihomo ui` 打开的 Web 面板（zash/metacubexd/yacd 均内置逐节点实时测延迟），
+> 或直接在订阅里配置 `url-test` 分组由内核自动选路——两者都比一次性的命令行快照更实时。
 
 ### 覆写配置
 
@@ -271,10 +269,13 @@ mihomo kernel --mirror
 # 指定镜像
 mihomo kernel --mirror hk.gh-proxy.org
 
-# API 请求和下载都使用镜像（解决 API 访问受限问题）
-mihomo kernel --mirror-all
-mihomo kernel --mirror-all hk.gh-proxy.org
+# 不使用镜像（显式直连）
+mihomo kernel --no-mirror
 ```
+
+> 镜像**只作用于内核产物下载**，版本查询（GitHub API）恒直连。
+> 内核二进制随后会以 root 运行（TUN/保活），下载地址必须由 GitHub 官方 API 给出，
+> 不能让镜像自己指定。
 
 **可用镜像：**
 
@@ -292,34 +293,24 @@ mihomo kernel --mirror-all hk.gh-proxy.org
 - 更新失败时继续使用本地缓存，不影响使用
 - 自动更新默认超时 10 秒，可通过 `-u <ms>` 调整；使用 `-s` 可完全跳过自动更新
 
-## 启动自动清理
-
-节点数超过阈值（GitHub 订阅 50、其他 100）时，`start` 会自动测速清理死节点：
-
-- 同一订阅 12 小时内只自动清理一次（冷却记录在订阅缓存），避免每次启动都全量测速
-- `--no-clean` 可跳过；随时可用 `mihomo clean` / `mihomo sub clean` 手动清理
-
 ## 选项写法
 
 带值选项支持三种等价写法，长短选项对应关系：
 
 | 短 | 长 | 用途 | 默认 |
 | --- | --- | --- | --- |
-| `-t` | `--timeout` | 测速超时（ms） | 2000 |
-| `-j` | `--concurrency` | 测速并发数 | 100 |
-| `-r` | `--rounds` | 清理时失败节点重试轮数 | 2 |
 | `-u` | `--update-timeout` | 启动时自动更新订阅超时（ms） | 10000 |
 | `-n` | `--lines` | 日志显示行数 | 100 |
 
 ```bash
-mihomo test -t 3000          # 短选项 + 空格
-mihomo test --timeout 3000   # 长选项 + 空格
-mihomo test --timeout=3000   # 长选项 + 等号
+mihomo start -u 30000            # 短选项 + 空格
+mihomo start --update-timeout 30000   # 长选项 + 空格
+mihomo start --update-timeout=30000   # 长选项 + 等号
 ```
 
-布尔开关：`-s`（跳过订阅更新）、`--no-update`、`--no-clean`、`-y`/`--yes`（跳过确认）、`-o`（用系统默认程序打开）。
+布尔开关：`-s`（跳过订阅更新）、`--no-update`、`--no-ssh`（跳过拉起 ssh 隧道）、`-y`/`--yes`（跳过确认）、`-o`（用系统默认程序打开）。
 
-上述数值选项只接受 **>= 1 的整数**，非法值（`0`、负数、`5s`、`abc`）会直接报错而非静默取默认值——避免 `-j 0` 之类静默产出"全部节点失败"的假结果。
+上述数值选项只接受 **>= 1 的整数**，非法值（`0`、负数、`5s`、`abc`）会直接报错而非静默取默认值——避免静默产出看似成功的错误结果。
 
 ## 数据保护
 
@@ -466,7 +457,7 @@ sudo pkill -9 mihomo
 
 ## 安全特性
 
-- **URL 脱敏**：订阅 URL 中的 token、key、password 等敏感参数（含 query、userinfo 及路径型令牌）自动替换为 `***`。逗号分隔的多源订阅逐段脱敏；query 内含逗号的单条 URL 不会被误拆（否则参数被劈开会导致 token 漏脱敏）
+- **URL 脱敏**：订阅 URL 中的 token、key、password 等敏感参数（含 query、userinfo 及路径型令牌）自动替换为 `***`。按整条 URL 处理、不按逗号切分——逗号在 query 中合法，切开会让 `?nodes=us,hk&token=xxx` 的 token 参数识别不出而明文输出
 - **文件权限**：配置文件使用 `0o600` 权限（仅所有者可读可写），目录使用 `0o700` 权限
 - **入站默认关闭**：订阅/覆写未指定时 `allow-lan` 默认 `false`；如需局域网设备连入代理端口，可在订阅或覆写中显式开启
 - **信号处理**：优雅处理 SIGINT/SIGTERM 信号

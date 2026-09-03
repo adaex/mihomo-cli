@@ -1,8 +1,6 @@
 import { colors } from '../colors.js';
-import { DEFAULT_TEST_CONCURRENCY, DEFAULT_TEST_TIMEOUT } from '../constants.js';
 import { CliError } from '../errors.js';
 import * as processManager from '../process.js';
-import { createProgressPrinter, formatCleanSummary, formatTestSummary } from '../progress.js';
 import * as runtime from '../runtime.js';
 import {
   addSubscription,
@@ -13,39 +11,13 @@ import {
   setDefaultSubscription,
 } from '../settings.js';
 import * as subscription from '../subscription.js';
-import { withTestInstance } from '../test-instance.js';
-import type { Subscription } from '../types.js';
-import { formatBytes, formatDate, formatTimestamp, getNonFlagArg, hasFlag, parseIntArg, suggestSimilar } from '../utils.js';
+import { formatBytes, formatDate, formatTimestamp, getNonFlagArg, hasFlag, suggestSimilar } from '../utils.js';
 import { confirmPrompt, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 function githubRepoUrl(rawUrl: string): string | null {
   const match = rawUrl.match(/raw\.githubusercontent\.com\/([^/]+\/[^/]+)/);
   if (match) return `https://github.com/${match[1]}`;
   return null;
-}
-
-function resolveTestTarget(args: string[]): { target: Subscription; timeout: number; concurrency: number } {
-  const subs = getSubscriptions();
-  if (subs.length === 0) {
-    throw new CliError('没有订阅');
-  }
-
-  const nameArg = getNonFlagArg(args, 2);
-  const timeout = parseIntArg(args, '-t', '--timeout', DEFAULT_TEST_TIMEOUT);
-  const concurrency = parseIntArg(args, '-j', '--concurrency', DEFAULT_TEST_CONCURRENCY);
-
-  let target: Subscription;
-  if (nameArg) {
-    target = subscription.resolveSubscription(subs, nameArg);
-  } else {
-    const activeSub = subscription.getActiveSubscription();
-    if (!activeSub) {
-      throw new CliError('没有活跃订阅，请指定订阅名称');
-    }
-    target = activeSub;
-  }
-
-  return { target, timeout, concurrency };
 }
 
 /** 订阅内容更新后，运行中的实例仍用旧配置，提示重启生效 */
@@ -71,9 +43,8 @@ function printSubscriptionList(): void {
   subs.forEach((s, i) => {
     const time = formatDate(s.updated_at);
     const defaultMark = activeSub && s.name === activeSub.name ? colors.green(' [使用中]') : '';
-    const mergeBadge = subscription.isMultiUrl(s.url) ? colors.cyan(` [合并 ${subscription.splitUrls(s.url).length} 源]`) : '';
     const interval = subscription.resolveUpdateInterval(s.url, s.update_interval);
-    console.log(`  ${i + 1}. ${s.name}${defaultMark}${mergeBadge}`);
+    console.log(`  ${i + 1}. ${s.name}${defaultMark}`);
     console.log(`    ${colors.gray('更新: ')}${time} (间隔: ${interval}h)`);
 
     if (s.username) {
@@ -102,8 +73,6 @@ function printSubscriptionList(): void {
   console.log('新增订阅: mihomo sub add <url> [name]');
   console.log('更新订阅: mihomo sub update [name]');
   console.log('删除订阅: mihomo sub remove <name>');
-  console.log('测试节点: mihomo sub test [name]');
-  console.log('清理节点: mihomo sub clean [name]');
   console.log('打开页面: mihomo sub web [name]');
   console.log('');
 }
@@ -116,56 +85,27 @@ async function subAdd(args: string[]): Promise<void> {
     throw new CliError('请提供有效的订阅 URL');
   }
 
-  if (subscription.isMultiUrl(url)) {
-    const urls = subscription.splitUrls(url);
-    if (urls.length === 0) {
-      throw new CliError('请提供有效的订阅 URL');
-    }
-    for (const u of urls) {
-      if (!subscription.isValidHttpUrl(u)) {
-        throw new CliError(`无效的 URL: ${u}`);
-      }
-    }
-    // 入库用清洗后的 urls 重新拼接，避免存进带多余空格/尾逗号的原始串
-    const normalizedUrl = urls.join(',');
-    console.log(`添加合并订阅: ${name} (${urls.length} 个源)`);
-    // 入库（重名/名称非法）在 try 外抛出：回滚只针对「入库成功后下载失败」，
-    // 否则重名错误会触发 removeSubscription 误删用户既有的同名订阅
-    addSubscription(normalizedUrl, name);
-    try {
-      const info = await subscription.downloadMergedSubscription(urls, name);
-      // 切换放在下载成功后：若放在前面，回滚的 removeSubscription 会把 active 落到 subs[0]
-      // 而非用户原来的选择（settings.ts 的 active 兜底逻辑），静默切错订阅
-      setDefaultSubscription(name);
-      console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)}, 合并 ${urls.length} 源)`);
-    } catch (e) {
-      // 下载失败回滚：不留"已入库但无配置"的半成品订阅（否则 start 会直接报错）
-      removeSubscription(name);
-      // 保留原 CliError 的 hint（如订阅无效时服务端返回的原因），仅换标签
-      if (e instanceof CliError) throw new CliError(e.message, { label: '添加失败', hint: e.hint });
-      throw new CliError((e as Error).message, { label: '添加失败' });
-    }
-  } else {
-    if (!subscription.isValidHttpUrl(url)) {
-      throw new CliError('请提供有效的订阅 URL（需以 http:// 或 https:// 开头）');
-    }
-    console.log(`添加订阅: ${name}`);
-    // 同上：入库在 try 外，回滚仅覆盖下载失败
-    addSubscription(url, name);
-    try {
-      const info = await subscription.downloadSubscription(url, name);
-      // 同上：切换必须在下载成功后，否则回滚会把 active 落到 subs[0] 而非用户原选择
-      setDefaultSubscription(name);
-      const repoUrl = githubRepoUrl(url);
-      if (repoUrl) saveSubscriptionCache(name, { web_page_url: repoUrl });
-      console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)})`);
-    } catch (e) {
-      // 下载失败回滚：不留"已入库但无配置"的半成品订阅（否则 start 会直接报错）
-      removeSubscription(name);
-      // 保留原 CliError 的 hint（如订阅无效时服务端返回的原因），仅换标签
-      if (e instanceof CliError) throw new CliError(e.message, { label: '添加失败', hint: e.hint });
-      throw new CliError((e as Error).message, { label: '添加失败' });
-    }
+  if (!subscription.isValidHttpUrl(url)) {
+    throw new CliError('请提供有效的订阅 URL（需以 http:// 或 https:// 开头）');
+  }
+  console.log(`添加订阅: ${name}`);
+  // 入库（重名/名称非法）在 try 外抛出：回滚只针对「入库成功后下载失败」，
+  // 否则重名错误会触发 removeSubscription 误删用户既有的同名订阅
+  addSubscription(url, name);
+  try {
+    const info = await subscription.downloadSubscription(url, name);
+    // 切换放在下载成功后：若放在前面，回滚的 removeSubscription 会把 active 落到 subs[0]
+    // 而非用户原来的选择（settings.ts 的 active 兜底逻辑），静默切错订阅
+    setDefaultSubscription(name);
+    const repoUrl = githubRepoUrl(url);
+    if (repoUrl) saveSubscriptionCache(name, { web_page_url: repoUrl });
+    console.log(`已添加并切换到 "${name}" (${subscription.formatProxySummary(info)})`);
+  } catch (e) {
+    // 下载失败回滚：不留"已入库但无配置"的半成品订阅（否则 start 会直接报错）
+    removeSubscription(name);
+    // 保留原 CliError 的 hint（如订阅无效时服务端返回的原因），仅换标签
+    if (e instanceof CliError) throw new CliError(e.message, { label: '添加失败', hint: e.hint });
+    throw new CliError((e as Error).message, { label: '添加失败' });
   }
   console.log('');
   printSubscriptionList();
@@ -236,7 +176,7 @@ async function subUse(args: string[]): Promise<void> {
   }
   console.log(`已切换到 "${target.name}"`);
 
-  // 运行中(含保活:launchd 托管不写 pidFile)才重启使新订阅生效；透传用户显式的启动选项(-s/-t 等)
+  // 运行中(含保活:launchd 托管不写 pidFile)才重启使新订阅生效；透传用户显式的启动选项(-s/-u 等)
   if (await restartToApply(args)) return;
 
   console.log('');
@@ -264,9 +204,7 @@ async function subWeb(args: string[]): Promise<void> {
     console.log('订阅信息中缺少页面地址，正在查询订阅...');
     try {
       // persist=false：只取响应头里的页面地址，不覆盖已保存的订阅配置
-      const info = subscription.isMultiUrl(target.url)
-        ? await subscription.downloadMergedSubscription(subscription.splitUrls(target.url), target.name, undefined, false)
-        : await subscription.downloadSubscription(target.url, target.name, undefined, false);
+      const info = await subscription.downloadSubscription(target.url, target.name, undefined, false);
       if (!info.webPageUrl) {
         throw new CliError('该订阅没有提供页面地址');
       }
@@ -327,64 +265,6 @@ async function subRemove(args: string[]): Promise<void> {
   printSubscriptionList();
 }
 
-async function subClean(args: string[]): Promise<void> {
-  const { target, timeout, concurrency } = resolveTestTarget(args);
-  const rounds = parseIntArg(args, '-r', '--rounds', subscription.DEFAULT_CLEAN_ROUNDS);
-
-  console.log(`清理订阅 "${target.name}"...`);
-  console.log(`超时: ${timeout}ms  并发: ${concurrency}`);
-  console.log('');
-
-  const progress = createProgressPrinter(rounds);
-
-  const result = await withTestInstance(target.name, async apiBase => {
-    return subscription.autoCleanSubscription(target.name, {
-      timeout,
-      concurrency,
-      rounds,
-      apiBase,
-      onResult: progress.onResult,
-      onRetryRound: progress.onRetryRound,
-    });
-  });
-
-  progress.finish();
-  console.log(formatTestSummary(result.summary));
-
-  if (result.skipped) {
-    console.log('');
-    console.log(colors.yellow('存活节点不足 1%，跳过清理。请检查原始订阅是否有效'));
-  } else if (result.removedProxies > 0) {
-    console.log(`${colors.green('已清理')}: ${formatCleanSummary(result)}`);
-    if (runtime.getRunningState().running) {
-      console.log('');
-      console.log('提示: 需要重启 mihomo 使更改生效 (mihomo start)');
-    }
-  }
-}
-
-async function subTest(args: string[]): Promise<void> {
-  const { target, timeout, concurrency } = resolveTestTarget(args);
-
-  console.log(`测试订阅 "${target.name}" 的节点连通性...`);
-  console.log(`超时: ${timeout}ms  并发: ${concurrency}`);
-  console.log('');
-
-  const progress = createProgressPrinter();
-
-  const summary = await withTestInstance(target.name, async apiBase => {
-    return subscription.testSubscriptionProxies(target.name, {
-      timeout,
-      concurrency,
-      apiBase,
-      onResult: progress.onResult,
-    });
-  });
-
-  progress.finish();
-  console.log(formatTestSummary(summary));
-}
-
 const SUBCOMMANDS: SubCommand[] = [
   { name: 'list', handler: printSubscriptionList },
   { name: 'add', handler: subAdd },
@@ -392,8 +272,6 @@ const SUBCOMMANDS: SubCommand[] = [
   { name: 'use', handler: subUse },
   { name: 'web', aliases: ['open'], handler: subWeb },
   { name: 'remove', aliases: ['rm', 'delete'], handler: subRemove },
-  { name: 'clean', handler: subClean },
-  { name: 'test', handler: subTest },
 ];
 
 export async function cmdSubscription(args: string[]): Promise<void> {
@@ -401,10 +279,16 @@ export async function cmdSubscription(args: string[]): Promise<void> {
     // 无子命令 → 列表；未知子命令 → 报错
     fallback: printSubscriptionList,
     onUnknown: action => {
+      // v3.10.0 移除的子命令单独引导：泛化的 did-you-mean 会把 test 猜成 list，毫无帮助
+      if (action === 'test' || action === 'clean') {
+        throw new CliError(`sub ${action} 已移除（v3.10.0）`, {
+          hint: ['节点测速改用 Web 面板: mihomo ui（zash / metacubexd / yacd 均内置逐节点测延迟）', '自动选路请在订阅里配置 url-test 分组，由内核持续测速。'],
+        });
+      }
       const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
       const suggestion = suggestSimilar(action, names);
       throw new CliError(`未知的订阅命令: ${action}`, {
-        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '用法: mihomo sub [list|use|add|update|remove|web|test|clean]'],
+        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '用法: mihomo sub [list|use|add|update|remove|web]'],
       });
     },
   });

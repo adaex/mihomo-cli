@@ -75,10 +75,10 @@ export function hasFlag(args: string[] | undefined, short: string, long?: string
 }
 
 /**
- * 解析整数选项。全部调用点（-t 超时 / -j 并发 / -r 轮次 / -n 行数 / -u 更新超时）
- * 语义上都是正整数，故 <1、非数字、带尾随垃圾（`5s`）一律抛错而非静默取值：
- * `-j 0` 会让测速起 0 个 worker，结果数组全是空洞，被报成「所有节点失败」（伪造结果）；
- * `-t 5s` 静默取 5（ms）会让全部节点超时。宁可报错也不给用户一个看似成功的错误结果。
+ * 解析整数选项。全部调用点（-n 行数 / -u 更新超时）语义上都是正整数，
+ * 故 <1、非数字、带尾随垃圾（`5s`）一律抛错而非静默取值：
+ * `-u 5s` 静默取 5（ms）会让自动更新立刻超时。
+ * 宁可报错也不给用户一个看似成功的错误结果。
  */
 export function parseIntArg(args: string[] | undefined, short: string, long: string, defaultValue: number): number {
   if (!args) return defaultValue;
@@ -134,23 +134,10 @@ export function parseStringArg(args: string[] | undefined, long: string, short?:
 
 /**
  * 需要「跳过其后一个值」的选项名（空格分隔、带值），与全部 parseIntArg / parseStringArg 调用一一对应。
- * getNonFlagArg 识别位置参数时借此避免把 `-t 3000` 里的 `3000` 误当位置参数。
- * 注意：--mirror/--mirror-all 是可选值选项、只走 parseMirrorArg，故意不收录。
+ * getNonFlagArg 识别位置参数时借此避免把 `--port 1080` 里的 `1080` 误当位置参数。
+ * 注意：--mirror 是可选值选项、只走 parseMirrorArg，故意不收录。
  */
-const VALUE_FLAGS: ReadonlySet<string> = new Set([
-  '-t',
-  '--timeout',
-  '-j',
-  '--concurrency',
-  '-r',
-  '--rounds',
-  '-n',
-  '--lines',
-  '-u',
-  '--update-timeout',
-  '--host',
-  '--port',
-]);
+const VALUE_FLAGS: ReadonlySet<string> = new Set(['-n', '--lines', '-u', '--update-timeout', '--host', '--port']);
 
 /**
  * 从任意命令的 argv 中抽取 start 支持的启动选项（含其值），供 sub use / ow on|off 触发的重启透传。
@@ -158,14 +145,14 @@ const VALUE_FLAGS: ReadonlySet<string> = new Set([
  */
 export function extractStartOptions(args: string[] | undefined): string[] {
   if (!args) return [];
-  const BOOL_FLAGS = new Set(['-s', '--no-update', '--no-clean', '--no-ssh']);
+  const BOOL_FLAGS = new Set(['-s', '--no-update', '--no-ssh']);
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (VALUE_FLAGS.has(a)) {
       out.push(a);
       if (i + 1 < args.length) out.push(args[++i]);
-    } else if (BOOL_FLAGS.has(a) || /^--(timeout|concurrency|rounds|update-timeout)=/.test(a)) {
+    } else if (BOOL_FLAGS.has(a) || /^--update-timeout=/.test(a)) {
       out.push(a);
     }
   }
@@ -260,37 +247,46 @@ function normalizeMirrorUrl(val: string): string | null {
   return url.endsWith('/') ? url : `${url}/`;
 }
 
+/**
+ * 解析 `--mirror`。镜像**只作用于产物下载**，GitHub API 恒直连：
+ * API 若也走镜像，`browser_download_url` 就完全由镜像说了算，而内核产物随后
+ * `chmod 755` 并在 TUN/daemon 下以 root 运行——上游不提供 checksums，
+ * 把来源钉死（assertTrustedAssetUrl）是主要防线，不能让镜像自己指定下载地址。
+ */
 export function parseMirrorArg(args: string[] | undefined): MirrorArg {
   if (!args || args.length < 2) {
-    return { mirror: null, isOverride: false, type: 'download' };
+    return { mirror: null, isOverride: false };
+  }
+
+  // 已移除的选项要显式报错，不能静默按直连继续：用户敲了 --mirror-all 却拿到直连行为，
+  // 正是「不报错但行为不对」的失效方式（同 reset 的 KNOWN_FLAGS 口径）
+  if (args.some(a => a === '--mirror-all' || a.startsWith('--mirror-all='))) {
+    throw new CliError('--mirror-all 已移除（v3.10.0）', {
+      label: '参数错误',
+      hint: [
+        '版本查询（GitHub API）现在恒直连，镜像只作用于内核产物下载。',
+        'API 若走镜像，下载地址就由镜像说了算，而内核随后以 root 运行。',
+        '',
+        '改用: mihomo kernel --mirror [镜像]',
+      ],
+    });
   }
 
   if (args.includes('--no-mirror') || args.includes('--direct')) {
-    return { mirror: null, isOverride: true, type: 'download' };
+    return { mirror: null, isOverride: true };
   }
 
   // 同时支持 `--mirror url` 与 `--mirror=url` 两种形式
-  const mirrorAllEq = args.find(a => a.startsWith('--mirror-all='));
-  const mirrorAllIdx = args.indexOf('--mirror-all');
-  if (mirrorAllIdx >= 0 || mirrorAllEq) {
-    const inline = mirrorAllEq?.slice('--mirror-all='.length);
-    const nextArg = inline ?? args[mirrorAllIdx + 1];
-    if (!nextArg || nextArg.startsWith('-')) {
-      return { mirror: DEFAULT_MIRROR, isOverride: true, type: 'all' };
-    }
-    return { mirror: normalizeMirrorUrl(nextArg), isOverride: true, type: 'all' };
-  }
-
   const mirrorEq = args.find(a => a.startsWith('--mirror='));
   const mirrorIdx = args.indexOf('--mirror');
   if (mirrorIdx >= 0 || mirrorEq) {
     const inline = mirrorEq?.slice('--mirror='.length);
     const nextArg = inline ?? args[mirrorIdx + 1];
     if (!nextArg || nextArg.startsWith('-')) {
-      return { mirror: DEFAULT_MIRROR, isOverride: true, type: 'download' };
+      return { mirror: DEFAULT_MIRROR, isOverride: true };
     }
-    return { mirror: normalizeMirrorUrl(nextArg), isOverride: true, type: 'download' };
+    return { mirror: normalizeMirrorUrl(nextArg), isOverride: true };
   }
 
-  return { mirror: null, isOverride: false, type: 'download' };
+  return { mirror: null, isOverride: false };
 }

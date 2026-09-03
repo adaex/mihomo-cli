@@ -48,15 +48,12 @@ export const LAUNCH_DAEMON_LABEL: string = RAW_DAEMON_LABEL && isValidDaemonLabe
 
 /**
  * external-controller 地址(系统强制,不受订阅/覆写影响)。
- * host 固定 127.0.0.1:loopback 必可达;控制面板 API、热重载、测速探测统一走此地址。
+ * host 固定 127.0.0.1:loopback 必可达;控制面板 API 与热重载统一走此地址。
  */
 export const CONTROLLER_PORT = 9090;
 export const CONTROLLER_ADDR = `127.0.0.1:${CONTROLLER_PORT}`;
 /** 控制面板 API 基址。config.ts 恒把 external-controller 覆盖为该地址，故调用方无需运行时解析 */
 export const CONTROLLER_BASE_URL = `http://${CONTROLLER_ADDR}`;
-
-/** 测速隔离实例的 external-controller(独立端口,避免与主实例 9090 冲突) */
-export const TEST_CONTROLLER_ADDR = '127.0.0.1:29090';
 
 export const TUN_CONFIG = {
   tun: {
@@ -67,14 +64,6 @@ export const TUN_CONFIG = {
     'auto-detect-interface': true,
     'strict-route': true,
   },
-};
-
-export const TEST_CONFIG: Record<string, unknown> = {
-  'mixed-port': 27890,
-  'allow-lan': false,
-  'external-controller': TEST_CONTROLLER_ADDR,
-  'log-level': 'error',
-  'geodata-mode': true,
 };
 
 export const BASE_CONFIG: Record<string, unknown> = {
@@ -106,20 +95,3 @@ export const DEFAULT_UPDATE_INTERVAL_HOURS = 12;
 export const DEFAULT_UPDATE_INTERVAL_HOURS_GITHUB = 6;
 /** 启动时自动更新订阅的默认超时（毫秒），超时后使用缓存配置 */
 export const DEFAULT_AUTO_UPDATE_TIMEOUT = 10_000;
-
-// === 节点测速 / 清理默认值 ===
-
-/** 测速默认超时（毫秒） */
-export const DEFAULT_TEST_TIMEOUT = 2000;
-/** 测速默认并发数 */
-export const DEFAULT_TEST_CONCURRENCY = 100;
-/** 测速使用的连通性探测 URL */
-export const DEFAULT_TEST_URL = 'http://www.gstatic.com/generate_204';
-/** 自动清理默认测试轮次（失败节点重试轮数） */
-export const DEFAULT_CLEAN_ROUNDS = 2;
-/** 非 GitHub 订阅启动后自动清理阈值（节点数超过则测速清理） */
-export const AUTO_CLEAN_THRESHOLD = 100;
-/** GitHub 订阅启动后自动清理阈值 */
-export const AUTO_CLEAN_THRESHOLD_GITHUB = 50;
-/** 启动时自动测速清理的冷却（小时）：冷却期内 start 不再全量测速，避免每次启动都慢 */
-export const AUTO_CLEAN_COOLDOWN_HOURS = 12;

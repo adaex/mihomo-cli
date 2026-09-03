@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { CliError } from './errors.js';
-import { parseIntArg, suggestSimilar } from './utils.js';
+import { parseIntArg, parseMirrorArg, suggestSimilar } from './utils.js';
 
-const TOKENS = ['start', 'stop', 'status', 'subscription', 'sub', 'test', 'clean', 'ui'];
+const TOKENS = ['start', 'stop', 'status', 'subscription', 'sub', 'ssh', 'ui'];
 
 describe('suggestSimilar', () => {
   it('前缀匹配命中（含别名），按相似度排序', () => {
@@ -53,7 +53,7 @@ describe('parseIntArg 范围与格式校验', () => {
     assert.equal(T(['x', '-o', '-s']), 2000);
   });
 
-  // 以下此前会静默取到危险值：0 让测速起 0 个 worker 报「全部失败」，'5s' 静默取 5ms
+  // 以下此前会静默取到危险值：'5s' 被 parseInt 静默取成 5（ms）
   for (const bad of ['0', '-1', '5s', 'abc', '', '1.5', ' ']) {
     it(`拒绝非法值 ${JSON.stringify(bad)}`, () => {
       assert.throws(
@@ -68,5 +68,32 @@ describe('parseIntArg 范围与格式校验', () => {
       () => T(['x', '-t']),
       (e: unknown) => e instanceof CliError,
     );
+  });
+});
+
+describe('parseMirrorArg：--mirror-all 已移除（v3.10.0）', () => {
+  it('显式报错，不静默按直连继续', () => {
+    // 静默忽略会让用户以为 API 仍走镜像 —— 「不报错但行为不对」的失效方式
+    assert.throws(
+      () => parseMirrorArg(['kernel', '--mirror-all']),
+      (e: unknown) => e instanceof CliError && /已移除/.test((e as CliError).message),
+    );
+    assert.throws(
+      () => parseMirrorArg(['kernel', '--mirror-all=hk.gh-proxy.org']),
+      (e: unknown) => e instanceof CliError,
+    );
+  });
+
+  it('--mirror 仍正常工作（仅作用于产物下载）', () => {
+    assert.equal(parseMirrorArg(['kernel', '--mirror']).mirror, 'https://v6.gh-proxy.org/');
+    assert.equal(parseMirrorArg(['kernel', '--mirror', 'gh.example.com']).mirror, 'https://gh.example.com/');
+  });
+
+  it('--no-mirror 显式直连', () => {
+    assert.deepEqual(parseMirrorArg(['kernel', '--no-mirror']), { mirror: null, isOverride: true });
+  });
+
+  it('无镜像选项时不覆盖', () => {
+    assert.deepEqual(parseMirrorArg(['kernel']), { mirror: null, isOverride: false });
   });
 });

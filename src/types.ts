@@ -71,8 +71,6 @@ export interface SubscriptionCacheEntry {
   expire?: number;
   web_page_url?: string;
   username?: string;
-  /** 上次启动时自动测速清理的时间（冷却用，避免每次 start 都全量测速） */
-  last_auto_clean_at?: string;
 }
 
 export interface SubscriptionCache {
@@ -275,7 +273,6 @@ export interface ConfigInfo {
 export interface MirrorArg {
   mirror: string | null;
   isOverride: boolean;
-  type: 'download' | 'all';
 }
 
 // === Reset ===
@@ -318,21 +315,6 @@ export interface ParsedSubscription {
   raw: Record<string, unknown>;
   proxies: ParsedProxy[];
   proxyGroups: ParsedProxyGroup[];
-}
-
-// === Proxy Test ===
-
-export interface ProxyTestResult {
-  name: string;
-  delay: number | null;
-  error?: string;
-}
-
-export interface ProxyTestSummary {
-  total: number;
-  alive: number;
-  dead: number;
-  results: ProxyTestResult[];
 }
 
 // === HTTP Client ===

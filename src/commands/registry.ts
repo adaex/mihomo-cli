@@ -10,7 +10,6 @@ import { cmdStart } from './start.js';
 import { printStatus } from './status.js';
 import { cmdStop } from './stop.js';
 import { cmdSubscription } from './subscription.js';
-import { cmdClean, cmdTest } from './test.js';
 import { cmdUI } from './ui.js';
 import { cmdUpdate } from './update.js';
 
@@ -46,7 +45,7 @@ export const COMMANDS: Command[] = [
     aliases: ['up'],
     handler: cmdStart,
     group: 'control',
-    usage: ['start [tun|mixed] [-s] [-u ms]     启动/切换代理 (默认 mixed)', '      [-r N] [-t ms] [-j N] [--no-clean]'],
+    usage: ['start [tun|mixed] [-s] [-u ms] [--no-ssh]   启动/切换代理 (默认 mixed)'],
   },
   {
     name: 'tun',
@@ -105,8 +104,6 @@ export const COMMANDS: Command[] = [
       'subscription update [name]   更新订阅（无参更新所有）',
       'subscription remove <name>   删除订阅（模糊匹配需确认，-y 跳过）',
       'subscription web [name]      打开订阅页面',
-      'subscription test [name]     测试节点（独立实例，无需运行）',
-      'subscription clean [name]    测速清理（独立实例，不动主实例）[-r N] [-t ms] [-j N]',
     ],
   },
   {
@@ -116,20 +113,6 @@ export const COMMANDS: Command[] = [
     rewrite: args => ['sub', 'use', ...args.slice(1)],
     group: 'subscription',
     usage: [],
-  },
-  {
-    name: 'test',
-    aliases: [],
-    handler: cmdTest,
-    group: 'subscription',
-    usage: ['test [-t ms] [-j N]           测试当前节点（经运行中的主实例）'],
-  },
-  {
-    name: 'clean',
-    aliases: [],
-    handler: cmdClean,
-    group: 'subscription',
-    usage: ['clean [-t ms] [-j N] [-r N]   清理失败节点并重启（经主实例）'],
   },
   // === 配置 ===
   {
@@ -176,7 +159,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdKernel,
     group: 'system',
-    usage: ['kernel [--mirror [镜像]]         更新内核（默认直连，--mirror 使用 v6）'],
+    usage: ['kernel [--mirror [镜像]]      更新内核（默认直连，--mirror 走镜像下载）'],
   },
   {
     name: 'daemon',

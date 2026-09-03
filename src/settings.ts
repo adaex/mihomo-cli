@@ -122,41 +122,13 @@ function maskSingleUrl(url: string): string {
   }
 }
 
-/** 是否为逗号分隔的多源订阅：切分后每段都是合法 http(s) URL 且不止一段。 */
-function looksLikeMultiUrl(url: string): boolean {
-  if (!url.includes(',')) return false;
-  const parts = url
-    .split(',')
-    .map(u => u.trim())
-    .filter(Boolean);
-  if (parts.length < 2) return false;
-  return parts.every(p => {
-    try {
-      const u = new URL(p);
-      return u.protocol === 'http:' || u.protocol === 'https:';
-    } catch {
-      return false;
-    }
-  });
-}
-
 /**
- * 遮蔽 URL 中的敏感信息，支持逗号分隔的多源订阅。
- * 关键：只有「每段都是合法 URL」才按多源切分。无条件按逗号切分会把
- * `?nodes=us,hk&token=xxx` 劈开，两段都不含可识别的 token 参数 → 密钥明文输出。
- * 反之只看「整体能否解析」也不行：真多源 `https://a/s,https://b/s` 整体亦可解析
- * （逗号是合法 path 字符），会导致第二段的 token 完全不被遮蔽。
- * 判据与 subscription.isMultiUrl 保持一致。
+ * 遮蔽 URL 中的敏感信息。
+ * 不对逗号做任何切分：逗号在 query/path 中合法（`?nodes=us,hk&token=xxx`），
+ * 切开后两段都不含可识别的 token 参数，反而会让密钥明文输出。
  */
 export function maskUrl(url: string): string {
   if (!url) return url;
-
-  if (looksLikeMultiUrl(url)) {
-    return url
-      .split(',')
-      .map(u => maskSingleUrl(u.trim()))
-      .join(', ');
-  }
   return maskSingleUrl(url);
 }
 

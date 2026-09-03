@@ -37,7 +37,7 @@ describe('buildSshArgs', () => {
 
   it('-D 偏移足够小，不会撞上 BSD ps 的 79 列截断', () => {
     // isProcessCommandMatching 用 `-D 127.0.0.1:<port>` 作 needle；该片段若偏移过大，
-    // ps 截断会让匹配恒 false → 进程探测失效（历史上测速实例踩过这个坑）
+    // ps 截断会让匹配恒 false → 进程探测失效
     const needleOffset = `ssh ${args.join(' ')}`.indexOf('-D 127.0.0.1:1080');
     assert.ok(needleOffset < 79, `needle 偏移 ${needleOffset} 过大`);
   });

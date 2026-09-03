@@ -1,16 +1,13 @@
 import { colors } from '../colors.js';
 import { hasKernel } from '../config.js';
-import { AUTO_CLEAN_COOLDOWN_HOURS, DEFAULT_TEST_CONCURRENCY, DEFAULT_TEST_TIMEOUT } from '../constants.js';
 import { isDaemonEnabled } from '../daemon.js';
 import { CliError } from '../errors.js';
 import { PATHS } from '../paths.js';
 import * as processManager from '../process.js';
-import { createProgressPrinter, formatCleanSummary, formatTestSummary } from '../progress.js';
 import * as runtime from '../runtime.js';
-import { readSubscriptionCache, saveSubscriptionCache } from '../settings.js';
 import { startAutoSshTunnels } from '../ssh.js';
 import * as subscription from '../subscription.js';
-import { hasFlag, parseIntArg, sleep } from '../utils.js';
+import { hasFlag, parseIntArg } from '../utils.js';
 import { printStatus } from './status.js';
 import { handleStopResult } from './stop.js';
 
@@ -41,9 +38,46 @@ async function startAutoSshTunnelsWithWarning(): Promise<void> {
   }
 }
 
+/**
+ * v3.10.0 随测速清理一并移除的选项。显式报错而非静默忽略：
+ * 用户敲了 `--no-clean` 却拿到「照常启动」，属于「不报错但行为不对」——
+ * 何况这些选项原本控制的是会改写订阅文件的行为，静默吞掉最容易被误解为仍然生效。
+ */
+const REMOVED_OPTIONS: Record<string, string> = {
+  '-r': '--rounds',
+  '--rounds': '--rounds',
+  '-t': '--timeout',
+  '--timeout': '--timeout',
+  '-j': '--concurrency',
+  '--concurrency': '--concurrency',
+  '--no-clean': '--no-clean',
+};
+
+function assertNoRemovedOptions(args: string[]): void {
+  const hit = args.find(a => {
+    const name = a.startsWith('--') && a.includes('=') ? a.slice(0, a.indexOf('=')) : a;
+    return Object.hasOwn(REMOVED_OPTIONS, name);
+  });
+  if (!hit) return;
+  throw new CliError(`选项 ${hit} 已移除（v3.10.0，随节点测速清理一并删除）`, {
+    label: '参数错误',
+    hint: [
+      'start 不再在启动后自动测速清理节点，故超时/并发/轮次选项均已失效。',
+      '',
+      '节点测速请用 Web 面板: mihomo ui',
+      '自动选路请在订阅里配置 url-test 分组，由内核持续测速。',
+      '',
+      'start 现有选项: -s/--no-update, -u/--update-timeout <ms>, --no-ssh',
+    ],
+  });
+}
+
 export async function cmdStart(args: string[]): Promise<void> {
+  // 参数校验先于环境检查（内核/订阅），与模式参数同口径
+  assertNoRemovedOptions(args);
+
   // args[1] 为非 flag token 时才是模式参数；拼错模式名（如 start tn）必须报错，
-  // 不能静默按 Mixed 启动（用户会误以为已切到 TUN）。参数校验先于环境检查（内核/订阅）
+  // 不能静默按 Mixed 启动（用户会误以为已切到 TUN）。
   const modeToken = args[1] && !args[1].startsWith('-') ? args[1].toLowerCase() : undefined;
   if (modeToken !== undefined && modeToken !== 'tun' && modeToken !== 'mixed') {
     throw new CliError(`未知的启动模式: ${args[1]}`, { hint: '用法: mihomo start [tun|mixed]（默认 mixed）' });
@@ -60,11 +94,7 @@ export async function cmdStart(args: string[]): Promise<void> {
     throw new CliError('保活已启用（仅支持 Mixed 模式），无法启动 TUN', { hint: '请先关闭保活: mihomo daemon off' });
   }
 
-  const rounds = parseIntArg(args, '-r', '--rounds', subscription.DEFAULT_CLEAN_ROUNDS);
-  const timeout = parseIntArg(args, '-t', '--timeout', DEFAULT_TEST_TIMEOUT);
-  const concurrency = parseIntArg(args, '-j', '--concurrency', DEFAULT_TEST_CONCURRENCY);
   const skipUpdate = hasFlag(args, '-s', '--no-update');
-  const skipClean = hasFlag(args, '--no-clean');
   const skipSsh = hasFlag(args, '--no-ssh');
   const updateTimeout = parseIntArg(args, '-u', '--update-timeout', subscription.DEFAULT_AUTO_UPDATE_TIMEOUT);
 
@@ -125,55 +155,6 @@ export async function cmdStart(args: string[]): Promise<void> {
   // 反之隧道失败不影响内核——它只影响内网分流那部分规则，其余流量照常走订阅节点。
   if (!skipSsh) {
     await startAutoSshTunnelsWithWarning();
-  }
-
-  const cleanThreshold = subscription.isGithubUrl(sub.url) ? subscription.AUTO_CLEAN_THRESHOLD_GITHUB : subscription.AUTO_CLEAN_THRESHOLD;
-
-  if (!skipClean && configInfo.proxies > cleanThreshold) {
-    // 冷却：上次自动清理在 AUTO_CLEAN_COOLDOWN_HOURS 内则跳过，避免每次 start 都全量测速
-    const cache = readSubscriptionCache();
-    const lastCleanAt = cache[sub.name]?.last_auto_clean_at;
-    const withinCooldown = !!lastCleanAt && Date.now() - new Date(lastCleanAt).getTime() < AUTO_CLEAN_COOLDOWN_HOURS * 60 * 60 * 1000;
-
-    if (!withinCooldown) {
-      console.log('');
-      console.log(`节点数 ${configInfo.proxies} 超过 ${cleanThreshold}，自动清理（${AUTO_CLEAN_COOLDOWN_HOURS}h 内仅一次，--no-clean 跳过）...`);
-      console.log('');
-
-      await sleep(1000);
-
-      const progress = createProgressPrinter(rounds);
-      const cleanResult = await subscription.autoCleanSubscription(sub.name, {
-        timeout,
-        concurrency,
-        rounds,
-        onResult: progress.onResult,
-        onRetryRound: progress.onRetryRound,
-      });
-      progress.finish();
-      console.log(formatTestSummary(cleanResult.summary));
-
-      if (cleanResult.skipped) {
-        console.log(colors.yellow('存活节点不足 1%，跳过清理。请检查原始订阅是否有效'));
-      } else if (cleanResult.removedProxies > 0) {
-        console.log(`${colors.green('已清理')}: ${formatCleanSummary(cleanResult)}`);
-
-        console.log('');
-        console.log('重新加载配置...');
-        if (!daemonEnabled) handleStopResult(processManager.stop());
-        try {
-          configInfo = subscription.prepareConfigForStart(targetMode, sub.name);
-          const pid = await runtime.launchOrRestart(targetMode);
-          console.log(`${colors.green('已重启')}${pid ? ` (PID ${pid})` : ''} · ${subscription.formatProxySummary(configInfo)}`);
-        } catch (e) {
-          if (e instanceof CliError) throw e;
-          throw new CliError((e as Error).message.split('\n')[0], { label: '重启失败' });
-        }
-      }
-
-      // 记录本次自动清理时间（含 skipped：已测过一轮，冷却内不再测）
-      saveSubscriptionCache(sub.name, { last_auto_clean_at: new Date().toISOString() });
-    }
   }
 
   await printStatus();

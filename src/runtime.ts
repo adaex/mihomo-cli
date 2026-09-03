@@ -45,7 +45,7 @@ export function getRunningState(): RunningState {
 }
 
 /**
- * 改动配置(切换订阅、覆写开关、清理节点)后是否需要重启内核使之生效。
+ * 改动配置(切换订阅、覆写开关)后是否需要重启内核使之生效。
  * 保活模式恒需(launchd 不写 pidFile,须显式感知);普通模式仅在运行中时需要。
  */
 export function isRestartNeededOnChange(): boolean {

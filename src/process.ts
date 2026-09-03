@@ -34,11 +34,9 @@ export function isProcessRunning(pid: number): boolean {
  * 系统分配给无关进程）。读不到命令行时保守返回 false。
  *
  * 必须带 `-ww`：BSD/macOS 的 ps 即使 stdout 不是终端也会把 command 列截断到 79 列。
- * 主实例的 needle 是 binary 路径（偏移 0，截不掉），但测速实例的 needle 是
- * `<home>/.mihomo-cli/test/runtime/config.yaml`，在 `<binary> -d <data> -f <config>` 里
- * 起始偏移随用户名增长（alice 为 80、jonathan.smith 为 98），常见家目录下均越过 79 列
- * → 匹配恒 false → stopTestInstance 跳过 SIGKILL 却仍删 pid 文件，内核残留占着
- * 27890/29090 端口且再无记录，下次 sub test 直接启动失败。
+ * 主实例的 needle 是 binary 路径（偏移 0，截不掉），但 needle 偏移靠后的调用方
+ * （如 ssh 隧道以 `-D 127.0.0.1:<port>` 作 needle）会越过 79 列 → 匹配恒 false
+ * → 该停的进程跳过 SIGKILL 却仍删掉运行态文件，进程残留占着端口且再无记录可查。
  */
 export function isProcessCommandMatching(pid: number, needle: string): boolean {
   if (!pid) return false;
@@ -63,8 +61,8 @@ export function isProcessRoot(pid: number): boolean {
 /**
  * pgrep/pkill -f 用于识别「主实例」的正则:binary 路径 + 主 configFile 两段拼接。
  * mixed(spawn)、tun(脚本)、daemon(plist)三种启动的命令行都是 `<binary> -d <data> -f <configFile>`,
- * 均含这两段;而 `-f` 指向 `test/runtime/config.yaml` 的测速隔离实例、以及仅用编辑器打开配置文件的
- * 进程(命令行无 binary)都不会命中,从而避免误杀/误判为残留。escapeRegExp 防止路径里的 `.` 当通配符。
+ * 均含这两段;而仅用编辑器打开配置文件的进程(命令行无 binary)不会命中,
+ * 从而避免误杀/误判为残留。escapeRegExp 防止路径里的 `.` 当通配符。
  */
 export const MAIN_INSTANCE_PATTERN = `${escapeRegExp(PATHS.mihomoBinary)}.*${escapeRegExp(PATHS.configFile)}`;
 

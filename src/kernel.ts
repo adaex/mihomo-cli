@@ -14,8 +14,9 @@ const KERNEL_DOWNLOAD_TIMEOUT = 180_000;
 
 const HTTP_CLIENT = createHttpClient({ timeout: KERNEL_HTTP_TIMEOUT });
 
+/** 给 GitHub 下载地址套镜像前缀；非 GitHub 地址原样返回（调用前必须已过 assertTrustedAssetUrl）。 */
 function withMirror(url: string, mirror: string | null): string {
-  if (mirror && (url.startsWith('https://github.com/') || url.startsWith('https://api.github.com/'))) {
+  if (mirror && url.startsWith('https://github.com/')) {
     return mirror + url;
   }
   return url;
@@ -27,11 +28,11 @@ const ALLOWED_ASSET_HOSTS = new Set(['github.com', 'api.github.com', 'objects.gi
 /**
  * 校验 release 资产的下载地址确实指向 GitHub，且是 https。
  *
- * 为什么必须有：`--mirror-all` 下连 API 都走镜像，于是 `browser_download_url`
- * 完全由镜像说了算；而 `withMirror` 对非 github 的 URL **原样放行**，镜像只要
- * 返回一个指向自己主机的地址，就能让 CLI 下载任意二进制。该产物随后被 `chmod 755`，
+ * 为什么必须有：`withMirror` 对非 github 的 URL **原样放行**，故一个被篡改的
+ * `browser_download_url` 能让 CLI 下载任意二进制。该产物随后被 `chmod 755`，
  * 并在 TUN / daemon 模式下**以 root 运行**——这是比「无 checksum」更实际的缺口
  * （上游 release 确实不提供 checksums，无法做哈希校验，故把来源钉死是主要防线）。
+ * API 恒直连已消除镜像伪造该字段的路径，此校验是纵深防御的第二道。
  *
  * 校验必须针对**加镜像前**的上游 URL：加了前缀后整串以镜像域名开头，无从判断来源。
  */
@@ -80,8 +81,9 @@ function findMatchingAsset(assets: GitHubAsset[], platform: string, arch: string
   return standardAsset || matchingAssets[0];
 }
 
-async function getLatestRelease(repo: string, mirror: string | null): Promise<GitHubRelease> {
-  const url = withMirror(`https://api.github.com/repos/${repo}/releases`, mirror);
+/** 拉取 release 列表。**恒直连 GitHub API**：镜像只用于产物下载，见 assertTrustedAssetUrl 的说明。 */
+async function getLatestRelease(repo: string): Promise<GitHubRelease> {
+  const url = `https://api.github.com/repos/${repo}/releases`;
   const response = await HTTP_CLIENT.get<GitHubRelease[]>(url, { responseType: 'json' });
   const releases = response.data;
 
@@ -100,9 +102,9 @@ async function getLatestRelease(repo: string, mirror: string | null): Promise<Gi
   return stableReleases.length > 0 ? stableReleases[0] : releases[0];
 }
 
-export async function checkUpdate(mirror: string | null): Promise<KernelUpdateInfo> {
+export async function checkUpdate(): Promise<KernelUpdateInfo> {
   const currentVersion = getKernelVersion();
-  const latest = await getLatestRelease(GITHUB_REPO, mirror);
+  const latest = await getLatestRelease(GITHUB_REPO);
   const latestVersion = latest.tag_name;
 
   let needsUpdate = false;
@@ -167,7 +169,7 @@ export async function downloadKernel(
 ): Promise<{ version: string; path: string }> {
   ensureDirs();
 
-  const latest = releaseInfo || (await getLatestRelease(GITHUB_REPO, mirror));
+  const latest = releaseInfo || (await getLatestRelease(GITHUB_REPO));
   const arch = getArch();
   const platform = process.platform;
 

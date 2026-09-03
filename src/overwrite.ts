@@ -216,29 +216,6 @@ function summarizeMatch(match?: OverwriteMatch): string | undefined {
   return parts.length > 0 ? parts.join(', ') : undefined;
 }
 
-/**
- * 拆分逗号分隔的多 URL（内联，避免依赖 subscription.ts 造成循环引用）。
- * 与 subscription.splitUrls 同口径：仅当切分后每段都是合法 http(s) URL 才视为多源，
- * 否则原样返回（`?flag=clash,meta` 是单条 URL，逗号属于其 query）。
- */
-function splitUrlsLocal(url: string): string[] {
-  const isValidHttp = (u: string): boolean => {
-    try {
-      const parsed = new URL(u.trim());
-      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-    } catch {
-      return false;
-    }
-  };
-  if (!url.includes(',')) return [url.trim()];
-  const parts = url
-    .split(',')
-    .map(u => u.trim())
-    .filter(Boolean);
-  if (parts.length > 1 && parts.every(isValidHttp)) return parts;
-  return [url.trim()];
-}
-
 /** hostname 后缀匹配：host 完全等于 domain，或为其子域（.domain 结尾）。 */
 function hostMatchesDomain(host: string, domain: string): boolean {
   const h = host.toLowerCase();
@@ -268,17 +245,13 @@ function matchesScope(match: OverwriteMatch | undefined, scope?: OverwriteScope)
   if (match['url-domain']) {
     const domains = Array.isArray(match['url-domain']) ? match['url-domain'] : [match['url-domain']];
     if (!scope?.subUrl) return false;
-    const hosts: string[] = [];
-    for (const u of splitUrlsLocal(scope.subUrl)) {
-      try {
-        hosts.push(new URL(u).hostname);
-      } catch {
-        /* 非法 URL 跳过 */
-      }
+    let host: string;
+    try {
+      host = new URL(scope.subUrl.trim()).hostname;
+    } catch {
+      return false; // 非法 URL：fail closed，该文件不应用
     }
-    if (hosts.length === 0) return false;
-    const ok = domains.some(d => hosts.some(h => hostMatchesDomain(h, d)));
-    if (!ok) return false;
+    if (!domains.some(d => hostMatchesDomain(host, d))) return false;
   }
 
   return true;
