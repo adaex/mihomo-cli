@@ -7,7 +7,7 @@ import { BASE_CONFIG, CONTROLLER_PORT } from './constants.js';
 import { CliError } from './errors.js';
 import { registerCleanup } from './lifecycle.js';
 import { atomicWriteFileSync, DIRS, ensureDirs } from './paths.js';
-import { isProcessCommandMatching, isProcessRunning } from './process.js';
+import { isProcessCommandMatching, isProcessRunning } from './process-probe.js';
 import { getSshTunnels, updateSettings, validateSshName } from './settings.js';
 import type { Settings, SshConfig, SshRuntime, SshStatus } from './types.js';
 import { sleepSync } from './utils.js';

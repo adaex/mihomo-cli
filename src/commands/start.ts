@@ -3,7 +3,8 @@ import { hasKernel } from '../config.js';
 import { isDaemonEnabled } from '../daemon.js';
 import { CliError } from '../errors.js';
 import { PATHS } from '../paths.js';
-import * as processManager from '../process.js';
+import { getStatus, hasRootResidue } from '../process-probe.js';
+import { stop } from '../process-stop.js';
 import * as runtime from '../runtime.js';
 import { startAutoSshTunnels } from '../ssh.js';
 import * as subscription from '../subscription.js';
@@ -72,13 +73,13 @@ export async function cmdStart(args: string[]): Promise<void> {
 
   if (!daemonEnabled) {
     // 隐式停止不应意外弹 sudo：有 root 残留时直接报错引导（与 startMixedMode 的设计一致）
-    if (processManager.hasRootResidue()) {
+    if (hasRootResidue()) {
       throw new CliError('存在需要 root 权限清理的残留进程/文件', {
         hint: [`请先手动清理: sudo pkill -9 mihomo && sudo rm -f ${PATHS.pidFile}`, '或切换到 TUN 模式启动（自动清理）: mihomo start tun'],
       });
     }
 
-    const status = processManager.getStatus();
+    const status = getStatus();
     const hasProcess = status.running || status.allProcesses.length > 0;
 
     if (hasProcess) {
@@ -86,7 +87,7 @@ export async function cmdStart(args: string[]): Promise<void> {
       console.log(`停止 ${count} 个进程...`);
     }
 
-    handleStopResult(processManager.stop());
+    handleStopResult(stop());
 
     if (hasProcess) {
       console.log(`${colors.green('已停止进程')}\n`);

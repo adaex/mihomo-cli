@@ -1,17 +1,18 @@
 import { CliError } from '../errors.js';
-import * as processManager from '../process.js';
+import { getLogPath, listLogs } from '../log-files.js';
+import { openLogFile, viewLogWithTail } from '../open.js';
 import type { LogEntry } from '../types.js';
 import { formatBytes, formatDate, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
 
 export function cmdLog(args: string[]): void {
-  const logPath = processManager.getLogPath();
+  const logPath = getLogPath();
 
   if (hasFlag(args, '-o', '--open')) {
-    processManager.openLogFile(logPath);
+    openLogFile(logPath);
     return;
   }
 
-  processManager.viewLogWithTail(logPath, { follow: true, lines: 50 });
+  viewLogWithTail(logPath, { follow: true, lines: 50 });
 }
 
 export function cmdLogs(args: string[]): void {
@@ -25,13 +26,13 @@ export function cmdLogs(args: string[]): void {
     let logPath: string;
 
     if (targetName === '0') {
-      logPath = processManager.getLogPath();
+      logPath = getLogPath();
     } else {
       const parsedIdx = parseInt(targetName, 10);
       if (Number.isNaN(parsedIdx) || parsedIdx < 1 || String(parsedIdx) !== targetName) {
         throw new CliError(`无效的日志编号 "${targetName}"`, { hint: '用法: mihomo logs <编号>（0=当前，1+=归档）；查看列表: mihomo logs' });
       }
-      const archive = processManager.listLogs().archives[parsedIdx - 1];
+      const archive = listLogs().archives[parsedIdx - 1];
       if (!archive) {
         throw new CliError(`未找到日志 "${targetName}"`, { hint: '使用 "mihomo logs" 查看可用日志列表' });
       }
@@ -39,15 +40,15 @@ export function cmdLogs(args: string[]): void {
     }
 
     if (openInViewer) {
-      processManager.openLogFile(logPath);
+      openLogFile(logPath);
       return;
     }
 
-    processManager.viewLogWithTail(logPath, { follow: false, lines });
+    viewLogWithTail(logPath, { follow: false, lines });
     return;
   }
 
-  const logs = processManager.listLogs();
+  const logs = listLogs();
   const all: LogEntry[] = [];
 
   if (logs.current) all.push(logs.current);

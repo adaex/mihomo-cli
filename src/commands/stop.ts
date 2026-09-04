@@ -1,7 +1,8 @@
 import { colors } from '../colors.js';
 import { isDaemonEnabled } from '../daemon.js';
 import { CliError } from '../errors.js';
-import * as processManager from '../process.js';
+import { getMihomoPids } from '../process-probe.js';
+import { stop } from '../process-stop.js';
 import { stopAutoSshTunnels } from '../ssh.js';
 import type { StopResult } from '../types.js';
 import { hasFlag } from '../utils.js';
@@ -34,7 +35,7 @@ export async function cmdStop(args: string[]): Promise<void> {
   }
 
   const skipSsh = hasFlag(args, '--no-ssh');
-  const pids = processManager.getMihomoPids();
+  const pids = getMihomoPids();
 
   if (pids.length === 0) {
     console.log(colors.yellow('不在运行'));
@@ -45,7 +46,7 @@ export async function cmdStop(args: string[]): Promise<void> {
   }
 
   console.log(`停止 ${pids.length} 个进程...`);
-  handleStopResult(processManager.stop());
+  handleStopResult(stop());
   console.log(colors.green('已停止进程'));
 
   if (!skipSsh) stopAutoSshTunnelsWithLog();

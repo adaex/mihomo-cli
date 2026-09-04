@@ -2,7 +2,7 @@ import { colors } from '../colors.js';
 import { hasKernel } from '../config.js';
 import { DAEMON_BOOT_WAIT_MS, disableDaemon, enableDaemon, getDaemonStatus, isDaemonEnabled, isDaemonRunning } from '../daemon.js';
 import { CliError } from '../errors.js';
-import { getMihomoPids, isProcessRoot } from '../process.js';
+import { getMihomoPids, isProcessRoot } from '../process-probe.js';
 import * as subscription from '../subscription.js';
 import { sleep, suggestSimilar } from '../utils.js';
 import { dispatchSubcommand, type SubCommand } from './shared.js';

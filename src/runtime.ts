@@ -1,6 +1,7 @@
 import { getConfigInfo } from './config.js';
 import { DAEMON_BOOT_WAIT_MS, getDaemonStatus, isDaemonEnabled, isDaemonRunning, restartDaemon } from './daemon.js';
-import * as processManager from './process.js';
+import { getStatus } from './process-probe.js';
+import { start } from './process-start.js';
 import type { ProcessInfo } from './types.js';
 import { sleep } from './utils.js';
 
@@ -46,7 +47,7 @@ export function getRunningState(): RunningState {
     const daemon = getDaemonStatus();
     return { running: isDaemonRunning(daemon), pid: daemon.pid, daemon: true, processInfo: null };
   }
-  const status = processManager.getStatus();
+  const status = getStatus();
   return { running: status.running, pid: status.pid, daemon: false, processInfo: status.processInfo };
 }
 
@@ -55,14 +56,14 @@ export function getRunningState(): RunningState {
  * 保活模式恒需(launchd 不写 pidFile,须显式感知);普通模式仅在运行中时需要。
  */
 export function isRestartNeededOnChange(): boolean {
-  return isDaemonEnabled() || processManager.getStatus().running;
+  return isDaemonEnabled() || getStatus().running;
 }
 
 /**
  * 启动内核,或(保活时)重启托管内核使新配置生效,返回 PID。
  * **不负责停止旧进程**——普通模式的 stop 由调用方按需先行处理(保留其 handleStopResult 残留检查)。
  *   保活 → restartDaemon()(优先热重载,失败回退 kickstart)+ 等待 launchd + 读 PID
- *   普通 → processManager.start(mode)
+ *   普通 → start(mode)
  */
 export async function launchOrRestart(mode: RuntimeMode): Promise<number | null> {
   if (isDaemonEnabled()) {
@@ -70,6 +71,6 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
     await sleep(DAEMON_BOOT_WAIT_MS);
     return getDaemonStatus().pid;
   }
-  const result = await processManager.start(mode);
+  const result = await start(mode);
   return result.pid;
 }

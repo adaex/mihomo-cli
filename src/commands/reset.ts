@@ -5,7 +5,8 @@ import { disableDaemon, isDaemonEnabled } from '../daemon.js';
 import { CliError } from '../errors.js';
 import { isOverwriteFilename } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
-import * as processManager from '../process.js';
+import { getMihomoPids } from '../process-probe.js';
+import { cleanupAll, PROCESS_WAIT_ATTEMPTS, PROCESS_WAIT_INTERVAL } from '../process-stop.js';
 import { invalidateSettingsCache, writeSettings } from '../settings.js';
 import { stopAllSshTunnels } from '../ssh.js';
 import { isSshFilename } from '../ssh-config.js';
@@ -202,7 +203,7 @@ export async function cmdReset(args: string[]): Promise<void> {
   const daemonTargeted = targets.some(t => t.id === 'daemon');
   const disablesDaemon = needsStop || kernelTargeted || daemonTargeted;
 
-  const pids = needsStop || warnRunning ? processManager.getMihomoPids() : [];
+  const pids = needsStop || warnRunning ? getMihomoPids() : [];
 
   // 确认前只做只读警告，不做任何破坏性操作（停止进程/卸载保活）——用户取消时环境须原样保留
   if (warnRunning && pids.length > 0) {
@@ -240,17 +241,17 @@ export async function cmdReset(args: string[]): Promise<void> {
     }
   }
 
-  if (needsStop && processManager.getMihomoPids().length > 0) {
+  if (needsStop && getMihomoPids().length > 0) {
     console.log('停止进程...');
-    const cleanup = processManager.cleanupAll();
-    for (let i = 0; i < processManager.PROCESS_WAIT_ATTEMPTS; i++) {
-      if (processManager.getMihomoPids().length === 0) break;
-      await new Promise(r => setTimeout(r, processManager.PROCESS_WAIT_INTERVAL));
+    const cleanup = cleanupAll();
+    for (let i = 0; i < PROCESS_WAIT_ATTEMPTS; i++) {
+      if (getMihomoPids().length === 0) break;
+      await new Promise(r => setTimeout(r, PROCESS_WAIT_INTERVAL));
     }
     // 必须确认真的停了才继续删数据：cleanupAll 遇 root 实例（TUN）走 sudo pkill，
     // 用户取消密码或 kill 失败时它只把 pid 记进 failed 并返回，此前被整个丢弃 →
     // 残留的 root 代理进程会继续跑在已删除的配置上，且用户毫不知情
-    const remaining = processManager.getMihomoPids();
+    const remaining = getMihomoPids();
     if (remaining.length > 0) {
       throw new CliError(remaining.join(', '), {
         label: '进程未能停止，重置中止',

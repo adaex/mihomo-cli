@@ -1,7 +1,7 @@
 import { colors } from '../colors.js';
 import { UI_URLS } from '../constants.js';
 import { CliError } from '../errors.js';
-import * as processManager from '../process.js';
+import { openUrl } from '../open.js';
 import { getRunningState } from '../runtime.js';
 import { readSettings } from '../settings.js';
 
@@ -28,7 +28,7 @@ export function cmdUI(args: string[]): void {
     console.log('已配置访问密钥（UI 连接 127.0.0.1:9090 时需输入，密钥见 settings.json）');
   }
 
-  const success = processManager.openUrl(url);
+  const success = openUrl(url);
   if (!success) {
     console.log('请手动访问上面的地址');
   }

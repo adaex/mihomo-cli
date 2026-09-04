@@ -1,7 +1,7 @@
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
+import { openUrl } from '../open.js';
 import { DIRECTORY_TARGETS, USER_DATA_DIR } from '../paths.js';
-import * as processManager from '../process.js';
 import { suggestSimilar } from '../utils.js';
 import { dispatchSubcommand, type SubCommand } from './shared.js';
 
@@ -10,7 +10,7 @@ function openDirectory(args: string[]): void {
 
   if (!target || target === 'root') {
     console.log('正在打开: 根目录');
-    const success = processManager.openUrl(USER_DATA_DIR);
+    const success = openUrl(USER_DATA_DIR);
     if (!success) {
       console.log(`请手动打开: ${USER_DATA_DIR}`);
     }
@@ -22,7 +22,7 @@ function openDirectory(args: string[]): void {
   if (targetInfo) {
     const targetPath = targetInfo.path || USER_DATA_DIR;
     console.log(`正在打开: ${targetInfo.label}`);
-    const success = processManager.openUrl(targetPath);
+    const success = openUrl(targetPath);
     if (!success) {
       console.log(`请手动打开: ${targetPath}`);
     }
