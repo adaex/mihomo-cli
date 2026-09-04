@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+内部重构与命令合并，减少冗余。
+
+### 变更
+
+- **`log` 并入 `logs`**：`logs` 新增 `-f/--follow` 实时跟随；`log` 保留为隐藏别名（等价 `logs 0 -f`），不再在帮助中列出
+- **拆分 `process.ts`（650 行）**为 `process-probe`/`process-start`/`process-stop`/`log-files`/`open`/`sudo` 六个职责单一的模块；`openUrl`/`getLogPath` 不再寄生在进程管理模块
+- `runSudoScript` 收敛到 `sudo.ts`，TUN 启动与 launchd 保活共用同一套 sudo 脚本范式（各少一份手写 spawnSync/chmod/unlink 样板）
+- `getSubscriptions`/`getSshTunnels` 收敛为 `readSettingsList` 通用读取 + 类型守卫
+- 确认提示（`sub remove`/`ssh rm`/`reset`）收敛为 `shared.confirmOrThrow`，非 TTY 语义统一
+- 流量展示抽成 `utils.formatTraffic`，`status` 与 `sub` 列表共用同一口径
+- 修复 `status` 非保活模式下重复查询进程状态（`getStatus` 此前跑两遍）
+
 ## [3.11.0] - 2026-09-04
 
 命令与机制瘦身：删掉冗余快捷命令和已完成历史使命的迁移引导。

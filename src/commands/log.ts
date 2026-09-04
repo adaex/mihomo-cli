@@ -4,21 +4,11 @@ import { openLogFile, viewLogWithTail } from '../open.js';
 import type { LogEntry } from '../types.js';
 import { formatBytes, formatDate, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
 
-export function cmdLog(args: string[]): void {
-  const logPath = getLogPath();
-
-  if (hasFlag(args, '-o', '--open')) {
-    openLogFile(logPath);
-    return;
-  }
-
-  viewLogWithTail(logPath, { follow: true, lines: 50 });
-}
-
 export function cmdLogs(args: string[]): void {
   const targetName = getNonFlagArg(args, 1);
   const lines = parseIntArg(args, '-n', '--lines', 100);
   const openInViewer = hasFlag(args, '-o', '--open');
+  const follow = hasFlag(args, '-f', '--follow');
 
   if (targetName) {
     // 只认「当前」与列表序号：归档名是 mihomo.<时间戳>.log，没人会去敲它，
@@ -44,7 +34,7 @@ export function cmdLogs(args: string[]): void {
       return;
     }
 
-    viewLogWithTail(logPath, { follow: false, lines });
+    viewLogWithTail(logPath, { follow, lines });
     return;
   }
 
@@ -86,6 +76,7 @@ export function cmdLogs(args: string[]): void {
 
   console.log('用法:');
   console.log('  mihomo logs 0          # 查看当前日志 (最后 100 行)');
+  console.log('  mihomo logs 0 -f       # 实时跟随当前日志');
   console.log('  mihomo logs 1          # 查看第 1 个归档日志（最新）');
   console.log('  mihomo logs 1 -n 200   # 查看 200 行');
   console.log('  mihomo logs 1 -o       # 用系统默认程序打开');

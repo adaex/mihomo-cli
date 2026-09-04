@@ -90,9 +90,8 @@ mihomo ui yacd     # YACD
 | `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式（`-s` 跳过订阅更新，`-u` 更新超时，`--no-ssh` 跳过拉起 ssh 隧道） |
 | `mihomo stop`               | 停止代理                                                                     |
 | `mihomo status`             | 查看运行状态（含订阅流量、到期时间）                                         |
-| `mihomo log`                | 实时查看日志 (`-o` 用系统默认程序打开)                                       |
 | `mihomo logs`               | 列出所有日志（当前 + 历史归档）                                              |
-| `mihomo logs <编号>`        | 查看指定日志（`0`=当前日志，`1+`=归档日志，支持 `-n N` 指定行数、`-o` 打开） |
+| `mihomo logs <编号>`        | 查看指定日志（`0`=当前，`1+`=归档，`-f` 实时跟随，`-n N` 行数，`-o` 打开）  |
 
 ### 订阅管理
 
@@ -433,7 +432,7 @@ sudo pkill -9 mihomo
 
 1. 确保使用 sudo / 管理员权限
 2. 检查是否有其他程序占用 53 端口
-3. 查看日志：`mihomo log`
+3. 查看日志：`mihomo logs 0 -f`
 
 ### 订阅更新失败
 

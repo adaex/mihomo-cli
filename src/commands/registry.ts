@@ -2,7 +2,7 @@ import { cmdDaemon } from './daemon.js';
 import { cmdDirectory } from './directory.js';
 import { printHelp, printVersion } from './help.js';
 import { cmdKernel } from './kernel.js';
-import { cmdLog, cmdLogs } from './log.js';
+import { cmdLogs } from './log.js';
 import { cmdOverwrite } from './overwrite.js';
 import { cmdReset } from './reset.js';
 import { cmdSsh } from './ssh.js';
@@ -78,18 +78,20 @@ export const COMMANDS: Command[] = [
     usage: ['ui [zash|dash|yacd]          打开 Web UI (默认 zash)'],
   },
   {
+    // 已并入 `logs -f`；保留为隐藏别名过渡，不在帮助中列出（usage 留空）
     name: 'log',
     aliases: [],
-    handler: cmdLog,
+    handler: cmdLogs,
+    rewrite: args => ['logs', '0', '-f', ...args.slice(1)],
     group: 'interface',
-    usage: ['log [-o]                     实时日志（-o 打开文件）'],
+    usage: [],
   },
   {
     name: 'logs',
     aliases: [],
     handler: cmdLogs,
     group: 'interface',
-    usage: ['logs [编号] [-n N] [-o]      日志列表（0=当前，1+=归档）'],
+    usage: ['logs [-f] [-n N] [编号] [-o]  日志列表/查看（0=当前，1+=归档，-f 跟随）'],
   },
   // === 订阅 ===
   {
