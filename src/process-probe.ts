@@ -29,9 +29,9 @@ export function isProcessRunning(pid: number): boolean {
  * 系统分配给无关进程）。读不到命令行时保守返回 false。
  *
  * 必须带 `-ww`：BSD/macOS 的 ps 即使 stdout 不是终端也会把 command 列截断到 79 列。
- * 主实例的 needle 是 binary 路径（偏移 0，截不掉），但 needle 偏移靠后的调用方
- * （如 ssh 隧道以 `-D 127.0.0.1:<port>` 作 needle）会越过 79 列 → 匹配恒 false
- * → 该停的进程跳过 SIGKILL 却仍删掉运行态文件，进程残留占着端口且再无记录可查。
+ * 当前唯一的 needle 是 binary 路径（偏移 0，截不掉），但偏移靠后的 needle 会越过 79 列
+ * → 匹配恒 false → 该停的进程跳过 SIGKILL 却仍删掉 pid 文件，残留进程再无记录可查。
+ * 新增调用方时别把 `-ww` 去掉。
  */
 export function isProcessCommandMatching(pid: number, needle: string): boolean {
   if (!pid) return false;

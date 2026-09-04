@@ -5,7 +5,6 @@ import { cmdKernel } from './kernel.js';
 import { cmdLogs } from './log.js';
 import { cmdOverwrite } from './overwrite.js';
 import { cmdReset } from './reset.js';
-import { cmdSsh } from './ssh.js';
 import { cmdStart } from './start.js';
 import { printStatus } from './status.js';
 import { cmdStop } from './stop.js';
@@ -45,7 +44,7 @@ export const COMMANDS: Command[] = [
     aliases: ['up'],
     handler: cmdStart,
     group: 'control',
-    usage: ['start [tun|mixed] [-s] [-u ms] [--no-ssh]   启动/切换代理 (默认 mixed)'],
+    usage: ['start [tun|mixed] [-s] [-u ms]        启动/切换代理 (默认 mixed)'],
   },
   {
     name: 'tun',
@@ -60,7 +59,7 @@ export const COMMANDS: Command[] = [
     aliases: ['down'],
     handler: cmdStop,
     group: 'control',
-    usage: ['stop [--no-ssh]                停止代理（--no-ssh 保留 ssh 隧道）'],
+    usage: ['stop                         停止代理'],
   },
   {
     name: 'status',
@@ -136,21 +135,6 @@ export const COMMANDS: Command[] = [
     handler: cmdDaemon,
     group: 'system',
     usage: ['daemon [on|off]             开机自启 + 崩溃重启（仅 Mixed，需管理员密码）；无参看状态'],
-  },
-  {
-    // 无别名：`tun` 被 TUN 模式快捷命令占用，`ssh` 本身已够短。
-    // （注册表重复 token 会在模块加载期直接抛错）
-    name: 'ssh',
-    aliases: [],
-    handler: cmdSsh,
-    group: 'system',
-    usage: [
-      'ssh                         列出 ssh 隧道（本地 SOCKS5 端口）',
-      'ssh add <名字> --host <主机> --port <端口> [--no-auto]',
-      'ssh up|down [名字]          启动/停止隧道（无参即全部）',
-      'ssh status [名字]           查看隧道状态（真实探测端口）',
-      'ssh rm <名字> [-y]          删除隧道',
-    ],
   },
   {
     name: 'update',

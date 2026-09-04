@@ -125,34 +125,33 @@ export function parseIntArg(args: string[] | undefined, short: string, long: str
 }
 
 /**
- * 解析字符串选项（`--host m4` 与 `--host=m4` 两形式）。未提供返回 null。
- * 与 parseIntArg 一样对「有选项名但缺值」抛错，而非静默取 undefined——
- * `ssh add work --host` 若静默通过，会在后面报一个与真实原因无关的错。
+ * 拒绝已移除的 `--no-ssh`（v4.0.0 删掉 ssh 隧道功能）。
+ *
+ * 不能静默忽略：脚本里 `mihomo stop --no-ssh` 的原意是「停代理但保留隧道」，
+ * 静默通过会让它变成「停代理」而用户不知道语义已变——同 `--mirror-all` 的口径，
+ * 已移除的选项要显式报错并说清替代做法。
+ *
+ * 住在 utils 而非 commands/shared：后者 import 了 cmdStart，start 反向 import 会成环
+ * （shared.ts 头部的「依赖方向单向」不变量）。
  */
-export function parseStringArg(args: string[] | undefined, long: string, short?: string): string | null {
-  if (!args) return null;
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === long || (short !== undefined && args[i] === short)) {
-      if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
-        return args[i + 1];
-      }
-      throw new CliError(`选项 ${args[i]} 缺少值`, { hint: [`例如: ${long} <值>`] });
-    }
-    if (args[i].startsWith(`${long}=`)) {
-      const value = args[i].slice(long.length + 1);
-      if (!value) throw new CliError(`选项 ${long} 缺少值`, { hint: [`例如: ${long}=<值>`] });
-      return value;
-    }
-  }
-  return null;
+export function assertNoRemovedSshFlag(args: string[] | undefined): void {
+  if (!args?.some(a => a === '--no-ssh' || a.startsWith('--no-ssh='))) return;
+  throw new CliError('--no-ssh 已移除（v4.0.0）', {
+    label: '参数错误',
+    hint: [
+      'ssh 隧道功能已整体移除，该选项不再有对应行为。',
+      '如仍需内网出口：自行运行 ssh -D 127.0.0.1:<端口> -N <主机>，',
+      '节点与分流规则写在 overwrite.yaml 里（写法见 CHANGELOG 的 4.0.0 升级须知）。',
+    ],
+  });
 }
 
 /**
- * 需要「跳过其后一个值」的选项名（空格分隔、带值），与全部 parseIntArg / parseStringArg 调用一一对应。
- * getNonFlagArg 识别位置参数时借此避免把 `--port 1080` 里的 `1080` 误当位置参数。
+ * 需要「跳过其后一个值」的选项名（空格分隔、带值），与全部 parseIntArg 调用一一对应。
+ * getNonFlagArg 识别位置参数时借此避免把 `-n 200` 里的 `200` 误当位置参数。
  * 注意：--mirror 是可选值选项、只走 parseMirrorArg，故意不收录。
  */
-const VALUE_FLAGS: ReadonlySet<string> = new Set(['-n', '--lines', '-u', '--update-timeout', '--host', '--port']);
+const VALUE_FLAGS: ReadonlySet<string> = new Set(['-n', '--lines', '-u', '--update-timeout']);
 
 /**
  * 从任意命令的 argv 中抽取 start 支持的启动选项（含其值），供 sub use / ow on|off 触发的重启透传。
@@ -160,7 +159,7 @@ const VALUE_FLAGS: ReadonlySet<string> = new Set(['-n', '--lines', '-u', '--upda
  */
 export function extractStartOptions(args: string[] | undefined): string[] {
   if (!args) return [];
-  const BOOL_FLAGS = new Set(['-s', '--no-update', '--no-ssh']);
+  const BOOL_FLAGS = new Set(['-s', '--no-update']);
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];

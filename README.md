@@ -13,7 +13,6 @@
 - 🔄 **智能重启** - `sub use` 切换订阅、`ow on/off` 切换覆写后自动重启
 - 🚀 **进程管理** - 启动/停止/切换模式，自动清理残留进程
 - 🛡️ **进程保活** - 基于 launchd（root），崩溃/开机自动拉起，代理后台常驻（`daemon on`）
-- 🔌 **ssh 隧道出口** - 管理 `ssh -D` 进程生命周期，把内网机器变成本地 SOCKS5 端口，随 `start` 一并拉起
 - 🔄 **双模式支持** - Mixed 模式和 TUN 透明代理模式
 - 📊 **状态监控** - 查看运行状态、内存占用、订阅流量与到期时间
 - 📝 **日志管理** - 实时日志 + 历史日志归档（自动轮转，保留7天）
@@ -87,8 +86,8 @@ mihomo ui yacd     # YACD
 
 | 命令                        | 说明                                                                         |
 | --------------------------- | ---------------------------------------------------------------------------- |
-| `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式（`-s` 跳过订阅更新，`-u` 更新超时，`--no-ssh` 跳过拉起 ssh 隧道） |
-| `mihomo stop`               | 停止代理（`--no-ssh` 保留 ssh 隧道不停）                                     |
+| `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式（`-s` 跳过订阅更新，`-u` 更新超时） |
+| `mihomo stop`               | 停止代理                                                                     |
 | `mihomo status`             | 查看运行状态（含订阅流量、到期时间）                                         |
 | `mihomo logs`               | 列出所有日志（当前 + 历史归档）                                              |
 | `mihomo logs <编号>`        | 查看指定日志（`0`=当前，`1+`=归档，`-f` 实时跟随，`-n N` 行数，`-o` 打开）  |
@@ -122,16 +121,11 @@ mihomo ui yacd     # YACD
 | --------------------------------- | ------------------------------------------------------------------- |
 | `mihomo kernel [--mirror [镜像]]` | 更新内核（默认直连，`--mirror` 使用镜像；更新后运行中实例需重启生效） |
 | `mihomo daemon [on\|off]`    | 进程保活：开机自启 + 崩溃自动重启（仅 Mixed 模式，on/off 需管理员密码，无参看状态）  |
-| `mihomo ssh`                      | 列出 ssh 隧道及真实状态                                              |
-| `mihomo ssh add <名字> --host <主机> --port <端口> [--no-auto]` | 添加隧道（默认随 start 拉起） |
-| `mihomo ssh up\|down [名字]`      | 启动/停止隧道（无参即全部）                                          |
-| `mihomo ssh status [名字]`        | 查看隧道状态（真实探测端口，能识别「假活」）                          |
-| `mihomo ssh rm <名字> [-y]`       | 删除隧道                                                             |
 | `mihomo update`                   | 更新 mihomo-cli（先查 npm 最新版，已是最新则跳过重装）              |
 | `mihomo ui [zash\|dash\|yacd]`    | 打开 Web UI                                                         |
 | `mihomo dir`                      | 显示数据目录位置                                                    |
 | `mihomo dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `data`, `runtime`, `kernel`）  |
-| `mihomo reset [目标...] [--full] [-y]` | 重置用户数据（可用目标：`subs`, `logs`, `data`, `runtime`, `settings`, `kernel`, `overwrites`, `daemon`, `ssh`；`--full` 删全部，`-y` 跳过确认） |
+| `mihomo reset [目标...] [--full] [-y]` | 重置用户数据（可用目标：`subs`, `logs`, `data`, `runtime`, `settings`, `kernel`, `overwrites`, `daemon`；`--full` 删全部，`-y` 跳过确认） |
 | `mihomo version`                  | 显示版本信息                                                        |
 | `mihomo help`                     | 显示帮助信息                                                        |
 
@@ -144,7 +138,7 @@ mihomo ui yacd     # YACD
 - `mhm`
 - `mh`
 
-子命令组亦有别名：`subscription` = `sub`/`subs`/`subscriptions`，`directory` = `dir`/`dirs`/`directories`，`overwrite` = `ow`（`ssh` 无别名，`tun` 已被 TUN 模式占用）
+子命令组亦有别名：`subscription` = `sub`/`subs`/`subscriptions`，`directory` = `dir`/`dirs`/`directories`，`overwrite` = `ow`
 
 ### 快捷命令
 
@@ -169,54 +163,6 @@ mihomo ui yacd     # YACD
 - 全局自动路由，所有流量自动走代理
 - 需要 sudo / 管理员权限
 - 首次使用会自动配置 DNS 和路由
-
-## ssh 隧道出口
-
-把一台可 ssh 登录的机器（如公司内网的机器）变成本地 SOCKS5 出口，配合分流规则即可只让内网域名走它，其余流量照常走订阅节点。本功能**只负责 ssh 进程的生命周期**——起一个端口、告诉你它是死是活，不碰任何配置文件。
-
-```bash
-mihomo ssh add work --host m4 --port 1080   # m4 是 ~/.ssh/config 里的别名
-mihomo ssh up work                          # 启动
-mihomo ssh status                           # 查看状态（真实探测端口）
-mihomo ssh down work                        # 停止
-```
-
-隧道起来之后，要不要接进分流、怎么接，由你写进 `overwrite.yaml`（`ssh add` 会把片段打印出来，复制即可）：
-
-```yaml
-~proxies:
-  - {name: SSH-work, type: socks5, server: 127.0.0.1, port: 1080}
-+rules:
-  - DOMAIN-SUFFIX,example.internal,SSH-work
-  - IP-CIDR,10.0.0.0/8,SSH-work
-```
-
-改完执行 `mihomo start` 生效。端口以 `mihomo ssh` 显示的为准——改端口时记得同步改这里，CLI 不会代改你的覆写文件。
-
-### 与 start / stop 的联动
-
-隧道默认带 `auto` 标记，`mihomo start` 会顺带拉起、`mihomo stop` 会连带停止（`--no-ssh` 可跳过；`add` 时加 `--no-auto` 则不参与）。
-
-- **隧道起不来不会让 `start` 失败**——它只影响内网分流那部分规则，其余流量正常，但会打印显眼的黄色警告并附上 ssh 给出的原因
-- **`stop` 只停自己起的**：手动 `ssh up` 起的隧道不会被 `mihomo stop` 带走，避免下次 start 又起一个而累积僵尸进程
-
-### 状态的三种形态
-
-`ssh status` 会**真实探测端口是否在监听**，而不是只看进程在不在：
-
-| 状态 | 含义 |
-| --- | --- |
-| 运行中 | 进程在且端口在监听，可正常使用 |
-| **假活** | 进程还在但端口不通——最需要警惕的形态，此时 mihomo 仍在往死端口送流量 |
-| 未运行 | 进程不在 |
-
-### 安全边界
-
-- `-D` **恒绑 `127.0.0.1`**，不提供绑定地址开关：绑 `0.0.0.0` 会让同一 WiFi 下任何设备都能经本机进入内网
-- ssh 参数固定带 `ExitOnForwardFailure`/`BatchMode`/`ConnectTimeout`/`ServerAlive*`，分别防「假活」、无 TTY 挂死、久等、断线后端口成僵尸
-- `--host` 拒绝以 `-` 开头的值（`-oProxyCommand=...` 会被 ssh 当选项解析，等同任意命令执行）
-
-> 暂不做自动重连保活。断线依靠 `ServerAliveInterval` 让 ssh 进程自行退出，再用 `ssh status` 查出来。
 
 ## 进程保活
 
@@ -297,7 +243,7 @@ mihomo start --update-timeout 30000   # 长选项 + 空格
 mihomo start --update-timeout=30000   # 长选项 + 等号
 ```
 
-布尔开关：`-s`（跳过订阅更新）、`--no-update`、`--no-ssh`（跳过拉起 ssh 隧道）、`-y`/`--yes`（跳过确认）、`-o`（用系统默认程序打开）。
+布尔开关：`-s`（跳过订阅更新）、`--no-update`、`-y`/`--yes`（跳过确认）、`-o`（用系统默认程序打开）。
 
 上述数值选项只接受 **>= 1 的整数**，非法值（`0`、负数、`5s`、`abc`）会直接报错而非静默取默认值——避免静默产出看似成功的错误结果。
 
@@ -324,11 +270,8 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 │   └── mihomo            # mihomo 内核二进制
 ├── logs/
 │   ├── mihomo.log        # 当前日志
-│   ├── mihomo.YYYY-MM-DD_HH-MM-SS.log  # 归档日志
-│   └── ssh-<name>.log    # 隧道 ssh 输出（每次启动覆写）
+│   └── mihomo.YYYY-MM-DD_HH-MM-SS.log  # 归档日志
 ├── data/                 # mihomo 运行数据（GeoIP 等，由内核自行管理）
-├── ssh/                  # 隧道运行态（stop 不清除，故不放在 runtime/）
-│   └── <name>.json       # PID、谁启动的、启动时间
 └── runtime/              # 运行时临时文件（stop 自动清除）
     ├── pid               # 进程 PID
     ├── config.yaml       # 运行时生成的配置

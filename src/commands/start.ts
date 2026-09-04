@@ -6,45 +6,17 @@ import { PATHS } from '../paths.js';
 import { getStatus, hasRootResidue } from '../process-probe.js';
 import { stop } from '../process-stop.js';
 import * as runtime from '../runtime.js';
-import { startAutoSshTunnels } from '../ssh.js';
 import * as subscription from '../subscription.js';
 import type { PreparedConfig } from '../types.js';
-import { getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
+import { assertNoRemovedSshFlag, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
 import { printStatus } from './status.js';
 import { handleStopResult } from './stop.js';
-
-/**
- * 拉起 auto 隧道。失败只告警不抛——隧道只影响内网分流那部分规则，
- * 让整个 start 失败是过度反应。但告警必须显眼：前后留空行、黄色标题，
- * 并附上 ssh 自己说的原因（否则用户只能去翻日志）。
- */
-async function startAutoSshTunnelsWithWarning(): Promise<void> {
-  const outcomes = await startAutoSshTunnels();
-  if (outcomes.length === 0) return;
-
-  const started = outcomes.filter(o => o.ok && !o.alreadyRunning);
-  if (started.length > 0) {
-    console.log(`${colors.green('已启动隧道')}: ${started.map(o => o.name).join(', ')}`);
-  }
-
-  for (const failed of outcomes.filter(o => !o.ok)) {
-    console.log('');
-    console.log(colors.yellow(`警告: 隧道 "${failed.name}" 启动失败`));
-    console.log(colors.gray(`  ${failed.error?.message ?? '未知错误'}`));
-    for (const line of failed.error?.hint ?? []) {
-      if (line.trim()) console.log(colors.gray(line.startsWith('  ') ? line : `  ${line}`));
-    }
-    console.log(colors.gray('  内网分流规则将不可用，其余流量正常'));
-    console.log(colors.gray(`  排查: mihomo ssh status ${failed.name}`));
-    console.log('');
-  }
-}
 
 /**
  * 从 argv 解析启动模式。取第一个非 flag token（而非固定 args[1]）：
  * `start -s tun` 里模式在 flag 之后，只看 args[1] 会把它当 flag 丢掉、
  * 静默按 Mixed 启动——正是拼错模式那条报错要防的情形。
- * 与 `sub remove -y foo` / `ssh rm -y foo` 的 getNonFlagArg 口径一致。
+ * 与 `sub remove -y foo` 的 getNonFlagArg 口径一致。
  */
 export function resolveStartMode(args: string[]): 'tun' | 'mixed' {
   const modeArg = getNonFlagArg(args, 1);
@@ -56,6 +28,7 @@ export function resolveStartMode(args: string[]): 'tun' | 'mixed' {
 }
 
 export async function cmdStart(args: string[]): Promise<void> {
+  assertNoRemovedSshFlag(args);
   const targetMode = resolveStartMode(args);
 
   if (!hasKernel()) {
@@ -69,7 +42,6 @@ export async function cmdStart(args: string[]): Promise<void> {
   }
 
   const skipUpdate = hasFlag(args, '-s', '--no-update');
-  const skipSsh = hasFlag(args, '--no-ssh');
   const updateTimeout = parseIntArg(args, '-u', '--update-timeout', subscription.DEFAULT_AUTO_UPDATE_TIMEOUT);
 
   const sub = subscription.requireActiveSubscription('没有订阅，请先添加订阅');
@@ -132,12 +104,6 @@ export async function cmdStart(args: string[]): Promise<void> {
     if (e instanceof CliError) throw e;
     const lines = (e as Error).message.split('\n');
     throw new CliError(lines[0], { label: '启动失败', hint: lines.slice(1) });
-  }
-
-  // 隧道放在内核启动成功之后：内核失败就直接抛错，没必要再起隧道。
-  // 反之隧道失败不影响内核——它只影响内网分流那部分规则，其余流量照常走订阅节点。
-  if (!skipSsh) {
-    await startAutoSshTunnelsWithWarning();
   }
 
   await printStatus();

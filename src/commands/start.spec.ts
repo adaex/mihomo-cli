@@ -7,10 +7,10 @@ import { resolveStartMode } from './start.js';
 describe('resolveStartMode：模式 token 不受 flag 位置影响', () => {
   // 曾经只读 args[1]：`start -s tun` 的模式被当成 flag 丢掉，静默按 Mixed 启动，
   // 而用户以为已切到 TUN（全局路由没生效却毫无提示）。flag 在前是自然写法，
-  // 且 sub remove / ssh rm 都接受，start 不能是唯一的例外。
+  // 且 sub remove 也接受，start 不能是唯一的例外。
   it('flag 在模式之前仍识别为 tun', () => {
     assert.equal(resolveStartMode(['start', '-s', 'tun']), 'tun');
-    assert.equal(resolveStartMode(['start', '--no-ssh', 'tun']), 'tun');
+    assert.equal(resolveStartMode(['start', '--no-update', 'tun']), 'tun');
   });
 
   it('带值选项的值不会被误当模式', () => {

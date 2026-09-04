@@ -20,10 +20,6 @@ export const DIRS = {
   logs: path.join(USER_DATA_DIR, 'logs'),
   data: path.join(USER_DATA_DIR, 'data'),
   runtime: path.join(USER_DATA_DIR, 'runtime'),
-  // ssh 隧道运行态。刻意独立于 runtime/：clearRuntime() 会在 stop() 成功路径 rmrf 整个
-  // runtime 目录，隧道状态放那里会被 `mihomo stop` 连同 config.yaml 一起抹掉，
-  // 于是「谁起的」标记丢失、手动起的隧道再也无法被识别
-  ssh: path.join(USER_DATA_DIR, 'ssh'),
 } as const;
 
 export const PATHS = {
@@ -93,7 +89,7 @@ const LOCK_RETRY_MS = 20;
  * 为什么必须有：`settings.json` 的读-改-写此前无任何跨进程保护，两个 CLI 进程
  * （慢速 `sub add` 跨网络下载期间用户在另一个终端操作，是日常场景）会各自读到旧
  * 全量、各自写回，后写者把先写者的条目整块抹掉——**而先写者已经打印了「已添加」**。
- * 实测 6 个并发 `sub add` 丢 3 条；`ssh add` 被并发 `sub add` 抹成 null。
+ * 实测 6 个并发 `sub add` 丢 3 条。
  * 仅靠「写前重读盘」不够：读与写之间仍有窗口，实测仍丢 3 条。
  *
  * 用 `O_EXCL` 建锁文件（POSIX 下创建即原子，NFS 外均可靠），忙等到拿到为止。

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { CliError } from './errors.js';
-import { parseIntArg, parseMirrorArg, suggestSimilar } from './utils.js';
+import { assertNoRemovedSshFlag, parseIntArg, parseMirrorArg, suggestSimilar } from './utils.js';
 
-const TOKENS = ['start', 'stop', 'status', 'subscription', 'sub', 'ssh', 'ui'];
+const TOKENS = ['start', 'stop', 'status', 'subscription', 'sub', 'kernel', 'ui'];
 
 describe('suggestSimilar', () => {
   it('前缀匹配命中（含别名），按相似度排序', () => {
@@ -95,5 +95,24 @@ describe('parseMirrorArg：--mirror-all 已移除（v3.10.0）', () => {
 
   it('无镜像选项时不覆盖', () => {
     assert.deepEqual(parseMirrorArg(['kernel']), { mirror: null, isOverride: false });
+  });
+});
+
+describe('assertNoRemovedSshFlag：--no-ssh 已移除（v4.0.0）', () => {
+  it('显式报错，不静默忽略', () => {
+    // 静默通过会让 `stop --no-ssh`（原意「停代理但留隧道」）变成「停代理」而用户不知情
+    assert.throws(
+      () => assertNoRemovedSshFlag(['stop', '--no-ssh']),
+      (e: unknown) => e instanceof CliError,
+    );
+    assert.throws(
+      () => assertNoRemovedSshFlag(['start', '--no-ssh=true']),
+      (e: unknown) => e instanceof CliError,
+    );
+  });
+
+  it('不含该选项时放行', () => {
+    assert.doesNotThrow(() => assertNoRemovedSshFlag(['start', 'tun', '-s']));
+    assert.doesNotThrow(() => assertNoRemovedSshFlag(undefined));
   });
 });

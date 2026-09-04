@@ -52,7 +52,7 @@ export async function confirmPrompt(question: string): Promise<boolean> {
 }
 
 /**
- * 破坏性操作的确认入口，收敛 sub remove / ssh rm / reset 三处重复的
+ * 破坏性操作的确认入口，收敛 sub remove / reset 两处重复的
  * 「TTY 检查 → confirm → 非 TTY 抛错」样板。
  *
  * 非 TTY（管道/CI）下 stdin 无人应答：直接抛 CliError（退出码 1），

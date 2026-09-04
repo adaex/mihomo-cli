@@ -56,7 +56,6 @@ export function printHelp(commands: Command[]): void {
     '  mihomo start -s           # 跳过自动更新订阅',
     '  mihomo start -u 30000     # 自动更新超时 30 秒 (默认 10s)',
     '  mihomo daemon on          # 开启保活（开机自启 + 崩溃重启）',
-    '  mihomo ssh add work --host m4 --port 1080      # 加 ssh 隧道出口',
     '  mihomo sub add <url>      # 添加订阅 (sub 是 subscription 别名)',
     '  mihomo ui                 # 打开 Web UI',
     '',

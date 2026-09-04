@@ -72,24 +72,3 @@ describe('prepareConfigForStart / commitPreparedConfig 分两步', () => {
     assert.throws(() => prepareConfigForStart('mixed', 'nope'), CliError);
   });
 });
-
-/**
- * 锁住 v3.12.0 的边界：ssh 只管端口，配置里不该出现任何 CLI 合成的东西。
- * 回退成「CLI 依据 settings 注入节点」会同时带回两份真相与那条循环依赖。
- */
-describe('buildConfig 不再掺入任何 ssh 内容', () => {
-  it('settings 里有隧道也不注入节点，且不写 4.ssh.yaml', () => {
-    fs.writeFileSync(path.join(tmpDir, 'subscriptions', 'x.yaml'), SUB_YAML);
-    fs.writeFileSync(path.join(tmpDir, 'settings.json'), JSON.stringify({ ssh: [{ name: 'work', host: 'm4', port: 1080, auto: true }] }));
-    // 遗留文件也不该被加载（升级后它就是个孤儿文件，由 ssh 列表的告警负责提醒）
-    fs.writeFileSync(path.join(tmpDir, 'ssh.work.yaml'), '~proxy-groups:\n  - {name: SSH-Work, type: select, proxies: [DIRECT]}\n');
-
-    const { buildResult } = prepareConfigForStart('mixed', 'x');
-    const names = (buildResult.config.proxies as { name: string }[]).map(p => p.name);
-    const groups = (buildResult.config['proxy-groups'] as { name: string }[]).map(g => g.name);
-
-    assert.deepEqual(names, ['a'], '不得出现 CLI 合成的 socks5 节点');
-    assert.deepEqual(groups, ['PROXY'], '遗留的 ssh.*.yaml 不得被加载');
-    assert.equal(fs.existsSync(path.join(tmpDir, 'runtime', '4.ssh.yaml')), false);
-  });
-});

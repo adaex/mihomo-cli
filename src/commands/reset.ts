@@ -8,14 +8,13 @@ import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
 import { cleanupAll, PROCESS_WAIT_ATTEMPTS, PROCESS_WAIT_INTERVAL } from '../process-stop.js';
 import { invalidateSettingsCache, writeSettings } from '../settings.js';
-import { stopAllSshTunnels } from '../ssh.js';
 import type { ResetTarget } from '../types.js';
 import { confirmOrThrow } from './shared.js';
 
 /**
  * 重置目标注册表。**顺序即执行顺序**（`resolveResetTargets` 会按本数组排序），
  * 带 `onAfter: writeSettings` 的目标必须排在 `settings` 之前，否则会把刚删掉的
- * settings.json 重建成 `{}`——`subs` 与 `ssh` 都受此约束，有单测锁定。
+ * settings.json 重建成 `{}`——`subs` 受此约束，有单测锁定。
  */
 export const RESET_TARGETS: ResetTarget[] = [
   {
@@ -48,24 +47,6 @@ export const RESET_TARGETS: ResetTarget[] = [
     label: '运行时',
     paths: () => [DIRS.runtime],
     needsStop: true,
-  },
-  {
-    // 隧道要在删 pid 文件之前先停进程（onBefore）：文件一删就再也找不到那些 ssh 进程，
-    // 它们会继续占着端口跑下去，且 CLI 无任何路径能停掉。
-    // **必须排在 settings 之前**：onAfter 会 writeSettings 重建 settings.json，
-    // 排在 settings 之后会让 `reset --full` 留下一个 {}（同 subs 的处理，见执行顺序注释）
-    id: 'ssh',
-    aliases: ['ssh'],
-    label: '隧道',
-    // 只删运行态：v3.12.0 起 CLI 不再生成任何 ssh 配置文件，节点/规则都在用户自己
-    // 维护的 overwrite.yaml 里（归 overwrites 目标管），这里没有额外文件要清
-    paths: () => [DIRS.ssh],
-    needsStop: false,
-    onBefore: async () => {
-      await stopAllSshTunnels();
-    },
-    // 同步清空 settings 里的隧道列表：只删运行态会留下「列表在但状态没了」的半重置状态
-    onAfter: () => writeSettings({ ssh: undefined }),
   },
   {
     id: 'settings',
@@ -172,9 +153,8 @@ export async function cmdReset(args: string[]): Promise<void> {
     }
     targets = matched;
   } else {
-    // 留空 = 只删「可再生成的运行数据」，保留用户配置资产（设置/内核/覆写/保活/隧道）。
-    // 隧道条目在 settings.json 里、且关联用户手写的 ssh.<名字>.yaml，与 settings 同档，不该被裸 reset 带走
-    targets = RESET_TARGETS.filter(t => !['settings', 'kernel', 'overwrites', 'daemon', 'ssh'].includes(t.id));
+    // 留空 = 只删「可再生成的运行数据」，保留用户配置资产（设置/内核/覆写/保活）
+    targets = RESET_TARGETS.filter(t => !['settings', 'kernel', 'overwrites', 'daemon'].includes(t.id));
   }
 
   for (const t of targets) {
@@ -257,7 +237,6 @@ export async function cmdReset(args: string[]): Promise<void> {
   }
 
   for (const t of targets) {
-    await t.onBefore?.();
     for (const p of t.paths()) {
       if (fs.existsSync(p)) {
         try {

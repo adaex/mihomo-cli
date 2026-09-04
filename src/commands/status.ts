@@ -3,8 +3,7 @@ import { getConfigInfo, getKernelVersion } from '../config.js';
 import { isDaemonEnabled } from '../daemon.js';
 import { isOverwriteEnabled, listOverwriteFile } from '../overwrite.js';
 import { getRunningState } from '../runtime.js';
-import { getSshTunnels, getSubscriptionsWithCache } from '../settings.js';
-import { getAllSshStatus } from '../ssh.js';
+import { getSubscriptionsWithCache } from '../settings.js';
 import { formatProxySummary, getActiveSubscription } from '../subscription.js';
 import { formatTimestamp, formatTraffic } from '../utils.js';
 
@@ -82,23 +81,6 @@ export async function printStatus(): Promise<void> {
 
   if (isDaemonEnabled()) {
     console.log(`${colors.gray('保活: ')}${colors.green('已启用')} ${colors.gray('(开机自启 + 崩溃重启)')}`);
-  }
-
-  // 隧道段：无隧道配置时零开销（不进 getAllSshStatus，也就不做任何端口探测）——
-  // printStatus 同时是裸 `mihomo` 的入口，不能因为这个功能变慢
-  const tunnels = getSshTunnels();
-  if (tunnels.length > 0) {
-    const statuses = await getAllSshStatus();
-    const parts = statuses.map(s => {
-      const label = `${s.config.name}:${s.config.port}`;
-      if (s.state === 'running') return colors.green(label);
-      // 假活必须与未运行区分：进程在、端口不通，mihomo 仍在往死端口送流量
-      if (s.state === 'dead-port') return colors.yellow(`${label} 假活`);
-      // 带文字后缀而非只靠灰色：NO_COLOR 或管道输出时颜色会被剥掉，
-      // 只着色的话「运行中」与「未运行」在纯文本下完全一样，等于没显示状态
-      return colors.gray(`${label} 未运行`);
-    });
-    console.log(`${colors.gray('隧道: ')}${parts.join(', ')}`);
   }
 
   console.log('');

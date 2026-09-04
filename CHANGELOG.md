@@ -1,5 +1,31 @@
 # Changelog
 
+## [4.0.0] - 2026-09-05
+
+移除 ssh 隧道功能。
+
+### 破坏性变更
+
+- **移除 `ssh` 命令及全部相关能力**。删除项：`mihomo ssh`（`add`/`up`/`down`/`status`/`rm`）、`start` 与 `stop` 的 `--no-ssh` 选项、`reset` 的 `ssh` 目标、settings 的 `ssh` 字段、数据目录的 `ssh/`。
+
+  演进轨迹：v3.9.0 `tunnel` 统一为 `ssh` → v3.12.0 剥离配置层弱化为「只管端口」→ 本版整体移除。功能价值撑不起维护面——既要防 `--host` 的 `-oProxyCommand=` 注入、又要真实探测端口识别「假活」、还要维护 `started_by` 的 auto/manual 单向提升语义以免 `stop` 误杀，而它做的事等价于用户自己跑一条 `ssh -D 127.0.0.1:1080 -N host`。
+
+  **升级须知**：自己起 `ssh -D`（可用 `~/.ssh/config` 的 `LocalForward` 或系统 launchd 托管），节点与分流规则照旧写在 `overwrite.yaml` 里，无需改动：
+
+  ```yaml
+  ~proxies:
+    - {name: SSH-work, type: socks5, server: 127.0.0.1, port: 1080}
+  +rules:
+    - DOMAIN-SUFFIX,example.internal,SSH-work
+  ```
+
+  老的 `settings.json` 里会留着 `ssh` 键、数据目录会留着 `ssh/` 与 `logs/ssh-*.log`。**不自动清理**：未知键本就被忽略，孤儿目录不影响任何行为，自动删用户数据的风险大于收益。想清干净就手动 `rm -rf ~/.mihomo-cli/ssh`。
+
+### 内部
+
+- 连带移除已无消费者的 `parseStringArg`（`--host`/`--port` 是仅有的两个调用方）与 `ResetTarget.onBefore` 钩子
+- `readSettingsList` 泛型包装内联回 `getSubscriptions`（订阅是唯一剩余的列表字段）
+
 ## [3.12.1] - 2026-09-05
 
 并发数据丢失与信号响应两处稳定性修复。
