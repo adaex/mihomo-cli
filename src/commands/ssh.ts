@@ -5,7 +5,7 @@ import * as ssh from '../ssh.js';
 import { ensureSshConfigFile, getSshConfigPath } from '../ssh-config.js';
 import type { SshConfig, SshStatus } from '../types.js';
 import { getNonFlagArg, hasFlag, parseStringArg, suggestSimilar } from '../utils.js';
-import { confirmPrompt, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
+import { confirmOrThrow, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 /** 状态的展示文本：三态各自着色，「假活」必须与「运行中」区分开——那正是最误导的形态 */
 function formatState(status: SshStatus): string {
@@ -197,15 +197,12 @@ async function sshRemove(args: string[]): Promise<void> {
   const skipConfirm = hasFlag(args, '-y', '--yes');
 
   if (!skipConfirm) {
-    if (!process.stdin.isTTY) {
-      // 非交互下打印「已取消」再 return 会以退出码 0 结束，脚本会把「什么都没做」当成功
-      throw new CliError('删除隧道需要确认', {
-        label: '已取消',
+    if (
+      !(await confirmOrThrow(`确认删除隧道 "${config.name}"?`, {
+        nonTtyMessage: '删除隧道需要确认',
         hint: [`跳过确认: mihomo ssh rm ${config.name} -y`],
-      });
-    }
-    const confirmed = await confirmPrompt(`确认删除隧道 "${config.name}"?`);
-    if (!confirmed) {
+      }))
+    ) {
       console.log('已取消');
       return;
     }

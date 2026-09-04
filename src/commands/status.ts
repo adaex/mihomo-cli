@@ -1,24 +1,24 @@
 import { colors } from '../colors.js';
-import { getConfigInfo } from '../config.js';
+import { getConfigInfo, getKernelVersion } from '../config.js';
 import { isDaemonEnabled } from '../daemon.js';
 import { isOverwriteEnabled, listOverwriteFile } from '../overwrite.js';
-import * as processManager from '../process.js';
 import { getRunningState } from '../runtime.js';
 import { getSshTunnels, getSubscriptionsWithCache } from '../settings.js';
 import { getAllSshStatus } from '../ssh.js';
 import { formatProxySummary, getActiveSubscription } from '../subscription.js';
-import { formatBytes, formatTimestamp } from '../utils.js';
+import { formatTimestamp, formatTraffic } from '../utils.js';
 
 export async function printStatus(): Promise<void> {
-  const status = processManager.getStatus();
   const state = getRunningState();
   const info = getConfigInfo();
   const overwriteEnabled = isOverwriteEnabled();
   const overwriteFiles = listOverwriteFile().files;
   const activeSub = getActiveSubscription();
 
-  // 运行状态/PID 由门面统一(保活看 launchd,普通看 pidFile);此处只负责展示。
-  const { running, pid, daemon: daemonManaged } = state;
+  // 运行状态/PID/内存由门面统一(保活看 launchd,普通看 pidFile);此处只负责展示。
+  // 内核版本走 getKernelVersion()(带缓存、与运行模式无关),不再为它单独发一次 getStatus——
+  // 此前同时调 getStatus() 与 getRunningState(),非保活模式下后者内部又调一遍,同一份查询跑两次
+  const { running, pid, daemon: daemonManaged, processInfo } = state;
 
   console.log('');
   // 模式取自配置文件：未运行时也展示上次构建的模式（stop 会清配置，清了就不显示）
@@ -28,12 +28,12 @@ export async function printStatus(): Promise<void> {
   }
   const statusText = running ? colors.green('● 运行中') : colors.yellow('不在运行');
   console.log(`${colors.gray('状态: ')}${statusText}${modeLabel}`);
-  console.log(`${colors.gray('内核: ')}${status.kernelVersion || '未安装'}`);
+  console.log(`${colors.gray('内核: ')}${getKernelVersion() || '未安装'}`);
 
   if (pid) {
     console.log(`${colors.gray('PID:  ')}${pid}`);
-    if (!daemonManaged && status.processInfo) {
-      console.log(`${colors.gray('内存: ')}${status.processInfo.memory}`);
+    if (!daemonManaged && processInfo) {
+      console.log(`${colors.gray('内存: ')}${processInfo.memory}`);
     }
   }
 
@@ -60,13 +60,9 @@ export async function printStatus(): Promise<void> {
     console.log(subLine);
     // 订阅流量/到期来自缓存（上次下载响应头），仅缓存里有才展示
     const cached = getSubscriptionsWithCache().find(s => s.name === activeSub.name);
-    if (cached && (cached.download !== undefined || cached.total !== undefined)) {
-      const used = (cached.upload || 0) + (cached.download || 0);
-      let trafficLine = `${colors.gray('流量: ')}${formatBytes(used)} / ${formatBytes(cached.total)}`;
-      if (cached.total && cached.total > 0) {
-        trafficLine += ` (${Math.min((used / cached.total) * 100, 100).toFixed(1)}%)`;
-      }
-      console.log(trafficLine);
+    const traffic = cached ? formatTraffic(cached.upload, cached.download, cached.total) : null;
+    if (traffic) {
+      console.log(`${colors.gray('流量: ')}${traffic}`);
     }
     if (cached?.expire !== undefined) {
       console.log(`${colors.gray('到期: ')}${formatTimestamp(cached.expire)}`);

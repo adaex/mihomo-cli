@@ -1,4 +1,5 @@
 import readline from 'node:readline';
+import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
 import { extractStartOptions } from '../utils.js';
 import { cmdStart } from './start.js';
@@ -48,6 +49,22 @@ export async function confirmPrompt(question: string): Promise<boolean> {
     });
   });
   return answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes';
+}
+
+/**
+ * 破坏性操作的确认入口，收敛 sub remove / ssh rm / reset 三处重复的
+ * 「TTY 检查 → confirm → 非 TTY 抛错」样板。
+ *
+ * 非 TTY（管道/CI）下 stdin 无人应答：直接抛 CliError（退出码 1），
+ * 而非「打印已取消却 exit 0」——后者会让脚本把「什么都没做」误判成执行成功。
+ * TTY 下委托 confirmPrompt；返回 false 表示用户选了 No，由调用方打印
+ * 「已取消」并 return（控制流留在调用方，helper 不替它做退出决策）。
+ */
+export async function confirmOrThrow(question: string, opts: { nonTtyMessage: string; hint?: string[] }): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    throw new CliError(opts.nonTtyMessage, { label: '已取消', hint: opts.hint });
+  }
+  return confirmPrompt(question);
 }
 
 /**

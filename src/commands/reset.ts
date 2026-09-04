@@ -10,7 +10,7 @@ import { invalidateSettingsCache, writeSettings } from '../settings.js';
 import { stopAllSshTunnels } from '../ssh.js';
 import { isSshFilename } from '../ssh-config.js';
 import type { ResetTarget } from '../types.js';
-import { confirmPrompt } from './shared.js';
+import { confirmOrThrow } from './shared.js';
 
 /**
  * 重置目标注册表。**顺序即执行顺序**（`resolveResetTargets` 会按本数组排序），
@@ -216,10 +216,12 @@ export async function cmdReset(args: string[]): Promise<void> {
 
   if (!skipConfirm) {
     // 非交互环境无法应答：报错退出而非静默「已取消」，避免脚本误判重置已完成
-    if (!process.stdin.isTTY) {
-      throw new CliError('非交互环境无法确认', { label: '已取消', hint: ['跳过确认请加 -y: mihomo reset ... -y'] });
-    }
-    if (!(await confirmPrompt('确认?'))) {
+    if (
+      !(await confirmOrThrow('确认?', {
+        nonTtyMessage: '非交互环境无法确认',
+        hint: ['跳过确认请加 -y: mihomo reset ... -y'],
+      }))
+    ) {
       console.log('已取消');
       return;
     }

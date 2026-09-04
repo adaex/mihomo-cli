@@ -42,6 +42,21 @@ export function formatBytes(bytes: unknown): string {
   return `${parseFloat((num / k ** i).toFixed(2))} ${sizes[i]}`;
 }
 
+/**
+ * 格式化订阅流量「已用 / 总量 (百分比)」。status 与 sub 列表两处共用同一口径。
+ * 与展示侧约定一致：download 与 total 都缺失时返回 null（调用方据此跳过整行），
+ * 只缺 total 时仍展示已用（formatBytes(undefined) 兜底为「未知」）。
+ */
+export function formatTraffic(upload: number | undefined, download: number | undefined, total: number | undefined): string | null {
+  if (download === undefined && total === undefined) return null;
+  const used = (upload || 0) + (download || 0);
+  let line = `${formatBytes(used)} / ${formatBytes(total)}`;
+  if (total && total > 0) {
+    line += ` (${Math.min((used / total) * 100, 100).toFixed(1)}%)`;
+  }
+  return line;
+}
+
 export function formatTimestamp(ts: unknown): string {
   if (ts === undefined || ts === null) return '未知';
   // 机场以 expire=0（或缺省）表示永久/无限期，不能显示成 1970-01-01

@@ -1,6 +1,7 @@
 import { getConfigInfo } from './config.js';
 import { DAEMON_BOOT_WAIT_MS, getDaemonStatus, isDaemonEnabled, isDaemonRunning, restartDaemon } from './daemon.js';
 import * as processManager from './process.js';
+import type { ProcessInfo } from './types.js';
 import { sleep } from './utils.js';
 
 /**
@@ -29,6 +30,11 @@ export interface RunningState {
   pid: number | null;
   /** 是否处于保活模式(内核由 launchd 托管) */
   daemon: boolean;
+  /**
+   * 非保活模式下的进程内存信息（复用 getStatus 内部已查的结果，免命令层再发一次 ps）；
+   * 保活模式为 null——root 属主进程不查内存，且 status 本就不展示
+   */
+  processInfo: ProcessInfo | null;
 }
 
 /**
@@ -38,10 +44,10 @@ export interface RunningState {
 export function getRunningState(): RunningState {
   if (isDaemonEnabled()) {
     const daemon = getDaemonStatus();
-    return { running: isDaemonRunning(daemon), pid: daemon.pid, daemon: true };
+    return { running: isDaemonRunning(daemon), pid: daemon.pid, daemon: true, processInfo: null };
   }
   const status = processManager.getStatus();
-  return { running: status.running, pid: status.pid, daemon: false };
+  return { running: status.running, pid: status.pid, daemon: false, processInfo: status.processInfo };
 }
 
 /**

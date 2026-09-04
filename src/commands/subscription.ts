@@ -3,8 +3,8 @@ import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
 import { addSubscription, getSubscriptions, getSubscriptionsWithCache, removeSubscription, setDefaultSubscription } from '../settings.js';
 import * as subscription from '../subscription.js';
-import { formatBytes, formatDate, formatTimestamp, getNonFlagArg, hasFlag, suggestSimilar } from '../utils.js';
-import { confirmPrompt, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
+import { formatDate, formatTimestamp, formatTraffic, getNonFlagArg, hasFlag, suggestSimilar } from '../utils.js';
+import { confirmOrThrow, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 /** 订阅内容更新后，运行中的实例仍用旧配置，提示重启生效 */
 function printRestartHintIfRunning(): void {
@@ -36,16 +36,9 @@ function printSubscriptionList(): void {
     if (s.username) {
       console.log(`    ${colors.gray('用户: ')}${s.username}`);
     }
-    if (s.download !== undefined || s.total !== undefined) {
-      const used = (s.upload || 0) + (s.download || 0);
-      const usedStr = formatBytes(used);
-      const totalStr = formatBytes(s.total);
-      let percentStr = '';
-      if (s.total && s.total > 0) {
-        const percent = Math.min((used / s.total) * 100, 100);
-        percentStr = ` (${percent.toFixed(1)}%)`;
-      }
-      console.log(`    ${colors.gray('流量: ')}${usedStr} / ${totalStr}${percentStr}`);
+    const traffic = formatTraffic(s.upload, s.download, s.total);
+    if (traffic) {
+      console.log(`    ${colors.gray('流量: ')}${traffic}`);
     }
     if (s.expire !== undefined) {
       console.log(`    ${colors.gray('到期: ')}${formatTimestamp(s.expire)}`);
@@ -185,15 +178,13 @@ async function subRemove(args: string[]): Promise<void> {
   const isExact = target.name === name;
   const skipConfirm = hasFlag(args, '-y', '--yes');
   if (!isExact && !skipConfirm) {
-    // 非交互环境无法应答，直接报错而非「不删除却 exit=0」——后者会让脚本误判成功
-    if (!process.stdin.isTTY) {
-      throw new CliError(`模糊匹配到 "${target.name}"，非交互环境需确认`, {
-        label: '已取消',
-        hint: [`请用完整名称: mihomo sub remove ${target.name}`, `或跳过确认: mihomo sub remove ${name} -y`],
-      });
-    }
     console.log(`将删除订阅 "${target.name}" (模糊匹配 "${name}")`);
-    if (!(await confirmPrompt('此操作不可恢复，确认?'))) {
+    if (
+      !(await confirmOrThrow('此操作不可恢复，确认?', {
+        nonTtyMessage: `模糊匹配到 "${target.name}"，非交互环境需确认`,
+        hint: [`请用完整名称: mihomo sub remove ${target.name}`, `或跳过确认: mihomo sub remove ${name} -y`],
+      }))
+    ) {
       console.log('已取消');
       return;
     }
