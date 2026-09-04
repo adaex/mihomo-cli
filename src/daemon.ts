@@ -54,7 +54,7 @@ function escapeXml(s: string): string {
 
 /**
  * 生成 LaunchDaemon plist（root 运行）。
- * ProgramArguments 与 startMixedMode 的 spawn 参数保持一致（process.ts）。
+ * ProgramArguments 与 startMixedMode 的 spawn 参数保持一致（process-start.ts）。
  * KeepAlive: 崩溃/被杀后由 launchd 拉起；RunAtLoad: 开机自启。
  * 关键：**不设 UserName** —— 守护进程须以 root 运行，这正是解除 macOS 本地网络隐私（TCC）
  * 限制、使经局域网跳板的代理可达的原因（用户级 LaunchAgent 会被静默拦成 no route to host）。

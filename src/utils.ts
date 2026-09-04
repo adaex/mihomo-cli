@@ -5,7 +5,7 @@ import type { MirrorArg } from './types.js';
 /**
  * 通用纯函数小工具：sleep、字符串转义、格式化、flag 解析、did-you-mean。
  * 有 I/O 或独立职责的模块已拆出：colors.ts（颜色）、errors.ts（CliError/TimeoutError）、
- * http.ts（HTTP 客户端）、process.ts（进程探测）。
+ * http.ts（HTTP 客户端）、process-probe.ts（进程探测）。
  */
 
 const sleepBuf = new Int32Array(new SharedArrayBuffer(4));

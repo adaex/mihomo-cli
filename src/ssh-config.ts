@@ -11,7 +11,7 @@ import type { SshConfig, SshFileEntry } from './types.js';
  * ssh 隧道的配置侧：文件加载、节点合成、与主配置的合并。
  *
  * 与 `ssh.ts`（进程生命周期）分家的理由是依赖方向：`config.ts` 要在 buildConfig 里
- * 调用本模块，而 `ssh.ts` 依赖 `process.ts`，`process.ts` 又依赖 `config.ts`——
+ * 调用本模块，而 `ssh.ts` 依赖 `process-probe.ts`，`process-probe.ts` 又依赖 `config.ts`——
  * config 直接引 ssh.ts 会成环。本模块刻意只依赖纯数据层（settings/overwrite/paths）。
  *
  * 与 overwrite 的关系是「同语法、不同开关」：复用 `deepMergeWithOverrides` 的

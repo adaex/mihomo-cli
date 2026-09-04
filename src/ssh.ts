@@ -16,8 +16,8 @@ import { sleepSync } from './utils.js';
  * ssh -D 动态转发隧道的**进程侧**：启停与真实状态。
  *
  * 配置侧（ssh.<name>.yaml 的加载、节点合成、与主配置合并）在 ssh-config.ts。
- * 分家是为了依赖方向：config.ts 要用配置侧，而本模块依赖 process.ts、
- * process.ts 又依赖 config.ts——不拆会成环。
+ * 分家是为了依赖方向：config.ts 要用配置侧，而本模块依赖 process-probe.ts、
+ * process-probe.ts 又依赖 config.ts——不拆会成环。
  *
  * 放 src/ 而非 commands/：commands 的 start/stop/status 三处都要用它，
  * 放命令层会造成命令层互相 import。
@@ -223,7 +223,7 @@ export function getSshLogPath(name: string): string {
   return path.join(DIRS.logs, `ssh-${name}.log`);
 }
 
-/** 进程是否为本隧道的 ssh：存活 + 命令行匹配双条件（防 PID 复用误杀，同 process.ts 口径） */
+/** 进程是否为本隧道的 ssh：存活 + 命令行匹配双条件（防 PID 复用误杀，同 process-probe.ts 口径） */
 function isSshProcessAlive(pid: number, port: number): boolean {
   return isProcessRunning(pid) && isProcessCommandMatching(pid, commandNeedle(port));
 }

@@ -30,7 +30,12 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/settings.ts`          | settings.json 读写（含损坏恢复）、订阅缓存、订阅列表增删、URL 遮蔽 |
 | `src/config.ts`            | 配置构建、YAML 解析/序列化、内核版本 |
 | `src/subscription.ts`      | 订阅下载、流量解析、自动更新      |
-| `src/process.ts`           | 进程启动/停止、PID 管理、日志轮转、进程探测（isProcess*） |
+| `src/process-probe.ts`     | 进程探测：ps/pgrep、pid 文件、运行状态、getStatus |
+| `src/process-start.ts`     | 内核启动（Mixed spawn / TUN sudo 脚本） |
+| `src/process-stop.ts`      | 内核停止/清理：stop、cleanupAll、clearPid |
+| `src/log-files.ts`         | 日志轮转/清理/列表/路径 |
+| `src/open.ts`              | openUrl/openLogFile/viewLogWithTail |
+| `src/sudo.ts`              | runSudoScript：TUN 与 launchd 保活共用的 sudo 脚本范式 |
 | `src/daemon.ts`            | launchd 保活：开机自启/崩溃重启、热重载、状态查询 |
 | `src/runtime.ts`           | 运行时门面：收敛普通进程/保活双轨（模式、状态、启停） |
 | `src/ssh.ts`               | ssh -D 隧道进程侧：运行态文件、端口探测、启停 |
@@ -39,7 +44,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/kernel.ts`            | GitHub Releases 检查、下载        |
 | `src/overwrite.ts`         | 覆写配置合并                      |
 | `src/commands/registry.ts` | 命令注册表（name/别名/handler/argv 改写/help 用法），路由与帮助的单一真相源 |
-| `src/commands/shared.ts`   | 命令层公共工具：dispatchSubcommand 子命令分发、confirmPrompt、restartToApply |
+| `src/commands/shared.ts`   | 命令层公共工具：dispatchSubcommand 子命令分发、confirmPrompt/confirmOrThrow、restartToApply |
 | `src/commands/*.ts`        | 各命令处理器（每命令一个文件）    |
 
 ### 命令处理器
@@ -50,13 +55,13 @@ This file provides guidance to Claude Code when working with this repository.
 | `commands/status.ts`          | status                         |
 | `commands/start.ts`           | start, tun                     |
 | `commands/stop.ts`            | stop                           |
-| `commands/log.ts`             | log, logs                      |
+| `commands/log.ts`             | logs（`log` 为隐藏别名，等价 `logs 0 -f`） |
 | `commands/ui.ts`              | ui                             |
 | `commands/kernel.ts`          | kernel                         |
 | `commands/subscription.ts`    | subscription (list/add/update/use/remove) |
 | `commands/overwrite.ts`       | overwrite (on/off)             |
 | `commands/directory.ts`       | directory (open)               |
-| `commands/daemon.ts`          | daemon (on/off/status)         |
+| `commands/daemon.ts`          | daemon (on/off，无参看状态)    |
 | `commands/ssh.ts`             | ssh (list/add/up/down/status/rm)，无别名 |
 | `commands/reset.ts`           | reset                          |
 | `commands/update.ts`          | update                         |
@@ -88,7 +93,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `findSubscriptionFuzzy` | `findSubsFuzzy`  |
 | `cmdSubscription`       | `cmdSub`         |
 | `readSubscriptionCache` | `readSubsCache`  |
-| `processManager`        | `processMgr`     |
+| `readSettingsList`      | `readSettingsLst` |
 | `configInfo`            | `cfgInfo`        |
 | `overwriteEnabled`      | `owEnabled`      |
 | `settingsCache`         | `_settingsCache` |
@@ -269,7 +274,7 @@ ssh/                    # 隧道运行态 <名字>.json（刻意不放 runtime/�
 #### 配置侧与进程侧分家
 
 `ssh-config.ts`（纯数据：文件加载、节点合成、合并）与 `ssh.ts`（进程启停）必须分开：
-`config.ts` 要在 `buildConfig` 里调配置侧，而 `ssh.ts` 依赖 `process.ts`、`process.ts` 又依赖
+`config.ts` 要在 `buildConfig` 里调配置侧，而 `ssh.ts` 依赖 `process-probe.ts`、`process-probe.ts` 又依赖
 `config.ts`——合在一起就是循环依赖。`ssh-config.ts` 因此只许依赖纯数据层。
 
 #### 节点由 CLI 内建注入，且必须最后合并

@@ -28,7 +28,7 @@ export interface SshConfig {
 
 /**
  * 隧道运行态。存 `<USER_DATA_DIR>/ssh/<name>.json`，**不能放 DIRS.runtime**——
- * process.ts 的 clearRuntime() 会在 stop() 成功路径 rmrf 整个 runtime 目录。
+ * process-stop.ts 的 clearRuntime() 会在 stop() 成功路径 rmrf 整个 runtime 目录。
  */
 export interface SshRuntime {
   pid: number;
