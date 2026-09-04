@@ -186,22 +186,34 @@ export function saveSubscriptionCache(subName: string, data: Partial<Subscriptio
 // === Subscription list ===
 
 /**
- * 订阅列表的唯一读取入口。
- * 校验必须在此收口：settings.json 被手改成 `{"subscriptions":"oops"}` 时，
- * 下游的 `[...(settings.subscriptions || [])]` 会把字符串按字符展开，写出
- * `["o","o","p","s",{...}]` 这种垃圾列表且不报错，后续所有 s.name 都是 undefined。
- * 非数组一律视为空列表；顺带滤掉缺 name/url 的残缺条目。
+ * settings.json 列表字段的统一读取入口。
+ * 校验必须在此收口：字段被手改成非数组（如 `{"subscriptions":"oops"}`）时，下游的
+ * 展开运算符会把字符串按字符展开成垃圾列表且不报错，后续所有 s.name 都是 undefined。
+ * 非数组一律视为空列表；条目经 isValid 滤掉残缺项。
  */
-export function getSubscriptions(): Subscription[] {
-  const settings = readSettings();
-  const subs = settings.subscriptions;
-  if (!Array.isArray(subs)) {
-    if (subs !== undefined) {
-      console.warn('警告: settings.json 的 subscriptions 不是列表，已忽略（可用 mihomo sub add 重新添加）');
+function readSettingsList<T>(key: 'subscriptions' | 'ssh', isValid: (item: unknown) => item is T, reAddHint: string): T[] {
+  // 收成 unknown 再过滤：settings[key] 是 Subscription[] | SshConfig[] 联合，
+  // 直接 .filter(类型谓词) 匹配不上 filter 的 S extends T 重载，会退回普通 filter
+  const list: unknown = readSettings()[key];
+  if (!Array.isArray(list)) {
+    if (list !== undefined) {
+      console.warn(`警告: settings.json 的 ${key} 不是列表，已忽略（${reAddHint}）`);
     }
     return [];
   }
-  return subs.filter(s => s != null && typeof s === 'object' && typeof s.name === 'string' && typeof s.url === 'string');
+  return list.filter(isValid);
+}
+
+function isValidSubscription(s: unknown): s is Subscription {
+  return s != null && typeof s === 'object' && typeof (s as Subscription).name === 'string' && typeof (s as Subscription).url === 'string';
+}
+
+/**
+ * 订阅列表的唯一读取入口。住在 settings.ts 而非订阅命令层：subscription.ts（核心）、
+ * config.ts、status 等多处都要读。
+ */
+export function getSubscriptions(): Subscription[] {
+  return readSettingsList('subscriptions', isValidSubscription, '可用 mihomo sub add 重新添加');
 }
 
 export function getSubscriptionsWithCache(): SubscriptionWithCache[] {
@@ -220,23 +232,23 @@ export function getSubscriptionsWithCache(): SubscriptionWithCache[] {
  */
 export const SAFE_NAME_RE = /^[\w\-\p{Unified_Ideograph}]{1,64}$/u;
 
+function isValidSshConfig(t: unknown): t is SshConfig {
+  return (
+    t != null &&
+    typeof t === 'object' &&
+    typeof (t as SshConfig).name === 'string' &&
+    typeof (t as SshConfig).host === 'string' &&
+    Number.isInteger((t as SshConfig).port)
+  );
+}
+
 /**
- * 隧道列表的唯一读取入口，与 getSubscriptions 同构、同一教训：settings.json 被手改成
- * `{"ssh":"oops"}` 时，下游的展开运算符会把字符串按字符展开成垃圾列表且不报错。
- *
- * 住在 settings.ts 而非 ssh.ts：ssh-config.ts（配置合并，被 config.ts 依赖）也要读它，
- * 放 ssh.ts 会让 config.ts 经 ssh.ts → process.ts 绕回 config.ts 形成循环依赖。
+ * 隧道列表的唯一读取入口。住在 settings.ts 而非 ssh.ts：ssh-config.ts（配置合并，
+ * 被 config.ts 依赖）也要读它，放 ssh.ts 会让 config.ts 经 ssh-config → ssh 多绕一层
+ * 进程模块的依赖。
  */
 export function getSshTunnels(): SshConfig[] {
-  const settings = readSettings();
-  const tunnels = settings.ssh;
-  if (!Array.isArray(tunnels)) {
-    if (tunnels !== undefined) {
-      console.warn('警告: settings.json 的 ssh 不是列表，已忽略（可用 mihomo ssh add 重新添加）');
-    }
-    return [];
-  }
-  return tunnels.filter(t => t != null && typeof t === 'object' && typeof t.name === 'string' && typeof t.host === 'string' && Number.isInteger(t.port));
+  return readSettingsList('ssh', isValidSshConfig, '可用 mihomo ssh add 重新添加');
 }
 
 export function validateSshName(name: string): void {
