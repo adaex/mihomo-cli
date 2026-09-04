@@ -5,10 +5,14 @@ import type { LogEntry } from '../types.js';
 import { formatBytes, formatDate, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
 
 export function cmdLogs(args: string[]): void {
-  const targetName = getNonFlagArg(args, 1);
   const lines = parseIntArg(args, '-n', '--lines', 100);
   const openInViewer = hasFlag(args, '-o', '--open');
   const follow = hasFlag(args, '-f', '--follow');
+  // 编号省略但给了查看类选项时默认看当前日志：`logs -f` / `logs -n 200` / `logs -o`
+  // 的意图明确是「看日志」，落到列表分支等于选项静默失效（`log` 已降为隐藏别名，
+  // `logs -f` 是跟随当前日志的自然写法，不能无声无息地只打印列表）
+  const hasLinesFlag = args.some(a => a === '-n' || a === '--lines' || a.startsWith('--lines='));
+  const targetName = getNonFlagArg(args, 1) ?? (follow || openInViewer || hasLinesFlag ? '0' : null);
 
   if (targetName) {
     // 只认「当前」与列表序号：归档名是 mihomo.<时间戳>.log，没人会去敲它，

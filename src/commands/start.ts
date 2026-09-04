@@ -8,7 +8,7 @@ import { stop } from '../process-stop.js';
 import * as runtime from '../runtime.js';
 import { startAutoSshTunnels } from '../ssh.js';
 import * as subscription from '../subscription.js';
-import { hasFlag, parseIntArg } from '../utils.js';
+import { getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
 import { printStatus } from './status.js';
 import { handleStopResult } from './stop.js';
 
@@ -39,14 +39,23 @@ async function startAutoSshTunnelsWithWarning(): Promise<void> {
   }
 }
 
-export async function cmdStart(args: string[]): Promise<void> {
-  // args[1] 为非 flag token 时才是模式参数；拼错模式名（如 start tn）必须报错，
-  // 不能静默按 Mixed 启动（用户会误以为已切到 TUN）。
-  const modeToken = args[1] && !args[1].startsWith('-') ? args[1].toLowerCase() : undefined;
+/**
+ * 从 argv 解析启动模式。取第一个非 flag token（而非固定 args[1]）：
+ * `start -s tun` 里模式在 flag 之后，只看 args[1] 会把它当 flag 丢掉、
+ * 静默按 Mixed 启动——正是拼错模式那条报错要防的情形。
+ * 与 `sub remove -y foo` / `ssh rm -y foo` 的 getNonFlagArg 口径一致。
+ */
+export function resolveStartMode(args: string[]): 'tun' | 'mixed' {
+  const modeArg = getNonFlagArg(args, 1);
+  const modeToken = modeArg?.toLowerCase();
   if (modeToken !== undefined && modeToken !== 'tun' && modeToken !== 'mixed') {
-    throw new CliError(`未知的启动模式: ${args[1]}`, { hint: '用法: mihomo start [tun|mixed]（默认 mixed）' });
+    throw new CliError(`未知的启动模式: ${modeArg}`, { hint: '用法: mihomo start [tun|mixed]（默认 mixed）' });
   }
-  const targetMode = modeToken === 'tun' ? 'tun' : 'mixed';
+  return modeToken === 'tun' ? 'tun' : 'mixed';
+}
+
+export async function cmdStart(args: string[]): Promise<void> {
+  const targetMode = resolveStartMode(args);
 
   if (!hasKernel()) {
     throw new CliError('未找到内核，请运行 "mihomo kernel"');
@@ -72,8 +81,11 @@ export async function cmdStart(args: string[]): Promise<void> {
   // 非保活模式沿用 stop() + start()。差异收敛在 runtime.launchOrRestart。
 
   if (!daemonEnabled) {
-    // 隐式停止不应意外弹 sudo：有 root 残留时直接报错引导（与 startMixedMode 的设计一致）
-    if (hasRootResidue()) {
+    // 隐式停止不应意外弹 sudo：有 root 残留时直接报错引导（与 startMixedMode 的设计一致）。
+    // 仅对 Mixed 生效：TUN 本来就要提权，且 buildTunLaunchScript 会以 root 跑
+    // `pkill -9` + `rm -f pid`，自带清理能力。对 TUN 也拦的话，正在运行的 TUN
+    // （root 属主进程）永远无法重启/切订阅，且报错 hint 会让人去执行刚失败的那条命令。
+    if (targetMode !== 'tun' && hasRootResidue()) {
       throw new CliError('存在需要 root 权限清理的残留进程/文件', {
         hint: [`请先手动清理: sudo pkill -9 mihomo && sudo rm -f ${PATHS.pidFile}`, '或切换到 TUN 模式启动（自动清理）: mihomo start tun'],
       });

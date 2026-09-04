@@ -60,7 +60,7 @@ export const COMMANDS: Command[] = [
     aliases: ['down'],
     handler: cmdStop,
     group: 'control',
-    usage: ['stop                         停止代理'],
+    usage: ['stop [--no-ssh]                停止代理（--no-ssh 保留 ssh 隧道）'],
   },
   {
     name: 'status',
@@ -91,7 +91,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdLogs,
     group: 'interface',
-    usage: ['logs [-f] [-n N] [编号] [-o]  日志列表/查看（0=当前，1+=归档，-f 跟随）'],
+    usage: ['logs [-f] [-n N] [编号] [-o]  日志列表/查看（0=当前，1+=归档，-f 跟随；省略编号即当前）'],
   },
   // === 订阅 ===
   {

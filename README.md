@@ -88,10 +88,11 @@ mihomo ui yacd     # YACD
 | 命令                        | 说明                                                                         |
 | --------------------------- | ---------------------------------------------------------------------------- |
 | `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式（`-s` 跳过订阅更新，`-u` 更新超时，`--no-ssh` 跳过拉起 ssh 隧道） |
-| `mihomo stop`               | 停止代理                                                                     |
+| `mihomo stop`               | 停止代理（`--no-ssh` 保留 ssh 隧道不停）                                     |
 | `mihomo status`             | 查看运行状态（含订阅流量、到期时间）                                         |
 | `mihomo logs`               | 列出所有日志（当前 + 历史归档）                                              |
 | `mihomo logs <编号>`        | 查看指定日志（`0`=当前，`1+`=归档，`-f` 实时跟随，`-n N` 行数，`-o` 打开）  |
+| `mihomo logs -f`            | 跟随当前日志（省略编号时默认当前，等价 `logs 0 -f`）                        |
 
 ### 订阅管理
 
@@ -338,7 +339,8 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
     ├── config.yaml       # 运行时生成的配置
     ├── 1.subscription.yaml   # 分阶段调试：订阅原始配置
     ├── 2.overwrite.yaml      # 分阶段调试：应用覆写后
-    └── 3.system.yaml         # 分阶段调试：合并系统配置后
+    ├── 3.system.yaml         # 分阶段调试：合并系统配置后
+    └── 4.ssh.yaml            # 分阶段调试：合并 ssh 隧道配置后
 ```
 
 可通过环境变量 `MIHOMO_CLI_DIR` 自定义数据目录位置。
