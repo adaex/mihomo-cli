@@ -5,7 +5,37 @@ import * as kernel from '../kernel.js';
 import { getRunningState } from '../runtime.js';
 import { parseMirrorArg } from '../utils.js';
 
+/**
+ * 拒绝未知选项（同 reset 的 KNOWN_FLAGS 口径）。
+ * `--mirror` 敲错一个字母（`--miror`）此前会静默按直连下载：不报错但行为不对，
+ * 而镜像正是这条命令最常用的选项，直连慢才是用它的理由。
+ * `parseMirrorArg` 已为已移除的 `--mirror-all` 单独抛错，此处补上其余拼写。
+ */
+function assertKnownKernelFlags(args: string[]): void {
+  const KNOWN_FLAGS = new Set(['--mirror', '--no-mirror', '--direct']);
+  const unknown = args
+    .slice(1)
+    .filter(a => a.startsWith('-') && !KNOWN_FLAGS.has(a) && !a.startsWith('--mirror='))
+    // --mirror-all 留给 parseMirrorArg：它有解释「为何移除」的专门文案，
+    // 比通用的「未知选项」更有用，别让这里抢先吞掉
+    .filter(a => a !== '--mirror-all' && !a.startsWith('--mirror-all='));
+  if (unknown.length > 0) {
+    throw new CliError(`未知的选项: ${unknown.join(', ')}`, {
+      label: '参数错误',
+      hint: [
+        '',
+        '可用选项:',
+        '  --mirror [镜像]   下载走镜像（默认 v6.gh-proxy.org）',
+        '  --no-mirror       显式直连（默认行为）',
+        '',
+        `可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`,
+      ],
+    });
+  }
+}
+
 export async function cmdKernel(args: string[]): Promise<void> {
+  assertKnownKernelFlags(args);
   const mirrorInfo = parseMirrorArg(args);
   const effectiveMirror = mirrorInfo.mirror;
 

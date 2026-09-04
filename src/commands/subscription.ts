@@ -55,6 +55,21 @@ function printSubscriptionList(): void {
   console.log('');
 }
 
+/**
+ * 拒绝以 `-` 开头的名字。`SAFE_NAME_RE` 允许短横线（`my-sub` 是正常名字），
+ * 但**以短横线开头**的名字会造出删不掉的订阅：add/use/update 用位置参数能建出 `-s`，
+ * 而 remove 走 getNonFlagArg 会把 `-s` 当选项跳过，恒报「请指定名称」，`-y` 也无用。
+ * 与其让两边口径打架，不如在入口就拒绝这种名字。
+ */
+function assertNotFlagLike(name: string, usage: string): void {
+  if (name.startsWith('-')) {
+    throw new CliError(`名称不能以 "-" 开头: "${name}"`, {
+      label: '参数错误',
+      hint: ['以 "-" 开头的名称会与命令行选项混淆，删除时无法指定。', `用法: ${usage}`],
+    });
+  }
+}
+
 async function subAdd(args: string[]): Promise<void> {
   const url = args[2]?.trim();
   const name = args[3] || 'default';
@@ -66,6 +81,7 @@ async function subAdd(args: string[]): Promise<void> {
   if (!subscription.isValidHttpUrl(url)) {
     throw new CliError('请提供有效的订阅 URL（需以 http:// 或 https:// 开头）');
   }
+  assertNotFlagLike(name, 'mihomo sub add <url> [name]');
   console.log(`添加订阅: ${name}`);
   // 入库（重名/名称非法）在 try 外抛出：回滚只针对「入库成功后下载失败」，
   // 否则重名错误会触发 removeSubscription 误删用户既有的同名订阅
