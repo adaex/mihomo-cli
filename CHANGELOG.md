@@ -4,6 +4,10 @@
 
 内部重构与命令合并，减少冗余。
 
+### 破坏性变更
+
+- **移除 `daemon status` 子命令**：与裸 `daemon` 输出完全相同，且顶层 `status` 已覆盖保活状态。查看状态用 `mihomo daemon`（无参）或 `mihomo status`
+
 ### 变更
 
 - **`log` 并入 `logs`**：`logs` 新增 `-f/--follow` 实时跟随；`log` 保留为隐藏别名（等价 `logs 0 -f`），不再在帮助中列出

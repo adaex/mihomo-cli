@@ -120,7 +120,7 @@ mihomo ui yacd     # YACD
 | 命令                              | 说明                                                                |
 | --------------------------------- | ------------------------------------------------------------------- |
 | `mihomo kernel [--mirror [镜像]]` | 更新内核（默认直连，`--mirror` 使用镜像；更新后运行中实例需重启生效） |
-| `mihomo daemon [on\|off\|status]` | 进程保活：开机自启 + 崩溃自动重启（仅 Mixed 模式，on/off 需管理员密码）  |
+| `mihomo daemon [on\|off]`    | 进程保活：开机自启 + 崩溃自动重启（仅 Mixed 模式，on/off 需管理员密码，无参看状态）  |
 | `mihomo ssh`                      | 列出 ssh 隧道及真实状态                                              |
 | `mihomo ssh add <名字> --host <主机> --port <端口> [--no-auto]` | 添加隧道并生成配置模板（默认随 start 拉起） |
 | `mihomo ssh up\|down [名字]`      | 启动/停止隧道（无参即全部）                                          |
@@ -228,7 +228,7 @@ socks5 节点由 CLI 依据 `mihomo ssh add` 记录的 host/port **自动注入*
 ```bash
 mihomo daemon on       # 开启保活（需管理员密码）
 mihomo daemon off      # 关闭保活并停止代理（需管理员密码）
-mihomo daemon status   # 查看保活状态（无需密码）
+mihomo daemon          # 查看保活状态（无参，无需密码）
 ```
 
 ### 原理

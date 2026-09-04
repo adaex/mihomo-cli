@@ -82,26 +82,28 @@ function daemonOff(): void {
   console.log('');
 }
 
-function printStatusView(): void {
-  console.log('');
-  printDaemonStatus();
-}
-
 const SUBCOMMANDS: SubCommand[] = [
   { name: 'on', aliases: ['enable'], handler: daemonOn },
   { name: 'off', aliases: ['disable'], handler: daemonOff },
-  { name: 'status', handler: printStatusView },
 ];
 
 export async function cmdDaemon(args: string[]): Promise<void> {
   await dispatchSubcommand(args, SUBCOMMANDS, {
     // 无 action → 显示状态；未知 action → 报错
-    fallback: printStatusView,
+    fallback: () => {
+      console.log('');
+      printDaemonStatus();
+    },
     onUnknown: action => {
       const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
       const suggestion = suggestSimilar(action, names);
       throw new CliError(`未知的 daemon 子命令: ${action}`, {
-        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '', '可用子命令: on, off, status'],
+        hint: [
+          ...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []),
+          '',
+          '可用子命令: on, off',
+          '查看保活状态: mihomo daemon（无参）或 mihomo status',
+        ],
       });
     },
   });

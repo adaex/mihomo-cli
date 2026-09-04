@@ -135,7 +135,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdDaemon,
     group: 'system',
-    usage: ['daemon on|off               开机自启 + 崩溃重启（仅 Mixed，需管理员密码）', 'daemon status               查看保活状态'],
+    usage: ['daemon [on|off]             开机自启 + 崩溃重启（仅 Mixed，需管理员密码）；无参看状态'],
   },
   {
     // 无别名：`tun` 被 TUN 模式快捷命令占用，`ssh` 本身已够短。
