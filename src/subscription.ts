@@ -12,7 +12,17 @@ import {
   saveSubscriptionCache,
   saveSubscriptionRawConfig,
 } from './settings.js';
-import type { AutoUpdateResult, DownloadResult, HttpResponse, Subscription, SubscriptionWithCache, TryUpdateResult, UserInfo } from './types.js';
+import type {
+  AutoUpdateResult,
+  ConfigSummary,
+  DownloadResult,
+  HttpResponse,
+  PreparedConfig,
+  Subscription,
+  SubscriptionWithCache,
+  TryUpdateResult,
+  UserInfo,
+} from './types.js';
 
 // 供命令层沿用 `subscription.XXX` 引用（实际定义在 constants.ts，集中管理默认值）
 export { DEFAULT_AUTO_UPDATE_TIMEOUT };
@@ -272,7 +282,15 @@ export async function downloadSubscription(url: string, subName = 'default', sig
   };
 }
 
-export function prepareConfigForStart(mode: string, subName = 'default'): { proxies: number; proxyGroups: number } {
+/**
+ * 构建并校验待启动的配置，**不写盘**。
+ *
+ * 与 commitPreparedConfig 分成两步，是为了让 start 能「先校验、再停机」：
+ * 坏覆写或不合法订阅在这一步就抛错，此时运行中的内核还没被 stop() 带走，
+ * 用户维持在可用状态。合成一步的话，stop() 已经 rmrf 掉 runtime/，
+ * 构建失败就留下「已停机 + 无 config.yaml」的半死态，且无从回滚。
+ */
+export function prepareConfigForStart(mode: string, subName = 'default'): PreparedConfig {
   const rawContent = readSubscriptionRawConfig(subName);
   if (!rawContent) {
     throw new CliError(`未找到订阅配置 "${subName}"，请先添加订阅`);
@@ -280,6 +298,26 @@ export function prepareConfigForStart(mode: string, subName = 'default'): { prox
 
   const subUrl = getSubscriptions().find(s => s.name === subName)?.url;
   const buildResult = buildConfig(rawContent, mode, { subName, subUrl });
+
+  const proxies = buildResult.config.proxies as unknown[] | undefined;
+  const proxyGroups = buildResult.config['proxy-groups'] as unknown[] | undefined;
+
+  return {
+    buildResult,
+    info: {
+      proxies: proxies ? proxies.length : 0,
+      proxyGroups: proxyGroups ? proxyGroups.length : 0,
+    },
+  };
+}
+
+/**
+ * 把已校验的配置落盘。必须在 stop() 之后调用：stop() 的 clearRuntime()
+ * 会 rmrf 整个 runtime/，先写就会被连同 pid 一起删掉。
+ * 自动修复告警也放这里打印，避免校验失败时先刷一屏「已修复」再报错。
+ */
+export function commitPreparedConfig(prepared: PreparedConfig): ConfigSummary {
+  const { buildResult } = prepared;
 
   if (buildResult.warnings.length > 0) {
     for (const warning of buildResult.warnings) {
@@ -291,13 +329,7 @@ export function prepareConfigForStart(mode: string, subName = 'default'): { prox
   writeMihomoConfig(buildResult.config);
   writeDebugConfig(buildResult);
 
-  const proxies = buildResult.config.proxies as unknown[] | undefined;
-  const proxyGroups = buildResult.config['proxy-groups'] as unknown[] | undefined;
-
-  return {
-    proxies: proxies ? proxies.length : 0,
-    proxyGroups: proxyGroups ? proxyGroups.length : 0,
-  };
+  return prepared.info;
 }
 
 function needsAutoUpdate(sub: SubscriptionWithCache): boolean {

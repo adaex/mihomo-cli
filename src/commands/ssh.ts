@@ -241,8 +241,8 @@ function resolveSshTunnel(name: string): SshConfig {
   return config;
 }
 
+// list 刻意不注册：裸 `ssh` 就是列表（fallback），与 `sub` / `dir` / `ow` 同口径
 const SUBCOMMANDS: SubCommand[] = [
-  { name: 'list', handler: printSshList },
   { name: 'add', handler: sshAdd },
   { name: 'up', aliases: ['start'], handler: sshUp },
   { name: 'down', aliases: ['stop'], handler: sshDown },
@@ -258,7 +258,7 @@ export async function cmdSsh(args: string[]): Promise<void> {
       const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
       const suggestion = suggestSimilar(action, names);
       throw new CliError(`未知的 ssh 子命令: ${action}`, {
-        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '', '可用子命令: list, add, up, down, status, rm'],
+        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '', '可用子命令: add, up, down, status, rm（裸 ssh 即列表）'],
       });
     },
   });

@@ -114,6 +114,18 @@ export interface BuildConfigResult {
   warnings: string[];
 }
 
+/** 配置规模摘要，用于启动时的一行提示（`Mixed · default · 12 组, 340 节点`） */
+export interface ConfigSummary {
+  proxies: number;
+  proxyGroups: number;
+}
+
+/** 已构建校验、尚未写盘的配置。见 subscription.prepareConfigForStart */
+export interface PreparedConfig {
+  buildResult: BuildConfigResult;
+  info: ConfigSummary;
+}
+
 export interface OverwriteFileEntry {
   name: string;
   path: string;

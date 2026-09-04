@@ -4,6 +4,7 @@ import { DAEMON_BOOT_WAIT_MS, disableDaemon, enableDaemon, getDaemonStatus, isDa
 import { CliError } from '../errors.js';
 import { getMihomoPids, isProcessRoot } from '../process-probe.js';
 import * as subscription from '../subscription.js';
+import type { ConfigSummary } from '../types.js';
 import { sleep, suggestSimilar } from '../utils.js';
 import { dispatchSubcommand, type SubCommand } from './shared.js';
 
@@ -33,9 +34,9 @@ async function daemonOn(): Promise<void> {
   }
   const sub = subscription.requireActiveSubscription('没有订阅，请先添加订阅');
 
-  let configInfo: { proxies: number; proxyGroups: number };
+  let configInfo: ConfigSummary;
   try {
-    configInfo = subscription.prepareConfigForStart('mixed', sub.name);
+    configInfo = subscription.commitPreparedConfig(subscription.prepareConfigForStart('mixed', sub.name));
   } catch (e) {
     if (e instanceof CliError) throw e;
     throw new CliError((e as Error).message, { label: '配置错误' });

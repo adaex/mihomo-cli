@@ -216,8 +216,10 @@ async function subRemove(args: string[]): Promise<void> {
   printSubscriptionList();
 }
 
+// list 刻意不注册：裸 `sub` 就是列表（fallback），与 `dir` / `ow` 同口径。
+// v3.11.0 已删掉 `dir list` / `ow list`，若这里保留 `sub list`，同一批命令
+// 一半能敲 list 一半不能，用户只能靠试。
 const SUBCOMMANDS: SubCommand[] = [
-  { name: 'list', handler: printSubscriptionList },
   { name: 'add', handler: subAdd },
   { name: 'update', handler: subUpdate },
   { name: 'use', handler: subUse },
@@ -232,7 +234,7 @@ export async function cmdSubscription(args: string[]): Promise<void> {
       const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
       const suggestion = suggestSimilar(action, names);
       throw new CliError(`未知的订阅命令: ${action}`, {
-        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '用法: mihomo sub [list|use|add|update|remove]'],
+        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '用法: mihomo sub [use|add|update|remove]（裸 sub 即列表）'],
       });
     },
   });

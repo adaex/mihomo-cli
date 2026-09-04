@@ -8,6 +8,7 @@ import { stop } from '../process-stop.js';
 import * as runtime from '../runtime.js';
 import { startAutoSshTunnels } from '../ssh.js';
 import * as subscription from '../subscription.js';
+import type { PreparedConfig } from '../types.js';
 import { getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
 import { printStatus } from './status.js';
 import { handleStopResult } from './stop.js';
@@ -77,6 +78,17 @@ export async function cmdStart(args: string[]): Promise<void> {
     await subscription.autoUpdateStaleSubscription({ timeout: updateTimeout });
   }
 
+  // 先构建校验、后停机：坏覆写/不合法订阅在这里就抛错，此时运行中的内核还没被
+  // stop() 带走，用户维持在可用状态。反过来（先停后建）失败就是「已停机 + 无
+  // config.yaml」的半死态——stop() 的 clearRuntime() 已把 runtime/ 整个删了，无从回滚。
+  let prepared: PreparedConfig;
+  try {
+    prepared = subscription.prepareConfigForStart(targetMode, sub.name);
+  } catch (e) {
+    if (e instanceof CliError) throw e;
+    throw new CliError((e as Error).message, { label: '配置错误' });
+  }
+
   // 保活模式下由 launchd 托管进程,重启走 kickstart(不裸 kill,避免与 KeepAlive 打架);
   // 非保活模式沿用 stop() + start()。差异收敛在 runtime.launchOrRestart。
 
@@ -106,13 +118,8 @@ export async function cmdStart(args: string[]): Promise<void> {
     }
   }
 
-  let configInfo: { proxies: number; proxyGroups: number };
-  try {
-    configInfo = subscription.prepareConfigForStart(targetMode, sub.name);
-  } catch (e) {
-    if (e instanceof CliError) throw e;
-    throw new CliError((e as Error).message, { label: '配置错误' });
-  }
+  // 写盘必须在 stop() 之后：clearRuntime() 会 rmrf 整个 runtime/
+  const configInfo = subscription.commitPreparedConfig(prepared);
 
   const modeLabel = targetMode === 'tun' ? 'TUN' : 'Mixed';
   console.log([colors.cyan(modeLabel), sub.name, subscription.formatProxySummary(configInfo)].join(' · '));

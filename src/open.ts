@@ -48,7 +48,10 @@ export function viewLogWithTail(logPath: string, options?: { follow?: boolean; l
   // follow 模式下 Ctrl+C 是常规退出：抑制全局 SIGINT 处理器的"正在退出..."提示
   if (follow) setSilentSigint(true);
 
-  tail.on('close', () => process.exit(0));
+  // 透传 tail 的退出码：日志文件不存在时 tail 退 1 并往 stderr 报错，
+  // 若恒退 0，脚本里 `mihomo logs 0 > out` 会把「文件不存在的空结果」当成功。
+  // 信号退出（follow 模式的 Ctrl+C）算正常收尾，退 0。
+  tail.on('close', (code, signal) => process.exit(signal ? 0 : (code ?? 0)));
   tail.on('error', e => {
     console.error(`无法读取日志: ${e.message}`);
     process.exit(1);

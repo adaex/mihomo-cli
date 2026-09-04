@@ -58,11 +58,11 @@ This file provides guidance to Claude Code when working with this repository.
 | `commands/log.ts`             | logs（`log` 为隐藏别名，等价 `logs 0 -f`） |
 | `commands/ui.ts`              | ui                             |
 | `commands/kernel.ts`          | kernel                         |
-| `commands/subscription.ts`    | subscription (list/add/update/use/remove) |
+| `commands/subscription.ts`    | subscription (add/update/use/remove，裸命令即列表) |
 | `commands/overwrite.ts`       | overwrite (on/off)             |
 | `commands/directory.ts`       | directory (open)               |
 | `commands/daemon.ts`          | daemon (on/off，无参看状态)    |
-| `commands/ssh.ts`             | ssh (list/add/up/down/status/rm)，无别名 |
+| `commands/ssh.ts`             | ssh (add/up/down/status/rm，裸命令即列表)，无别名 |
 | `commands/reset.ts`           | reset                          |
 | `commands/update.ts`          | update                         |
 
