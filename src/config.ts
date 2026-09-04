@@ -361,7 +361,7 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
       systemConfig.dns = dns;
     }
   } else {
-    // Mixed 模式（含保活）不保留订阅/覆写自带的 tun 字段，避免未要求 TUN 却被静默按 TUN 启动
+    // Mixed 模式不保留订阅/覆写自带的 tun 字段，避免未要求 TUN 却被静默按 TUN 启动
     delete withOverwrites.tun;
   }
 

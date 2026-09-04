@@ -1,10 +1,11 @@
-import { cmdDaemon } from './daemon.js';
 import { cmdDirectory } from './directory.js';
 import { printHelp, printVersion } from './help.js';
 import { cmdKernel } from './kernel.js';
 import { cmdLogs } from './log.js';
 import { cmdOverwrite } from './overwrite.js';
+import { removedCommand } from './removed.js';
 import { cmdReset } from './reset.js';
+import { cmdInstall, cmdUninstall } from './service.js';
 import { cmdStart } from './start.js';
 import { printStatus } from './status.js';
 import { cmdStop } from './stop.js';
@@ -40,11 +41,18 @@ export interface Command {
 export const COMMANDS: Command[] = [
   // === 控制 ===
   {
+    name: 'install',
+    aliases: [],
+    handler: cmdInstall,
+    group: 'control',
+    usage: ['install [--system]              安装服务（Mixed 模式的前置；--system 装为 root 服务）'],
+  },
+  {
     name: 'start',
-    aliases: ['up'],
+    aliases: [],
     handler: cmdStart,
     group: 'control',
-    usage: ['start [tun|mixed] [-s] [-u ms]        启动/切换代理 (默认 mixed)'],
+    usage: ['start [tun|mixed] [-s] [-u ms]  启动代理并开机自启 (默认 mixed)'],
   },
   {
     name: 'tun',
@@ -56,17 +64,53 @@ export const COMMANDS: Command[] = [
   },
   {
     name: 'stop',
-    aliases: ['down'],
+    aliases: [],
     handler: cmdStop,
     group: 'control',
-    usage: ['stop                         停止代理'],
+    usage: ['stop                            停止代理并关闭开机自启'],
+  },
+  {
+    name: 'uninstall',
+    aliases: [],
+    handler: cmdUninstall,
+    group: 'control',
+    usage: ['uninstall                       卸载服务'],
   },
   {
     name: 'status',
     aliases: [],
     handler: printStatus,
     group: 'control',
-    usage: ['status                       查看状态'],
+    usage: ['status                          查看状态'],
+  },
+  // === 已移除（墓碑：显式报错指引迁移，不在帮助中列出） ===
+  {
+    name: 'daemon',
+    aliases: [],
+    handler: removedCommand('daemon', 'v5.0.0', [
+      '保活已成为 Mixed 模式的唯一运行方式，改用服务命令族：',
+      '  mihomo daemon on   →  mihomo install（一次）+ mihomo start',
+      '  mihomo daemon off  →  mihomo stop（停止并关闭自启）',
+      '  mihomo daemon      →  mihomo status',
+      '',
+      '彻底移除服务: mihomo uninstall',
+    ]),
+    group: 'meta',
+    usage: [],
+  },
+  {
+    name: 'up',
+    aliases: [],
+    handler: removedCommand('up', 'v5.0.0', ['请用: mihomo start']),
+    group: 'meta',
+    usage: [],
+  },
+  {
+    name: 'down',
+    aliases: [],
+    handler: removedCommand('down', 'v5.0.0', ['请用: mihomo stop']),
+    group: 'meta',
+    usage: [],
   },
   // === 界面 ===
   {
@@ -128,13 +172,6 @@ export const COMMANDS: Command[] = [
     handler: cmdKernel,
     group: 'system',
     usage: ['kernel [--mirror [镜像]]      更新内核（默认直连，--mirror 走镜像下载）'],
-  },
-  {
-    name: 'daemon',
-    aliases: [],
-    handler: cmdDaemon,
-    group: 'system',
-    usage: ['daemon [on|off]             开机自启 + 崩溃重启（仅 Mixed，需管理员密码）；无参看状态'],
   },
   {
     name: 'update',

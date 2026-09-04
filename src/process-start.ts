@@ -1,31 +1,31 @@
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 
 import { CliError } from './errors.js';
 import { rotateAndCleanupLogs } from './log-files.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
-import { checkStaleState, getPid, isRunning, MAIN_INSTANCE_PATTERN } from './process-probe.js';
-import { cleanupAll, clearPid } from './process-stop.js';
+import { checkStaleState, getPid, MAIN_INSTANCE_PATTERN } from './process-probe.js';
 import { runSudoScript } from './sudo.js';
-import type { StaleState, StartResult } from './types.js';
+import type { StartResult } from './types.js';
 import { shellQuote } from './utils.js';
 
 /**
- * 内核进程的启动（Mixed 普通 spawn / TUN sudo 脚本两条路径）。
+ * TUN 内核的启动（临时 sudo 脚本，不走 launchd）。
+ *
+ * Mixed 模式**没有**用户态启动路径了：它由 launchd 服务托管（service.ts），
+ * 此前的 startMixedMode（detached spawn + pid 文件）已随 v5.0.0 删除。
+ * TUN 保持临时进程语义——本就需要提权，且用完即走，交给 launchd 托管没有意义。
+ *
  * 停止与清理在 process-stop.ts，探测在 process-probe.ts。
  */
 
-const STARTUP_WAIT_MS = 800;
 const TUN_MODE_POST_WAIT_MS = 500;
-
-function savePid(pid: number): void {
-  ensureDirs();
-  fs.writeFileSync(PATHS.pidFile, pid.toString(), { mode: 0o600 });
-}
 
 /**
  * 生成 TUN 启动脚本 body（不写盘：写盘 + chmod + sudo + 清理由 runSudoScript 统一完成，
- * 与 daemon 的 enable/disable/restart 共用同一套 sudo 范式，不再各自手写 spawnSync('sudo')）。
+ * 与 service 的 sudo 路径共用同一套范式，不再各自手写 spawnSync('sudo')）。
+ *
+ * 命令行为 `<mihomoBinary> -d <data> -f <configFile>`——与服务的 plist 同构（后者
+ * ProgramArguments[0] 是符号链），两者都被 MAIN_INSTANCE_PATTERN 的二选一分支覆盖。
  */
 function buildTunLaunchScript(): string {
   const binary = shellQuote(PATHS.mihomoBinary);
@@ -76,57 +76,21 @@ function buildTunLaunchScript(): string {
   );
 }
 
-export async function start(mode = 'mixed'): Promise<StartResult> {
-  const isTunMode = mode === 'tun';
-
+export async function startTun(): Promise<StartResult> {
   ensureDirs();
   rotateAndCleanupLogs();
 
-  const binary = PATHS.mihomoBinary;
-  if (!fs.existsSync(binary)) {
-    throw new CliError('未找到 mihomo 内核，请先下载内核');
+  if (!fs.existsSync(PATHS.mihomoBinary)) {
+    throw new CliError('未找到 mihomo 内核，请先下载内核', { hint: '下载内核: mihomo kernel' });
   }
-
-  const configFile = PATHS.configFile;
-  if (!fs.existsSync(configFile)) {
+  if (!fs.existsSync(PATHS.configFile)) {
     throw new CliError('未找到配置文件，请先添加订阅并启动');
   }
 
-  const staleState = checkStaleState();
-
-  if (isTunMode) {
-    return startTunMode(staleState);
-  }
-  return startMixedMode(staleState);
-}
-
-async function startMixedMode(staleState: StaleState): Promise<StartResult> {
-  if (staleState.needsCleanup) {
-    if (staleState.needsSudo) {
-      console.log('\n发现需要 root 权限清理的残留进程/文件');
-      console.log(`请先手动清理: sudo pkill -9 mihomo && sudo rm -f ${PATHS.pidFile}`);
-      console.log('或者切换到 TUN 模式，启动时会自动清理');
-      throw new Error('存在需要 root 权限清理的残留');
-    }
-
-    const cleanupResult = await cleanupAll();
-    if (cleanupResult.killed > 0) {
-      console.log(`清理了 ${cleanupResult.killed} 个残留进程`);
-    }
-  }
-
-  if (isRunning()) {
-    const pid = getPid() as number;
-    return { success: true, pid, alreadyRunning: true };
-  }
-
-  const configFile = PATHS.configFile;
+  // 系统级服务或此前的 TUN 曾以 root 写过 mihomo.log；日志此后仍由 root 追加，
+  // 但 rotateAndCleanupLogs 的 rename 需要目录权限（logs/ 属用户，可行）。
+  // 若日志本身不可写且非 root 场景（用户态服务留下的），删掉让 root 重建，避免权限僵局。
   const logFile = PATHS.logFile;
-  const args = ['-d', DIRS.data, '-f', configFile];
-
-  // 防御：保活（root LaunchDaemon）曾运行时可能把 mihomo.log 变成 root 属主，
-  // 用户态 openSync('a') 会 EACCES。若不可写则直接删除（父目录用户拥有，unlink 必成功；
-  // rotateLog 对 size===0 会跳过，故不能依赖它），让下面重建用户属主的新日志。
   if (fs.existsSync(logFile)) {
     try {
       fs.accessSync(logFile, fs.constants.W_OK);
@@ -134,60 +98,12 @@ async function startMixedMode(staleState: StaleState): Promise<StartResult> {
       try {
         fs.unlinkSync(logFile);
       } catch {
-        /* ignore：极端情况下留给 openSync 抛出可读错误 */
+        /* ignore：极端情况下留给启动脚本的 >> 重定向抛出可读错误 */
       }
     }
   }
 
-  const logFd = fs.openSync(logFile, 'a');
-
-  const child = spawn(PATHS.mihomoBinary, args, {
-    detached: true,
-    stdio: ['ignore', logFd, logFd],
-  });
-
-  // 监听 error（如二进制不可执行 EACCES/ENOENT）：detached 进程的 error 事件若无 handler 会冒泡为
-  // uncaughtException。这里吞掉，交由下面的 isRunning() + 日志读取给出可读错误。
-  child.on('error', () => {});
-
-  fs.closeSync(logFd);
-
-  child.unref();
-
-  const pid = child.pid;
-  if (!pid) {
-    clearPid();
-    throw new Error('启动失败：无法创建内核进程（内核二进制可能不可执行）');
-  }
-  savePid(pid);
-
-  await new Promise(resolve => setTimeout(resolve, STARTUP_WAIT_MS));
-
-  if (!isRunning()) {
-    clearPid();
-    let errorMsg = '启动失败';
-    if (fs.existsSync(logFile)) {
-      try {
-        const logs = fs.readFileSync(logFile, 'utf8').slice(-3000);
-        if (logs.trim()) {
-          errorMsg +=
-            '\n最近的日志:\n' +
-            logs
-              .split('\n')
-              .map(l => `  ${l}`)
-              .join('\n');
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-    throw new Error(errorMsg);
-  }
-
-  return { success: true, pid, mode: 'mixed' };
-}
-
-async function startTunMode(staleState: StaleState): Promise<StartResult> {
+  const staleState = checkStaleState();
   if (staleState.needsCleanup) {
     console.log(`清理 ${staleState.allPids.length} 个残留进程...`);
   }
@@ -205,7 +121,7 @@ async function startTunMode(staleState: StaleState): Promise<StartResult> {
 
   const finalPid = getPid();
   if (!finalPid) {
-    throw new Error('TUN 启动失败');
+    throw new CliError('TUN 启动失败');
   }
 
   return { success: true, pid: finalPid, mode: 'tun' };

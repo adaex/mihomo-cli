@@ -1,5 +1,63 @@
 # Changelog
 
+## [5.0.0] - 2026-09-05
+
+`daemon` 保活重构为 install/start/stop 服务模型，日常操作全程免密。
+
+### 破坏性变更
+
+- **移除 `daemon` 命令**，保活从「可选增强」变为 **Mixed 模式的唯一运行方式**。命令族对齐 `install`/`start`/`stop`/`uninstall`：
+
+  | 旧 | 新 |
+  | --- | --- |
+  | `mihomo daemon on` | `mihomo install`（一次）+ `mihomo start` |
+  | `mihomo daemon off` | `mihomo stop` |
+  | `mihomo daemon` | `mihomo status` |
+  | — | `mihomo uninstall`（新增，彻底移除服务） |
+
+  Mixed 模式不再有用户态直启路径（`startMixedMode` 的 detached spawn + pid 文件已删除），`mihomo start` 在服务未安装时报错引导 `mihomo install`。TUN 不变，仍是临时 sudo 进程。
+
+- **默认改用用户级 LaunchAgent，`start`/`stop` 不再需要密码**。此前是 root LaunchDaemon（system 域），而该域的 `bootstrap`/`bootout`/`enable`/`disable` 一律需要 root——意味着每次启停都要输密码。
+
+  推翻 v3.0.0 那条「必须用 root LaunchDaemon」的结论，依据是 Apple DTS 的原话：「Programs running as **root** are automatically granted local network access」——豁免条件是 root，不是「身为 daemon」。用户级 LaunchAgent 不豁免，但那只意味着走**正常的弹框授权流程**（首次连局域网节点时点一次「允许」，永久生效），并非被静默拦死。原先记录的「静默拦成 no route to host」是**无人登录、没人能点弹框**的服务器场景。
+
+  **升级须知**：老用户升级后仍是系统级安装（label 值未变，`detectInstalledDomain()` 能直接接管，不会产生幽灵进程）。想换成免密的用户级：
+
+  ```bash
+  mihomo uninstall && mihomo install
+  ```
+
+  若你的节点里有局域网跳板且始终不弹授权框，用 `mihomo install --system` 回退到 root 服务（局域网天然豁免，代价是启停需密码）。详见 README「本地网络授权」。
+
+- **移除 `up` / `down` 别名**。命令名统一为 `install`/`start`/`stop`/`uninstall`。执行 `mihomo up`、`mihomo down`、`mihomo daemon` 会得到明确的迁移提示而非 did-you-mean 猜测（同 `--no-ssh` 的先例）。
+
+- **`stop` 语义变更**：现在是「停止 **+ 关闭登录自启**」（`bootout` + `disable`），不再是单纯杀进程。只 bootout 的话 enable 位还在，下次登录代理会自己回来，而 CLI 已经报告「已停止」。
+
+- **`reset` 的 `daemon` 目标改名 `service`**（`daemon` 保留为别名）。同时区分「停止」与「卸载」：`reset subs/data/runtime/kernel` 只 **stop** 服务（保留安装），只有 `reset service` 与 `--full` 才卸载。此前一律卸载，会让 `reset runtime` 顺手把用户的安装删掉。
+
+- **配置变更后的重启条件收紧**：此前只要装了保活就恒重启（`isDaemonEnabled() || running`），现在改为仅在**确有实例在跑**时重启。服务已安装但已停止时执行 `sub use x` 不再把它启起来。
+
+### 新增
+
+- `mihomo install [--system]` / `mihomo uninstall`
+- `status` 增加「服务」「自启」两行，并检出两类异常：plist 被手动删除但任务仍装载（KeepAlive 会持续拉起内核）、用户级与系统级同时安装（抢占同一组端口）
+- 服务以符号链 `kernel/mihomo-cli-service` 启动，「系统设置 → 通用 → 登录项与扩展」中显示为有意义的名字，而非一个没有上下文的 `mihomo`
+
+### 修复
+
+- **`bootstrap` 一个被 disable 的服务是硬失败**（`Bootstrap failed: 5: Input/output error`），不是「加载了但不启动」——本机实测。旧 `restartDaemon` 的 kickstart 回退分支在 bootstrap 前没有 `enable`，在新的 stop 恒置 disable 位的语义下会 100% 失败。install/start 的所有 bootstrap 前均已补 `enable`。
+- **bootstrap 失败不再删除 plist**。旧 `enableDaemon` 失败时会 `rm -f plist` 回滚，在新语义下会把「重装」静默升级成「卸载」。现在失败后停在「已安装未装载」这个可恢复状态。
+- **plist 被手动删除后的死胡同**：状态查询此前只看 plist 文件，文件不在就直接返回「未安装」，于是 `uninstall` 拒绝执行 `bootout`，而 KeepAlive 仍在拉起内核。现在 plist 不存在时也会探两个域的 launchctl，捞出孤儿任务（实测可复现，同 CODE_REVIEW #6）。
+- 进程探测正则同时匹配真实二进制与符号链两种命令行——实测进程命令行记录的是**启动时用的路径**，服务经符号链启动，只认真实路径会漏掉它（残留杀不掉、状态误判）。
+
+### 内部
+
+- `daemon.ts` → `service.ts`，`DaemonStatus` → `ServiceStatus`（新增 `domain`/`installed`/`disabled` 字段），双域抽象 `DomainSpec`
+- 状态查询改用 `launchctl print` / `print-disabled`（免 sudo，实测 3ms），取代此前 pgrep + root 属主过滤的近似判断，能拿到真实的 state/pid 与自启位
+- `runtime.ts` 门面保留，双轨判据从「是否装了保活」改为「service 还是 tun」
+- 新增 `service.spec.ts`（23 例）：`launchctl print` 输出解析（锁定行首单 tab 锚定，防嵌套 endpoint 的 `state = active` 污染）、`print-disabled` 解析（`enable` 同样会留下记录，不能只看是否在表中）、plist 生成、label 路径穿越校验
+- `reset` 的裸执行保留清单抽为具名常量 `RESET_PRESERVED_ON_BARE` 并加测试锁定——此前是内联字符串数组，target id 改名时漏改会静默改变裸 `reset` 的行为
+
 ## [4.0.0] - 2026-09-05
 
 移除 ssh 隧道功能。

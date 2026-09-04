@@ -8,7 +8,7 @@ import { DIRS, ensureDirs } from './paths.js';
 const SUDO_TIMEOUT_MS = 60_000;
 
 interface SudoScriptOptions {
-  /** 动作名，用于错误消息，如 "启用保活" */
+  /** 动作名，用于错误消息，如 "安装服务" */
   action: string;
   /** 临时脚本文件名（写在 DIRS.runtime 下，用后即删） */
   file: string;
@@ -17,7 +17,7 @@ interface SudoScriptOptions {
 }
 
 /**
- * 写临时 bash 脚本并用单次交互式 sudo 执行（TUN 启动与 launchd 保活共用的范式）。
+ * 写临时 bash 脚本并用单次交互式 sudo 执行（TUN 启动与系统级服务操作共用的范式）。
  * stdio:'inherit' 让 sudo 直接在 TTY 读密码；一个脚本内完成多步 root 操作，只弹一次密码。
  * 退出码 1 保留给 sudo 鉴权取消/密码错误；脚本内部失败用 ≥2 区分。
  */

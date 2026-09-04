@@ -46,9 +46,9 @@ function clearProxyEnv(): void {
 }
 
 /**
- * 平台守卫：本工具的进程保活（launchd/LaunchDaemon）、目录与 UI 打开（open）、提权（sudo）
+ * 平台守卫：本工具的 launchd 服务（LaunchAgent/LaunchDaemon）、目录与 UI 打开（open）、提权（sudo）
  * 全部为 macOS 专有实现，无其他平台后端。缺此守卫时非 macOS 会「部分成功」——
- * status/sub 看着正常，daemon on 输完 root 密码才在 /Library/LaunchDaemons 撞墙，
+ * status/sub 看着正常，install 才在 launchctl 撞墙，
  * ui 报成功却什么都没打开（Linux 的 open 多指向 run-mailcap，会把 URL 当附件处理）。
  * 快速失败优于这种静默误行为。help/version 为纯信息命令，不受限。
  * MIHOMO_CLI_ALLOW_ANY_PLATFORM=1 可绕过，仅供在非 macOS 上开发调试。
@@ -62,7 +62,7 @@ function assertSupportedPlatform(commandName: string): void {
   throw new CliError(`mihomo-cli 目前仅支持 macOS（当前平台: ${process.platform}）`, {
     label: '平台不支持',
     hint: [
-      '进程保活依赖 launchd、目录/UI 打开依赖 open、提权依赖 sudo，均无其他平台实现。',
+      '服务托管依赖 launchd、目录/UI 打开依赖 open、提权依赖 sudo，均无其他平台实现。',
       'Windows / Linux 适配仍在进行中。',
       '如需在非 macOS 上开发调试，可设 MIHOMO_CLI_ALLOW_ANY_PLATFORM=1（功能不保证可用）。',
     ],

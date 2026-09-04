@@ -1,29 +1,30 @@
 import { colors } from '../colors.js';
 import { getConfigInfo, getKernelVersion } from '../config.js';
-import { isDaemonEnabled } from '../daemon.js';
 import { isOverwriteEnabled, listOverwriteFile } from '../overwrite.js';
 import { getRunningState } from '../runtime.js';
+import { getDomainSpec, getServiceStatus, hasBothDomainsInstalled } from '../service.js';
 import { getSubscriptionsWithCache } from '../settings.js';
 import { formatProxySummary, getActiveSubscription } from '../subscription.js';
 import { formatTimestamp, formatTraffic } from '../utils.js';
 
+/** 全程免 sudo：launchctl print / print-disabled 对两个域都可读，pgrep/ps 亦然。 */
 export async function printStatus(): Promise<void> {
   const state = getRunningState();
+  const service = getServiceStatus();
   const info = getConfigInfo();
   const overwriteEnabled = isOverwriteEnabled();
   const overwriteFiles = listOverwriteFile().files;
   const activeSub = getActiveSubscription();
 
-  // 运行状态/PID/内存由门面统一(保活看 launchd,普通看 pidFile);此处只负责展示。
-  // 内核版本走 getKernelVersion()(带缓存、与运行模式无关),不再为它单独发一次 getStatus——
-  // 此前同时调 getStatus() 与 getRunningState(),非保活模式下后者内部又调一遍,同一份查询跑两次
-  const { running, pid, daemon: daemonManaged, processInfo } = state;
+  const { running, pid, kind, processInfo } = state;
 
   console.log('');
-  // 模式取自配置文件：未运行时也展示上次构建的模式（stop 会清配置，清了就不显示）
+  // 模式取自配置文件：未运行时也展示上次构建的模式
   let modeLabel = '';
   if (info) {
-    modeLabel = colors.cyan(info.tun ? ' (TUN)' : ' (Mixed)') as string;
+    const mode = info.tun ? 'TUN' : 'Mixed';
+    const carrier = kind === 'service' ? ' · 服务' : kind === 'tun' ? ' · 临时' : '';
+    modeLabel = colors.cyan(` (${mode}${carrier})`) as string;
   }
   const statusText = running ? colors.green('● 运行中') : colors.yellow('不在运行');
   console.log(`${colors.gray('状态: ')}${statusText}${modeLabel}`);
@@ -31,7 +32,7 @@ export async function printStatus(): Promise<void> {
 
   if (pid) {
     console.log(`${colors.gray('PID:  ')}${pid}`);
-    if (!daemonManaged && processInfo) {
+    if (kind === 'tun' && processInfo) {
       console.log(`${colors.gray('内存: ')}${processInfo.memory}`);
     }
   }
@@ -79,9 +80,34 @@ export async function printStatus(): Promise<void> {
     console.log(`${colors.gray('覆写: ')}${colors.yellow('已禁用')}`);
   }
 
-  if (isDaemonEnabled()) {
-    console.log(`${colors.gray('保活: ')}${colors.green('已启用')} ${colors.gray('(开机自启 + 崩溃重启)')}`);
-  }
+  printServiceLines(service);
 
   console.log('');
+}
+
+function printServiceLines(service: ReturnType<typeof getServiceStatus>): void {
+  if (!service.installed && !service.loaded) {
+    console.log(`${colors.gray('服务: ')}${colors.yellow('未安装')} ${colors.gray('(mihomo install 安装后可用 Mixed 模式)')}`);
+    return;
+  }
+
+  const spec = getDomainSpec(service.domain ?? 'user');
+
+  // plist 被手动删除但任务仍装载：KeepAlive 会持续拉起内核。不能报「已安装」——
+  // 那与紧随其后的异常提示自相矛盾，用户无法判断到底装没装
+  if (!service.installed) {
+    console.log(`${colors.gray('服务: ')}${colors.yellow('异常')} ${colors.gray(`(${spec.label}：plist 不存在，但服务仍处装载状态)`)}`);
+    console.log(colors.gray('  KeepAlive 会持续拉起内核，清理: mihomo uninstall'));
+  } else {
+    console.log(`${colors.gray('服务: ')}${colors.green('已安装')} ${colors.gray(`(${spec.label})`)}`);
+  }
+
+  // 自启位独立于 plist 与运行状态：stop 之后重启不会自动回来，这一行让用户能确认
+  const autoStart = service.disabled ? colors.yellow('已关闭') : colors.green('已开启');
+  console.log(`${colors.gray('自启: ')}${autoStart}`);
+
+  if (hasBothDomainsInstalled()) {
+    console.log(colors.yellow('  异常: 用户级与系统级同时装有服务，会抢占同一组端口'));
+    console.log(colors.gray('  清理: mihomo uninstall（重复执行直至清空）'));
+  }
 }

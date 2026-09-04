@@ -264,7 +264,7 @@ function normalizeMirrorUrl(val: string): string | null {
 /**
  * 解析 `--mirror`。镜像**只作用于产物下载**，GitHub API 恒直连：
  * API 若也走镜像，`browser_download_url` 就完全由镜像说了算，而内核产物随后
- * `chmod 755` 并在 TUN/daemon 下以 root 运行——上游不提供 checksums，
+ * `chmod 755` 并在 TUN / 系统级服务下以 root 运行——上游不提供 checksums，
  * 把来源钉死（assertTrustedAssetUrl）是主要防线，不能让镜像自己指定下载地址。
  */
 export function parseMirrorArg(args: string[] | undefined): MirrorArg {

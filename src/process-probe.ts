@@ -54,13 +54,23 @@ export function isProcessRoot(pid: number): boolean {
 }
 
 /**
- * pgrep/pkill -f 用于识别「主实例」的正则:binary 路径 + 主 configFile 两段拼接。
- * mixed(spawn)、tun(脚本)、daemon(plist)三种启动的命令行都是 `<binary> -d <data> -f <configFile>`,
+ * pgrep/pkill -f 用于识别「主实例」的正则:内核路径 + 主 configFile 两段拼接。
+ * service(plist)、tun(脚本)两种启动的命令行都是 `<binary> -d <data> -f <configFile>`,
  * 均含这两段;而仅用编辑器打开配置文件的进程(命令行无 binary)不会命中,
  * 从而避免误杀/误判为残留。escapeRegExp 防止路径里的 `.` 当通配符。
+ *
+ * **内核路径必须匹配两种形式**:服务经符号链 `kernel/mihomo-cli-service` 启动,
+ * tun 经真实二进制 `kernel/mihomo` 启动,而进程命令行记录的是**启动时用的那个路径**——
+ * 实测 `ps -ww -o command=` 对符号链启动的进程输出符号链名,用真实文件名 pgrep 匹配不到。
+ * 只认一种会漏掉另一种:残留进程杀不掉、getMihomoPids 漏报、状态误判。
  */
-export const MAIN_INSTANCE_PATTERN = `${escapeRegExp(PATHS.mihomoBinary)}.*${escapeRegExp(PATHS.configFile)}`;
+const BINARY_ALTERNATION = `(?:${escapeRegExp(PATHS.serviceBinary)}|${escapeRegExp(PATHS.mihomoBinary)})`;
+export const MAIN_INSTANCE_PATTERN = `${BINARY_ALTERNATION}.*${escapeRegExp(PATHS.configFile)}`;
 
+/**
+ * pid 文件**只有 tun 在用**：服务由 launchd 托管，PID 从 `launchctl print` 取，不写 pid 文件。
+ * 故 getPid/isRunning 是「tun 是否在跑」的判断，服务状态一律走 service.ts 的 getServiceStatus。
+ */
 export function getPid(): number | null {
   if (!fs.existsSync(PATHS.pidFile)) return null;
   try {
@@ -75,8 +85,10 @@ export function isRunning(): boolean {
   const pid = getPid();
   if (!pid) return false;
   // 同时校验命令行含内核路径：pidFile 残留 + 系统重启后 PID 可能被无关进程复用，
-  // 只看存活会把无关进程误判成运行中的 mihomo（与 test-instance 的防护同口径）
-  return isProcessRunning(pid) && isProcessCommandMatching(pid, PATHS.mihomoBinary);
+  // 只看存活会把无关进程误判成运行中的 mihomo。
+  // 两种路径都要认：pid 文件虽只由 tun 写（真实二进制），但用户可能手工介入，
+  // 只认真实路径会把符号链启动的实例判成「不是 mihomo」
+  return isProcessRunning(pid) && (isProcessCommandMatching(pid, PATHS.mihomoBinary) || isProcessCommandMatching(pid, PATHS.serviceBinary));
 }
 
 export function getMihomoPids(): number[] {

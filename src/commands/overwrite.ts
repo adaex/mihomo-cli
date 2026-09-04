@@ -49,7 +49,7 @@ async function setOverwrite(enabled: boolean, args: string[]): Promise<void> {
   setOverwriteEnabled(enabled);
   console.log(`已${enabled ? '启用' : '禁用'}覆写配置`);
 
-  // 运行中(含保活)才重启使覆写生效
+  // 运行中(服务或 TUN)才重启使覆写生效
   if (await restartToApply(args)) return;
 
   console.log('');
@@ -63,7 +63,7 @@ const SUBCOMMANDS: SubCommand[] = [
 
 export async function cmdOverwrite(args: string[]): Promise<void> {
   await dispatchSubcommand(args, SUBCOMMANDS, {
-    // 无子命令 → 列表；未知子命令 → 报错（与 sub/daemon 同构，避免 `ow onn` 静默当成 list）
+    // 无子命令 → 列表；未知子命令 → 报错（与 sub/dir 同构，避免 `ow onn` 静默当成 list）
     fallback: () => {
       console.log('');
       printOverwriteList();

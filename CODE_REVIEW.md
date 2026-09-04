@@ -45,6 +45,24 @@
 
 ---
 
+## v5.0.0 服务化改造对本文条目的影响
+
+`daemon` 保活重构为 install/start/stop 服务模型（`daemon.ts` → `service.ts`，默认域从 root
+LaunchDaemon 改为用户级 LaunchAgent）。上文「本轮已修复」表中 4 条 daemon 相关条目的现状：
+
+| 上轮编号 | 现状 |
+| --- | --- |
+| 4（sudo 脚本 mode 不重放） | **仍然成立**。`runSudoScript` 未改，系统级安装路径仍走它。用户级路径不写中间脚本（直接 `spawnSync('/bin/bash', ['-c', ...])`），不涉及该问题 |
+| 5（热重载信任 9090 上的任意响应） | **仍然成立且已保留**。`tryHotReload` 的三重防伪造（先确认服务 running → 探 `/version` 确认应答方是 mihomo → 带 Bearer）原样迁入 `service.ts` |
+| 6（`daemon off` 在 plist 被手删后是静默 no-op） | **同类缺陷在新代码中复发过，已修**。新的 `getServiceStatus()` 起初也只看 plist 文件，文件不在就直接返回「未安装」→ `uninstall` 拒绝执行 bootout，而 KeepAlive 仍在拉起内核。改造中实测复现并修复：plist 不存在时也探两个域的 launchctl，捞出孤儿任务。**「两处判据必须同步」的旧告警已失效**——判据现在只有 `getServiceStatus()` 一处，命令层直接消费其结果 |
+| 7（`daemon on` 遗留 root 属主 pid 文件） | **仍然成立**。`cleanupRootResidue()` 承接该职责，但改为**仅在检测到 root 残留时才提权**（用户级路径的正常启停不应因此弹密码） |
+
+新增的同类风险与其防护，见 `CLAUDE.md` 的「launchd 实测事实」一节（bootstrap-while-disabled
+硬失败、disable 位独立于 plist、print 输出的单/双 tab、符号链改变进程命令行）。相关纯函数已由
+`service.spec.ts` 锁定，且每条守卫都验证过「回退实现会让对应用例失败」。
+
+---
+
 ## 本轮复核：文档已过期的条目
 
 - **匿名节点 collapse（上轮「仍待处理 9」的子项）已失效**：上轮称无 `name` 元素会被去重折叠、告警显示 `"undefined"`。实测现在 `assertConfigShape` 会抛 `CliError: proxies[0] 缺少有效的 name` 并带 hint，该路径走不到。条目已删

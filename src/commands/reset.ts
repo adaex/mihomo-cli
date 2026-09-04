@@ -1,12 +1,12 @@
 import fs from 'node:fs';
 import { colors } from '../colors.js';
 import { clearKernelVersionCache, hasKernel } from '../config.js';
-import { disableDaemon, isDaemonEnabled } from '../daemon.js';
 import { CliError } from '../errors.js';
 import { isOverwriteFilename } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
 import { cleanupAll, PROCESS_WAIT_ATTEMPTS, PROCESS_WAIT_INTERVAL } from '../process-stop.js';
+import { detectInstalledDomain, getServiceStatus, stopService, uninstallService } from '../service.js';
 import { invalidateSettingsCache, writeSettings } from '../settings.js';
 import type { ResetTarget } from '../types.js';
 import { confirmOrThrow } from './shared.js';
@@ -84,19 +84,29 @@ export const RESET_TARGETS: ResetTarget[] = [
     needsStop: false,
   },
   {
-    id: 'daemon',
-    aliases: ['daemon'],
-    label: '保活',
-    // 卸载由确认后的 disablesDaemon 段统一处理（需 sudo，受取消保护）；
-    // 此处 paths 返回空（plist 在系统目录，用户态删不掉，且不应提前删破坏卸载），
-    // onAfter 因幂等守卫（plist 已删）成为 no-op，仅作单独 reset 未走前段时的兜底。
+    id: 'service',
+    aliases: ['service', 'daemon'],
+    label: '服务',
+    // 卸载由确认后的 uninstallsService 段统一处理（系统级需 sudo，受取消保护）；
+    // 此处 paths 返回空（plist 不在数据目录里，且不应提前删破坏卸载），
+    // onAfter 因幂等守卫成为 no-op，仅作单独 reset 未走前段时的兜底。
     paths: () => [],
     needsStop: false,
-    onAfter: () => disableDaemon(),
-    checkEmpty: () => !isDaemonEnabled(),
-    emptyMsg: '保活未启用，无需删除',
+    onAfter: () => {
+      const domain = detectInstalledDomain();
+      if (domain) uninstallService(domain);
+    },
+    checkEmpty: () => !detectInstalledDomain() && !getServiceStatus().loaded,
+    emptyMsg: '服务未安装，无需删除',
   },
 ];
+
+/**
+ * 裸 `mihomo reset`（无参无 flag）保留的目标：用户的配置资产，不删。
+ * **必须是具名常量**：此前是内联字符串数组，target id 改名时漏改会让裸 reset
+ * 静默把用户的服务安装/设置一并删掉，且不报错。reset.spec.ts 对着它断言。
+ */
+export const RESET_PRESERVED_ON_BARE = ['settings', 'kernel', 'overwrites', 'service'] as const;
 
 function resolveResetTargets(names: string[]): { matched: ResetTarget[]; unmatched: string[] } {
   const matched: ResetTarget[] = [];
@@ -153,8 +163,8 @@ export async function cmdReset(args: string[]): Promise<void> {
     }
     targets = matched;
   } else {
-    // 留空 = 只删「可再生成的运行数据」，保留用户配置资产（设置/内核/覆写/保活）
-    targets = RESET_TARGETS.filter(t => !['settings', 'kernel', 'overwrites', 'daemon'].includes(t.id));
+    // 留空 = 只删「可再生成的运行数据」，保留用户配置资产（设置/内核/覆写/服务）
+    targets = RESET_TARGETS.filter(t => !RESET_PRESERVED_ON_BARE.includes(t.id as (typeof RESET_PRESERVED_ON_BARE)[number]));
   }
 
   for (const t of targets) {
@@ -168,21 +178,30 @@ export async function cmdReset(args: string[]): Promise<void> {
 
   const needsStop = targets.some(t => t.needsStop);
   const warnRunning = targets.some(t => t.warnIfRunning);
-  // 删内核会让保活 plist 指向已删二进制（KeepAlive 空转）；需停止进程的重置也要求保活先卸载；
-  // 直接重置 daemon target 本身也要卸载。三种情况统一走确认后的 disableDaemon（受 sudo 取消保护），
-  // 使 daemon target 的 onAfter 因幂等守卫成为 no-op，避免重复弹密码或未捕获抛错冒泡。
+  // 「停止」与「卸载」必须分开——此前二者混为一谈（一律 disableDaemon）。
+  //   needsStop（subs/data/runtime）→ 只 **stop**：删了 config.yaml 而服务还 enabled 的话，
+  //     下次登录 launchd 会用不存在的 -f 拉起内核，KeepAlive 每几秒崩溃重启一次刷爆日志。
+  //     stop 恒置 disable 位，正好堵住这个组合。但不该顺手把用户的安装卸掉。
+  //   kernel → 同样只 stop + 警告（plist 会指向已删的二进制）
+  //   service target / --full → 才是真正的 uninstall
   const kernelTargeted = targets.some(t => t.id === 'kernel');
-  const daemonTargeted = targets.some(t => t.id === 'daemon');
-  const disablesDaemon = needsStop || kernelTargeted || daemonTargeted;
+  const serviceTargeted = targets.some(t => t.id === 'service');
+  const uninstallsService = serviceTargeted;
+  const stopsService = needsStop || kernelTargeted;
+
+  const serviceStatus = getServiceStatus();
+  const serviceActive = serviceStatus.installed || serviceStatus.loaded;
 
   const pids = needsStop || warnRunning ? getMihomoPids() : [];
 
-  // 确认前只做只读警告，不做任何破坏性操作（停止进程/卸载保活）——用户取消时环境须原样保留
+  // 确认前只做只读警告，不做任何破坏性操作（停止进程/卸载服务）——用户取消时环境须原样保留
   if (warnRunning && pids.length > 0) {
     console.log(colors.yellow(`警告: mihomo 正在运行 (PID ${pids.join(', ')})，删除内核后将无法重新启动`));
   }
-  if (disablesDaemon && isDaemonEnabled()) {
-    console.log(colors.yellow('保活已启用，重置将一并关闭保活（移除开机自启）'));
+  if (uninstallsService && serviceActive) {
+    console.log(colors.yellow('将卸载 launchd 服务（移除开机自启，Mixed 模式需重新 install 才能使用）'));
+  } else if (stopsService && serviceActive) {
+    console.log(colors.yellow('将停止服务并关闭开机自启（安装保留，mihomo start 可重新启动）'));
   }
 
   console.log(`将删除: ${targets.map(t => t.label).join('、')}`);
@@ -200,16 +219,20 @@ export async function cmdReset(args: string[]): Promise<void> {
     }
   }
 
-  // 确认后再执行破坏性操作。保活开启时必须先卸载（使 KeepAlive 失效），
-  // 否则后续 cleanupAll 裸杀会被立即拉起。daemon target 的卸载由其 onAfter 兜底，
-  // 但停止段早于删除循环，故这里对"需停止/删内核 + 保活开启"统一先卸载（含 --full）。
-  // disableDaemon 现需 sudo：用户取消（密码错误/Ctrl-C）则中止重置，避免部分删除后环境不一致。
-  if (disablesDaemon && isDaemonEnabled()) {
+  // 确认后再执行破坏性操作。服务在跑时必须先停（使 KeepAlive 失效），
+  // 否则后续 cleanupAll 裸杀会被立即拉起。系统级服务需 sudo：用户取消（密码错误/Ctrl-C）
+  // 则中止重置，避免部分删除后环境不一致。
+  if ((uninstallsService || stopsService) && serviceActive) {
     try {
-      disableDaemon();
+      const domain = serviceStatus.domain ?? 'user';
+      if (uninstallsService) {
+        uninstallService(domain);
+      } else {
+        stopService(domain);
+      }
     } catch (e) {
       if (e instanceof CliError) throw e;
-      throw new CliError((e as Error).message.split('\n')[0], { label: '保活关闭已取消，重置中止' });
+      throw new CliError((e as Error).message.split('\n')[0], { label: '服务操作已取消，重置中止' });
     }
   }
 

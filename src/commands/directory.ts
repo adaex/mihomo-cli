@@ -60,7 +60,7 @@ function printDirectoryInfo(): void {
 const SUBCOMMANDS: SubCommand[] = [{ name: 'open', handler: openDirectory }];
 
 export async function cmdDirectory(args: string[]): Promise<void> {
-  // 无子命令 → 目录信息；未知子命令 → 报错（与 sub/daemon 同构，避免 `dir opn` 静默当成 list）
+  // 无子命令 → 目录信息；未知子命令 → 报错（与 sub/ow 同构，避免 `dir opn` 静默当成 list）
   // 必须 await/返回 Promise：dispatchSubcommand 是 async，若用 void 丢弃，onUnknown 抛的
   // CliError 会变成未处理的 Promise 拒绝，绕过 main().catch 的统一渲染（丢 label/hint）
   await dispatchSubcommand(args, SUBCOMMANDS, {

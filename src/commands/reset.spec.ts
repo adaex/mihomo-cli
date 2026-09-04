@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { RESET_TARGETS } from './reset.js';
+import { RESET_PRESERVED_ON_BARE, RESET_TARGETS } from './reset.js';
 
 describe('RESET_TARGETS 执行顺序', () => {
   const indexOf = (id: string): number => RESET_TARGETS.findIndex(t => t.id === id);
@@ -21,5 +21,27 @@ describe('RESET_TARGETS 执行顺序', () => {
     assert.equal(new Set(ids).size, ids.length, `id 重复: ${ids.join(', ')}`);
     const aliases = RESET_TARGETS.flatMap(t => t.aliases);
     assert.equal(new Set(aliases).size, aliases.length, `别名重复: ${aliases.join(', ')}`);
+  });
+});
+
+describe('RESET_PRESERVED_ON_BARE：裸 reset 保留的用户资产', () => {
+  // 此前这份清单是内联的字符串数组。target id 改名（daemon → service）时若漏改，
+  // 裸 `mihomo reset` 会从「保留服务安装」静默变成「卸载服务」，且不报任何错。
+  // 故清单必须是具名常量，且每一项都要能对上真实存在的 target。
+  it('每一项都对应真实存在的 target id', () => {
+    const ids = new Set(RESET_TARGETS.map(t => t.id));
+    for (const preserved of RESET_PRESERVED_ON_BARE) {
+      assert.ok(ids.has(preserved), `保留清单里的 "${preserved}" 不存在于 RESET_TARGETS（id 改名时漏改？）`);
+    }
+  });
+
+  it('service 在保留清单中：裸 reset 不得卸载用户的服务安装', () => {
+    assert.ok(RESET_PRESERVED_ON_BARE.includes('service'));
+  });
+
+  it('运行数据类目标不在保留清单中（裸 reset 的本职就是清它们）', () => {
+    for (const id of ['subs', 'logs', 'data', 'runtime']) {
+      assert.ok(!RESET_PRESERVED_ON_BARE.includes(id as never), `${id} 不应被保留`);
+    }
   });
 });

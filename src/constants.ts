@@ -19,32 +19,41 @@ export const UI_URLS: Record<string, string> = {
 };
 
 /**
- * launchd 保活任务的 LaunchDaemon 标签（同时用作 /Library/LaunchDaemons/ 下的 plist 文件名）。
+ * launchd 服务的标签（同时用作 plist 文件名：用户级在 ~/Library/LaunchAgents/，
+ * 系统级在 /Library/LaunchDaemons/）。
  * 可用 MIHOMO_CLI_DAEMON_LABEL 覆盖，供隔离测试使用一次性 label，避免碰生产 plist 文件名。
  *
- * 非法值在此静默回退到默认标签，另由 assertDaemonLabelSafe()（daemon.ts 的写操作入口）
+ * 非法值在此静默回退到默认标签，另由 assertServiceLabelSafe()（service.ts 的写操作入口）
  * 抛出可读错误——不能在模块顶层抛：constants 在 import 阶段求值，早于 index.ts 的
  * main().catch 注册，抛出会直接打印堆栈而绕过统一收口。
+ *
+ * **值与环境变量名都保持 `daemon` 字样不变**（v5.0.0 只改常量名不改值）：改了值会让老用户
+ * v4 装的 /Library/LaunchDaemons/com.mihomo-cli.daemon.plist 变成新 CLI 看不见的幽灵，
+ * 而它带 KeepAlive 会持续拉起内核，用户没有任何途径卸载它。保持不变则 detectInstalledDomain()
+ * 天然识别出旧的系统级安装并可直接接管。
  */
-export const DEFAULT_DAEMON_LABEL = 'com.mihomo-cli.daemon';
+export const DEFAULT_SERVICE_LABEL = 'com.mihomo-cli.daemon';
 
 /**
- * 合法 label 字符集。必须校验：该值经 path.join 拼成 plist 路径后，是 daemon.ts 里
+ * 合法 label 字符集。必须校验：该值经 path.join 拼成 plist 路径后，是系统级安装时
  * `sudo install -m 644 -o root -g wheel` 的写入目标与 `sudo rm -f` 的删除目标。
  * path.join 会折叠 `..`（`../../etc/sudoers.d/evil` → `/etc/sudoers.d/evil.plist`），
  * 未校验时可借此以 root 身份写入/删除任意路径，内容还部分可控 → 提权原语。
- * 同时该值也拼进 launchctl 的 SERVICE_TARGET（`system/<label>`）。
+ * 同时该值也拼进 launchctl 的服务目标（`gui/<uid>/<label>` 或 `system/<label>`）。
  */
-export const DAEMON_LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+export const SERVICE_LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-export function isValidDaemonLabel(label: string): boolean {
-  return DAEMON_LABEL_RE.test(label) && !label.includes('..');
+export function isValidServiceLabel(label: string): boolean {
+  return SERVICE_LABEL_RE.test(label) && !label.includes('..');
 }
 
-const RAW_DAEMON_LABEL = process.env.MIHOMO_CLI_DAEMON_LABEL;
-/** 环境变量提供的原始 label（可能非法），供 daemon.ts 校验时报出用户实际传入的值。 */
-export const RAW_DAEMON_LABEL_INPUT: string | undefined = RAW_DAEMON_LABEL;
-export const LAUNCH_DAEMON_LABEL: string = RAW_DAEMON_LABEL && isValidDaemonLabel(RAW_DAEMON_LABEL) ? RAW_DAEMON_LABEL : DEFAULT_DAEMON_LABEL;
+const RAW_SERVICE_LABEL = process.env.MIHOMO_CLI_DAEMON_LABEL;
+/** 环境变量提供的原始 label（可能非法），供 service.ts 校验时报出用户实际传入的值。 */
+export const RAW_SERVICE_LABEL_INPUT: string | undefined = RAW_SERVICE_LABEL;
+export const SERVICE_LABEL: string = RAW_SERVICE_LABEL && isValidServiceLabel(RAW_SERVICE_LABEL) ? RAW_SERVICE_LABEL : DEFAULT_SERVICE_LABEL;
+
+/** 服务二进制符号链名。见 paths.ts 的 serviceBinary 与 service.ts 的 ensureServiceSymlink。 */
+export const SERVICE_BINARY_NAME = 'mihomo-cli-service';
 
 /**
  * external-controller 地址(系统强制,不受订阅/覆写影响)。

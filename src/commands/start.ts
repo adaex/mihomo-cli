@@ -1,16 +1,12 @@
 import { colors } from '../colors.js';
 import { hasKernel } from '../config.js';
-import { isDaemonEnabled } from '../daemon.js';
 import { CliError } from '../errors.js';
-import { PATHS } from '../paths.js';
-import { getStatus, hasRootResidue } from '../process-probe.js';
-import { stop } from '../process-stop.js';
 import * as runtime from '../runtime.js';
+import { getDomainSpec, getServiceStatus } from '../service.js';
 import * as subscription from '../subscription.js';
 import type { PreparedConfig } from '../types.js';
 import { assertNoRemovedSshFlag, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
 import { printStatus } from './status.js';
-import { handleStopResult } from './stop.js';
 
 /**
  * 从 argv 解析启动模式。取第一个非 flag token（而非固定 args[1]）：
@@ -32,17 +28,35 @@ export async function cmdStart(args: string[]): Promise<void> {
   const targetMode = resolveStartMode(args);
 
   if (!hasKernel()) {
-    throw new CliError('未找到内核，请运行 "mihomo kernel"');
-  }
-
-  const daemonEnabled = isDaemonEnabled();
-
-  if (targetMode === 'tun' && daemonEnabled) {
-    throw new CliError('保活已启用（仅支持 Mixed 模式），无法启动 TUN', { hint: '请先关闭保活: mihomo daemon off' });
+    throw new CliError('未找到内核', { hint: '下载内核: mihomo kernel' });
   }
 
   const skipUpdate = hasFlag(args, '-s', '--no-update');
   const updateTimeout = parseIntArg(args, '-u', '--update-timeout', subscription.DEFAULT_AUTO_UPDATE_TIMEOUT);
+
+  const serviceBefore = getServiceStatus();
+
+  if (targetMode === 'tun') {
+    // 判据是 loaded 而非 installed：`mh stop` 之后服务虽仍装着但不会被拉起，
+    // 此时起 TUN 是正常用法。只看 installed 会把它一并拦掉，与「stop 后可用 tun」矛盾
+    if (serviceBefore.loaded) {
+      throw new CliError('服务正在运行，无法启动 TUN', {
+        hint: ['两者会抢占同一组端口与配置。请先停止服务:', '  mihomo stop', '', 'TUN 用完后 mihomo start 可恢复服务'],
+      });
+    }
+  } else if (!serviceBefore.installed) {
+    // Mixed 恒由 launchd 服务托管，没有用户态直启路径。
+    // 「plist 已删但任务仍装载」的孤儿态单独指引——此时叫用户 install 只会撞上
+    // 「已装载」的旧任务，得先 uninstall 清干净
+    if (serviceBefore.loaded) {
+      throw new CliError('服务处于异常状态（plist 不存在，但任务仍装载）', {
+        hint: ['先清理残留任务，再重新安装:', '  mihomo uninstall', '  mihomo install'],
+      });
+    }
+    throw new CliError('服务未安装', {
+      hint: ['Mixed 模式由 launchd 服务托管，需先安装:', '  mihomo install', '', '临时使用可走 TUN: mihomo tun'],
+    });
+  }
 
   const sub = subscription.requireActiveSubscription('没有订阅，请先添加订阅');
 
@@ -50,9 +64,8 @@ export async function cmdStart(args: string[]): Promise<void> {
     await subscription.autoUpdateStaleSubscription({ timeout: updateTimeout });
   }
 
-  // 先构建校验、后停机：坏覆写/不合法订阅在这里就抛错，此时运行中的内核还没被
-  // stop() 带走，用户维持在可用状态。反过来（先停后建）失败就是「已停机 + 无
-  // config.yaml」的半死态——stop() 的 clearRuntime() 已把 runtime/ 整个删了，无从回滚。
+  // 先构建校验、后落盘启动：坏覆写/不合法订阅在这里就抛错，此时运行中的内核还没被动过，
+  // 用户维持在可用状态。反过来（先动手后构建）失败就是「已停机 + 无 config.yaml」的半死态。
   let prepared: PreparedConfig;
   try {
     prepared = subscription.prepareConfigForStart(targetMode, sub.name);
@@ -61,45 +74,24 @@ export async function cmdStart(args: string[]): Promise<void> {
     throw new CliError((e as Error).message, { label: '配置错误' });
   }
 
-  // 保活模式下由 launchd 托管进程,重启走 kickstart(不裸 kill,避免与 KeepAlive 打架);
-  // 非保活模式沿用 stop() + start()。差异收敛在 runtime.launchOrRestart。
-
-  if (!daemonEnabled) {
-    // 隐式停止不应意外弹 sudo：有 root 残留时直接报错引导（与 startMixedMode 的设计一致）。
-    // 仅对 Mixed 生效：TUN 本来就要提权，且 buildTunLaunchScript 会以 root 跑
-    // `pkill -9` + `rm -f pid`，自带清理能力。对 TUN 也拦的话，正在运行的 TUN
-    // （root 属主进程）永远无法重启/切订阅，且报错 hint 会让人去执行刚失败的那条命令。
-    if (targetMode !== 'tun' && hasRootResidue()) {
-      throw new CliError('存在需要 root 权限清理的残留进程/文件', {
-        hint: [`请先手动清理: sudo pkill -9 mihomo && sudo rm -f ${PATHS.pidFile}`, '或切换到 TUN 模式启动（自动清理）: mihomo start tun'],
-      });
-    }
-
-    const status = getStatus();
-    const hasProcess = status.running || status.allProcesses.length > 0;
-
-    if (hasProcess) {
-      const count = status.allProcesses.length > 0 ? status.allProcesses.length : 1;
-      console.log(`停止 ${count} 个进程...`);
-    }
-
-    handleStopResult(await stop());
-
-    if (hasProcess) {
-      console.log(`${colors.green('已停止进程')}\n`);
-    }
-  }
-
-  // 写盘必须在 stop() 之后：clearRuntime() 会 rmrf 整个 runtime/
   const configInfo = subscription.commitPreparedConfig(prepared);
 
   const modeLabel = targetMode === 'tun' ? 'TUN' : 'Mixed';
   console.log([colors.cyan(modeLabel), sub.name, subscription.formatProxySummary(configInfo)].join(' · '));
 
+  // 冷启动（未装载/被 disable）需要动 launchctl：用户级免密，系统级会弹一次密码。
+  // 已在跑则走热重载，两种域都免密——这是日常最高频的路径（切订阅、开关覆写）。
+  // 重查一次状态：前面的订阅更新耗时可能跨越数秒，期间服务状态可能已变
+  if (targetMode === 'mixed') {
+    const now = getServiceStatus();
+    if (now.domain && getDomainSpec(now.domain).needsSudo && !(now.running && !now.disabled)) {
+      console.log(colors.gray('系统级服务启动需要管理员权限'));
+    }
+  }
+
   try {
     const pid = await runtime.launchOrRestart(targetMode);
-    const label = daemonEnabled ? '已启动 (保活)' : '已启动';
-    console.log(`${colors.green(label)}${pid ? ` (PID ${pid})` : ''}`);
+    console.log(`${colors.green('已启动')}${pid ? ` (PID ${pid})` : ''}`);
   } catch (e) {
     if (e instanceof CliError) throw e;
     const lines = (e as Error).message.split('\n');

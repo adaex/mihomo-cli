@@ -69,7 +69,7 @@ export async function confirmOrThrow(question: string, opts: { nonTtyMessage: st
 
 /**
  * 配置变更（切订阅、覆写开关）后，运行中则重启使之生效并返回 true；否则返回 false。
- * 保活恒 Mixed；普通保留当前模式（避免订阅残留 tun 字段误判）。透传用户显式启动选项（-s/-u 等）。
+ * 装了服务恒 Mixed；否则保留当前模式（避免订阅残留 tun 字段误判）。透传用户显式启动选项（-s/-u 等）。
  */
 export async function restartToApply(args: string[]): Promise<boolean> {
   if (!runtime.isRestartNeededOnChange()) return false;

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { LAUNCH_DAEMON_LABEL } from './constants.js';
+import { SERVICE_BINARY_NAME, SERVICE_LABEL } from './constants.js';
 import type { DirectoryTarget } from './types.js';
 
 function getUserDataDir(): string {
@@ -24,6 +24,16 @@ export const DIRS = {
 
 export const PATHS = {
   mihomoBinary: path.join(DIRS.kernel, 'mihomo'),
+  /**
+   * 服务启动用的符号链（→ mihomoBinary，同目录相对链接）。
+   * plist 的 ProgramArguments[0] 指向它而非真实二进制：「系统设置 → 通用 → 登录项与扩展」
+   * 按 ProgramArguments[0] 的 basename 显示，直接指向内核的话用户只看到一个没有上下文的
+   * "mihomo"，无从判断这是什么、能不能关掉。
+   *
+   * 注意：进程命令行记录的是**符号链路径**而非真实路径（实测 ps -ww -o command= 输出符号链名，
+   * 用真实文件名 pgrep -f 匹配不到），故 MAIN_INSTANCE_PATTERN 必须同时匹配两者。
+   */
+  serviceBinary: path.join(DIRS.kernel, SERVICE_BINARY_NAME),
   settingsFile: path.join(USER_DATA_DIR, 'settings.json'),
   subscriptionsCacheFile: path.join(DIRS.subscriptions, 'cache.json'),
   configFile: path.join(DIRS.runtime, 'config.yaml'),
@@ -32,8 +42,10 @@ export const PATHS = {
   configStage1Subscription: path.join(DIRS.runtime, '1.subscription.yaml'),
   configStage2Overwrite: path.join(DIRS.runtime, '2.overwrite.yaml'),
   configStage3System: path.join(DIRS.runtime, '3.system.yaml'),
-  // launchd LaunchDaemon plist 位于系统级 /Library/LaunchDaemons/，root:wheel 拥有，与 homedir / MIHOMO_CLI_DIR 无关
-  launchDaemonPlist: path.join('/Library/LaunchDaemons', `${LAUNCH_DAEMON_LABEL}.plist`),
+  // 用户级 LaunchAgent（默认）：gui/<uid> 域，全程免 sudo。随 homedir 走
+  userAgentPlist: path.join(os.homedir(), 'Library/LaunchAgents', `${SERVICE_LABEL}.plist`),
+  // 系统级 LaunchDaemon（install --system 回退路径）：root:wheel 拥有，与 homedir / MIHOMO_CLI_DIR 无关
+  systemDaemonPlist: path.join('/Library/LaunchDaemons', `${SERVICE_LABEL}.plist`),
 } as const;
 
 export const DIRECTORY_TARGETS: Record<string, DirectoryTarget> = {

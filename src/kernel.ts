@@ -30,7 +30,7 @@ const ALLOWED_ASSET_HOSTS = new Set(['github.com', 'api.github.com', 'objects.gi
  *
  * 为什么必须有：`withMirror` 对非 github 的 URL **原样放行**，故一个被篡改的
  * `browser_download_url` 能让 CLI 下载任意二进制。该产物随后被 `chmod 755`，
- * 并在 TUN / daemon 模式下**以 root 运行**——这是比「无 checksum」更实际的缺口
+ * 并在 TUN / 系统级服务下**以 root 运行**——这是比「无 checksum」更实际的缺口
  * （上游 release 确实不提供 checksums，无法做哈希校验，故把来源钉死是主要防线）。
  * API 恒直连已消除镜像伪造该字段的路径，此校验是纵深防御的第二道。
  *

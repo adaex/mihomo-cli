@@ -31,13 +31,13 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/config.ts`            | 配置构建、YAML 解析/序列化、内核版本 |
 | `src/subscription.ts`      | 订阅下载、流量解析、自动更新      |
 | `src/process-probe.ts`     | 进程探测：ps/pgrep、pid 文件、运行状态、getStatus |
-| `src/process-start.ts`     | 内核启动（Mixed spawn / TUN sudo 脚本） |
+| `src/process-start.ts`     | TUN 内核启动（sudo 脚本）。Mixed 无用户态路径，由 service.ts 托管 |
 | `src/process-stop.ts`      | 内核停止/清理：stop、cleanupAll、clearPid |
 | `src/log-files.ts`         | 日志轮转/清理/列表/路径 |
 | `src/open.ts`              | openUrl/openLogFile/viewLogWithTail |
-| `src/sudo.ts`              | runSudoScript：TUN 与 launchd 保活共用的 sudo 脚本范式 |
-| `src/daemon.ts`            | launchd 保活：开机自启/崩溃重启、热重载、状态查询 |
-| `src/runtime.ts`           | 运行时门面：收敛普通进程/保活双轨（模式、状态、启停） |
+| `src/sudo.ts`              | runSudoScript：TUN 与系统级服务共用的 sudo 脚本范式 |
+| `src/service.ts`           | launchd 服务：双域(用户级 LaunchAgent / 系统级 LaunchDaemon)、install/start/stop/uninstall、热重载、状态查询、符号链 |
+| `src/runtime.ts`           | 运行时门面：收敛 service(Mixed)/tun 双轨（模式、状态、启停） |
 | `src/lifecycle.ts`         | 退出清理注册表（信号/异常退出前清理 detached 子进程） |
 | `src/kernel.ts`            | GitHub Releases 检查、下载        |
 | `src/overwrite.ts`         | 覆写配置合并                      |
@@ -52,14 +52,15 @@ This file provides guidance to Claude Code when working with this repository.
 | `commands/help.ts`            | help, version, 简短帮助       |
 | `commands/status.ts`          | status                         |
 | `commands/start.ts`           | start, tun                     |
-| `commands/stop.ts`            | stop                           |
+| `commands/removed.ts`         | 已移除命令的墓碑（daemon/up/down）|
+| `commands/stop.ts`            | stop（停止 + 关闭自启）        |
 | `commands/log.ts`             | logs（`log` 为隐藏别名，等价 `logs 0 -f`） |
 | `commands/ui.ts`              | ui                             |
 | `commands/kernel.ts`          | kernel                         |
 | `commands/subscription.ts`    | subscription (add/update/use/remove，裸命令即列表) |
 | `commands/overwrite.ts`       | overwrite (on/off)             |
 | `commands/directory.ts`       | directory (open)               |
-| `commands/daemon.ts`          | daemon (on/off，无参看状态)    |
+| `commands/service.ts`         | install (--system), uninstall  |
 | `commands/reset.ts`           | reset                          |
 | `commands/update.ts`          | update                         |
 
@@ -152,7 +153,7 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 命令层与数据层的预期错误一律 `throw new CliError(msg, { label?, hint?, exitCode? })`，由 `index.ts` 的 `main().catch` 单点渲染（`label:` 前缀 + hint 多行 + exitCode）并 `runCleanup()`。**不在命令逻辑里 `console.error + process.exit`**。仅两类 exit 保留：信号/全局处理器、`viewLogWithTail` 的 tail 事件回调（main 已 resolve，无法收口）。catch 后重标签需先 `if (e instanceof CliError) throw e`（防双重包裹）。detached/事件回调中不得抛 CliError。
 
-模块顶层（import 阶段求值）也不得抛 CliError——早于 `main().catch` 注册，会直接打印堆栈。需校验的环境变量在**使用点**校验（如 `MIHOMO_CLI_DAEMON_LABEL` 由 `constants.ts` 静默回退默认值 + `daemon.ts` 写操作入口 `assertDaemonLabelSafe()` 抛错）。
+模块顶层（import 阶段求值）也不得抛 CliError——早于 `main().catch` 注册，会直接打印堆栈。需校验的环境变量在**使用点**校验（如 `MIHOMO_CLI_DAEMON_LABEL` 由 `constants.ts` 静默回退默认值 + `service.ts` 写操作入口 `assertServiceLabelSafe()` 抛错）。
 
 `dispatchSubcommand` 是 async，命令 handler 必须 `await`/返回其 Promise。用 `void` 丢弃会让子命令抛的 CliError 变成未处理的 Promise 拒绝、绕过统一渲染。
 
@@ -171,7 +172,19 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 `main()` 开头（`ensureDirs()` 之前）校验 `process.platform === 'darwin'`，`package.json` 声明 `"os": ["darwin"]`。豁免 `help`/`version`；`MIHOMO_CLI_ALLOW_ANY_PLATFORM=1` 为开发逃生阀。守卫必须先于 `ensureDirs`，避免在不支持的平台创建数据目录。
 
-原因：launchd 保活、`open`、`sudo`、BSD 专有命令语法（`stat -f%z`、`ps -o command=`）均无其他平台实现，且 `openUrl` 吞掉 ENOENT 后恒返回 true，非 macOS 上会「报告成功但什么都没做」。
+原因：launchd 服务、`open`、`sudo`、BSD 专有命令语法（`stat -f%z`、`ps -o command=`）均无其他平台实现，且 `openUrl` 吞掉 ENOENT 后恒返回 true，非 macOS 上会「报告成功但什么都没做」。
+
+### launchd 实测事实（v5.0.0 服务化时逐条验证）
+
+改这块前先读这里，几条都是「文档不写、猜错就静默出错」的：
+
+- **`bootstrap` 一个被 disable 的 label 是硬失败**（`Bootstrap failed: 5: Input/output error`），不是「加载了但不启动」。故 `enable` 必须在 `bootstrap` 之前，顺序不可换。而 `stop` 恒置 disable 位，「stop 之后 start」是最常走的路径——少了 enable 就 100% 失败
+- **disable 位持久化在 `/var/db/com.apple.xpc.launchd/disabled*.plist`，与 plist 文件相互独立**：删掉 plist 后该位仍在。且 launchctl **没有「清除记录」的动词**，`enable` 同样写一条 `=> enabled`。故 `parseDisabledList` 必须区分 `disabled`/`enabled` 两种值，只判断「在不在表里」会把 enable 过的服务误判成已禁用
+- **`launchctl print <target>` 与 `print-disabled <domain>` 均免 sudo**（对 system 域也是），实测 3ms。退出码 `113` = 未装载，`0` = 已装载。这让状态查询能拿到真实 state/pid，取代早期 pgrep + root 属主过滤的近似判断
+- **`launchctl print` 输出里顶层字段是单 tab（`\tstate = running`），嵌套 endpoint 是双 tab（`\t\tstate = active`）**。解析必须锚定 `^\t`。实测多个真实服务顶层 state 都排在嵌套之前，不锚定「碰巧」也对——但那是 launchd 的实现细节不是契约，`service.spec.ts` 用倒序 fixture 锁死了锚定行为
+- **`KeepAlive.PathState` 不能用来实现 stop**：删掉 flag 文件后进程照跑不误，`KeepAlive` 只决定「退出后是否重启」，不主动终止运行中的任务。这条排除了「flag 文件 + root daemon 免密」的方案
+- **本地网络隐私的豁免条件是「以 root 运行」，不是「身为 daemon」**（Apple DTS 原话）。用户级 LaunchAgent 不豁免，但走的是正常弹框授权流程，不是被静默拦死——被拦死的是无人登录、没人能点弹框的服务器场景。这是 v5.0.0 敢把默认域从 system 改成 user 的依据
+- **进程命令行记录的是启动时用的路径**：服务经符号链 `kernel/mihomo-cli-service` 启动，`ps -ww -o command=` 输出的就是符号链名，用真实二进制名 `pgrep -f` 匹配不到。`MAIN_INSTANCE_PATTERN` 因此是二选一分支，两条都要留
 
 ### 平台命令细节
 
@@ -260,6 +273,32 @@ logs/                   # 当前日志 + 归档日志
 data/                   # mihomo 运行数据
 runtime/                # pid, config.yaml, 分阶段调试文件(1.subscription/2.overwrite/3.system)
 ```
+
+`kernel/` 下除内核二进制 `mihomo` 外还有 `install` 建的符号链 `mihomo-cli-service`（→ `mihomo`，相对链接）。
+plist 的 `ProgramArguments[0]` 指向它，只为让「登录项与扩展」显示有意义的名字。
+`reset kernel` 会连它一起删，故 `install`/`start` 都用 `ensureServiceSymlink()` 幂等重建。
+
+### daemon → 服务模型（v5.0.0）
+
+`daemon` 命令、`src/daemon.ts` / `commands/daemon.ts`、`up`/`down` 别名全部删除，
+换成 `install`/`start`/`stop`/`uninstall`。三个已移除 token 在 registry 里留了墓碑条目
+（`commands/removed.ts`），执行时报明确的迁移指引——同 `--no-ssh` 的先例。
+
+**默认域从 system 改为 user 是这次的核心决策**，理由与推翻的旧结论：
+
+- 旧结论（v3.0.0，README 曾逐字保留）：「必须用 root LaunchDaemon，用户级 LaunchAgent 会被
+  macOS 本地网络隐私静默拦成 no route to host」
+- 推翻依据：Apple DTS 明确「豁免条件是**以 root 运行**」，不是「身为 daemon」。LaunchAgent
+  确实不豁免，但那意味着**走正常弹框授权**（点一次「允许」永久生效），不是被拦死。
+  旧结论描述的是无人登录、没人能点弹框的场景
+- 代价对比：system 域的 `bootstrap`/`bootout`/`enable`/`disable` 一律需 root → 每次启停输密码；
+  user 域全程免密，代价是局域网节点首次需点一次授权，且换内核后可能需重新授权
+- `--system` 保留为回退路径，两域命令语义完全一致，`DomainSpec` 收敛差异
+
+**label 值刻意不改名**（仍是 `com.mihomo-cli.daemon`，环境变量仍是 `MIHOMO_CLI_DAEMON_LABEL`）：
+它是 plist 文件名与 launchd 的注册键，改值等于要求所有老用户做一次带幽灵进程风险的迁移
+（旧 plist 带 KeepAlive 会持续拉起内核，而新 CLI 完全看不见它），而这个字符串对用户不可见。
+只改了代码里的标识符名。别再提议改值。
 
 ### ssh 隧道已移除（v4.0.0）
 

@@ -31,7 +31,7 @@ function clearRuntime(): void {
   ensureDirs();
 }
 
-/** 清理 pid 文件。root 属主（TUN/daemon 残留）走 sudo 删除，普通用户态直接 unlink。 */
+/** 清理 pid 文件。root 属主（TUN 残留）走 sudo 删除，普通用户态直接 unlink。 */
 export function clearPid(): void {
   if (!fs.existsSync(PATHS.pidFile)) return;
   if (isPidFileOwnedByRoot()) {

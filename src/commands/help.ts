@@ -8,7 +8,7 @@ export function printShortHelp(): void {
   console.log(`\n${colors.cyan(colors.bold(`mihomo-cli v${VERSION}`))}  (mihomo help 查看完整帮助)\n`);
   console.log(
     '常用命令:\n' +
-      `  ${colors.bold('start')} [tun|mixed]    启动/切换代理\n` +
+      `  ${colors.bold('start')} / ${colors.bold('stop')}         启动/停止代理\n` +
       `  ${colors.bold('sub')} [use|update]     订阅管理\n` +
       `  ${colors.bold('ow')} [on|off]          覆写配置\n` +
       `  ${colors.bold('ui')} [zash|dash|yacd]  打开 Web UI\n`,
@@ -51,20 +51,20 @@ export function printHelp(commands: Command[]): void {
   lines.push(
     '',
     `${colors.cyan('示例:')}`,
-    '  mihomo start              # 启动/重启 Mixed 模式',
-    '  mihomo start tun          # 切换到 TUN 透明代理模式',
+    '  mihomo install            # 安装服务（Mixed 模式的前置，只需一次）',
+    '  mihomo start              # 启动代理并开机自启',
+    '  mihomo stop               # 停止并关闭开机自启',
+    '  mihomo start tun          # 临时 TUN 透明代理（不走服务，需 sudo）',
     '  mihomo start -s           # 跳过自动更新订阅',
-    '  mihomo start -u 30000     # 自动更新超时 30 秒 (默认 10s)',
-    '  mihomo daemon on          # 开启保活（开机自启 + 崩溃重启）',
     '  mihomo sub add <url>      # 添加订阅 (sub 是 subscription 别名)',
     '  mihomo ui                 # 打开 Web UI',
     '',
     `${colors.cyan('快捷命令:')}`,
-    '  tun = start tun   up = start   down = stop',
+    '  tun = start tun',
     '',
     `${colors.cyan('模式说明:')}`,
-    '  mixed  HTTP + SOCKS5 混合端口 (默认)',
-    '  tun    透明代理，全局自动路由，需要 sudo',
+    '  mixed  HTTP + SOCKS5 混合端口 (默认)，由 launchd 服务托管，崩溃/登录自动拉起',
+    '  tun    透明代理，全局自动路由，临时进程，需要 sudo',
     '',
     `${colors.cyan('数据目录:')}`,
     '  环境变量 MIHOMO_CLI_DIR 可自定义位置',

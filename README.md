@@ -2,7 +2,7 @@
 
 一个基于命令行的 mihomo (Clash.Meta) 客户端，**仅支持 macOS**。
 
-进程保活依赖 launchd、目录/UI 打开依赖 `open`、提权依赖 `sudo`，均无其他平台实现，故在非 macOS 上会直接报错退出而非部分可用。Windows / Linux 适配尚无时间表。
+服务托管依赖 launchd、目录/UI 打开依赖 `open`、提权依赖 `sudo`，均无其他平台实现，故在非 macOS 上会直接报错退出而非部分可用。Windows / Linux 适配尚无时间表。
 
 ## 功能特性
 
@@ -12,7 +12,7 @@
 - 📝 **覆写配置** - 在订阅基础上进行自定义覆写，支持强制覆盖、数组合并、按 name 就地 patch、按订阅限定作用域
 - 🔄 **智能重启** - `sub use` 切换订阅、`ow on/off` 切换覆写后自动重启
 - 🚀 **进程管理** - 启动/停止/切换模式，自动清理残留进程
-- 🛡️ **进程保活** - 基于 launchd（root），崩溃/开机自动拉起，代理后台常驻（`daemon on`）
+- 🛡️ **服务托管** - 基于 launchd，崩溃/登录自动拉起，代理后台常驻；日常 `start`/`stop` **全程免密**
 - 🔄 **双模式支持** - Mixed 模式和 TUN 透明代理模式
 - 📊 **状态监控** - 查看运行状态、内存占用、订阅流量与到期时间
 - 📝 **日志管理** - 实时日志 + 历史日志归档（自动轮转，保留7天）
@@ -60,19 +60,31 @@ mihomo kernel --mirror hk.gh-proxy.org
 mihomo sub add "https://your-subscription-url" "my-proxy"
 ```
 
-### 3. 启动代理
+### 3. 安装服务
 
 ```bash
-# Mixed 模式（默认）
-mihomo start
-
-# 切换到 TUN 模式（透明代理，需要管理员权限）
-mihomo start tun
-
-# 再次执行 start = 重启 / 切换模式
+mihomo install
 ```
 
-### 4. 打开 Web UI
+Mixed 模式由 launchd 服务托管（崩溃/登录自动拉起），只需装这一次。全程免密，详见「服务托管」。
+
+### 4. 启动代理
+
+```bash
+# Mixed 模式（默认），同时开启登录自启
+mihomo start
+
+# 再次执行 start = 重启并应用新配置
+mihomo start
+
+# 停止并关闭登录自启
+mihomo stop
+
+# 临时 TUN 透明代理（不走服务，需管理员权限）
+mihomo tun
+```
+
+### 5. 打开 Web UI
 
 ```bash
 mihomo ui          # 默认 zash
@@ -86,8 +98,10 @@ mihomo ui yacd     # YACD
 
 | 命令                        | 说明                                                                         |
 | --------------------------- | ---------------------------------------------------------------------------- |
-| `mihomo start [tun\|mixed]` | 启动/重启/切换代理模式（`-s` 跳过订阅更新，`-u` 更新超时） |
-| `mihomo stop`               | 停止代理                                                                     |
+| `mihomo install [--system]` | 安装服务（Mixed 模式的前置，只需一次；`--system` 装为 root 服务，见「本地网络授权」） |
+| `mihomo start [tun\|mixed]` | 启动代理并开启登录自启（`-s` 跳过订阅更新，`-u` 更新超时） |
+| `mihomo stop`               | 停止代理并关闭登录自启                                                       |
+| `mihomo uninstall`          | 卸载服务                                                                     |
 | `mihomo status`             | 查看运行状态（含订阅流量、到期时间）                                         |
 | `mihomo logs`               | 列出所有日志（当前 + 历史归档）                                              |
 | `mihomo logs <编号>`        | 查看指定日志（`0`=当前，`1+`=归档，`-f` 实时跟随，`-n N` 行数，`-o` 打开）  |
@@ -120,12 +134,11 @@ mihomo ui yacd     # YACD
 | 命令                              | 说明                                                                |
 | --------------------------------- | ------------------------------------------------------------------- |
 | `mihomo kernel [--mirror [镜像]]` | 更新内核（默认直连，`--mirror` 使用镜像；更新后运行中实例需重启生效） |
-| `mihomo daemon [on\|off]`    | 进程保活：开机自启 + 崩溃自动重启（仅 Mixed 模式，on/off 需管理员密码，无参看状态）  |
 | `mihomo update`                   | 更新 mihomo-cli（先查 npm 最新版，已是最新则跳过重装）              |
 | `mihomo ui [zash\|dash\|yacd]`    | 打开 Web UI                                                         |
 | `mihomo dir`                      | 显示数据目录位置                                                    |
 | `mihomo dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `data`, `runtime`, `kernel`）  |
-| `mihomo reset [目标...] [--full] [-y]` | 重置用户数据（可用目标：`subs`, `logs`, `data`, `runtime`, `settings`, `kernel`, `overwrites`, `daemon`；`--full` 删全部，`-y` 跳过确认） |
+| `mihomo reset [目标...] [--full] [-y]` | 重置用户数据（可用目标：`subs`, `logs`, `data`, `runtime`, `settings`, `kernel`, `overwrites`, `service`；`--full` 删全部，`-y` 跳过确认） |
 | `mihomo version`                  | 显示版本信息                                                        |
 | `mihomo help`                     | 显示帮助信息                                                        |
 
@@ -146,49 +159,92 @@ mihomo ui yacd     # YACD
 
 | 快捷命令               | 等效于                     |
 | ---------------------- | -------------------------- |
-| `mihomo up`            | `mihomo start`（同样支持 `-s`/`-u`）|
-| `mihomo down`          | `mihomo stop`              |
 | `mihomo tun`           | `mihomo start tun`         |
+
+> `up` / `down` 别名已于 v5.0.0 移除（命令名统一为 `install`/`start`/`stop`/`uninstall`）。执行它们会给出明确的迁移提示。
 
 ## 模式说明
 
 ### Mixed 模式（默认）
 
 - HTTP + SOCKS5 混合端口
-- 无需管理员权限
+- 由 launchd 服务托管，崩溃/登录自动拉起
+- 需先 `mihomo install`（一次），之后 `start`/`stop` 全程免密
 - 需要手动配置应用代理
 
 ### TUN 模式（透明代理）
 
 - 全局自动路由，所有流量自动走代理
+- 临时进程，不走 launchd（用完 `mihomo stop` 收掉）
 - 需要 sudo / 管理员权限
 - 首次使用会自动配置 DNS 和路由
+- 与服务互斥：服务运行时会被拦下，需先 `mihomo stop`
 
-## 进程保活
+## 服务托管
 
-默认情况下，mihomo 内核在后台独立运行，但如果内核崩溃、被系统 kill（如内存不足）、或重启/重新登录后，代理就会失效且不会自动恢复。进程保活用 macOS 原生的 **launchd** 解决这个问题。
+Mixed 模式由 macOS 原生的 **launchd** 托管：内核崩溃、被系统 kill（如内存不足）、重新登录后都会自动拉起，无需手动 `start`。
 
 ```bash
-mihomo daemon on       # 开启保活（需管理员密码）
-mihomo daemon off      # 关闭保活并停止代理（需管理员密码）
-mihomo daemon          # 查看保活状态（无参，无需密码）
+mihomo install         # 安装服务（只需一次，装完不启动）
+mihomo start           # 启动 + 开启登录自启
+mihomo stop            # 停止 + 关闭登录自启
+mihomo uninstall       # 卸载服务
+mihomo status          # 查看状态
 ```
 
-### 原理
+**以上全部免密**。安装为用户级 LaunchAgent（`~/Library/LaunchAgents/`，`gui/<uid>` 域），不需要 root，因此日常启停不会打断你去输密码。
 
-- 基于系统级 **LaunchDaemon**（`/Library/LaunchDaemons/`，以 root 运行），`daemon on/off` 需输入一次管理员密码
-- **`KeepAlive`** - 内核崩溃或被杀后由 launchd 自动拉起（约 10 秒节流后重启）
-- **`RunAtLoad`** - 开机后自动启动，无需手动 `start`
-- 常驻的是系统 launchd 进程本身，**不额外占用系统资源、无轮询**
+### 语义
 
-> **为什么用 root 级 LaunchDaemon**：早期版本用用户级 LaunchAgent（免密），但 macOS 15+ 的本地网络隐私限制会静默拦截其对**局域网其他设备**的访问（经局域网跳板的代理会连不通，报 `no route to host`）。系统级 root 守护进程不受此限制，是唯一可靠方案。
+| 命令 | 做了什么 | 重新登录后 |
+| --- | --- | --- |
+| `install` | 写 plist，**不启动** | 不启动 |
+| `start` | `enable` + `bootstrap` | 自动启动 |
+| `stop` | `bootout` + `disable` | **不启动** |
+| `uninstall` | 停止 + 删 plist | 不启动 |
 
-### 注意事项
+`stop` 会一并关闭自启，这是它与「杀掉进程」的区别——只停不关的话，下次登录代理又自己回来了，而 CLI 已经告诉你「已停止」。
 
-- **仅支持 Mixed 模式**。保活开启时执行 `start tun` 会被拦截，需先 `daemon off`
-- 保活开启后，`mihomo stop` 不再直接停止（会被自动拉起），请用 `mihomo daemon off`
-- 切换订阅、覆写开关、清理节点后的重启**优先走内核热重载（免密）**，失败才回退到需密码的 `launchctl kickstart`
-- 保活模式下日志持续追加到 `mihomo.log`；超过 10MB 时，下次配置变更触发的重启会走 kickstart（需密码）并顺便轮转归档，不再无限增长
+- **`KeepAlive`** — 内核崩溃或被杀后由 launchd 自动拉起（约 10 秒节流后重启）
+- **`RunAtLoad`** — 登录后自动启动
+- 常驻的是系统 launchd 进程本身，**不额外占用资源、无轮询**
+- 切换订阅、开关覆写后的重启**优先走内核热重载**，免密且不中断连接
+- 「系统设置 → 通用 → 登录项与扩展」中显示为 **`mihomo-cli-service`**（plist 指向一个同名符号链，否则那里只会显示一个没有上下文的 `mihomo`）
+
+### 本地网络授权
+
+如果你的代理节点里有**指向局域网设备**的（如 `192.168.x.x` 的跳板机、`*.local` 主机名），首次连接时 macOS 会弹出「允许访问本地网络」——点允许即可，之后永久生效，条目可在「系统设置 → 隐私与安全性 → 本地网络」查看和开关。
+
+> **为什么会有这一步**：macOS 15+ 的本地网络隐私限制适用于用户身份运行的进程。Apple 的规则是**「以 root 运行的程序自动获得本地网络访问」**——豁免条件是 root，而非「是不是 daemon」。用户级 LaunchAgent 不豁免，因此走正常的弹框授权流程。
+>
+> 早期版本（v3.0–v4.x）为了绕开这个弹框而使用 root 级 LaunchDaemon，代价是每次 `start`/`stop` 都要输管理员密码。权衡后改为默认用户级：点一次「允许」远优于每天输若干次密码。
+
+**两个已知限制**：
+
+1. 系统按代码签名与可执行文件 UUID 识别进程，而 mihomo 内核是从 GitHub 下载的 Go 二进制（ad-hoc 签名）。**`mihomo kernel` 更新内核后可能需要重新授权一次**，且 macOS 目前没有重置本地网络授权的机制。
+2. 若始终不弹框且局域网节点连不通，改用系统级安装：
+
+```bash
+mihomo uninstall
+mihomo install --system    # 装为 root LaunchDaemon，局域网天然豁免
+```
+
+系统级安装的 `install` / `start` / `stop` / `uninstall` 各需输一次管理员密码，但热重载（切订阅、开关覆写）仍然免密。`mihomo status` 会标明当前是「用户级」还是「系统级」。
+
+### TUN 与服务共存
+
+TUN 是临时模式，不走 launchd（本就需要 sudo，且用完即走）。两者会抢占同一组端口，因此服务运行时执行 `mihomo tun` 会被拦下：
+
+```bash
+mihomo stop      # 先停服务
+mihomo tun       # 起临时 TUN（需 sudo）
+mihomo stop      # 收掉 TUN
+mihomo start     # 恢复服务
+```
+
+### 日志
+
+服务模式下日志持续追加到 `mihomo.log`；超过 10MB 时，下次配置变更触发的重启会顺便轮转归档，不会无限增长。
 
 ## 内核更新镜像
 

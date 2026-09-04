@@ -140,15 +140,24 @@ export interface StaleState {
   needsSudo: boolean;
 }
 
-// === Daemon (launchd 保活) ===
+// === Service (launchd 服务) ===
 
-export interface DaemonStatus {
-  /** plist 文件是否存在（即用户是否启用过保活） */
-  enabled: boolean;
-  /** 托管内核是否在运行（免 sudo 近似：root 属主主实例进程存在；非 launchctl 真实装载状态） */
+/** 服务安装域：user = ~/Library/LaunchAgents（免 sudo）；system = /Library/LaunchDaemons（需 root） */
+export type ServiceDomain = 'user' | 'system';
+
+export interface ServiceStatus {
+  /** 已安装在哪个域；null = 未安装 */
+  domain: ServiceDomain | null;
+  /** plist 文件是否存在 */
+  installed: boolean;
+  /** launchctl print 能查到（已 bootstrap 进域） */
   loaded: boolean;
-  /** 被 launchd 托管的内核进程 PID（未运行为 null） */
+  /** 顶层 state = running */
+  running: boolean;
+  /** 服务进程 PID（未运行为 null） */
   pid: number | null;
+  /** 开机/登录自启是否被禁用（launchctl disable 位，独立于 plist 文件存在与否） */
+  disabled: boolean;
 }
 
 // === Kernel ===

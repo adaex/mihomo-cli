@@ -168,7 +168,7 @@ async function subUse(args: string[]): Promise<void> {
   }
   console.log(`已切换到 "${target.name}"`);
 
-  // 运行中(含保活:launchd 托管不写 pidFile)才重启使新订阅生效；透传用户显式的启动选项(-s/-u 等)
+  // 运行中(服务或 TUN)才重启使新订阅生效；透传用户显式的启动选项(-s/-u 等)
   if (await restartToApply(args)) return;
 
   console.log('');
