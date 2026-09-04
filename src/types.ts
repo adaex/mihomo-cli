@@ -262,7 +262,6 @@ export interface LogList {
 export interface ConfigInfo {
   proxies: number;
   proxyGroups: number;
-  mode: string;
   mixedPort: number | null;
   httpPort: number | null;
   socksPort: number | null;
@@ -284,8 +283,11 @@ export interface ResetTarget {
   label: string;
   paths: () => string[];
   needsStop: boolean;
-  /** 在删除 paths 之前执行。用于「删掉文件就再也做不成」的清理（如隧道要先读 pid 文件才能停进程） */
-  onBefore?: () => void;
+  /**
+   * 在删除 paths 之前执行。用于「删掉文件就再也做不成」的清理（如隧道要先读 pid 文件才能停进程）。
+   * 允许返回 Promise：停隧道要轮询等进程退出，是 async（见 process-stop.ts 的信号响应说明）。
+   */
+  onBefore?: () => void | Promise<void>;
   onAfter?: () => void;
   checkEmpty?: () => boolean;
   emptyMsg?: string;

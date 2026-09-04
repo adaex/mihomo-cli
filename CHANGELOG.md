@@ -1,5 +1,22 @@
 # Changelog
 
+## [3.12.1] - 2026-09-05
+
+并发数据丢失与信号响应两处稳定性修复。
+
+### 修复
+
+- **订阅缓存并发写丢失**：`cache.json` 的读-改-写此前无跨进程保护（`settings.json` 早有 `withFileLock`，缓存被漏掉）。两个 CLI 进程同时写——一个终端 `sub update` 并行下载各自回写、另一个终端 `start` 又触发自动更新——后写者会整块覆盖先写者的条目，实测 4 进程各写 30 条丢 7 条。
+
+  丢的是 `updated_at`，后果是该订阅 `needsAutoUpdate` 恒为 true、每次 `start` 都重新下载全量配置，且流量/到期展示一并消失。现在写入路径一律持锁，回归测试锁定（回退修复可稳定复现丢失）
+
+- **`stop` 等待进程退出期间 Ctrl+C 无响应**：`cleanupAll` 用 `Atomics.wait` 忙等最多 5 秒、`stopSshTunnel` 最多 4 秒，其间事件循环被完全阻塞，SIGINT 要等轮询走完才被处理（实测 5.3 秒）。用户在 `mihomo stop` 卡住时按 Ctrl+C 会以为 CLI 挂死。改用 async 轮询后实测 102ms 响应
+
+### 内部
+
+- `cleanupAll` / `stop` / `stopSshTunnel` / `stopAutoSshTunnels` / `stopAllSshTunnels` 改为 async；`ResetTarget.onBefore` 放宽为 `() => void | Promise<void>`。`withFileLock` 内的同步忙等**保持不变**——持锁期间让出事件循环会让另一进程等到强夺陈旧锁
+- 删除 `ConfigInfo.mode` 死字段（解析并声明，但无任何消费者）
+
 ## [3.12.0] - 2026-09-04
 
 `ssh` 弱化为只管端口，配置层剥离；内部重构与命令合并，减少冗余。

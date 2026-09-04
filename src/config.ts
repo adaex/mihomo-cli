@@ -429,7 +429,6 @@ export function getConfigInfo(): ConfigInfo | null {
     return {
       proxies: proxies ? proxies.length : 0,
       proxyGroups: proxyGroups ? proxyGroups.length : 0,
-      mode: (cfg.mode as string) || 'rule',
       mixedPort: (cfg['mixed-port'] as number) || null,
       httpPort: (cfg.port as number) || null,
       socksPort: (cfg['socks-port'] as number) || null,

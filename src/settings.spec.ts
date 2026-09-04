@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { maskUrl } from './settings.js';
@@ -57,5 +61,58 @@ describe('maskUrl 逗号：URL 整体处理，不做任何切分', () => {
   it('逗号落在 path 时，其后的长路径段仍按路径型令牌遮蔽', () => {
     const masked = maskUrl('https://a.com/s,https://b.com/sub/abcd1234567890efgh');
     assert.ok(!masked.includes('abcd1234567890efgh'), `路径型令牌应遮蔽: ${masked}`);
+  });
+});
+
+describe('saveSubscriptionCache 跨进程并发', () => {
+  it('多进程同时写入不丢条目（cache.json 的读-改-写持锁）', async () => {
+    // 回归测试：此前 saveSubscriptionCache 是裸读-改-写，只在单进程内靠「无 await」安全。
+    // 跨进程下后写者整块覆盖先写者，实测 4 进程各写 30 条丢 7 条。丢的是 updated_at →
+    // needsAutoUpdate 恒 true → 该订阅每次 start 都重新下载，且流量/到期展示消失。
+    //
+    // 必须用 spawn 而非 spawnSync：后者逐个跑完，根本不产生并发，测不出这个 bug。
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cache-race-'));
+    const settingsPath = path.resolve('src/settings.ts');
+    const WORKERS = ['A', 'B', 'C', 'D'];
+    const PER_WORKER = 15;
+
+    try {
+      const codes = await Promise.all(
+        WORKERS.map(
+          who =>
+            new Promise<number | null>(resolve => {
+              const child = spawn(
+                process.execPath,
+                [
+                  '--import',
+                  'tsx',
+                  '-e',
+                  `import { saveSubscriptionCache } from ${JSON.stringify(settingsPath)};
+                   for (let i = 0; i < ${PER_WORKER}; i++) {
+                     saveSubscriptionCache(${JSON.stringify(who)} + '-' + i, { total: i });
+                   }`,
+                ],
+                { stdio: 'ignore', env: { ...process.env, MIHOMO_CLI_DIR: tmpDir } },
+              );
+              child.on('close', code => resolve(code));
+              child.on('error', () => resolve(-1));
+            }),
+        ),
+      );
+      for (const code of codes) {
+        assert.equal(code, 0, '写入子进程应正常退出');
+      }
+
+      const cacheFile = path.join(tmpDir, 'subscriptions', 'cache.json');
+      const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')) as Record<string, unknown>;
+      const keys = Object.keys(cache);
+      const expected = WORKERS.length * PER_WORKER;
+      assert.equal(keys.length, expected, `期望 ${expected} 条，实际 ${keys.length} 条（并发写丢失）`);
+      for (const who of WORKERS) {
+        assert.equal(keys.filter(k => k.startsWith(`${who}-`)).length, PER_WORKER, `worker ${who} 的条目应完整保留`);
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

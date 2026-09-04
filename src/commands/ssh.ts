@@ -155,7 +155,7 @@ async function sshUp(args: string[]): Promise<void> {
   }
 }
 
-function sshDown(args: string[]): void {
+async function sshDown(args: string[]): Promise<void> {
   const name = getSshNameArg(args);
   const targets = name ? [resolveSshTunnel(name)] : getSshTunnels();
 
@@ -165,7 +165,7 @@ function sshDown(args: string[]): void {
 
   let stopped = 0;
   for (const config of targets) {
-    const result = ssh.stopSshTunnel(config.name);
+    const result = await ssh.stopSshTunnel(config.name);
     if (result.notRunning) {
       console.log(`${colors.yellow('不在运行')} ${config.name}`);
     } else {
@@ -228,7 +228,7 @@ async function sshRemove(args: string[]): Promise<void> {
     }
   }
 
-  ssh.stopSshTunnel(config.name);
+  await ssh.stopSshTunnel(config.name);
   ssh.removeSshTunnel(config.name);
 
   console.log(`${colors.green('已删除隧道')} ${config.name}`);

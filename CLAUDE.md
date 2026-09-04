@@ -195,6 +195,16 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 - mutator 必须同步，且不得再调 `updateSettings`/`writeSettings`——**锁不可重入**，会死等到强夺陈旧锁
 - 锁超过 10s 视为持锁进程已崩溃并强夺：宁可退回竞态，也不能让一次崩溃永久锁死 CLI
 
+**`cache.json` 同理，别只想着 settings**（v3.12.1 修）：`saveSubscriptionCache` 曾以「全程同步、读写之间无 await」自证安全，但那只在单进程内成立。跨进程下它就是裸读-改-写——实测 4 进程各写 30 条丢 7 条。丢的是 `updated_at` → `needsAutoUpdate` 恒 true → 该订阅每次 `start` 都重新下载，且流量/到期展示一并消失。写入路径（`saveSubscriptionCache` / `deleteSubscriptionCache`）一律持 `withFileLock`，回归测试在 `settings.spec.ts`（必须用 `spawn` 并行起子进程，`spawnSync` 逐个跑完根本测不出并发）。
+
+### 等进程退出的轮询用 async sleep，不用 sleepSync
+
+`sleepSync`（`Atomics.wait`）阻塞整个事件循环，**期间 SIGINT 完全不被处理**：`cleanupAll` 的 50×100ms 忙等实测要走完全程、5.3 秒后才响应 Ctrl+C，用户会以为 CLI 挂死。故 `cleanupAll` / `stop` / `stopSshTunnel` 及其包装（`stopAutoSshTunnels`/`stopAllSshTunnels`）都是 async，用 `sleep`。改后实测 102ms 响应。
+
+反例是 `withFileLock` 里的 `sleepSyncMs`：那里**必须同步**——持锁期间让出事件循环，慢速网络下另一进程会等到强夺陈旧锁，等于没锁。两处别混。
+
+`ResetTarget.onBefore` 因此放宽为 `() => void | Promise<void>`，`reset` 循环里要 `await`。
+
 ### 内核下载的来源信任
 
 上游 release 不提供 checksums（127 个资产实测，注释属实），故**把来源钉死是主要防线**，不是可选加固：

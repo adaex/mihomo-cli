@@ -61,7 +61,9 @@ export const RESET_TARGETS: ResetTarget[] = [
     // 维护的 overwrite.yaml 里（归 overwrites 目标管），这里没有额外文件要清
     paths: () => [DIRS.ssh],
     needsStop: false,
-    onBefore: () => stopAllSshTunnels(),
+    onBefore: async () => {
+      await stopAllSshTunnels();
+    },
     // 同步清空 settings 里的隧道列表：只删运行态会留下「列表在但状态没了」的半重置状态
     onAfter: () => writeSettings({ ssh: undefined }),
   },
@@ -233,7 +235,7 @@ export async function cmdReset(args: string[]): Promise<void> {
 
   if (needsStop && getMihomoPids().length > 0) {
     console.log('停止进程...');
-    const cleanup = cleanupAll();
+    const cleanup = await cleanupAll();
     for (let i = 0; i < PROCESS_WAIT_ATTEMPTS; i++) {
       if (getMihomoPids().length === 0) break;
       await new Promise(r => setTimeout(r, PROCESS_WAIT_INTERVAL));
@@ -255,7 +257,7 @@ export async function cmdReset(args: string[]): Promise<void> {
   }
 
   for (const t of targets) {
-    t.onBefore?.();
+    await t.onBefore?.();
     for (const p of t.paths()) {
       if (fs.existsSync(p)) {
         try {

@@ -172,15 +172,35 @@ function writeSubscriptionCache(cache: SubscriptionCache): void {
 }
 
 /**
- * 更新单个订阅的缓存条目（读全量→合并该条→写全量）。
- * 必须保持全程同步、读写之间不得插入 await：并行更新（autoUpdateStaleSubscription 的
- * Promise.all）依赖 Node 单线程下本函数不可被中断，才能避免「A 读旧全量、B 读旧全量、
- * B 写覆盖掉 A 的改动」的读-改-写丢失。临时文件踩踏另由 atomicWriteFileSync 的唯一临时名解决。
+ * 更新单个订阅的缓存条目（读全量→合并该条→写全量），**持跨进程锁**。
+ *
+ * 单进程内的并行更新（autoUpdateStaleSubscription 的 Promise.all）靠「全程同步、
+ * 读写之间无 await」即可安全，但那只在进程内成立：cache.json 与 settings.json 一样
+ * 会被多个 CLI 进程同时写（一个终端 `sub update` 并行下载各自回写，另一个终端
+ * `start` 又触发自动更新），裸读-改-写下后写者会整块覆盖先写者的条目。
+ * 实测 2 进程各写 30 条丢 1 条、4 进程各写 30 条丢 7 条。
+ *
+ * 丢的是 `updated_at` → `needsAutoUpdate` 恒 true → 该订阅每次 `start` 都重新下载，
+ * 且流量/到期展示一并消失。故与 settings.json 同构，把整个读-改-写圈进锁里。
  */
 export function saveSubscriptionCache(subName: string, data: Partial<SubscriptionCacheEntry>): void {
-  const cache = readSubscriptionCache();
-  cache[subName] = { ...cache[subName], ...data };
-  writeSubscriptionCache(cache);
+  ensureDirs();
+  withFileLock(PATHS.subscriptionsCacheFile, () => {
+    const cache = readSubscriptionCache();
+    cache[subName] = { ...cache[subName], ...data };
+    writeSubscriptionCache(cache);
+  });
+}
+
+/** 删除单个订阅的缓存条目。同 saveSubscriptionCache 持锁：并发下裸读-改-写会覆盖对方的条目。 */
+function deleteSubscriptionCache(subName: string): void {
+  ensureDirs();
+  withFileLock(PATHS.subscriptionsCacheFile, () => {
+    const cache = readSubscriptionCache();
+    if (!cache[subName]) return;
+    delete cache[subName];
+    writeSubscriptionCache(cache);
+  });
 }
 
 // === Subscription list ===
@@ -306,11 +326,7 @@ export function removeSubscription(name: string): string | null {
 
   if (!found) return null;
 
-  const cache = readSubscriptionCache();
-  if (cache[name]) {
-    delete cache[name];
-    writeSubscriptionCache(cache);
-  }
+  deleteSubscriptionCache(name);
 
   // 名字非法（手改 settings.json）时 getSubscriptionRawConfigPath 会抛错；
   // 此处跳过文件清理即可——订阅已从设置移除，非法路径的文件本就不应存在

@@ -4,12 +4,19 @@ import fs from 'node:fs';
 import { DIRS, ensureDirs, PATHS, rmrf } from './paths.js';
 import { getMihomoPids, isPidFileOwnedByRoot, isProcessRoot, MAIN_INSTANCE_PATTERN } from './process-probe.js';
 import type { CleanupResult, StopResult } from './types.js';
-import { sleepSync } from './utils.js';
+import { sleep } from './utils.js';
 
 /**
  * 内核进程的停止与残留清理。与启动（process-start.ts）分家：
  * stop 被 start/stop/reset 三处调用，cleanupAll 还被 start 复用，
  * 合在一起会让「停」依赖「启」的全部家当。
+ *
+ * 「等进程退出」的轮询用 async 的 `sleep` 而非 `sleepSync`：后者是 `Atomics.wait`，
+ * 会阻塞整个事件循环，**期间 SIGINT 完全不被处理**（实测 50×100ms 的忙等要等循环
+ * 全部走完、5.3 秒后才响应 Ctrl+C）。用户在 `mihomo stop` 卡住时按 Ctrl+C 会以为
+ * CLI 挂死。改 async 后信号在下一个 await 间隙即可送达。
+ * （`withFileLock` 里的忙等是另一回事，那里必须同步——持锁期间让出事件循环，
+ * 慢速网络下另一进程会等到强夺陈旧锁，等于没锁。）
  */
 
 export const PROCESS_WAIT_ATTEMPTS = 50;
@@ -70,7 +77,7 @@ function killAllMihomo(forceSudo = false): boolean {
   }
 }
 
-export function cleanupAll(forceSudo = false): CleanupResult {
+export async function cleanupAll(forceSudo = false): Promise<CleanupResult> {
   const pids = getMihomoPids();
   if (pids.length === 0) {
     clearPid();
@@ -107,7 +114,7 @@ export function cleanupAll(forceSudo = false): CleanupResult {
 
   for (let i = 0; i < PROCESS_WAIT_ATTEMPTS; i++) {
     if (getMihomoPids().length === 0) break;
-    sleepSync(PROCESS_WAIT_INTERVAL);
+    await sleep(PROCESS_WAIT_INTERVAL);
   }
 
   clearPid();
@@ -115,7 +122,7 @@ export function cleanupAll(forceSudo = false): CleanupResult {
   return { killed: killedCount, failed: failedPids.length, remaining: getMihomoPids() };
 }
 
-export function stop(forceSudo = false): StopResult {
+export async function stop(forceSudo = false): Promise<StopResult> {
   const allPids = getMihomoPids();
   if (allPids.length === 0) {
     clearPid();
@@ -123,7 +130,7 @@ export function stop(forceSudo = false): StopResult {
     return { success: true, notRunning: true };
   }
 
-  const result = cleanupAll(forceSudo);
+  const result = await cleanupAll(forceSudo);
 
   const remaining = getMihomoPids();
   if (remaining.length > 0) {

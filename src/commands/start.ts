@@ -111,7 +111,7 @@ export async function cmdStart(args: string[]): Promise<void> {
       console.log(`停止 ${count} 个进程...`);
     }
 
-    handleStopResult(stop());
+    handleStopResult(await stop());
 
     if (hasProcess) {
       console.log(`${colors.green('已停止进程')}\n`);

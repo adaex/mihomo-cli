@@ -109,7 +109,7 @@ async function startMixedMode(staleState: StaleState): Promise<StartResult> {
       throw new Error('存在需要 root 权限清理的残留');
     }
 
-    const cleanupResult = cleanupAll();
+    const cleanupResult = await cleanupAll();
     if (cleanupResult.killed > 0) {
       console.log(`清理了 ${cleanupResult.killed} 个残留进程`);
     }

@@ -10,7 +10,7 @@ import { atomicWriteFileSync, DIRS, ensureDirs } from './paths.js';
 import { isProcessCommandMatching, isProcessRunning } from './process-probe.js';
 import { getSshTunnels, updateSettings, validateSshName } from './settings.js';
 import type { Settings, SshConfig, SshRuntime, SshStatus } from './types.js';
-import { sleepSync } from './utils.js';
+import { sleep } from './utils.js';
 
 /**
  * ssh -D 动态转发隧道：启停与真实状态。**只管端口，不碰配置**。
@@ -416,8 +416,11 @@ export interface StopSshResult {
  * 停止隧道。SIGTERM → 轮询 → SIGKILL：ssh 收到 SIGTERM 会关闭转发通道再退出，
  * 直接 SIGKILL 可能留下半开连接。（现有代码对内核一律裸 SIGKILL，但内核是自己的进程，
  * 语义不同。）
+ *
+ * 轮询用 async 的 `sleep`：`sleepSync`（Atomics.wait）会阻塞事件循环，期间 SIGINT
+ * 完全不被处理——最坏情况 SIGTERM 等 2 秒 + SIGKILL 再等 2 秒，Ctrl+C 要 4 秒后才响应。
  */
-export function stopSshTunnel(name: string): StopSshResult {
+export async function stopSshTunnel(name: string): Promise<StopSshResult> {
   const config = findSshTunnel(name);
   const runtime = readSshRuntime(name);
   if (!runtime) {
@@ -441,7 +444,7 @@ export function stopSshTunnel(name: string): StopSshResult {
 
   for (let i = 0; i < STOP_WAIT_ATTEMPTS; i++) {
     if (!isProcessRunning(pid)) break;
-    sleepSync(STOP_WAIT_INTERVAL);
+    await sleep(STOP_WAIT_INTERVAL);
   }
 
   if (isProcessRunning(pid) && isProcessCommandMatching(pid, commandNeedle(port))) {
@@ -452,7 +455,7 @@ export function stopSshTunnel(name: string): StopSshResult {
     }
     for (let i = 0; i < STOP_WAIT_ATTEMPTS; i++) {
       if (!isProcessRunning(pid)) break;
-      sleepSync(STOP_WAIT_INTERVAL);
+      await sleep(STOP_WAIT_INTERVAL);
     }
   }
 
@@ -497,12 +500,12 @@ export async function startAutoSshTunnels(): Promise<AutoSshOutcome[]> {
  * **只停 started_by === 'auto' 的**——手动 `ssh up` 起的不该被 `stop` 带走，
  * 否则下次 start 又起一个，累积僵尸进程。
  */
-export function stopAutoSshTunnels(): string[] {
+export async function stopAutoSshTunnels(): Promise<string[]> {
   const stopped: string[] = [];
   for (const tunnel of getSshTunnels()) {
     const runtime = readSshRuntime(tunnel.name);
     if (runtime?.started_by !== 'auto') continue;
-    const result = stopSshTunnel(tunnel.name);
+    const result = await stopSshTunnel(tunnel.name);
     if (!result.notRunning) stopped.push(tunnel.name);
   }
   return stopped;
@@ -512,10 +515,10 @@ export function stopAutoSshTunnels(): string[] {
  * 停止全部隧道，不论 started_by。供 `reset` 使用：删掉运行态文件后就再也找不到
  * 那些 ssh 进程，它们会继续占着端口跑下去且 CLI 无路径可停，故必须在删除前停干净。
  */
-export function stopAllSshTunnels(): string[] {
+export async function stopAllSshTunnels(): Promise<string[]> {
   const stopped: string[] = [];
   for (const tunnel of getSshTunnels()) {
-    const result = stopSshTunnel(tunnel.name);
+    const result = await stopSshTunnel(tunnel.name);
     if (!result.notRunning) stopped.push(tunnel.name);
   }
   return stopped;
