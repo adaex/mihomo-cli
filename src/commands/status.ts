@@ -94,7 +94,9 @@ export async function printStatus(): Promise<void> {
       if (s.state === 'running') return colors.green(label);
       // 假活必须与未运行区分：进程在、端口不通，mihomo 仍在往死端口送流量
       if (s.state === 'dead-port') return colors.yellow(`${label} 假活`);
-      return colors.gray(label);
+      // 带文字后缀而非只靠灰色：NO_COLOR 或管道输出时颜色会被剥掉，
+      // 只着色的话「运行中」与「未运行」在纯文本下完全一样，等于没显示状态
+      return colors.gray(`${label} 未运行`);
     });
     console.log(`${colors.gray('隧道: ')}${parts.join(', ')}`);
   }

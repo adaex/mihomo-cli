@@ -145,11 +145,11 @@ export const COMMANDS: Command[] = [
     handler: cmdSsh,
     group: 'system',
     usage: [
-      'ssh                         列出 ssh 隧道',
+      'ssh                         列出 ssh 隧道（本地 SOCKS5 端口）',
       'ssh add <名字> --host <主机> --port <端口> [--no-auto]',
       'ssh up|down [名字]          启动/停止隧道（无参即全部）',
       'ssh status [名字]           查看隧道状态（真实探测端口）',
-      'ssh rm <名字> [-y]          删除隧道（不删配置文件）',
+      'ssh rm <名字> [-y]          删除隧道',
     ],
   },
   {

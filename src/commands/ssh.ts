@@ -1,11 +1,48 @@
+import fs from 'node:fs';
+
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
+import { USER_DATA_DIR } from '../paths.js';
 import { getSshTunnels } from '../settings.js';
 import * as ssh from '../ssh.js';
-import { ensureSshConfigFile, getSshConfigPath } from '../ssh-config.js';
 import type { SshConfig, SshStatus } from '../types.js';
 import { getNonFlagArg, hasFlag, parseStringArg, suggestSimilar } from '../utils.js';
-import { confirmOrThrow, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
+import { confirmOrThrow, dispatchSubcommand, type SubCommand } from './shared.js';
+
+/**
+ * 提醒残留的 `ssh.*.yaml`：v3.12.0 起这些文件不再被加载，里面的分组和规则**已经失效**。
+ * 不自动删也不自动迁移（用户手写的分流规则不可恢复，且合并进 overwrite.yaml 需要人判断），
+ * 但必须说出来——否则就是「配置还在、看着没变、实际不生效」这种最难查的静默失效。
+ */
+function warnLegacySshConfigFiles(): void {
+  if (!fs.existsSync(USER_DATA_DIR)) return;
+  const legacy = fs.readdirSync(USER_DATA_DIR).filter(f => /^ssh\..+\.ya?ml$/.test(f));
+  if (legacy.length === 0) return;
+
+  console.log(colors.yellow(`警告: 发现 ${legacy.length} 个已失效的 ssh 配置文件`));
+  for (const f of legacy) {
+    console.log(colors.gray(`  ${f}`));
+  }
+  console.log(colors.gray('  v3.12.0 起 CLI 不再加载它们，其中的分组与规则已不生效'));
+  console.log(colors.gray('  需要的话把内容并入 overwrite.yaml（含 socks5 节点定义），然后自行删除'));
+  console.log('');
+}
+
+/**
+ * 打印「怎么把这条隧道接进配置」的示例片段。
+ *
+ * CLI 只管端口，不再生成也不再合并任何 ssh 配置文件（v3.12.0）：节点与分流规则
+ * 一律由用户自己写进 overwrite.yaml。此前 CLI 依据 settings 合成节点并独立于
+ * `ow off` 合并，多出一整条只服务一个功能的配置管线，也让「配置从哪来」有两个答案。
+ * 现在只在这里把片段打出来，复制即可用——端口以本命令显示的为准。
+ */
+function printOverwriteSnippet(config: SshConfig): void {
+  console.log(colors.gray('把隧道接入分流：在 overwrite.yaml 里加上（改成你的内网域名）'));
+  console.log(colors.gray(`  ~proxies:`));
+  console.log(colors.gray(`    - {name: SSH-${config.name}, type: socks5, server: 127.0.0.1, port: ${config.port}}`));
+  console.log(colors.gray(`  +rules:`));
+  console.log(colors.gray(`    - DOMAIN-SUFFIX,example.internal,SSH-${config.name}`));
+}
 
 /** 状态的展示文本：三态各自着色，「假活」必须与「运行中」区分开——那正是最误导的形态 */
 function formatState(status: SshStatus): string {
@@ -38,12 +75,13 @@ function requireSshNameArg(args: string[], usage: string): string {
 async function printSshList(): Promise<void> {
   const tunnels = getSshTunnels();
   console.log('');
+  warnLegacySshConfigFiles();
   if (tunnels.length === 0) {
     console.log('没有配置隧道');
     console.log('');
     console.log('添加隧道: mihomo ssh add <名字> --host <ssh主机> --port <端口>');
     console.log(colors.gray('  例如: mihomo ssh add work --host m4 --port 1080'));
-    console.log(colors.gray('  隧道把内网出口暴露为本地 SOCKS5，配合 ssh.<名字>.yaml 分流内网域名'));
+    console.log(colors.gray('  隧道把内网出口暴露为本地 SOCKS5，节点与分流规则写进 overwrite.yaml'));
     console.log('');
     return;
   }
@@ -57,7 +95,6 @@ async function printSshList(): Promise<void> {
     console.log(`  ${colors.bold(config.name)}${autoLabel}`);
     console.log(`    ${colors.gray('出口: ')}${config.host} → 127.0.0.1:${config.port}`);
     console.log(`    ${colors.gray('状态: ')}${formatState(status)}`);
-    console.log(`    ${colors.gray('配置: ')}${getSshConfigPath(config.name)}`);
     if (status.started_by) {
       console.log(`    ${colors.gray('来源: ')}${status.started_by === 'auto' ? '随 start 拉起' : '手动启动'}`);
     }
@@ -68,7 +105,7 @@ async function printSshList(): Promise<void> {
   console.log('');
 }
 
-async function sshAdd(args: string[]): Promise<void> {
+function sshAdd(args: string[]): void {
   const name = requireSshNameArg(args, '用法: mihomo ssh add <名字> --host <ssh主机> --port <端口> [--no-auto]');
 
   const host = parseStringArg(args, '--host');
@@ -92,24 +129,11 @@ async function sshAdd(args: string[]): Promise<void> {
   const config: SshConfig = { name, host, port, auto };
   ssh.addSshTunnel(config);
 
-  const created = ensureSshConfigFile(config);
-  const configPath = getSshConfigPath(name);
-
   console.log(`${colors.green('已添加隧道')} ${name} · ${host} → 127.0.0.1:${port}${auto ? ' · auto' : ''}`);
   console.log('');
-  if (created) {
-    console.log(`已生成配置模板: ${configPath}`);
-    console.log(colors.gray('  socks5 节点由 CLI 自动注入，模板只建好分组，分流规则需你填写（CLI 无从知道你的内网域名）'));
-    console.log(colors.gray('  编辑后执行 mihomo start 生效'));
-  } else {
-    console.log(`配置文件已存在，未改动: ${configPath}`);
-  }
+  printOverwriteSnippet(config);
   console.log('');
   console.log(`启动隧道: mihomo ssh up ${name}`);
-
-  // 节点由 CLI 依据 settings 注入，故端口/主机变更本身就需重启生效——
-  // 不能像此前那样只在「新建了模板」时重启（改端口时文件已存在，会漏掉重启）
-  await restartToApply(args);
 }
 
 async function sshUp(args: string[]): Promise<void> {
@@ -121,10 +145,6 @@ async function sshUp(args: string[]): Promise<void> {
   }
 
   for (const config of targets) {
-    // 自愈：配置文件被 reset ssh 之类删掉后，这里补建回来
-    if (ensureSshConfigFile(config)) {
-      console.log(colors.gray(`已补建配置模板: ${getSshConfigPath(config.name)}`));
-    }
     // 手动启动记 manual：`mihomo stop` 只带走 auto 的，用户显式起的不该被连带停掉
     const result = await ssh.startSshTunnel(config.name, { startedBy: 'manual' });
     if (result.alreadyRunning) {
@@ -156,7 +176,7 @@ function sshDown(args: string[]): void {
 
   if (stopped > 0) {
     console.log('');
-    console.log(colors.gray('注意: 配置里的隧道节点仍在，现在指向未监听的端口'));
+    console.log(colors.gray('注意: overwrite.yaml 里指向该端口的节点现在连不通'));
   }
 }
 
@@ -213,11 +233,9 @@ async function sshRemove(args: string[]): Promise<void> {
 
   console.log(`${colors.green('已删除隧道')} ${config.name}`);
   console.log('');
-  // 不代删用户维护的配置文件：那可能含用户手写的分流规则，删掉不可恢复
-  console.log(`配置文件未删除: ${getSshConfigPath(config.name)}`);
-  // 节点随 settings 条目一起消失（由 CLI 注入），文件里的分组因此引用不到节点，
-  // 会被 validateConfig 连同相关规则一并移除并告警——不会生成非法配置，但会有噪音
-  console.log(colors.gray('  其中的分组已引用不到节点，下次 start 会被自动移除，如不再需要请自行删除该文件'));
+  // CLI 不碰 overwrite.yaml：那是用户维护的资产，代改会动到手写的分流规则。
+  // 端口没了之后节点连不通，但配置本身仍合法，不影响其余流量
+  console.log(colors.gray(`如 overwrite.yaml 里写过指向 127.0.0.1:${config.port} 的节点，请自行移除`));
 }
 
 /** 按名精确解析隧道；未找到时列出可用名称。隧道通常只有一两条，不引入模糊匹配。 */

@@ -36,9 +36,6 @@ export const PATHS = {
   configStage1Subscription: path.join(DIRS.runtime, '1.subscription.yaml'),
   configStage2Overwrite: path.join(DIRS.runtime, '2.overwrite.yaml'),
   configStage3System: path.join(DIRS.runtime, '3.system.yaml'),
-  // ssh 单列一个 stage：它不受 overwrite 开关约束，混进 2.overwrite.yaml 会让
-  // `ow off` 时的调试输出自相矛盾（覆写已禁用，文件里却有内容）
-  configStage4Ssh: path.join(DIRS.runtime, '4.ssh.yaml'),
   // launchd LaunchDaemon plist 位于系统级 /Library/LaunchDaemons/，root:wheel 拥有，与 homedir / MIHOMO_CLI_DIR 无关
   launchDaemonPlist: path.join('/Library/LaunchDaemons', `${LAUNCH_DAEMON_LABEL}.plist`),
 } as const;

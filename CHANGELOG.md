@@ -6,7 +6,27 @@
 
 ### 破坏性变更
 
+- **`ssh` 弱化为「只管端口」**：CLI 不再生成 `ssh.*.yaml`、不再合成 socks5 节点、不再往主配置里注入 ssh 层（`src/ssh-config.ts` 已删除）。`ssh` 现在只负责起停 `ssh -D 127.0.0.1:<端口>` 并真实探测端口死活；节点与分流规则改由你写进 `overwrite.yaml`，`ssh add` 会把可复制的片段打印出来
+
+  **升级须知**：已有的 `ssh.*.yaml` 不再被加载，其中的分组与规则会失效。把内容搬进 `overwrite.yaml`，并补上此前由 CLI 注入的节点：
+
+  ```yaml
+  ~proxies:
+    - {name: SSH-work, type: socks5, server: 127.0.0.1, port: 1080}
+  ```
+
+  注意节点名不再有 `-Host` 后缀（`SSH-Work-Host` → 自己取名），端口以 `mihomo ssh` 显示的为准。副作用：`ow off` 现在会连带关掉 ssh 分流（此前刻意独立）；`ssh add` 不再自动重启；`reset ssh` 只删运行态，覆写文件归 `reset ow` 管
+
 - **移除 `daemon status` 子命令**：与裸 `daemon` 输出完全相同，且顶层 `status` 已覆盖保活状态。查看状态用 `mihomo daemon`（无参）或 `mihomo status`
+- **移除 `sub list` / `ssh list` 子命令**：裸 `sub` / `ssh` 即列表，与 `dir` / `ow` 同口径（v3.11.0 已删掉 `dir list` / `ow list`，此前一半命令能敲 `list` 一半不能）
+
+### 修复
+
+- **`start` 改为先校验配置、后停机**：坏订阅或坏覆写此前会在停掉运行中的内核**之后**才报错，留下「已停机 + 无 config.yaml」的半死状态且无从回滚。现在构建失败时运行中的代理原样保留
+- **`logs` 透传 `tail` 的退出码**：日志文件不存在时此前恒退 0，脚本里 `mihomo logs 0 > out` 会把空结果当成功
+- **`kernel` 拒绝未知选项**：`mihomo kernel --mirrror` 此前被静默忽略、按直连下载
+- **`sub add` 拒绝以 `-` 开头的订阅名**：能建出但删不掉（`remove` 会把它当选项跳过）
+- **`status` 的隧道行在无颜色环境下可读**：未运行的隧道此前只靠灰色区分，`NO_COLOR` 或管道输出时与运行中完全一样
 
 ### 变更
 

@@ -9,7 +9,6 @@ import { getMihomoPids } from '../process-probe.js';
 import { cleanupAll, PROCESS_WAIT_ATTEMPTS, PROCESS_WAIT_INTERVAL } from '../process-stop.js';
 import { invalidateSettingsCache, writeSettings } from '../settings.js';
 import { stopAllSshTunnels } from '../ssh.js';
-import { isSshFilename } from '../ssh-config.js';
 import type { ResetTarget } from '../types.js';
 import { confirmOrThrow } from './shared.js';
 
@@ -58,18 +57,9 @@ export const RESET_TARGETS: ResetTarget[] = [
     id: 'ssh',
     aliases: ['ssh'],
     label: '隧道',
-    // 连 ssh.*.yaml 一并删：它们既不匹配 isOverwriteFilename（不归 overwrites 目标），
-    // 本目标又只管运行态的话，`reset --full` 会留下配置文件，与「删全部」的承诺不符。
-    // 单条 `ssh rm` 则刻意不删该文件（用户手写的分流规则不可恢复），两者语义不同
-    paths: () => {
-      const files = fs.existsSync(USER_DATA_DIR)
-        ? fs
-            .readdirSync(USER_DATA_DIR)
-            .filter(isSshFilename)
-            .map(f => `${USER_DATA_DIR}/${f}`)
-        : [];
-      return [DIRS.ssh, ...files];
-    },
+    // 只删运行态：v3.12.0 起 CLI 不再生成任何 ssh 配置文件，节点/规则都在用户自己
+    // 维护的 overwrite.yaml 里（归 overwrites 目标管），这里没有额外文件要清
+    paths: () => [DIRS.ssh],
     needsStop: false,
     onBefore: () => stopAllSshTunnels(),
     // 同步清空 settings 里的隧道列表：只删运行态会留下「列表在但状态没了」的半重置状态

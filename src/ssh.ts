@@ -13,11 +13,12 @@ import type { Settings, SshConfig, SshRuntime, SshStatus } from './types.js';
 import { sleepSync } from './utils.js';
 
 /**
- * ssh -D 动态转发隧道的**进程侧**：启停与真实状态。
+ * ssh -D 动态转发隧道：启停与真实状态。**只管端口，不碰配置**。
  *
- * 配置侧（ssh.<name>.yaml 的加载、节点合成、与主配置合并）在 ssh-config.ts。
- * 分家是为了依赖方向：config.ts 要用配置侧，而本模块依赖 process-probe.ts、
- * process-probe.ts 又依赖 config.ts——不拆会成环。
+ * v3.12.0 起 CLI 不再生成 `ssh.*.yaml`、也不再往主配置里注入 socks5 节点
+ * （原 ssh-config.ts 已删除）：那条只服务单一功能的配置管线让「节点从哪来」有两个
+ * 答案，且 config.ts 需要绕开循环依赖才能用它。现在隧道就是一个本地 SOCKS5 端口，
+ * 要不要接进分流、怎么接，由用户自己写进 overwrite.yaml。
  *
  * 放 src/ 而非 commands/：commands 的 start/stop/status 三处都要用它，
  * 放命令层会造成命令层互相 import。

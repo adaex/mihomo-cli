@@ -242,11 +242,7 @@ function isValidSshConfig(t: unknown): t is SshConfig {
   );
 }
 
-/**
- * 隧道列表的唯一读取入口。住在 settings.ts 而非 ssh.ts：ssh-config.ts（配置合并，
- * 被 config.ts 依赖）也要读它，放 ssh.ts 会让 config.ts 经 ssh-config → ssh 多绕一层
- * 进程模块的依赖。
- */
+/** 隧道列表的唯一读取入口。与订阅列表同址，共用 readSettingsList 的容错口径。 */
 export function getSshTunnels(): SshConfig[] {
   return readSettingsList('ssh', isValidSshConfig, '可用 mihomo ssh add 重新添加');
 }

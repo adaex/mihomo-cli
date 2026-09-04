@@ -38,8 +38,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/sudo.ts`              | runSudoScript：TUN 与 launchd 保活共用的 sudo 脚本范式 |
 | `src/daemon.ts`            | launchd 保活：开机自启/崩溃重启、热重载、状态查询 |
 | `src/runtime.ts`           | 运行时门面：收敛普通进程/保活双轨（模式、状态、启停） |
-| `src/ssh.ts`               | ssh -D 隧道进程侧：运行态文件、端口探测、启停 |
-| `src/ssh-config.ts`        | ssh 隧道配置侧：ssh.*.yaml 加载、节点合成、与主配置合并（独立于 ow 开关） |
+| `src/ssh.ts`               | ssh -D 隧道：运行态文件、端口探测、启停（只管端口，不碰配置） |
 | `src/lifecycle.ts`         | 退出清理注册表（信号/异常退出前清理 detached 子进程） |
 | `src/kernel.ts`            | GitHub Releases 检查、下载        |
 | `src/overwrite.ts`         | 覆写配置合并                      |
@@ -247,12 +246,11 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 settings.json           # 用户设置
 overwrite.yaml          # 覆写配置（主文件，可选）
 overwrite.*.yaml        # 覆写配置（扩展文件，如 overwrite.dns.yaml）
-ssh.*.yaml              # ssh 隧道分流配置（独立于 overwrite 开关，见下）
 subscriptions/          # 订阅配置和缓存
 kernel/                 # 内核二进制
 logs/                   # 当前日志 + 归档日志 + ssh-<名字>.log
 data/                   # mihomo 运行数据
-runtime/                # pid, config.yaml, 分阶段调试文件(1.subscription/2.overwrite/3.system/4.ssh.yaml)
+runtime/                # pid, config.yaml, 分阶段调试文件(1.subscription/2.overwrite/3.system)
 ssh/                    # 隧道运行态 <名字>.json（刻意不放 runtime/，见下）
 ```
 
@@ -271,37 +269,19 @@ ssh/                    # 隧道运行态 <名字>.json（刻意不放 runtime/�
 `--host` 拒绝 `-` 开头（`-oProxyCommand=...` 即任意命令执行）；
 状态判定必须**真实探测端口**而非只看进程在不在（否则识别不出「进程在、转发已死」的假活）。
 
-#### 配置侧与进程侧分家
+#### 只管端口，不碰配置（v3.12.0 起）
 
-`ssh-config.ts`（纯数据：文件加载、节点合成、合并）与 `ssh.ts`（进程启停）必须分开：
-`config.ts` 要在 `buildConfig` 里调配置侧，而 `ssh.ts` 依赖 `process-probe.ts`、`process-probe.ts` 又依赖
-`config.ts`——合在一起就是循环依赖。`ssh-config.ts` 因此只许依赖纯数据层。
+CLI 不生成 `ssh.*.yaml`、不合成 socks5 节点、不往 `buildConfig` 里插任何 ssh 层
+（`src/ssh-config.ts` 已删除）。节点与分流规则由用户自己写进 `overwrite.yaml`，
+`ssh add` 只把可复制的片段打印出来。
 
-#### 节点由 CLI 内建注入，且必须最后合并
+移除的理由，改回去前先读一遍：那条管线为单一功能立了第二套「配置从哪来」的答案
+（一份在 overwrite，一份 CLI 内建注入），还要靠 config/process 拆两个模块来绕开
+循环依赖，并为「独立于 ow 开关」写一整套只此一处适用的合并规则。收益仅是省掉用户
+手写四行 YAML。现在 `ssh` 就是「起一个本地 SOCKS5 端口 + 报告它死活」。
 
-socks5 节点**不写进用户文件**，由 `renderSshProxy` 依据 settings 的 host/port 合成。
-此前节点写在覆写模板里，与 settings 构成两份真相：`ssh rm` 后换端口 `add`，
-模板已存在故不重建，配置仍指向旧端口，**静默失效**。
-
-`applySshConfig` 内部顺序**不可调换**：先合用户 `ssh.*.yaml`，再注入 CLI 节点。
-`~proxies` 是字段级合并且后合并者胜——顺序写反的话，用户手写同名节点就能改掉
-port/server（连 `127.0.0.1` 绑定都能绕过），又退回两份真相。有单测锁定。
-
-#### 独立于 overwrite 开关
-
-`ow off` 只关覆写，ssh 分流照常——覆写是可选调优，内网出口是刚需。落点在 `buildConfig`：
-ssh 层不看 `isOverwriteEnabled()`。**不能复用 `applyOverwrite`**，它开头就有
-`if (!isOverwriteEnabled()) return`，传了 preloadedFiles 也会被旁路；直接用
-`deepMergeWithOverrides`。文件名 `ssh.*.yaml` 与 `isOverwriteFilename` 的
-`overwrite.*.yaml` 互不匹配（有双向单测），故 `reset ow` 也不会删它。
-
-内建注入的节点名要经 `excludeOverwriteProxiesFromIncludeAll` 的 `extraNames` 参数
-排除出 include-all 分组，否则被重复纳入。
-
-#### 文件归属
-
-模板仅在**文件不存在时**生成，生成后完全由用户维护。`ssh rm` **不删**该文件
-（可能有手写分流规则）；但 `reset ssh` / `reset --full` **要删**，否则「删全部」名不副实。
+代价是端口改了要用户自己同步覆写文件——这是明确接受的取舍，`ssh add` / `ssh rm`
+的输出都会提醒。
 
 ---
 

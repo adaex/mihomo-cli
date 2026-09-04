@@ -13,7 +13,7 @@
 - 🔄 **智能重启** - `sub use` 切换订阅、`ow on/off` 切换覆写后自动重启
 - 🚀 **进程管理** - 启动/停止/切换模式，自动清理残留进程
 - 🛡️ **进程保活** - 基于 launchd（root），崩溃/开机自动拉起，代理后台常驻（`daemon on`）
-- 🔌 **ssh 隧道出口** - 管理 `ssh -D` 进程生命周期，把内网机器变成本地 SOCKS5 出口，随 `start` 一并拉起
+- 🔌 **ssh 隧道出口** - 管理 `ssh -D` 进程生命周期，把内网机器变成本地 SOCKS5 端口，随 `start` 一并拉起
 - 🔄 **双模式支持** - Mixed 模式和 TUN 透明代理模式
 - 📊 **状态监控** - 查看运行状态、内存占用、订阅流量与到期时间
 - 📝 **日志管理** - 实时日志 + 历史日志归档（自动轮转，保留7天）
@@ -123,10 +123,10 @@ mihomo ui yacd     # YACD
 | `mihomo kernel [--mirror [镜像]]` | 更新内核（默认直连，`--mirror` 使用镜像；更新后运行中实例需重启生效） |
 | `mihomo daemon [on\|off]`    | 进程保活：开机自启 + 崩溃自动重启（仅 Mixed 模式，on/off 需管理员密码，无参看状态）  |
 | `mihomo ssh`                      | 列出 ssh 隧道及真实状态                                              |
-| `mihomo ssh add <名字> --host <主机> --port <端口> [--no-auto]` | 添加隧道并生成配置模板（默认随 start 拉起） |
+| `mihomo ssh add <名字> --host <主机> --port <端口> [--no-auto]` | 添加隧道（默认随 start 拉起） |
 | `mihomo ssh up\|down [名字]`      | 启动/停止隧道（无参即全部）                                          |
 | `mihomo ssh status [名字]`        | 查看隧道状态（真实探测端口，能识别「假活」）                          |
-| `mihomo ssh rm <名字> [-y]`       | 删除隧道（不删配置文件）                                             |
+| `mihomo ssh rm <名字> [-y]`       | 删除隧道                                                             |
 | `mihomo update`                   | 更新 mihomo-cli（先查 npm 最新版，已是最新则跳过重装）              |
 | `mihomo ui [zash\|dash\|yacd]`    | 打开 Web UI                                                         |
 | `mihomo dir`                      | 显示数据目录位置                                                    |
@@ -172,7 +172,7 @@ mihomo ui yacd     # YACD
 
 ## ssh 隧道出口
 
-把一台可 ssh 登录的机器（如公司内网的机器）变成本地 SOCKS5 出口，配合分流规则即可只让内网域名走它，其余流量照常走订阅节点。本功能负责的是 **ssh 进程的生命周期管理**——隧道断了 mihomo 并不知情，会一直往死端口送流量。
+把一台可 ssh 登录的机器（如公司内网的机器）变成本地 SOCKS5 出口，配合分流规则即可只让内网域名走它，其余流量照常走订阅节点。本功能**只负责 ssh 进程的生命周期**——起一个端口、告诉你它是死是活，不碰任何配置文件。
 
 ```bash
 mihomo ssh add work --host m4 --port 1080   # m4 是 ~/.ssh/config 里的别名
@@ -181,21 +181,17 @@ mihomo ssh status                           # 查看状态（真实探测端口�
 mihomo ssh down work                        # 停止
 ```
 
-socks5 节点由 CLI 依据 `mihomo ssh add` 记录的 host/port **自动注入**，无需也不要手写——端口只有一个真相，改端口重新 `add` 即可，配置会自动跟上。
-
-`add` 会生成一份配置模板 `ssh.<名字>.yaml`，其中已建好代理分组，
-**分流规则留白待你填写**（CLI 无从知道你的内网域名）：
+隧道起来之后，要不要接进分流、怎么接，由你写进 `overwrite.yaml`（`ssh add` 会把片段打印出来，复制即可）：
 
 ```yaml
-# 取消注释并改成你的内网域名/网段
+~proxies:
+  - {name: SSH-work, type: socks5, server: 127.0.0.1, port: 1080}
 +rules:
-  - DOMAIN-SUFFIX,example.internal,SSH-Work
-  - IP-CIDR,10.0.0.0/8,SSH-Work
+  - DOMAIN-SUFFIX,example.internal,SSH-work
+  - IP-CIDR,10.0.0.0/8,SSH-work
 ```
 
-该文件生成后**完全由你维护**，CLI 不会再改写；`ssh rm` 也不会删它（`reset ssh` 会）。改完执行 `mihomo start` 生效。
-
-它支持与覆写文件相同的 `~`/`+` 语法，但**独立于覆写开关**：`mihomo ow off` 只关覆写，内网分流照常工作——覆写是可选调优，内网出口是刚需。同理 `reset ow` 不会删 `ssh.*.yaml`。
+改完执行 `mihomo start` 生效。端口以 `mihomo ssh` 显示的为准——改端口时记得同步改这里，CLI 不会代改你的覆写文件。
 
 ### 与 start / stop 的联动
 
@@ -216,7 +212,7 @@ socks5 节点由 CLI 依据 `mihomo ssh add` 记录的 host/port **自动注入*
 
 ### 安全边界
 
-- `-D` **恒绑 `127.0.0.1`**，不提供绑定地址开关：绑 `0.0.0.0` 会让同一 WiFi 下任何设备都能经本机进入内网。在 `ssh.<名字>.yaml` 里手写同名节点也改不掉——CLI 注入恒排在用户配置之后
+- `-D` **恒绑 `127.0.0.1`**，不提供绑定地址开关：绑 `0.0.0.0` 会让同一 WiFi 下任何设备都能经本机进入内网
 - ssh 参数固定带 `ExitOnForwardFailure`/`BatchMode`/`ConnectTimeout`/`ServerAlive*`，分别防「假活」、无 TTY 挂死、久等、断线后端口成僵尸
 - `--host` 拒绝以 `-` 开头的值（`-oProxyCommand=...` 会被 ssh 当选项解析，等同任意命令执行）
 
@@ -321,7 +317,6 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 ├── settings.json         # 用户设置（订阅列表等）
 ├── overwrite.yaml        # 覆写配置（主文件，可选）
 ├── overwrite.*.yaml      # 覆写配置（扩展文件，如 overwrite.dns.yaml）
-├── ssh.*.yaml            # ssh 隧道分流配置（首次由 ssh add 生成，此后由你维护）
 ├── subscriptions/
 │   ├── cache.json        # 订阅动态缓存（更新时间、流量、到期时间等）
 │   └── <name>.yaml       # 订阅原始配置
@@ -339,8 +334,7 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
     ├── config.yaml       # 运行时生成的配置
     ├── 1.subscription.yaml   # 分阶段调试：订阅原始配置
     ├── 2.overwrite.yaml      # 分阶段调试：应用覆写后
-    ├── 3.system.yaml         # 分阶段调试：合并系统配置后
-    └── 4.ssh.yaml            # 分阶段调试：合并 ssh 隧道配置后
+    └── 3.system.yaml         # 分阶段调试：合并系统配置后
 ```
 
 可通过环境变量 `MIHOMO_CLI_DIR` 自定义数据目录位置。

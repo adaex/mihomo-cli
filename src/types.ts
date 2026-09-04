@@ -50,16 +50,6 @@ export interface SshStatus {
   started_at: string | null;
 }
 
-/**
- * 一个 `ssh.<名字>.yaml` 文件的解析结果。与 OverwriteFileEntry 刻意分开：
- * ssh 配置不受 overwrite 开关约束，也不支持 match 作用域块。
- */
-export interface SshFileEntry {
-  name: string;
-  path: string;
-  config: Record<string, unknown>;
-}
-
 // === Subscription Cache ===
 
 export interface SubscriptionCacheEntry {
@@ -109,7 +99,6 @@ export interface BuildConfigResult {
   config: Record<string, unknown>;
   subscriptionConfig: Record<string, unknown>;
   overwriteFiles: OverwriteFileEntry[];
-  sshFiles: SshFileEntry[];
   systemConfig: Record<string, unknown>;
   warnings: string[];
 }
