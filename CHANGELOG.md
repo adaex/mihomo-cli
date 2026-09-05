@@ -1,5 +1,19 @@
 # Changelog
 
+## [4.7.1] - 2026-09-06
+
+文档与 AI 资产整理，无功能变更。单测 246。
+
+### 变更
+
+- **CLAUDE.md 补表格漂移**：命令处理器表补 `doctor`/`completion`、架构表补 `src/flags.ts`，与 registry 实际注册对齐
+- **CLAUDE.md 新增 quickstart.sh 锚点**：明确它是内核下载的 shell 平行实现，改下载/信任逻辑须与 `kernel.ts` 双向同步；已知分歧（默认镜像、无标准版回退、支持 linux 等）标注为刻意
+- **CLAUDE.md ↔ CODE_REVIEW.md 去重划界**：规则以 CLAUDE.md 为唯一真相源，CODE_REVIEW 只记验证结论与未处理项，重复条目改为指针；`service.lock` 规则补进 CLAUDE.md
+- **CODE_REVIEW 基线更新到 v4.7.0**，单测数同步为 246，清掉已修条目的删除线残留
+- **ssh 恢复用法移至 README**（「用 ssh -D 做节点」），CLAUDE.md 保留防重提结论
+- **新增项目级命令** `/release`、`/wt-done`（`.claude/commands/`，随仓共享），发布与 worktree 收尾流程固化为可执行指令
+- 删除空壳 TODO.md（职责并入 CODE_REVIEW 未处理项）
+
 ## [4.7.0] - 2026-09-06
 
 内核下载多通道：gh > 本机代理 > 直连。单测 246。
