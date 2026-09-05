@@ -28,6 +28,12 @@ export async function printStatus(): Promise<void> {
   }
   const statusText = running ? colors.green('● 运行中') : colors.yellow('不在运行');
   console.log(`${colors.gray('状态: ')}${statusText}${modeLabel}`);
+  // 装着、自启开着、却没在跑且上次非 0 退出 —— 内核在被 KeepAlive 反复拉起。
+  // 不提示的话这与「用户自己 stop 掉了」显示完全一样，用户无从判断为何代理不通
+  if (!running && service.installed && !service.disabled && service.lastExitCode !== null && service.lastExitCode !== 0) {
+    console.log(colors.yellow(`  异常: 内核上次异常退出（退出码 ${service.lastExitCode}），launchd 正在反复拉起`));
+    console.log(colors.gray('  查看原因: mihomo logs 0    停止重试: mihomo stop'));
+  }
   console.log(`${colors.gray('内核: ')}${getKernelVersion() || '未安装'}`);
 
   if (pid) {

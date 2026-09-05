@@ -1,10 +1,11 @@
-type CleanupFn = () => void;
-
-const cleanupFns = new Set<CleanupFn>();
-
 /**
  * 静默 SIGINT 标志：tail -f 等场景下 Ctrl+C 是常规退出，
- * 置位后全局 SIGINT 处理器不再打印"正在退出..."（仍执行清理并退出）。
+ * 置位后全局 SIGINT 处理器不再打印"正在退出..."（仍正常退出）。
+ *
+ * 曾另有一套「退出前清理 detached 子进程」的注册表（registerCleanup/runCleanup）。
+ * v4.1.0 把 Mixed 改由 launchd 托管、删掉 detached spawn 后就再无注册方，
+ * 注册表恒为空、runCleanup 恒空转——留着会让人误以为信号安全网仍在生效，故一并删除。
+ * 真需要清理时再加回来，别留空壳。
  */
 let silentSigint = false;
 
@@ -14,30 +15,4 @@ export function setSilentSigint(value: boolean): void {
 
 export function isSilentSigint(): boolean {
   return silentSigint;
-}
-
-/**
- * 注册一个进程退出前需要同步执行的清理函数（如杀掉测试实例）。
- * 返回取消注册的函数，正常流程结束后应调用以避免重复清理。
- */
-export function registerCleanup(fn: CleanupFn): () => void {
-  cleanupFns.add(fn);
-  return () => {
-    cleanupFns.delete(fn);
-  };
-}
-
-/**
- * 同步执行所有已注册的清理函数。由信号处理器在 process.exit 前调用，
- * 确保 Ctrl+C 时 finally 块被跳过也不会泄漏子进程/临时目录。
- */
-export function runCleanup(): void {
-  for (const fn of cleanupFns) {
-    try {
-      fn();
-    } catch {
-      /* ignore */
-    }
-  }
-  cleanupFns.clear();
 }

@@ -3,7 +3,7 @@ import { printShortHelp } from './commands/help.js';
 import { allCommandTokens, findCommand } from './commands/registry.js';
 import { printStatus } from './commands/status.js';
 import { CliError } from './errors.js';
-import { isSilentSigint, runCleanup } from './lifecycle.js';
+import { isSilentSigint } from './lifecycle.js';
 import { ensureDirs } from './paths.js';
 import { suggestSimilar } from './utils.js';
 
@@ -11,12 +11,10 @@ process.on('SIGINT', () => {
   if (!isSilentSigint()) {
     console.log('\n正在退出...');
   }
-  runCleanup();
   process.exit(130);
 });
 
 process.on('SIGTERM', () => {
-  runCleanup();
   process.exit(143);
 });
 
@@ -25,14 +23,12 @@ process.on('uncaughtException', (e: Error) => {
   if (e.stack) {
     console.error(e.stack.split('\n').slice(1).join('\n'));
   }
-  runCleanup();
   process.exit(1);
 });
 
 process.on('unhandledRejection', (reason: unknown) => {
   const msg = reason instanceof Error ? reason.message : String(reason);
   console.error(`\n未处理的 Promise 拒绝: ${msg}`);
-  runCleanup();
   process.exit(1);
 });
 
@@ -104,13 +100,11 @@ main().catch(e => {
   if (e instanceof CliError) {
     console.error(`${colors.red(`${e.label}:`)} ${e.message}`);
     for (const line of e.hint) console.error(line);
-    runCleanup();
     process.exit(e.exitCode);
   }
   // 未预期错误 = bug：打印堆栈辅助定位（与 uncaughtException 处理器一致）
   const err = e as Error;
   console.error(`${colors.red('错误:')} ${err.message}`);
   if (err.stack) console.error(err.stack.split('\n').slice(1).join('\n'));
-  runCleanup();
   process.exit(1);
 });

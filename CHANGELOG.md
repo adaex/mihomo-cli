@@ -1,5 +1,29 @@
 # Changelog
 
+## [4.2.0] - 2026-09-05
+
+修两个「报告成功但其实没做到」的高危缺陷，均实测复现并回归验证。
+
+### 修复
+
+- **`start` 会把崩溃循环报成「已启动」**。内核因配置问题（端口占用、订阅里有内核不接受的字段）启动后立即退出时，`start` 打印「已启动 (PID xxx)」并退出 0，而 `KeepAlive` 正每隔约 10 秒把它反复拉起——用户以为代理开着，实际完全没有代理，日志被崩溃信息刷爆。更别扭的是几秒后 `status` 会显示「不在运行」，同一个状态两条命令给出相反答案。
+
+  根因是 `launchctl bootstrap` 成功只代表**任务被装载**，不代表进程活着，而此前的实现固定 `sleep 500ms` 后取一次 pid 就认定成功。现在 `start` 会观察一个窗口确认内核稳定运行，失败则报错、退出码非 0，并直接附上日志尾部（TUN 路径本就 `tail -25`，服务路径此前什么都不给）。
+
+  判据用 `last exit code` 而非 `runs`：`KeepAlive` 有约 10 秒重启节流，崩溃后 2 秒内 `runs` 仍是 1。实测还发现全新 `bootstrap` 后存在一段**假健康窗口**（`state = running` 且 pid 拿得到，进程其实马上要退出），长度不固定——同一台机器上量到过 180ms 与 540ms，故健康判定不能一看到 running 就收口。
+
+- **服务模式下日志永不轮转**。`rotateAndCleanupLogs()` 只在 TUN 启动路径被调用，而 Mixed（默认模式）走 launchd，于是 `mihomo.log` 无限增长、`logs` 的归档列表恒为空——README 承诺的「自动轮转，保留 7 天」对默认模式根本不成立。唯一的兜底是日志超 10MB 时借重启做 copy-truncate。
+
+  现在 `startService` 在 `bootout` 与 `bootstrap` 之间轮转日志。必须卡在这个窗口：运行中 rename 是无效的，launchd 的 `StandardOutPath` fd 指向旧 inode，改名后内核会继续往归档文件里写。
+
+- **`status` 无法区分「用户主动停止」与「崩溃循环」**：两者都显示「不在运行」。现在检出内核上次非 0 退出时会额外提示，并给出排查与止损命令。
+
+### 改进
+
+- `help` 的说明列改为按最长命令签名自动对齐。此前靠手写空格，实测三段错位（控制组落在第 34 列、其余组第 30 列，`subscription add <url> [name]` 直接溢出）。对齐宽度按显示宽度计算，含中文占位符（`[编号]`、`[镜像]`、`[目标...]`）的签名不再少缩进
+- 删除无消费者的死代码：`registerCleanup`/`runCleanup` 退出清理注册表（v4.1.0 移除 detached spawn 后已恒空转，留着会让人误以为信号安全网仍在生效）、`hasRootResidue`、`sleepSync`、`ProcessStatus` 的 `allProcesses`/`hasStaleProcesses`、`StartResult.alreadyRunning`、`downloadSubscription` 的 `persist` 参数
+- 文档整理：`CLAUDE.md` 新增「报告成功前必须确认事情真的成立」一节收敛这类缺陷的共性，launchd 实测事实补录本轮四条新结论；`CODE_REVIEW.md` 从两轮历史修复清单（含已删除功能的条目）重写为当前基线的未处理项与已验证结论
+
 ## [4.1.0] - 2026-09-05
 
 `daemon` 保活重构为 install/start/stop 服务模型，日常操作全程免密。

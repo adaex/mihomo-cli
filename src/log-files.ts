@@ -21,6 +21,44 @@ export function getLogPath(): string {
   return PATHS.logFile;
 }
 
+/**
+ * 读日志末尾若干行，用于把内核的失败原因直接呈现在错误里。
+ *
+ * 服务启动失败时，用户唯一能看到的线索就在这里（TUN 的 sudo 脚本本就 `tail -25`，
+ * 服务路径此前什么都不给，只报一句「已启动」——见 waitServiceHealthy）。
+ * 只读尾部 64KB：崩溃循环下日志可能很大，全量读入没有必要。
+ */
+export function readLogTail(maxLines = 15): string[] {
+  const TAIL_BYTES = 64 * 1024;
+  let fd: number | null = null;
+  try {
+    const size = fs.statSync(PATHS.logFile).size;
+    if (size === 0) return [];
+    const start = Math.max(0, size - TAIL_BYTES);
+    const length = size - start;
+    const buf = Buffer.alloc(length);
+    fd = fs.openSync(PATHS.logFile, 'r');
+    fs.readSync(fd, buf, 0, length, start);
+    return buf
+      .toString('utf8')
+      .split('\n')
+      .map(l => l.trimEnd())
+      .filter(l => l.length > 0)
+      .slice(-maxLines);
+  } catch {
+    // 日志不存在/不可读都不是要报的错——调用方本就在报另一个失败
+    return [];
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 function rotateLog(): string | null {
   const logFile = PATHS.logFile;
   if (!fs.existsSync(logFile)) return null;

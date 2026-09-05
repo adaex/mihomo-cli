@@ -1,9 +1,11 @@
 import { getConfigInfo } from './config.js';
+import { CliError } from './errors.js';
+import { readLogTail } from './log-files.js';
+import { PATHS } from './paths.js';
 import { getStatus } from './process-probe.js';
 import { startTun } from './process-start.js';
-import { getServiceStatus, isServiceInstalled, restartService, SERVICE_BOOT_WAIT_MS, startService } from './service.js';
+import { getServiceStatus, isServiceInstalled, restartService, startService, waitServiceHealthy } from './service.js';
 import type { ProcessInfo } from './types.js';
-import { sleep } from './utils.js';
 
 /**
  * 运行时门面：收敛「launchd 服务(Mixed) vs 临时进程(TUN)」双轨的差异。
@@ -72,6 +74,11 @@ export function isRestartNeededOnChange(): boolean {
  * **不负责停止旧进程**——TUN 的清理由其启动脚本内的 pkill 完成。
  *   mixed → 已在跑走 restartService(优先热重载，免密)；否则 startService(enable + bootstrap)
  *   tun   → startTun()
+ *
+ * Mixed 路径必须做健康确认：`launchctl bootstrap` 成功只代表任务被装载，不代表进程活着。
+ * 内核因坏配置立即退出时 KeepAlive 会反复拉起，而此前只固定 sleep 500ms 取一次 pid
+ * 就报「已启动」——用户以为代理开着，实际完全没有代理。详见 waitServiceHealthy。
+ * 热重载路径无需确认：它没有重启进程，且配置被拒时会回退到 kickstart（走确认分支）。
  */
 export async function launchOrRestart(mode: RuntimeMode): Promise<number | null> {
   if (mode === 'tun') {
@@ -84,11 +91,36 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
   // running && !disabled 才走热重载：`stop` 后被手动 bootstrap 的服务处于「在跑但 disabled」，
   // 只看 running 会走热重载、不清 disable 位，用户以为开了自启其实没有
   if (status.running && !status.disabled) {
-    await restartService();
+    const { hotReloaded } = await restartService();
+    if (hotReloaded) return getServiceStatus().pid;
   } else {
     startService();
   }
 
-  await sleep(SERVICE_BOOT_WAIT_MS);
-  return getServiceStatus().pid;
+  return assertServiceHealthy();
+}
+
+/**
+ * 确认服务真正跑起来了，否则抛出带日志尾部的 CliError。
+ *
+ * 崩溃循环下必须报错而非报成功：KeepAlive 会每隔约 10s 重新拉起坏内核，日志被刷爆，
+ * 而用户拿到的是「已启动 (PID xxx)」。日志尾部直接附在错误里——那是用户唯一的线索
+ * （TUN 的启动脚本本就 `tail -25`，服务路径此前什么都不给）。
+ */
+async function assertServiceHealthy(): Promise<number | null> {
+  const health = await waitServiceHealthy();
+  if (health.healthy) return health.pid;
+
+  const tail = readLogTail();
+  const reason = health.crashed ? `内核启动后立即退出（退出码 ${health.exitCode}）` : '内核未能进入运行状态';
+
+  throw new CliError(reason, {
+    label: '启动失败',
+    hint: [
+      ...(health.crashed ? ['launchd 会每隔约 10 秒反复拉起它，请先修正配置或执行 mihomo stop。'] : []),
+      ...(tail.length > 0 ? ['', '--- 日志尾部 ---', ...tail] : ['', `日志: ${PATHS.logFile}`]),
+      '',
+      '完整日志: mihomo logs 0',
+    ],
+  });
 }

@@ -124,6 +124,42 @@ describe('parseServicePrint：只认顶层字段，不被嵌套 endpoint 干扰'
   });
 });
 
+/**
+ * `last exit code` 是判定「起来了又立刻挂掉」的唯一可靠信号（见 waitServiceHealthy）。
+ * 健康服务上 launchd 写的是**字符串** `(never exited)`，不是数字——不区分的话
+ * 解析出 NaN 或 0 都会让崩溃判定失效，start 继续把崩溃循环报成「已启动」。
+ */
+describe('parseServicePrint：last exit code 区分数字与 (never exited)', () => {
+  it('健康服务的 (never exited) 解析为 null，不是 0', () => {
+    const out = '\tstate = running\n\tpid = 123\n\tlast exit code = (never exited)\n';
+    assert.equal(parseServicePrint(out).lastExitCode, null);
+  });
+
+  it('崩溃服务的非 0 退出码被取到（本机实测 exit 1 的真实形态）', () => {
+    const out = '\tstate = spawn scheduled\n\truns = 1\n\tlast exit code = 1\n';
+    const r = parseServicePrint(out);
+    assert.equal(r.lastExitCode, 1);
+    assert.equal(r.state, 'spawn scheduled');
+    assert.equal(r.pid, null, 'spawn scheduled 时无 pid 行');
+  });
+
+  it('正常退出的 0 与「从未退出」区分开（0 不是失败）', () => {
+    assert.equal(parseServicePrint('\tlast exit code = 0\n').lastExitCode, 0);
+  });
+
+  it('嵌套块里的同名字段不被误取（同 state/pid 的锚定要求）', () => {
+    const out = '\tstate = running\n\tservice = {\n\t\tlast exit code = 9\n\t}\n';
+    assert.equal(parseServicePrint(out).lastExitCode, null);
+  });
+
+  it('REAL_PRINT_RUNNING 的 last exit code = 255 被取到', () => {
+    // 该 fixture 里服务在跑但历史上退出过——waitServiceHealthy 因此必须
+    // 让「当前 running」优先于「历史退出码」，否则健康服务会被误报成崩溃
+    assert.equal(parseServicePrint(REAL_PRINT_RUNNING).lastExitCode, 255);
+    assert.equal(parseServicePrint(REAL_PRINT_RUNNING).state, 'running');
+  });
+});
+
 /** `launchctl print-disabled` 的真实输出格式（双 tab 缩进 + 引号包裹 label）。 */
 const REAL_DISABLED = `	disabled services = {
 		"com.apple.AEServer" => disabled

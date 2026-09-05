@@ -235,7 +235,7 @@ function assertLooksLikeSubscription(parsed: Record<string, unknown>, maskedUrl:
   });
 }
 
-export async function downloadSubscription(url: string, subName = 'default', signal?: AbortSignal, persist = true): Promise<DownloadResult> {
+export async function downloadSubscription(url: string, subName = 'default', signal?: AbortSignal): Promise<DownloadResult> {
   let response: HttpResponse<string>;
   try {
     response = await HTTP_CLIENT.get<string>(url, { responseType: 'text', signal });
@@ -260,14 +260,10 @@ export async function downloadSubscription(url: string, subName = 'default', sig
 
   assertLooksLikeSubscription(parsed, maskUrl(url));
 
-  if (persist) {
-    saveSubscriptionRawConfig(subName, content);
-  }
+  saveSubscriptionRawConfig(subName, content);
 
   const meta = extractSubscriptionMeta(response.headers);
-  if (persist) {
-    saveSubscriptionMeta(subName, meta);
-  }
+  saveSubscriptionMeta(subName, meta);
 
   const proxies = parsed.proxies as unknown[] | undefined;
   const proxyGroups = parsed['proxy-groups'] as unknown[] | undefined;

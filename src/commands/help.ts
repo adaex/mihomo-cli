@@ -2,7 +2,8 @@ import { colors } from '../colors.js';
 import { getKernelVersion } from '../config.js';
 import { VERSION } from '../constants.js';
 import { USER_DATA_DIR } from '../paths.js';
-import type { Command, CommandGroup } from './registry.js';
+import { displayWidth, padEndDisplay } from '../utils.js';
+import type { Command, CommandGroup, UsageLine } from './registry.js';
 
 export function printShortHelp(): void {
   console.log(`\n${colors.cyan(colors.bold(`mihomo-cli v${VERSION}`))}  (mihomo help 查看完整帮助)\n`);
@@ -28,24 +29,30 @@ const GROUP_TITLES: [CommandGroup, string][] = [
  * 从命令注册表生成帮助。命令清单(各分组的用法行)来自每条 Command 的 usage,
  * 单一真相源——新增命令即自动出现在帮助中,不会再出现手写 help 与实际脱节。
  * 用法行之后的示例/模式/数据目录为静态散文,手写附加。
+ *
+ * 说明列的缩进按**全部分组里最长的签名**统一计算，不是各组各算：分组只是视觉分隔，
+ * 说明列在整页里对不齐一眼就能看出来。宽度用 displayWidth 而非 `.length`——
+ * 签名含中文占位符（`[编号]`、`[镜像]`、`[目标...]`），按码点数算会让这几行少缩进。
  */
 export function printHelp(commands: Command[]): void {
   const lines: string[] = [`\n${colors.cyan(colors.bold(`mihomo-cli v${VERSION}`))}`, '', '命令别名: mihomo, mhm, mh', '', '用法:', '  mihomo <命令> [选项]'];
+
+  const allUsage = commands.flatMap(c => c.usage);
+  const signatureWidth = Math.max(...allUsage.map(u => displayWidth(u.signature)));
+
+  const formatUsage = (u: UsageLine): string => `  ${colors.bold(padEndDisplay(u.signature, signatureWidth))}  ${u.description}`;
 
   for (const [group, title] of GROUP_TITLES) {
     const usageLines = commands.filter(c => c.group === group).flatMap(c => c.usage);
     if (usageLines.length === 0) continue;
     lines.push('', colors.cyan(title));
-    for (const u of usageLines) {
-      // 第一段(命令名)加粗:遇到首个空格前的 token 加粗,续行(以空格开头)原样缩进
-      lines.push(u.startsWith(' ') ? `  ${u}` : `  ${boldFirstToken(u)}`);
-    }
+    for (const u of usageLines) lines.push(formatUsage(u));
   }
 
   const meta = commands.filter(c => c.group === 'meta').flatMap(c => c.usage);
   if (meta.length > 0) {
     lines.push('', colors.cyan('元:'));
-    for (const u of meta) lines.push(`  ${boldFirstToken(u)}`);
+    for (const u of meta) lines.push(formatUsage(u));
   }
 
   lines.push(
@@ -72,13 +79,6 @@ export function printHelp(commands: Command[]): void {
   );
 
   console.log(lines.join('\n'));
-}
-
-/** 把用法行首个 token(命令名)加粗,其余不变。 */
-function boldFirstToken(usage: string): string {
-  const spaceIdx = usage.indexOf(' ');
-  if (spaceIdx < 0) return colors.bold(usage) as string;
-  return `${colors.bold(usage.slice(0, spaceIdx))}${usage.slice(spaceIdx)}`;
 }
 
 export function printVersion(): void {

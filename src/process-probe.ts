@@ -130,14 +130,6 @@ export function checkStaleState(): StaleState {
   };
 }
 
-/**
- * 是否存在需要 root 权限清理的残留（root 属主进程或 root 属主 pid 文件）。
- * start 等「隐式停止」场景先查它：有残留则报错引导，避免 stop() 内部 sudo 提权意外弹密码。
- */
-export function hasRootResidue(): boolean {
-  return checkStaleState().needsSudo;
-}
-
 function getProcessInfo(pid: number): ProcessInfo | null {
   try {
     const result = spawnSync('ps', ['-p', String(pid), '-o', 'rss='], { encoding: 'utf8', timeout: 5000 });
@@ -159,7 +151,6 @@ function getProcessInfo(pid: number): ProcessInfo | null {
 export function getStatus(): ProcessStatus {
   const running = isRunning();
   const pid = getPid();
-  const allPids = getMihomoPids();
 
   return {
     running,
@@ -168,7 +159,5 @@ export function getStatus(): ProcessStatus {
     hasConfig: hasConfig(),
     hasKernel: hasKernel(),
     kernelVersion: getKernelVersion(),
-    allProcesses: allPids,
-    hasStaleProcesses: allPids.length > (running ? 1 : 0),
   };
 }

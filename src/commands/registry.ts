@@ -17,6 +17,19 @@ type Handler = (args: string[]) => void | Promise<void>;
 
 export type CommandGroup = 'control' | 'interface' | 'subscription' | 'config' | 'system' | 'meta';
 
+/**
+ * 一条帮助用法行：命令签名与说明分开存放。
+ *
+ * **不要合成一个字符串**：合成后对齐只能靠手写空格，加命令或改签名长度就会错位
+ * （历史上「控制」组与其余组的说明列曾分别落在第 34 与第 30 列，
+ * `subscription add <url> [name]` 更是直接溢出）。分开后由 printHelp
+ * 按当前最长签名统一 padEnd，对齐永远自洽。
+ */
+export interface UsageLine {
+  signature: string;
+  description: string;
+}
+
 export interface Command {
   /** 主名(全称单数),用于展示与去重 */
   name: string;
@@ -31,7 +44,7 @@ export interface Command {
   /** 帮助分组;meta(help/version)不在分组清单中展示 */
   group: CommandGroup;
   /** 该命令在帮助中的用法行(单一真相源);空数组表示不单独列出(如纯别名 open/on/off) */
-  usage: string[];
+  usage: UsageLine[];
 }
 
 /**
@@ -45,14 +58,14 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdInstall,
     group: 'control',
-    usage: ['install                         安装服务（Mixed 模式的前置，只需一次）'],
+    usage: [{ signature: 'install', description: '安装服务（Mixed 模式的前置，只需一次）' }],
   },
   {
     name: 'start',
     aliases: [],
     handler: cmdStart,
     group: 'control',
-    usage: ['start [tun|mixed] [-s] [-u ms]  启动代理并开启登录自启 (默认 mixed)'],
+    usage: [{ signature: 'start [tun|mixed] [-s] [-u ms]', description: '启动代理并开启登录自启（默认 mixed）' }],
   },
   {
     name: 'tun',
@@ -67,21 +80,21 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdStop,
     group: 'control',
-    usage: ['stop                            停止代理并关闭登录自启'],
+    usage: [{ signature: 'stop', description: '停止代理并关闭登录自启' }],
   },
   {
     name: 'uninstall',
     aliases: [],
     handler: cmdUninstall,
     group: 'control',
-    usage: ['uninstall                       卸载服务'],
+    usage: [{ signature: 'uninstall', description: '卸载服务' }],
   },
   {
     name: 'status',
     aliases: [],
     handler: printStatus,
     group: 'control',
-    usage: ['status                          查看状态'],
+    usage: [{ signature: 'status', description: '查看状态' }],
   },
   // === 已移除（墓碑：显式报错指引迁移，不在帮助中列出） ===
   {
@@ -118,7 +131,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdUI,
     group: 'interface',
-    usage: ['ui [zash|dash|yacd]          打开 Web UI (默认 zash)'],
+    usage: [{ signature: 'ui [zash|dash|yacd]', description: '打开 Web UI（默认 zash）' }],
   },
   {
     // 已并入 `logs -f`；保留为隐藏别名过渡，不在帮助中列出（usage 留空）
@@ -134,7 +147,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdLogs,
     group: 'interface',
-    usage: ['logs [-f] [-n N] [编号] [-o]  日志列表/查看（0=当前，1+=归档，-f 跟随；省略编号即当前）'],
+    usage: [{ signature: 'logs [-f] [-n N] [编号] [-o]', description: '日志列表/查看（0=当前，1+=归档，-f 跟随；省略编号即当前）' }],
   },
   // === 订阅 ===
   {
@@ -143,11 +156,11 @@ export const COMMANDS: Command[] = [
     handler: cmdSubscription,
     group: 'subscription',
     usage: [
-      'subscription                 列出所有订阅（别名 sub/subs）',
-      'subscription use <name>      切换当前订阅',
-      'subscription add <url> [name]  添加订阅',
-      'subscription update [name]   更新订阅（无参更新所有）',
-      'subscription remove <name>   删除订阅（模糊匹配需确认，-y 跳过）',
+      { signature: 'subscription', description: '列出所有订阅（别名 sub/subs）' },
+      { signature: 'subscription use <name>', description: '切换当前订阅' },
+      { signature: 'subscription add <url> [name]', description: '添加订阅' },
+      { signature: 'subscription update [name]', description: '更新订阅（无参更新所有）' },
+      { signature: 'subscription remove <name>', description: '删除订阅（模糊匹配需确认，-y 跳过）' },
     ],
   },
   // === 配置 ===
@@ -156,14 +169,20 @@ export const COMMANDS: Command[] = [
     aliases: ['ow'],
     handler: cmdOverwrite,
     group: 'config',
-    usage: ['overwrite                   查看覆写状态（别名 ow）', 'overwrite on|off            启用/禁用覆写配置'],
+    usage: [
+      { signature: 'overwrite', description: '查看覆写状态（别名 ow）' },
+      { signature: 'overwrite on|off', description: '启用/禁用覆写配置' },
+    ],
   },
   {
     name: 'directory',
     aliases: ['dir', 'dirs', 'directories'],
     handler: cmdDirectory,
     group: 'config',
-    usage: ['directory                   显示数据目录位置（别名 dir）', 'directory open [target]     打开目录: root|subs|logs|data|runtime|kernel'],
+    usage: [
+      { signature: 'directory', description: '显示数据目录位置（别名 dir）' },
+      { signature: 'directory open [target]', description: '打开目录: root|subs|logs|data|runtime|kernel' },
+    ],
   },
   // === 系统 ===
   {
@@ -171,21 +190,21 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdKernel,
     group: 'system',
-    usage: ['kernel [--mirror [镜像]]      更新内核（默认直连，--mirror 走镜像下载）'],
+    usage: [{ signature: 'kernel [--mirror [镜像]]', description: '更新内核（默认直连，--mirror 走镜像下载）' }],
   },
   {
     name: 'update',
     aliases: [],
     handler: cmdUpdate,
     group: 'system',
-    usage: ['update                       更新 mihomo-cli (npm install -g)'],
+    usage: [{ signature: 'update', description: '更新 mihomo-cli（npm install -g）' }],
   },
   {
     name: 'reset',
     aliases: [],
     handler: cmdReset,
     group: 'system',
-    usage: ['reset [目标...] [--full] [-y]   重置: 留空保留设置/内核/覆写, 指定目标删对应项, --full 删全部, -y 跳过确认'],
+    usage: [{ signature: 'reset [目标...] [--full] [-y]', description: '重置: 留空保留设置/内核/覆写，指定目标删对应项，--full 删全部，-y 跳过确认' }],
   },
   // === meta(不在分组清单展示,help 末尾单列) ===
   {
@@ -193,14 +212,14 @@ export const COMMANDS: Command[] = [
     aliases: ['-h', '--help'],
     handler: () => printHelp(COMMANDS),
     group: 'meta',
-    usage: ['help, -h                     显示帮助'],
+    usage: [{ signature: 'help, -h', description: '显示帮助' }],
   },
   {
     name: 'version',
     aliases: ['-v', '--version'],
     handler: printVersion,
     group: 'meta',
-    usage: ['version, -v                  显示版本'],
+    usage: [{ signature: 'version, -v', description: '显示版本' }],
   },
 ];
 

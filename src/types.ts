@@ -101,8 +101,6 @@ export interface ProcessStatus {
   hasConfig: boolean;
   hasKernel: boolean;
   kernelVersion: string | null;
-  allProcesses: number[];
-  hasStaleProcesses: boolean;
 }
 
 export interface ProcessInfo {
@@ -115,7 +113,6 @@ export interface StartResult {
   success: boolean;
   pid: number;
   mode?: 'mixed' | 'tun';
-  alreadyRunning?: boolean;
 }
 
 export interface StopResult {
@@ -153,6 +150,14 @@ export interface ServiceStatus {
   pid: number | null;
   /** 登录自启是否被禁用（launchctl disable 位，独立于 plist 文件存在与否） */
   disabled: boolean;
+  /**
+   * 托管进程上次的退出码；从未退出过（健康运行）或查不到为 null。
+   *
+   * 非 0 即「内核起来过又挂了」。这是区分「用户主动停止」与「崩溃循环」的唯一信号：
+   * 两者的 running 都是 false，但后者会被 KeepAlive 每隔约 10s 反复拉起。
+   * launchd 在健康服务上把该字段写成字符串 `(never exited)`，故解析后为 null。
+   */
+  lastExitCode: number | null;
 }
 
 // === Kernel ===

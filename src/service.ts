@@ -4,13 +4,13 @@ import path from 'node:path';
 
 import { CONTROLLER_BASE_URL, isValidServiceLabel, RAW_SERVICE_LABEL_INPUT, SERVICE_BINARY_NAME, SERVICE_LABEL } from './constants.js';
 import { CliError } from './errors.js';
-import { cleanupOldLogs } from './log-files.js';
+import { cleanupOldLogs, rotateAndCleanupLogs } from './log-files.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
 import { getMihomoPids, isProcessRoot, MAIN_INSTANCE_PATTERN } from './process-probe.js';
 import { readSettings } from './settings.js';
 import { runSudoScript } from './sudo.js';
 import type { ServiceStatus } from './types.js';
-import { formatLocalTimestamp, shellQuote } from './utils.js';
+import { formatLocalTimestamp, shellQuote, sleep } from './utils.js';
 
 /**
  * launchd 服务层：Mixed 模式的唯一运行方式。
@@ -46,9 +46,28 @@ function assertServiceLabelSafe(): void {
 
 /** 热重载（PUT /configs）超时 */
 const HOT_RELOAD_TIMEOUT_MS = 5000;
-/** bootstrap/kickstart/RunAtLoad 后，等待 launchd 拉起进程再查询 PID/状态的时间 */
-export const SERVICE_BOOT_WAIT_MS = 500;
-/** 日志超过该大小时，restartService 放弃热重载、改走 kickstart 顺便轮转（热重载路径无法轮转日志） */
+/**
+ * 启动后健康确认的采样节奏。
+ *
+ * 必须观察满 SERVICE_OBSERVE_MS 才敢判「健康」，不能一看到 running 就返回：
+ * 实测全新 bootstrap 后存在一段**假健康窗口**——state 是 running、pid 也给得出，
+ * 而进程其实马上就要退出。该窗口的长度**不固定**（同一台机器上实测过 180ms 与 540ms
+ * 两种，取决于内核进程从 spawn 到 exit 实际花了多久），故只能用一个足够宽的观察窗，
+ * 不能按某次实测值卡边。
+ *
+ * 取 1.2s：覆盖 mihomo 的配置解析失败（在进程启动后极早发生）并留足余量。
+ * 代价是健康路径上 `start` 多等约 0.7s（此前无条件 `sleep 500ms`）——用一次可感知的
+ * 短暂等待换掉「报告已启动但其实没有代理」，这笔交换是划算的。
+ * 崩溃一经检出立即返回，不必等满。
+ *
+ * 观察窗之后才崩溃的内核（如跑了几秒才 OOM）此处判不出来，由 `status` 的
+ * 「上次异常退出」提示兜底——那不是本函数的职责边界内能解决的。
+ */
+const SERVICE_HEALTH_INTERVAL_MS = 100;
+const SERVICE_OBSERVE_MS = 1200;
+/** 观察窗结束后仍处于 spawn 中间态时的额外宽限（慢机器上内核起得慢） */
+const SERVICE_HEALTH_GRACE_MS = 1800;
+/** 日志超过该大小时，restartService 借 kickstart 顺便 copy-truncate（startService 走 rotateAndCleanupLogs 无条件轮转） */
 const LOG_ROTATE_MAX_BYTES = 10 * 1024 * 1024;
 /** launchctl 查询超时：只读探测卡住时按「查不到」处理 */
 const LAUNCHCTL_TIMEOUT_MS = 5000;
@@ -89,14 +108,21 @@ export function detectLegacySystemInstall(): boolean {
  * **必须锚定单个前导 tab**：顶层字段是 `\tstate = running` / `\tpid = 5474`，
  * 而输出里还有嵌套 endpoint 的 `\t\tstate = active`（实测同一份输出里出现两次）。
  * 不锚定的话嵌套行会把 state 误解析成 "active"，任何时候都判成「未运行」。
+ *
+ * `lastExitCode` 是判定「起来了又立刻挂掉」的唯一可靠信号，见 waitServiceHealthy。
+ * 健康服务该字段是**字符串** `(never exited)` 而非数字（实测），故非数字一律归 null。
  */
-export function parseServicePrint(output: string): { state: string | null; pid: number | null } {
+export function parseServicePrint(output: string): { state: string | null; pid: number | null; lastExitCode: number | null } {
   const stateMatch = output.match(/^\tstate = (.+)$/m);
   const pidMatch = output.match(/^\tpid = (\d+)$/m);
   const pid = pidMatch ? Number.parseInt(pidMatch[1], 10) : null;
+  // 只匹配纯数字：`(never exited)` 不是失败信号，必须与「退出码 0」区分开
+  const exitMatch = output.match(/^\tlast exit code = (\d+)$/m);
+  const lastExitCode = exitMatch ? Number.parseInt(exitMatch[1], 10) : null;
   return {
     state: stateMatch ? stateMatch[1].trim() : null,
     pid: pid !== null && Number.isInteger(pid) && pid > 0 ? pid : null,
+    lastExitCode: lastExitCode !== null && Number.isInteger(lastExitCode) ? lastExitCode : null,
   };
 }
 
@@ -141,14 +167,82 @@ export function getServiceStatus(): ServiceStatus {
   const loaded = print.status === 0;
 
   if (!installed && !loaded) {
-    return { installed: false, loaded: false, running: false, pid: null, disabled: false };
+    return { installed: false, loaded: false, running: false, pid: null, disabled: false, lastExitCode: null };
   }
 
-  const { state, pid } = loaded ? parseServicePrint(print.stdout) : { state: null, pid: null };
+  const { state, pid, lastExitCode } = loaded ? parseServicePrint(print.stdout) : { state: null, pid: null, lastExitCode: null };
   const disabledOut = runLaunchctl(['print-disabled', bootstrapDomain()]);
   const disabled = disabledOut.status === 0 ? parseDisabledList(disabledOut.stdout, SERVICE_LABEL) : false;
 
-  return { installed, loaded, running: state === 'running', pid, disabled };
+  return { installed, loaded, running: state === 'running', pid, disabled, lastExitCode };
+}
+
+/** 服务启动后的健康判定结果。`crashed` 为真时内核已被 launchd 反复拉起，不是可用状态。 */
+export interface ServiceHealth {
+  healthy: boolean;
+  crashed: boolean;
+  pid: number | null;
+  exitCode: number | null;
+}
+
+/**
+ * 等待服务真正稳定运行，而非「bootstrap 没报错」。
+ *
+ * 为什么必须有：`launchctl bootstrap` 成功只意味着任务被装载，**不代表进程活着**。
+ * 内核因配置错误（端口占用、非法字段）立即退出时，KeepAlive 会每隔约 10s 重新拉起，
+ * 而 CLI 此前固定 `sleep 500ms` 后取 pid 即报「已启动 (PID xxx)」——用户以为代理开着，
+ * 实际完全没有代理，且日志被崩溃信息反复刷。实测该误报可 100% 复现。
+ *
+ * 判据是 `last exit code`（非 0 = 起来过又挂了），不用 `runs`：KeepAlive 有约 10s
+ * 的重启节流，崩溃后 2s 内 `runs` 仍是 1，用它判断会漏掉全部快速失败。
+ * 该字段在重新 bootstrap 后重置（实测不跨 bootout 残留），故只反映本次启动。
+ *
+ * **不能一看到 running 就返回**：实测全新 bootstrap 后存在假健康窗口
+ * （state=running 且有 pid，但进程马上就要退出），且其长度不固定。
+ * 故先观察满 SERVICE_OBSERVE_MS 再下结论；崩溃一经检出则立即收口。
+ *
+ * 「当前在跑」优先于「历史退出码」：`last exit code` 是历史值，崩溃一次后又正常起来的
+ * 服务该字段仍非 0，故只在观察窗内始终未能进入 running 时才判定崩溃。
+ */
+export async function waitServiceHealthy(): Promise<ServiceHealth> {
+  const deadline = Date.now() + SERVICE_OBSERVE_MS;
+  const graceDeadline = deadline + SERVICE_HEALTH_GRACE_MS;
+  let last = getServiceStatus();
+
+  // 第一阶段：观察满窗口。期间检出崩溃立即返回，否则以窗口结束时的状态为准
+  while (Date.now() < deadline) {
+    await sleep(SERVICE_HEALTH_INTERVAL_MS);
+    last = getServiceStatus();
+
+    if (isCrashed(last)) {
+      return { healthy: false, crashed: true, pid: null, exitCode: last.lastExitCode };
+    }
+    if (!last.loaded) {
+      // 已卸载（被外部 bootout，或 plist 装不进来），继续等无意义
+      return { healthy: false, crashed: false, pid: null, exitCode: last.lastExitCode };
+    }
+  }
+
+  if (last.running) return { healthy: true, crashed: false, pid: last.pid, exitCode: null };
+
+  // 第二阶段：窗口结束仍未 running（慢机器上内核起得慢，或正在 spawn 重试），再宽限一会儿
+  while (Date.now() < graceDeadline) {
+    await sleep(SERVICE_HEALTH_INTERVAL_MS);
+    last = getServiceStatus();
+
+    if (isCrashed(last)) {
+      return { healthy: false, crashed: true, pid: null, exitCode: last.lastExitCode };
+    }
+    if (!last.loaded) break;
+    if (last.running) return { healthy: true, crashed: false, pid: last.pid, exitCode: null };
+  }
+
+  return { healthy: false, crashed: false, pid: last.pid, exitCode: last.lastExitCode };
+}
+
+/** 「起来过又挂了」：当前不在跑，且本次启动记录了非 0 退出码。 */
+function isCrashed(status: ServiceStatus): boolean {
+  return !status.running && status.lastExitCode !== null && status.lastExitCode !== 0;
 }
 
 // === plist ===
@@ -383,6 +477,10 @@ export function installService(wasRunning: boolean): void {
  * 少了这一步 start 会 100% 失败。
  *
  * 先 `bootout` 清旧使重复调用幂等（改过 plist 后 start 一下即按新配置重载，无需 kickstart）。
+ *
+ * 拆成两次 launchctl 调用（bootout / bootstrap），中间插入日志轮转：轮转的 rename
+ * 只在「旧进程已退出、新进程未起」这个窗口里有效，见下方注释。两次调用都在用户域，
+ * 全程免密，拆开不额外弹密码。
  */
 export function startService(): void {
   assertServiceLabelSafe();
@@ -400,18 +498,22 @@ export function startService(): void {
 
   const target = shellQuote(serviceTarget());
   const dest = shellQuote(PATHS.userAgentPlist);
-  runLaunchctlSteps(
-    [
-      `launchctl bootout ${target} 2>/dev/null || true`,
-      ...waitUnloadedSteps(),
-      `launchctl enable ${target} || exit 2`,
-      `launchctl bootstrap ${bootstrapDomain()} ${dest} || exit 3`,
-    ],
-    {
-      action: '启动服务',
-      codeMessages: { 2: '启用服务失败（launchctl enable）', 3: '装载服务失败（launchctl bootstrap）' },
-    },
-  );
+
+  runLaunchctlSteps([`launchctl bootout ${target} 2>/dev/null || true`, ...waitUnloadedSteps()], { action: '卸载旧服务实例' });
+
+  // 轮转日志。**必须卡在这个窗口**：旧进程已退出、新进程尚未 bootstrap，此时无人持有
+  // 日志 fd，rename 才真正生效。运行中做 rename 是无效的——launchd 的 StandardOutPath
+  // fd 指向旧 inode，改名后内核会继续往归档文件里写（restartService 因此只能 copy-truncate）。
+  //
+  // 此前整个服务路径都不轮转（rotateAndCleanupLogs 只在 startTun 里调），于是默认的
+  // Mixed 模式下 mihomo.log 无限增长、`logs` 的归档列表恒为空，与 README 承诺的
+  // 「自动轮转，保留 7 天」不符。
+  rotateAndCleanupLogs();
+
+  runLaunchctlSteps([`launchctl enable ${target} || exit 2`, `launchctl bootstrap ${bootstrapDomain()} ${dest} || exit 3`], {
+    action: '启动服务',
+    codeMessages: { 2: '启用服务失败（launchctl enable）', 3: '装载服务失败（launchctl bootstrap）' },
+  });
 }
 
 /**
@@ -501,6 +603,11 @@ function logOversized(): boolean {
  * 用空 body：内核重新加载它启动时 `-f` 指定的配置文件（正是我们写入的 configFile）。
  * 不传 {path}——mihomo 的 SAFE_PATHS 限制只允许 workdir/home 下的路径，
  * 而 configFile 在 runtime/ 下会被拒成 400；空 body 重载 `-f` 文件天然规避该限制。
+ *
+ * 返回 false 即回退 kickstart（重启内核），因此**「重载被内核拒绝」是安全的**：
+ * 配置解析失败时 mihomo 返回 4xx，这里判 false，坏配置不会被当成生效。
+ * 但也正因回退路径会真的重启内核，调用方必须对回退结果做健康检查——
+ * 见 restartService 的返回值与 launchOrRestart。
  */
 async function tryHotReload(): Promise<boolean> {
   // 先确认 9090 上确实是我们托管的服务内核，再把配置变更托付给它。
@@ -543,16 +650,20 @@ async function tryHotReload(): Promise<boolean> {
  * 失败才回退 kickstart。kickstart -k 是命令式重启，不与 KeepAlive 冲突；
  * 若任务未装载（plist 在但被手动 bootout）则 bootstrap 自愈。
  *
+ * 返回 `hotReloaded` 供调用方决定是否做启动健康检查：热重载没有重启进程
+ * （配置被内核接受才返回 204，被拒是 400 → 回退 kickstart），无需再验；
+ * 走了 kickstart 就等于重启了内核，必须验，否则坏配置会静默进入 KeepAlive 崩溃循环。
+ *
  * 日志超阈值时跳过热重载、强制 kickstart 顺便轮转：运行中不能 rename 轮转——
  * launchd 的 StandardOutPath fd 指向旧 inode，rename 后日志会继续写进归档文件。
  * 只能 copy-truncate（fd 为 O_APPEND，truncate 后从 0 续写不丢句柄）。
  */
-export async function restartService(): Promise<void> {
+export async function restartService(): Promise<{ hotReloaded: boolean }> {
   if (!isServiceInstalled()) {
     throw new CliError('服务未安装，无法重启', { hint: '安装服务: mihomo install' });
   }
 
-  if (!logOversized() && (await tryHotReload())) return;
+  if (!logOversized() && (await tryHotReload())) return { hotReloaded: true };
 
   const target = shellQuote(serviceTarget());
   const dest = shellQuote(PATHS.userAgentPlist);
@@ -573,6 +684,8 @@ export async function restartService(): Promise<void> {
 
   // 顺手清理过期归档：归档可能为 root 属主，但 logs/ 目录归用户所有，unlink 只看目录权限
   cleanupOldLogs();
+
+  return { hotReloaded: false };
 }
 
 /** 符号链名，供命令层展示「登录项与扩展」里会看到的名字 */

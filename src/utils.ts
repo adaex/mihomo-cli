@@ -8,12 +8,6 @@ import type { MirrorArg } from './types.js';
  * http.ts（HTTP 客户端）、process-probe.ts（进程探测）。
  */
 
-const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
-
-export function sleepSync(ms: number): void {
-  Atomics.wait(sleepBuf, 0, 0, ms);
-}
-
 export function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -29,6 +23,37 @@ export function escapeRegExp(s: string): string {
 /** 单引号包裹并转义嵌入的单引号,安全地把任意字符串作为 bash 字面量(防御路径中的 `"`/`$`/反引号注入)。 */
 export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * 终端显示宽度：CJK 字符（含全角标点）占两列，其余按一列算。
+ *
+ * 不能用 `.length` 代替：帮助里的签名含中文占位符（`logs [编号]`、`--mirror [镜像]`），
+ * 按码点数 padEnd 会让这些行的说明列少缩进几格，正是要修的错位本身。
+ * 只覆盖本仓实际会出现的区间（CJK 统一表意文字、全角标点、中日韩符号），
+ * 不追求完整的 East Asian Width 实现。
+ */
+export function displayWidth(s: string): number {
+  let width = 0;
+  for (const ch of s) {
+    const code = ch.codePointAt(0) ?? 0;
+    const isWide =
+      (code >= 0x1100 && code <= 0x115f) || // 韩文字母
+      (code >= 0x2e80 && code <= 0xa4cf) || // CJK 部首 … 注音、统一表意文字
+      (code >= 0xac00 && code <= 0xd7a3) || // 韩文音节
+      (code >= 0xf900 && code <= 0xfaff) || // CJK 兼容表意文字
+      (code >= 0xfe30 && code <= 0xfe6f) || // CJK 兼容形式
+      (code >= 0xff00 && code <= 0xff60) || // 全角字母数字与标点
+      (code >= 0xffe0 && code <= 0xffe6);
+    width += isWide ? 2 : 1;
+  }
+  return width;
+}
+
+/** 按显示宽度右侧补空格（padEnd 的 CJK 安全版本）。 */
+export function padEndDisplay(s: string, width: number): string {
+  const pad = width - displayWidth(s);
+  return pad > 0 ? s + ' '.repeat(pad) : s;
 }
 
 export function formatBytes(bytes: unknown): string {
