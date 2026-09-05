@@ -2,8 +2,9 @@ import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
 import { addSubscription, getSubscriptions, getSubscriptionsWithCache, removeSubscription, setDefaultSubscription } from '../settings.js';
+import { withSpinner } from '../spinner.js';
 import * as subscription from '../subscription.js';
-import { formatDate, formatTimestamp, formatTraffic, getNonFlagArg, hasFlag, suggestSimilar } from '../utils.js';
+import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic, getNonFlagArg, hasFlag, suggestSimilar } from '../utils.js';
 import { confirmOrThrow, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 /** 订阅内容更新后，运行中的实例仍用旧配置，提示重启生效 */
@@ -27,7 +28,8 @@ function printSubscriptionList(): void {
   const activeSub = subscription.getActiveSubscription();
   console.log(colors.cyan('订阅列表:'));
   subs.forEach((s, i) => {
-    const time = formatDate(s.updated_at);
+    const rel = formatRelativeTime(s.updated_at);
+    const time = rel ? `${formatDate(s.updated_at)}（${rel}）` : formatDate(s.updated_at);
     const defaultMark = activeSub && s.name === activeSub.name ? colors.green(' [使用中]') : '';
     const interval = subscription.resolveUpdateInterval(s.url, s.update_interval);
     console.log(`  ${i + 1}. ${s.name}${defaultMark}`);
@@ -87,7 +89,7 @@ async function subAdd(args: string[]): Promise<void> {
   // 否则重名错误会触发 removeSubscription 误删用户既有的同名订阅
   addSubscription(url, name);
   try {
-    const info = await subscription.downloadSubscription(url, name);
+    const info = await withSpinner('下载订阅', () => subscription.downloadSubscription(url, name));
     // 切换放在下载成功后：若放在前面，回滚的 removeSubscription 会把 active 落到 subs[0]
     // 而非用户原来的选择（settings.ts 的 active 兜底逻辑），静默切错订阅
     setDefaultSubscription(name);
@@ -113,7 +115,7 @@ async function subUpdate(args: string[]): Promise<void> {
 
   if (!name) {
     console.log(`更新所有 ${subs.length} 个订阅...`);
-    const results = await Promise.all(subs.map(sub => subscription.tryUpdateOne(sub)));
+    const results = await withSpinner('并行更新中', () => Promise.all(subs.map(sub => subscription.tryUpdateOne(sub))));
     let ok = 0;
     for (const r of results) {
       if (r.success) ok++;
@@ -130,7 +132,7 @@ async function subUpdate(args: string[]): Promise<void> {
   const target = subscription.resolveSubscription(subs, name);
 
   console.log(`更新订阅: ${target.name}`);
-  const result = await subscription.tryUpdateOne(target);
+  const result = await withSpinner('下载订阅', () => subscription.tryUpdateOne(target));
   if (!result.success) {
     throw new CliError((result.error || '').split('\n')[0], { label: '更新失败' });
   }
@@ -144,9 +146,13 @@ async function subUse(args: string[]): Promise<void> {
   const name = args[2];
   const subs = getSubscriptions();
 
+  if (subs.length === 0) {
+    throw new CliError('没有订阅，请先添加订阅', { hint: 'mihomo sub add <url> [name]' });
+  }
+
   if (!name) {
     throw new CliError('请指定订阅名称', {
-      hint: subs.length > 0 ? ['', '可用订阅:', ...subs.map(s => `  ${s.name}`)] : undefined,
+      hint: ['', '可用订阅:', ...subs.map(s => `  ${s.name}`)],
     });
   }
 

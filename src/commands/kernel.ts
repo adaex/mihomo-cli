@@ -3,6 +3,8 @@ import { AVAILABLE_MIRRORS } from '../constants.js';
 import { CliError } from '../errors.js';
 import * as kernel from '../kernel.js';
 import { getRunningState } from '../runtime.js';
+import { readSettings, writeSettings } from '../settings.js';
+import { withSpinner } from '../spinner.js';
 import { parseMirrorArg } from '../utils.js';
 
 /**
@@ -36,32 +38,31 @@ function assertKnownKernelFlags(args: string[]): void {
 
 export async function cmdKernel(args: string[]): Promise<void> {
   assertKnownKernelFlags(args);
-  const mirrorInfo = parseMirrorArg(args);
+  const savedMirror = readSettings().kernel_mirror ?? null;
+  const mirrorInfo = parseMirrorArg(args, savedMirror);
   const effectiveMirror = mirrorInfo.mirror;
 
+  // 显式 --mirror 记住偏好（下次裸 mihomo kernel 默认走镜像）；--no-mirror 清除
+  if (mirrorInfo.remember) {
+    writeSettings({ kernel_mirror: mirrorInfo.mirror ?? undefined });
+  } else if (mirrorInfo.clearSaved && savedMirror) {
+    writeSettings({ kernel_mirror: undefined });
+  }
+
   if (effectiveMirror) {
-    console.log(`镜像: ${effectiveMirror} (仅下载走镜像，版本查询恒直连)`);
+    const host = effectiveMirror.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const note = mirrorInfo.remember
+      ? '已记住偏好，后续默认走镜像（--no-mirror 直连并清除偏好）'
+      : !mirrorInfo.isOverride
+        ? '已记住的偏好（--no-mirror 直连并清除偏好）'
+        : '仅下载走镜像，版本查询恒直连';
+    console.log(`镜像: ${host} (${note})`);
     console.log('');
   }
 
-  console.log('检查内核更新...');
-
+  let info: Awaited<ReturnType<typeof kernel.checkUpdate>>;
   try {
-    const info = await kernel.checkUpdate();
-    console.log(`当前: ${info.current}`);
-    console.log(`最新: ${info.latest}`);
-
-    if (!info.needsUpdate) {
-      console.log('已是最新版本');
-    } else {
-      console.log('\n正在下载...');
-      const result = await kernel.downloadKernel(msg => console.log(msg), mirrorInfo.mirror, info.release);
-      console.log(`\n已更新到 ${result.version}`);
-      // 运行中的内核仍是旧二进制（进程持有旧 inode），提醒重启生效
-      if (getRunningState().running) {
-        console.log(colors.yellow('提示: 运行中的内核仍是旧版本，执行 mihomo start 重启后生效'));
-      }
-    }
+    info = await withSpinner('检查内核更新（GitHub 直连，国内网络可能较慢）', () => kernel.checkUpdate());
   } catch (e) {
     if (e instanceof CliError) throw e;
     const err = e as Error & { response?: { data?: { message?: string; documentation_url?: string } } };
@@ -77,10 +78,24 @@ export async function cmdKernel(args: string[]): Promise<void> {
       hint.push(
         '',
         '提示: 直连失败或下载过慢时可使用镜像:',
-        '  mihomo kernel --mirror [镜像]   # 下载走镜像（默认 v6.gh-proxy.org）',
+        '  mihomo kernel --mirror [镜像]   # 下载走镜像（默认 v6.gh-proxy.org），一次使用后记住偏好',
         `  可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`,
       );
     }
     throw new CliError(err.message, { label: '更新失败', hint });
+  }
+  console.log(`当前: ${info.current}`);
+  console.log(`最新: ${info.latest}`);
+
+  if (!info.needsUpdate) {
+    console.log('已是最新版本');
+  } else {
+    console.log('\n正在下载...');
+    const result = await kernel.downloadKernel(msg => console.log(msg), mirrorInfo.mirror, info.release);
+    console.log(`\n已更新到 ${result.version}`);
+    // 运行中的内核仍是旧二进制（进程持有旧 inode），提醒重启生效
+    if (getRunningState().running) {
+      console.log(colors.yellow('提示: 运行中的内核仍是旧版本，执行 mihomo start 重启后生效'));
+    }
   }
 }

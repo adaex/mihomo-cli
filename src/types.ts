@@ -11,6 +11,11 @@ export interface Settings {
   overwrite_enabled?: boolean;
   /** external-controller 访问密钥（可选，多用户环境建议设置）；不设置则控制器无鉴权 */
   controller_secret?: string;
+  /**
+   * 内核下载的镜像偏好（`mihomo kernel --mirror` 记住、`--no-mirror` 清除）。
+   * 存 normalize 后的 https URL；缺省 = 直连。
+   */
+  kernel_mirror?: string;
 }
 
 // === Subscription Cache ===
@@ -245,6 +250,58 @@ export interface ConfigInfo {
 export interface MirrorArg {
   mirror: string | null;
   isOverride: boolean;
+  /** 显式 `--mirror`（裸或带值）：把选择写入 settings.kernel_mirror */
+  remember?: boolean;
+  /** 显式 `--no-mirror`/`--direct`：清除已记住的镜像偏好 */
+  clearSaved?: boolean;
+}
+
+// === Proxy connectivity probe ===
+
+export interface ProxyProbeResult {
+  ok: boolean;
+  /** HTTP 状态码；curl 失败时为 null */
+  statusCode: number | null;
+  /** 失败原因（curl 错误/超时/非 2xx），成功为 null */
+  error: string | null;
+  durationMs: number;
+}
+
+/** 订阅缓存的紧急度：过期 / 流量用尽 / 即将到期（7 天内）/ 无 */
+export type SubscriptionUrgency = 'expired' | 'traffic-exhausted' | 'expiring' | null;
+
+// === Status (JSON 输出) ===
+
+export interface StatusJson {
+  version: string;
+  running: boolean;
+  /** 运行中且探测过连通性时有值；未运行或无端口信息为 null */
+  connectivity: { ok: boolean; statusCode: number | null; error: string | null; durationMs: number } | null;
+  mode: 'mixed' | 'tun' | null;
+  carrier: 'service' | 'tun' | null;
+  pid: number | null;
+  kernel: string | null;
+  kernelInstalled: boolean;
+  ports: { mixed?: number; http?: number; socks?: number; tun?: boolean };
+  subscription: {
+    name: string;
+    proxies: number;
+    proxyGroups: number;
+    upload?: number;
+    download?: number;
+    total?: number;
+    expire?: number;
+    urgency: Exclude<SubscriptionUrgency, null> | null;
+  } | null;
+  overwrite: { enabled: boolean; files: string[] };
+  service: {
+    installed: boolean;
+    loaded: boolean;
+    running: boolean;
+    disabled: boolean;
+    lastExitCode: number | null;
+    legacySystemInstall: boolean;
+  };
 }
 
 // === Reset ===

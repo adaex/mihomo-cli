@@ -14,7 +14,10 @@
 - 🚀 **进程管理** - 启动/停止/切换模式，自动清理残留进程
 - 🛡️ **服务托管** - 基于 launchd，崩溃/登录自动拉起，代理后台常驻；日常 `start`/`stop` **全程免密**
 - 🔄 **双模式支持** - Mixed 模式和 TUN 透明代理模式
-- 📊 **状态监控** - 查看运行状态、内存占用、订阅流量与到期时间
+- 📊 **状态监控** - 查看运行状态、内存占用、订阅流量与到期时间（到期/流量紧急度着色，`--json` 机器可读）
+- 🩺 **体检诊断** - `mihomo doctor` 一键检查内核/服务/端口/订阅/配置/连通性并给修复指引
+- 🔌 **连通性探测** - 启动与状态展示独立确认「代理真的通」，不通时归因到订阅过期/流量用尽/节点失效
+- ⌨️ **Shell 补全** - `mihomo completion zsh|bash|fish` 生成补全脚本
 - 📝 **日志管理** - 每次启动归档上一次日志，保留 7 天，支持列表/跟随/编号查看
 - 🎨 **Web UI** - 一键打开 Web 控制面板 (zash/metacubexd/yacd)
 - 🔄 **内核更新** - 自动检查更新，支持 GitHub 镜像加速
@@ -40,6 +43,8 @@ npm link
 ```
 
 ## 快速开始
+
+> 全新环境直接运行 `mihomo`（不带参数）会显示状态与「开始使用」引导：缺哪步列哪步。
 
 ### 1. 下载内核
 
@@ -102,7 +107,7 @@ mihomo ui yacd     # YACD
 | `mihomo start [tun\|mixed]` | 启动代理并开启登录自启（`-s` 跳过订阅更新，`-u` 更新超时） |
 | `mihomo stop`               | 停止代理并关闭登录自启                                                       |
 | `mihomo uninstall`          | 卸载服务                                                                     |
-| `mihomo status`             | 查看运行状态（含订阅流量、到期时间）                                         |
+| `mihomo status`             | 查看运行状态（含订阅流量、到期时间；`--json` 机器可读）             |
 | `mihomo logs`               | 列出所有日志（当前 + 历史归档）                                              |
 | `mihomo logs <编号>`        | 查看指定日志（`0`=当前，`1+`=归档，`-f` 实时跟随，`-n N` 行数，`-o` 打开）  |
 | `mihomo logs -f`            | 跟随当前日志（省略编号时默认当前，等价 `logs 0 -f`）                        |
@@ -133,12 +138,14 @@ mihomo ui yacd     # YACD
 
 | 命令                              | 说明                                                                |
 | --------------------------------- | ------------------------------------------------------------------- |
-| `mihomo kernel [--mirror [镜像]]` | 更新内核（默认直连，`--mirror` 使用镜像；更新后运行中实例需重启生效） |
+| `mihomo kernel [--mirror [镜像]]` | 更新内核（默认直连，`--mirror` 走镜像下载；镜像偏好会被记住，`--no-mirror` 直连并清除偏好） |
 | `mihomo update`                   | 更新 mihomo-cli（先查 npm 最新版，已是最新则跳过重装）              |
-| `mihomo ui [zash\|dash\|yacd]`    | 打开 Web UI                                                         |
+| `mihomo ui [zash\|dash\|yacd]`    | 打开 Web UI（配了访问密钥时自动复制到剪贴板）                       |
 | `mihomo dir`                      | 显示数据目录位置                                                    |
 | `mihomo dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `data`, `runtime`, `kernel`）  |
 | `mihomo reset [目标...] [--full] [-y]` | 重置用户数据（可用目标：`subs`, `logs`, `data`, `runtime`, `settings`, `kernel`, `overwrites`, `service`；`--full` 删全部，`-y` 跳过确认） |
+| `mihomo doctor`                   | 体检诊断（内核/服务/端口/订阅/配置/连通性，有异常退出码 1）         |
+| `mihomo completion <shell>`       | 输出 shell 补全脚本（`zsh`/`bash`/`fish`）                          |
 | `mihomo version`                  | 显示版本信息                                                        |
 | `mihomo help`                     | 显示帮助信息                                                        |
 
@@ -160,8 +167,25 @@ mihomo ui yacd     # YACD
 | 快捷命令               | 等效于                     |
 | ---------------------- | -------------------------- |
 | `mihomo tun`           | `mihomo start tun`         |
+| `mihomo use <name>`    | `mihomo subscription use <name>` |
+| `mihomo restart`       | `mihomo start`（start 本身即重启） |
 
 > `up` / `down` 别名已于 v4.1.0 移除（命令名统一为 `install`/`start`/`stop`/`uninstall`）。执行它们会给出明确的迁移提示。
+
+## Shell 补全
+
+```bash
+# zsh（写入补全目录，或 eval "$(mihomo completion zsh)"）
+mihomo completion zsh > ~/.zsh/completions/_mihomo
+
+# bash
+eval "$(mihomo completion bash)"   # 或写入 ~/.bash_completion
+
+# fish
+mihomo completion fish | source
+```
+
+覆盖全部命令、订阅/覆写/目录子命令与常用选项（`logs` 的 `-f`/`-n`、`kernel` 的 `--mirror` 等）。
 
 ## 模式说明
 
@@ -273,13 +297,13 @@ mihomo logs 1       # 查看最新的归档
 # 默认直连（不使用镜像）
 mihomo kernel
 
-# 使用默认镜像 (v6.gh-proxy.org)
+# 使用默认镜像 (v6.gh-proxy.org)，并记住偏好：之后裸 mihomo kernel 默认走镜像
 mihomo kernel --mirror
 
-# 指定镜像
+# 指定镜像（同样记住偏好）
 mihomo kernel --mirror hk.gh-proxy.org
 
-# 不使用镜像（显式直连）
+# 不使用镜像（显式直连，并清除已记住的镜像偏好）
 mihomo kernel --no-mirror
 ```
 
@@ -437,6 +461,15 @@ match:
 | yacd | <https://yacd.metacubex.one>             | 经典 YACD 界面       |
 
 ## 故障排除
+
+### 一键体检
+
+```bash
+mihomo doctor
+```
+
+逐项检查内核可执行性、数据目录可写、settings 有效性、订阅配置与新鲜度、服务状态、端口占用、
+配置可构建性、代理连通性，每项给出 ✓/!/✗ 与修复命令；存在异常项时退出码为 1，可接入脚本。
 
 ### 启动失败
 

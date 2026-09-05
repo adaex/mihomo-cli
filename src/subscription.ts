@@ -12,6 +12,7 @@ import {
   saveSubscriptionCache,
   saveSubscriptionRawConfig,
 } from './settings.js';
+import { withSpinner } from './spinner.js';
 import type {
   AutoUpdateResult,
   ConfigSummary,
@@ -386,7 +387,7 @@ export async function autoUpdateStaleSubscription(options: { timeout?: number } 
     ),
   );
   try {
-    await withTimeout(updatePromise, timeoutMs);
+    await withSpinner('更新订阅中', () => withTimeout(updatePromise, timeoutMs));
   } catch (e) {
     if (!(e instanceof TimeoutError)) throw e;
     controller.abort(); // 中断仍在跑的 fetch，阻止其超时后成功回来又写盘（与"已用缓存启动"竞态）

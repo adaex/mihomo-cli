@@ -1,12 +1,35 @@
 import { colors } from '../colors.js';
-import { getKernelVersion } from '../config.js';
+import { getKernelVersion, hasKernel } from '../config.js';
 import { VERSION } from '../constants.js';
 import { USER_DATA_DIR } from '../paths.js';
+import { getServiceStatus } from '../service.js';
+import { getSubscriptions } from '../settings.js';
 import { displayWidth, padEndDisplay } from '../utils.js';
 import type { Command, CommandGroup, UsageLine } from './registry.js';
 
+/**
+ * 无参运行时的短帮助。**上下文感知**：全新用户缺什么引导什么（内核 → 订阅 → 服务 → 启动），
+ * 齐全后才显示常用命令。静态清单对老用户够用，但新用户照着敲 `start` 只会连撞三堵墙。
+ */
 export function printShortHelp(): void {
   console.log(`\n${colors.cyan(colors.bold(`mihomo-cli v${VERSION}`))}  (mihomo help 查看完整帮助)\n`);
+
+  const steps: [string, string][] = [];
+  if (!hasKernel()) steps.push(['mihomo kernel', '下载内核']);
+  if (getSubscriptions().length === 0) steps.push(['mihomo sub add <url>', '添加订阅']);
+  if (!getServiceStatus().installed) steps.push(['mihomo install', '安装服务（只需一次）']);
+
+  if (steps.length > 0) {
+    steps.push(['mihomo start', '启动代理']);
+    const width = Math.max(...steps.map(([cmd]) => displayWidth(cmd)));
+    console.log('开始使用:');
+    steps.forEach(([cmd, desc], i) => {
+      console.log(`  ${i + 1}. ${colors.bold(padEndDisplay(cmd, width))}  ${colors.gray(`# ${desc}`)}`);
+    });
+    console.log('');
+    return;
+  }
+
   console.log(
     '常用命令:\n' +
       `  ${colors.bold('start')} / ${colors.bold('stop')}         启动/停止代理\n` +

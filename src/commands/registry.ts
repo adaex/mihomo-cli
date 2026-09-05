@@ -1,4 +1,6 @@
+import { cmdCompletion } from './completion.js';
 import { cmdDirectory } from './directory.js';
+import { cmdDoctor } from './doctor.js';
 import { printHelp, printVersion } from './help.js';
 import { cmdKernel } from './kernel.js';
 import { cmdLogs } from './log.js';
@@ -62,10 +64,10 @@ export const COMMANDS: Command[] = [
   },
   {
     name: 'start',
-    aliases: [],
+    aliases: ['restart'],
     handler: cmdStart,
     group: 'control',
-    usage: [{ signature: 'start [tun|mixed] [-s] [-u ms]', description: '启动代理并开启登录自启（默认 mixed）' }],
+    usage: [{ signature: 'start [tun|mixed] [-s] [-u ms]', description: '启动代理并开启登录自启（默认 mixed；= 重启）' }],
   },
   {
     name: 'tun',
@@ -151,6 +153,15 @@ export const COMMANDS: Command[] = [
   },
   // === 订阅 ===
   {
+    // 顶层快捷方式：`mihomo use <name>` = `mihomo subscription use <name>`（与 tun 同范式）
+    name: 'use',
+    aliases: [],
+    handler: cmdSubscription,
+    rewrite: args => ['subscription', 'use', ...args.slice(1)],
+    group: 'subscription',
+    usage: [{ signature: 'use <name>', description: '切换订阅（subscription use 快捷方式，自动重启）' }],
+  },
+  {
     name: 'subscription',
     aliases: ['sub', 'subs', 'subscriptions'],
     handler: cmdSubscription,
@@ -205,6 +216,20 @@ export const COMMANDS: Command[] = [
     handler: cmdReset,
     group: 'system',
     usage: [{ signature: 'reset [目标...] [--full] [-y]', description: '重置: 留空保留设置/内核/覆写，指定目标删对应项，--full 删全部，-y 跳过确认' }],
+  },
+  {
+    name: 'doctor',
+    aliases: [],
+    handler: cmdDoctor,
+    group: 'system',
+    usage: [{ signature: 'doctor', description: '体检诊断（内核/服务/端口/订阅/配置/连通性，有异常退出码 1）' }],
+  },
+  {
+    name: 'completion',
+    aliases: [],
+    handler: cmdCompletion,
+    group: 'system',
+    usage: [{ signature: 'completion <zsh|bash|fish>', description: '输出 shell 补全脚本（eval 或写入补全目录）' }],
   },
   // === meta(不在分组清单展示,help 末尾单列) ===
   {

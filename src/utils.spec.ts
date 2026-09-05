@@ -2,7 +2,16 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { CliError } from './errors.js';
-import { assertNoRemovedSshFlag, displayWidth, padEndDisplay, parseIntArg, parseMirrorArg, suggestSimilar } from './utils.js';
+import {
+  assertNoRemovedSshFlag,
+  displayWidth,
+  formatRelativeTime,
+  padEndDisplay,
+  parseIntArg,
+  parseMirrorArg,
+  subscriptionUrgency,
+  suggestSimilar,
+} from './utils.js';
 
 const TOKENS = ['start', 'stop', 'status', 'subscription', 'sub', 'kernel', 'ui'];
 
@@ -84,17 +93,83 @@ describe('parseMirrorArg：--mirror-all 已移除（v3.10.0）', () => {
     );
   });
 
-  it('--mirror 仍正常工作（仅作用于产物下载）', () => {
+  it('--mirror 仍正常工作（仅作用于产物下载），并记住偏好', () => {
     assert.equal(parseMirrorArg(['kernel', '--mirror']).mirror, 'https://v6.gh-proxy.org/');
     assert.equal(parseMirrorArg(['kernel', '--mirror', 'gh.example.com']).mirror, 'https://gh.example.com/');
+    assert.equal(parseMirrorArg(['kernel', '--mirror']).remember, true);
+    assert.equal(parseMirrorArg(['kernel', '--mirror=gh.example.com']).remember, true);
   });
 
-  it('--no-mirror 显式直连', () => {
-    assert.deepEqual(parseMirrorArg(['kernel', '--no-mirror']), { mirror: null, isOverride: true });
+  it('--no-mirror 显式直连并清除偏好', () => {
+    assert.deepEqual(parseMirrorArg(['kernel', '--no-mirror']), { mirror: null, isOverride: true, clearSaved: true });
   });
 
   it('无镜像选项时不覆盖', () => {
     assert.deepEqual(parseMirrorArg(['kernel']), { mirror: null, isOverride: false });
+  });
+});
+
+describe('parseMirrorArg：镜像偏好（settings.kernel_mirror）', () => {
+  it('无显式选项时回退已记住的偏好', () => {
+    const r = parseMirrorArg(['kernel'], 'https://hk.gh-proxy.org/');
+    assert.deepEqual(r, { mirror: 'https://hk.gh-proxy.org/', isOverride: false });
+  });
+
+  it('显式 --no-mirror 优先于偏好，并标记清除', () => {
+    const r = parseMirrorArg(['kernel', '--no-mirror'], 'https://hk.gh-proxy.org/');
+    assert.deepEqual(r, { mirror: null, isOverride: true, clearSaved: true });
+  });
+
+  it('显式 --mirror 覆盖偏好并记住新值', () => {
+    const r = parseMirrorArg(['kernel', '--mirror', 'cdn.gh-proxy.org'], 'https://hk.gh-proxy.org/');
+    assert.equal(r.mirror, 'https://cdn.gh-proxy.org/');
+    assert.equal(r.remember, true);
+  });
+
+  it('--mirror direct 按直连处理并清除偏好', () => {
+    const r = parseMirrorArg(['kernel', '--mirror', 'direct'], 'https://hk.gh-proxy.org/');
+    assert.deepEqual(r, { mirror: null, isOverride: true, clearSaved: true });
+  });
+});
+
+describe('formatRelativeTime', () => {
+  const now = Date.now();
+  it('刚刚 / 分钟 / 小时 / 天', () => {
+    assert.equal(formatRelativeTime(new Date(now - 5_000), now), '刚刚');
+    assert.equal(formatRelativeTime(new Date(now - 3 * 60_000), now), '3 分钟前');
+    assert.equal(formatRelativeTime(new Date(now - 5 * 3_600_000), now), '5 小时前');
+    assert.equal(formatRelativeTime(new Date(now - 3 * 86_400_000), now), '3 天前');
+  });
+
+  it('ISO 字符串与 Date 都接受', () => {
+    assert.equal(formatRelativeTime(new Date(now - 60_000).toISOString(), now), '1 分钟前');
+  });
+
+  it('未来时间（时钟偏移）与非法值返回 null，由调用方回退绝对时间', () => {
+    assert.equal(formatRelativeTime(new Date(now + 60_000), now), null);
+    assert.equal(formatRelativeTime(undefined, now), null);
+    assert.equal(formatRelativeTime('not-a-date', now), null);
+  });
+});
+
+describe('subscriptionUrgency', () => {
+  const now = Date.now();
+  it('已过期优先判定', () => {
+    assert.equal(subscriptionUrgency({ expire: Math.floor(now / 1000) - 100, total: 100, upload: 50, download: 50 }, now), 'expired');
+  });
+
+  it('流量用尽', () => {
+    assert.equal(subscriptionUrgency({ total: 100, upload: 60, download: 40 }, now), 'traffic-exhausted');
+  });
+
+  it('7 天内到期', () => {
+    assert.equal(subscriptionUrgency({ expire: Math.floor(now / 1000) + 3 * 86_400 }, now), 'expiring');
+  });
+
+  it('永久（expire=0）与不限量不误报', () => {
+    assert.equal(subscriptionUrgency({ expire: 0 }, now), null);
+    assert.equal(subscriptionUrgency({}, now), null);
+    assert.equal(subscriptionUrgency({ expire: Math.floor(now / 1000) + 365 * 86_400 }, now), null);
   });
 });
 

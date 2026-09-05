@@ -1,9 +1,20 @@
+import { spawnSync } from 'node:child_process';
+
 import { colors } from '../colors.js';
 import { UI_URLS } from '../constants.js';
 import { CliError } from '../errors.js';
 import { openUrl } from '../open.js';
 import { getRunningState } from '../runtime.js';
 import { readSettings } from '../settings.js';
+
+/** 复制到剪贴板（macOS pbcopy）；失败返回 false，调用方回退到手动提示 */
+function copyToClipboard(text: string): boolean {
+  try {
+    return spawnSync('pbcopy', [], { input: text }).status === 0;
+  } catch {
+    return false;
+  }
+}
 
 export function cmdUI(args: string[]): void {
   const uiName = args[1] || 'zash';
@@ -25,7 +36,10 @@ export function cmdUI(args: string[]): void {
 
   const secret = readSettings().controller_secret;
   if (secret) {
-    console.log('已配置访问密钥（UI 连接 127.0.0.1:9090 时需输入，密钥见 settings.json）');
+    // 用户接下来就要在 UI 里粘贴密钥：顺手放进剪贴板，省一次翻 settings.json
+    console.log(
+      copyToClipboard(secret) ? '已配置访问密钥（已复制到剪贴板，UI 连接时粘贴）' : '已配置访问密钥（UI 连接 127.0.0.1:9090 时需输入，密钥见 settings.json）',
+    );
   }
 
   const success = openUrl(url);

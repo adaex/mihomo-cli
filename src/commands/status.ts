@@ -1,22 +1,140 @@
 import { colors } from '../colors.js';
-import { getConfigInfo, getKernelVersion } from '../config.js';
+import { getConfigInfo, getKernelVersion, hasKernel } from '../config.js';
+import { VERSION } from '../constants.js';
 import { isOverwriteEnabled, listOverwriteFile } from '../overwrite.js';
+import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
 import { detectLegacySystemInstall, getServiceStatus } from '../service.js';
 import { getSubscriptionsWithCache } from '../settings.js';
 import { formatProxySummary, getActiveSubscription } from '../subscription.js';
-import { formatTimestamp, formatTraffic } from '../utils.js';
+import type { ProxyProbeResult, StatusJson, SubscriptionUrgency } from '../types.js';
+import { formatTimestamp, formatTraffic, hasFlag, subscriptionUrgency } from '../utils.js';
+
+/** 运行中但代理不通时的归因提示（订阅过期/流量用尽优先，其余归到节点） */
+function connectivityHint(urgency: SubscriptionUrgency): string {
+  if (urgency === 'expired') return '订阅已过期，请续费或更换订阅';
+  if (urgency === 'traffic-exhausted') return '订阅流量已用尽，请续费或更换订阅';
+  return '节点可能失效，可在 Web UI 中切换节点 (mihomo ui)';
+}
+
+/** 流量行的着色：用尽红、>=90% 黄 */
+function trafficColor(line: string, urgency: SubscriptionUrgency, total: number | undefined, upload: number | undefined, download: number | undefined): string {
+  if (urgency === 'traffic-exhausted') return colors.red(line);
+  if (total && total > 0) {
+    const used = (upload || 0) + (download || 0);
+    if (used / total >= 0.9) return colors.yellow(line);
+  }
+  return line;
+}
+
+/** 到期行的着色：过期红、7 天内黄 */
+function expireColor(line: string, urgency: SubscriptionUrgency): string {
+  if (urgency === 'expired') return colors.red(line);
+  if (urgency === 'expiring') return colors.yellow(line);
+  return line;
+}
+
+/** 组装 status 的机器可读快照（与文本展示同源数据） */
+function buildStatusJson(args: {
+  running: boolean;
+  kind: 'service' | 'tun' | null;
+  pid: number | null;
+  probe: ProxyProbeResult | null;
+  info: ReturnType<typeof getConfigInfo>;
+  activeSub: ReturnType<typeof getActiveSubscription>;
+  cached: ReturnType<typeof getSubscriptionsWithCache>[number] | undefined;
+  overwriteEnabled: boolean;
+  overwriteFiles: string[];
+  service: ReturnType<typeof getServiceStatus>;
+  legacy: boolean;
+}): StatusJson {
+  const urgency = args.cached ? subscriptionUrgency(args.cached) : null;
+  return {
+    version: VERSION,
+    running: args.running,
+    connectivity: args.probe ? { ok: args.probe.ok, statusCode: args.probe.statusCode, error: args.probe.error, durationMs: args.probe.durationMs } : null,
+    mode: args.info ? (args.info.tun ? 'tun' : 'mixed') : null,
+    carrier: args.kind,
+    pid: args.pid,
+    kernel: getKernelVersion(),
+    kernelInstalled: hasKernel(),
+    ports: args.info
+      ? args.info.tun
+        ? { tun: true, ...(args.info.mixedPort ? { mixed: args.info.mixedPort } : {}) }
+        : {
+            ...(args.info.mixedPort ? { mixed: args.info.mixedPort } : {}),
+            ...(args.info.httpPort ? { http: args.info.httpPort } : {}),
+            ...(args.info.socksPort ? { socks: args.info.socksPort } : {}),
+          }
+      : {},
+    subscription: args.activeSub
+      ? {
+          name: args.activeSub.name,
+          proxies: args.info?.proxies ?? 0,
+          proxyGroups: args.info?.proxyGroups ?? 0,
+          ...(args.cached?.upload !== undefined ? { upload: args.cached.upload } : {}),
+          ...(args.cached?.download !== undefined ? { download: args.cached.download } : {}),
+          ...(args.cached?.total !== undefined ? { total: args.cached.total } : {}),
+          ...(args.cached?.expire !== undefined ? { expire: args.cached.expire } : {}),
+          urgency,
+        }
+      : null,
+    overwrite: { enabled: args.overwriteEnabled, files: args.overwriteFiles },
+    service: {
+      installed: args.service.installed,
+      loaded: args.service.loaded,
+      running: args.service.running,
+      disabled: args.service.disabled,
+      lastExitCode: args.service.lastExitCode,
+      legacySystemInstall: args.legacy,
+    },
+  };
+}
 
 /** 全程免 sudo：launchctl print / print-disabled 均可读，pgrep/ps 亦然。 */
-export async function printStatus(): Promise<void> {
+export async function printStatus(args: string[] = []): Promise<void> {
+  const asJson = hasFlag(args, '-j', '--json');
   const state = getRunningState();
   const service = getServiceStatus();
   const info = getConfigInfo();
   const overwriteEnabled = isOverwriteEnabled();
   const overwriteFiles = listOverwriteFile().files;
   const activeSub = getActiveSubscription();
+  const cached = activeSub ? getSubscriptionsWithCache().find(s => s.name === activeSub.name) : undefined;
+  const legacy = detectLegacySystemInstall();
 
-  const { running, pid, kind, processInfo } = state;
+  const { running, pid, kind } = state;
+
+  // 连通性探测：运行中且有混合端口才发（TUN 模式下混合端口同样在监听，可作备用入口）
+  let probe: ProxyProbeResult | null = null;
+  if (running && info?.mixedPort) {
+    probe = await probeProxyConnectivity(info.mixedPort);
+  }
+
+  if (asJson) {
+    console.log(
+      JSON.stringify(
+        buildStatusJson({
+          running,
+          kind,
+          pid,
+          probe,
+          info,
+          activeSub,
+          cached,
+          overwriteEnabled,
+          overwriteFiles: overwriteFiles.map(f => f.name),
+          service,
+          legacy,
+        }),
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  const urgency = cached ? subscriptionUrgency(cached) : null;
 
   console.log('');
   // 模式取自配置文件：未运行时也展示上次构建的模式
@@ -26,20 +144,35 @@ export async function printStatus(): Promise<void> {
     const carrier = kind === 'service' ? ' · 服务' : kind === 'tun' ? ' · 临时' : '';
     modeLabel = colors.cyan(` (${mode}${carrier})`) as string;
   }
-  const statusText = running ? colors.green('● 运行中') : colors.yellow('不在运行');
+  // 三态灯：进程在跑 ≠ 代理通。运行中但探测不通时黄灯并给归因，
+  // 与「不在运行」区分开——前者最容易让用户误以为代理正常
+  let statusText: string;
+  if (!running) {
+    statusText = colors.yellow('不在运行');
+  } else if (probe && !probe.ok) {
+    statusText = colors.yellow('● 运行中（代理不通）');
+  } else {
+    statusText = colors.green('● 运行中');
+  }
   console.log(`${colors.gray('状态: ')}${statusText}${modeLabel}`);
+  if (running && probe && !probe.ok) {
+    console.log(colors.yellow(`  异常: ${connectivityHint(urgency)}`));
+  }
   // 装着、自启开着、却没在跑且上次非 0 退出 —— 内核在被 KeepAlive 反复拉起。
   // 不提示的话这与「用户自己 stop 掉了」显示完全一样，用户无从判断为何代理不通
   if (!running && service.installed && !service.disabled && service.lastExitCode !== null && service.lastExitCode !== 0) {
     console.log(colors.yellow(`  异常: 内核上次异常退出（退出码 ${service.lastExitCode}），launchd 正在反复拉起`));
     console.log(colors.gray('  查看原因: mihomo logs 0    停止重试: mihomo stop'));
   }
-  console.log(`${colors.gray('内核: ')}${getKernelVersion() || '未安装'}`);
+  const kernelVersion = getKernelVersion();
+  console.log(
+    kernelVersion ? `${colors.gray('内核: ')}${kernelVersion}` : `${colors.gray('内核: ')}${colors.yellow('未安装')} ${colors.gray('(下载: mihomo kernel)')}`,
+  );
 
   if (pid) {
     console.log(`${colors.gray('PID:  ')}${pid}`);
-    if (kind === 'tun' && processInfo) {
-      console.log(`${colors.gray('内存: ')}${processInfo.memory}`);
+    if (kind === 'tun' && state.processInfo) {
+      console.log(`${colors.gray('内存: ')}${state.processInfo.memory}`);
     }
   }
 
@@ -65,16 +198,15 @@ export async function printStatus(): Promise<void> {
     }
     console.log(subLine);
     // 订阅流量/到期来自缓存（上次下载响应头），仅缓存里有才展示
-    const cached = getSubscriptionsWithCache().find(s => s.name === activeSub.name);
     const traffic = cached ? formatTraffic(cached.upload, cached.download, cached.total) : null;
     if (traffic) {
-      console.log(`${colors.gray('流量: ')}${traffic}`);
+      console.log(`${colors.gray('流量: ')}${trafficColor(traffic, urgency, cached?.total, cached?.upload, cached?.download)}`);
     }
     if (cached?.expire !== undefined) {
-      console.log(`${colors.gray('到期: ')}${formatTimestamp(cached.expire)}`);
+      console.log(`${colors.gray('到期: ')}${expireColor(formatTimestamp(cached.expire), urgency)}`);
     }
   } else {
-    console.log(`${colors.gray('订阅: ')}未配置`);
+    console.log(`${colors.gray('订阅: ')}未配置 ${colors.gray('(添加: mihomo sub add <url>)')}`);
   }
 
   if (overwriteEnabled && overwriteFiles.length > 0) {
@@ -86,14 +218,12 @@ export async function printStatus(): Promise<void> {
     console.log(`${colors.gray('覆写: ')}${colors.yellow('已禁用')}`);
   }
 
-  printServiceLines(service);
+  printServiceLines(service, legacy);
 
   console.log('');
 }
 
-function printServiceLines(service: ReturnType<typeof getServiceStatus>): void {
-  const legacy = detectLegacySystemInstall();
-
+function printServiceLines(service: ReturnType<typeof getServiceStatus>, legacy: boolean): void {
   if (!service.installed && !service.loaded) {
     console.log(`${colors.gray('服务: ')}${colors.yellow('未安装')} ${colors.gray('(mihomo install 安装后可用 Mixed 模式)')}`);
   } else if (!service.installed) {

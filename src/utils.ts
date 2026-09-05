@@ -1,7 +1,7 @@
 import { DEFAULT_MIRROR } from './constants.js';
 import { CliError } from './errors.js';
 import { START_RESTART_FLAGS, VALUE_FLAGS } from './flags.js';
-import type { MirrorArg } from './types.js';
+import type { MirrorArg, SubscriptionUrgency } from './types.js';
 
 /**
  * 通用纯函数小工具：sleep、字符串转义、格式化、flag 解析、did-you-mean。
@@ -109,6 +109,50 @@ export function formatDate(dateOrIso: unknown): string {
   } catch {
     return '未知';
   }
+}
+
+/**
+ * 相对时间（「3 小时前」），供订阅列表的更新时间等「距今多久」场景。
+ * 未来时间（时钟偏移、缓存被手改）或非法值返回 null，由调用方回退绝对时间——
+ * 未来时间显示成「N 分钟后」对「该不该更新」毫无意义，还会掩盖时钟问题。
+ */
+export function formatRelativeTime(dateOrIso: unknown, nowMs: number = Date.now()): string | null {
+  if (dateOrIso === undefined || dateOrIso === null) return null;
+  let t: number;
+  try {
+    const d = dateOrIso instanceof Date ? dateOrIso : new Date(dateOrIso as string);
+    t = d.getTime();
+  } catch {
+    return null;
+  }
+  if (Number.isNaN(t) || t > nowMs) return null;
+  const sec = Math.floor((nowMs - t) / 1000);
+  if (sec < 60) return '刚刚';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} 分钟前`;
+  const hour = Math.floor(min / 60);
+  if (hour < 24) return `${hour} 小时前`;
+  const day = Math.floor(hour / 24);
+  if (day < 30) return `${day} 天前`;
+  const month = Math.floor(day / 30);
+  if (month < 12) return `${month} 个月前`;
+  return `${Math.floor(month / 12)} 年前`;
+}
+
+/**
+ * 订阅缓存的紧急度判定，status 着色与「代理不通」归因共用同一口径。
+ * expire 为 unix 秒，0/缺省 = 永久；total 缺省 = 不限量。
+ * 优先级：已过期 > 流量用尽 > 7 天内到期。
+ */
+export function subscriptionUrgency(
+  entry: { expire?: number; upload?: number; download?: number; total?: number },
+  nowMs: number = Date.now(),
+): SubscriptionUrgency {
+  if (entry.expire !== undefined && entry.expire > 0 && entry.expire * 1000 < nowMs) return 'expired';
+  const used = (entry.upload || 0) + (entry.download || 0);
+  if (entry.total !== undefined && entry.total > 0 && used >= entry.total) return 'traffic-exhausted';
+  if (entry.expire !== undefined && entry.expire > 0 && entry.expire * 1000 - nowMs < 7 * 86_400_000) return 'expiring';
+  return null;
 }
 
 export function hasFlag(args: string[] | undefined, short: string, long?: string): boolean {
@@ -288,10 +332,14 @@ function normalizeMirrorUrl(val: string): string | null {
  * API 若也走镜像，`browser_download_url` 就完全由镜像说了算，而内核产物随后
  * `chmod 755` 并在 TUN / 系统级服务下以 root 运行——上游不提供 checksums，
  * 把来源钉死（assertTrustedAssetUrl）是主要防线，不能让镜像自己指定下载地址。
+ *
+ * `savedMirror`（settings.kernel_mirror）是无显式选项时的回退：
+ * 国内用户不必每次更新都带 `--mirror`。显式 `--mirror` 会记住偏好，
+ * `--no-mirror`/`--direct` 本次直连并清除偏好。
  */
-export function parseMirrorArg(args: string[] | undefined): MirrorArg {
+export function parseMirrorArg(args: string[] | undefined, savedMirror?: string | null): MirrorArg {
   if (!args || args.length < 2) {
-    return { mirror: null, isOverride: false };
+    return savedMirror ? { mirror: savedMirror, isOverride: false } : { mirror: null, isOverride: false };
   }
 
   // 已移除的选项要显式报错，不能静默按直连继续：用户敲了 --mirror-all 却拿到直连行为，
@@ -309,7 +357,7 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
   }
 
   if (args.includes('--no-mirror') || args.includes('--direct')) {
-    return { mirror: null, isOverride: true };
+    return { mirror: null, isOverride: true, clearSaved: true };
   }
 
   // 同时支持 `--mirror url` 与 `--mirror=url` 两种形式
@@ -319,10 +367,14 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
     const inline = mirrorEq?.slice('--mirror='.length);
     const nextArg = inline ?? args[mirrorIdx + 1];
     if (!nextArg || nextArg.startsWith('-')) {
-      return { mirror: DEFAULT_MIRROR, isOverride: true };
+      // 显式表达「我要用镜像」：记住偏好，免得下次还要带
+      return { mirror: DEFAULT_MIRROR, isOverride: true, remember: true };
     }
-    return { mirror: normalizeMirrorUrl(nextArg), isOverride: true };
+    // `--mirror direct` 等显式直连值：normalize 返回 null，按「直连并清除偏好」处理
+    const normalized = normalizeMirrorUrl(nextArg);
+    return normalized ? { mirror: normalized, isOverride: true, remember: true } : { mirror: null, isOverride: true, clearSaved: true };
   }
 
-  return { mirror: null, isOverride: false };
+  // 无显式选项：回退已记住的偏好
+  return savedMirror ? { mirror: savedMirror, isOverride: false } : { mirror: null, isOverride: false };
 }
