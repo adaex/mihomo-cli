@@ -180,6 +180,7 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 - **`bootstrap` 一个被 disable 的 label 是硬失败**（`Bootstrap failed: 5: Input/output error`），不是「加载了但不启动」。故 `enable` 必须在 `bootstrap` 之前，顺序不可换。而 `stop` 恒置 disable 位，「stop 之后 start」是最常走的路径——少了 enable 就 100% 失败
 - **disable 位持久化在 `/var/db/com.apple.xpc.launchd/disabled*.plist`，与 plist 文件相互独立**：删掉 plist 后该位仍在。且 launchctl **没有「清除记录」的动词**，`enable` 同样写一条 `=> enabled`。故 `parseDisabledList` 必须区分 `disabled`/`enabled` 两种值，只判断「在不在表里」会把 enable 过的服务误判成已禁用
+- **要真正抹掉那条记录只能直接改 plist**：user 域是 `disabled.<uid>.plist`（system 域为 `disabled.plist`），`sudo plutil -remove` 删键，**keypath 里 `.` 是层级分隔符，label 必须转义成 `com\.foo\.bar`**。但 launchd 在内存里持有该表，改磁盘不触发重读——`print-disabled` 仍显示旧值，重启后才一致。故这条路**不能做进 CLI 的自动清理**（既要提权又不立即生效），只作开发期手工收尾用
 - **`launchctl print <target>` 与 `print-disabled <domain>` 均免 sudo**（对 system 域也是），实测 3ms。退出码 `113` = 未装载，`0` = 已装载。这让状态查询能拿到真实 state/pid，取代早期 pgrep + root 属主过滤的近似判断
 - **`launchctl print` 输出里顶层字段是单 tab（`\tstate = running`），嵌套 endpoint 是双 tab（`\t\tstate = active`）**。解析必须锚定 `^\t`。实测多个真实服务顶层 state 都排在嵌套之前，不锚定「碰巧」也对——但那是 launchd 的实现细节不是契约，`service.spec.ts` 用倒序 fixture 锁死了锚定行为
 - **`KeepAlive.PathState` 不能用来实现 stop**：删掉 flag 文件后进程照跑不误，`KeepAlive` 只决定「退出后是否重启」，不主动终止运行中的任务。这条排除了「flag 文件 + root daemon 免密」的方案
