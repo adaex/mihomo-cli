@@ -1,57 +1,56 @@
 import { CliError } from '../errors.js';
 import { suggestSimilar } from '../utils.js';
+import { SUBCOMMANDS as DIRECTORY_SUBCOMMANDS } from './directory.js';
+import { SUBCOMMANDS as OVERWRITE_SUBCOMMANDS } from './overwrite.js';
+import type { Command } from './registry.js';
+import type { SubCommand } from './shared.js';
+import { SUBCOMMANDS as SUBSCRIPTION_SUBCOMMANDS } from './subscription.js';
 
 /**
- * Shell 补全脚本生成。词表为静态结构（与 registry.ts 的命令保持同步）：
- * 三个 shell 的脚本都从它生成，避免三份手写漂移。
- * 动态部分（订阅名等）不做——解析中文输出太脆，收益也低。
+ * Shell 补全脚本生成。词表**从命令注册表派生**（cmdCompletion 传入 COMMANDS），
+ * 子命令词表从各命令模块导出的 SUBCOMMANDS 派生（含别名展开）——
+ * 不再手写第二份词表，新增命令/子命令自动出现在补全里。
+ * 三个 shell 的脚本结构各自手写，词表同源。
+ *
+ * completion.ts 不 import registry 的运行时（registry import 本模块的 cmdCompletion，
+ * 反向 import 会成环）；Command 仅作类型导入。
  */
 
-const COMMAND_WORDS: { word: string; desc: string }[] = [
-  { word: 'install', desc: '安装服务（Mixed 模式的前置，只需一次）' },
-  { word: 'start', desc: '启动代理并开启登录自启' },
-  { word: 'stop', desc: '停止代理并关闭登录自启' },
-  { word: 'uninstall', desc: '卸载服务' },
-  { word: 'status', desc: '查看状态（--json 机器可读）' },
-  { word: 'logs', desc: '日志列表/查看' },
-  { word: 'ui', desc: '打开 Web UI' },
-  { word: 'subscription', desc: '订阅管理' },
-  { word: 'overwrite', desc: '覆写配置' },
-  { word: 'directory', desc: '数据目录' },
-  { word: 'kernel', desc: '更新内核' },
-  { word: 'update', desc: '更新 mihomo-cli' },
-  { word: 'reset', desc: '重置用户数据' },
-  { word: 'doctor', desc: '体检诊断' },
-  { word: 'completion', desc: '输出 shell 补全脚本' },
-  { word: 'use', desc: '切换订阅（subscription use 快捷方式）' },
-  { word: 'tun', desc: '临时 TUN 透明代理（= start tun）' },
-  { word: 'help', desc: '显示帮助' },
-  { word: 'version', desc: '显示版本' },
-];
+interface CompletionWord {
+  word: string;
+  desc: string;
+}
 
-const SUBCOMMANDS: Record<string, { word: string; desc: string }[]> = {
-  subscription: [
-    { word: 'use', desc: '切换订阅' },
-    { word: 'add', desc: '添加订阅' },
-    { word: 'update', desc: '更新订阅' },
-    { word: 'remove', desc: '删除订阅' },
-    { word: 'rm', desc: '删除订阅' },
-    { word: 'delete', desc: '删除订阅' },
-  ],
-  overwrite: [
-    { word: 'on', desc: '启用覆写' },
-    { word: 'off', desc: '禁用覆写' },
-    { word: 'enable', desc: '启用覆写' },
-    { word: 'disable', desc: '禁用覆写' },
-  ],
-  directory: [{ word: 'open', desc: '打开目录' }],
-};
+/** 命令词表：注册表中所有非 hidden 命令，desc 取首条用法行说明 */
+function commandWords(commands: Command[]): CompletionWord[] {
+  return commands.filter(c => !c.hidden).map(c => ({ word: c.name, desc: c.usage[0]?.description ?? '' }));
+}
+
+/** 子命令词表：主名 + 别名展开，desc 取 SubCommand.description */
+function subWords(subs: SubCommand[]): CompletionWord[] {
+  return subs.flatMap(s => [{ word: s.name, desc: s.description ?? '' }, ...(s.aliases ?? []).map(a => ({ word: a, desc: s.description ?? '' }))]);
+}
+
+interface SubGroup {
+  /** 触发该组的命令 token（主名 + 别名），用于 zsh/bash/fish 的 case 匹配 */
+  tokens: string[];
+  words: CompletionWord[];
+}
+
+/** 子命令组：从注册表取命令的主名+别名作为触发 token，子命令词表从 SUBCOMMANDS 派生 */
+function subGroups(commands: Command[]): SubGroup[] {
+  const groupOf = (name: string, subs: SubCommand[]): SubGroup => {
+    const cmd = commands.find(c => c.name === name);
+    return { tokens: cmd ? [cmd.name, ...cmd.aliases] : [name], words: subWords(subs) };
+  };
+  return [groupOf('subscription', SUBSCRIPTION_SUBCOMMANDS), groupOf('overwrite', OVERWRITE_SUBCOMMANDS), groupOf('directory', DIRECTORY_SUBCOMMANDS)];
+}
 
 const DIR_TARGETS = ['root', 'subs', 'logs', 'data', 'runtime', 'kernel'];
 const UI_NAMES = ['zash', 'dash', 'yacd'];
 const SHELLS = ['zsh', 'bash', 'fish'] as const;
 
-function buildZsh(): string {
+function buildZsh(commands: Command[], groups: SubGroup[]): string {
   const lines: string[] = [
     '#compdef mihomo mhm mh mihomo-cli',
     '',
@@ -60,7 +59,7 @@ function buildZsh(): string {
     '_mihomo() {',
     '  local -a commands subcmds',
     '  commands=(',
-    ...COMMAND_WORDS.map(c => `    '${c.word}:${c.desc.replace(/'/g, "''")}'`),
+    ...commandWords(commands).map(c => `    '${c.word}:${c.desc.replace(/'/g, "''")}'`),
     '  )',
     '',
     '  _arguments -C \\',
@@ -74,12 +73,11 @@ function buildZsh(): string {
     '    args)',
     '      case ${words[1]} in',
   ];
-  for (const [group, subs] of Object.entries(SUBCOMMANDS)) {
-    const aliases =
-      group === 'subscription' ? 'subscription|sub|subs|subscriptions' : group === 'overwrite' ? 'overwrite|ow' : 'directory|dir|dirs|directories';
+  for (const group of groups) {
+    const aliases = group.tokens.join('|');
     lines.push(`        ${aliases})`);
     lines.push('          subcmds=(');
-    for (const s of subs) lines.push(`            '${s.word}:${s.desc.replace(/'/g, "''")}'`);
+    for (const s of group.words) lines.push(`            '${s.word}:${s.desc.replace(/'/g, "''")}'`);
     lines.push('          )');
     lines.push('          if (( CURRENT == 2 )); then');
     lines.push("            _describe 'subcommand' subcmds");
@@ -123,8 +121,30 @@ function buildZsh(): string {
   return lines.join('\n');
 }
 
-function buildBash(): string {
-  const top = COMMAND_WORDS.map(c => c.word).join(' ');
+function buildBash(commands: Command[], groups: SubGroup[]): string {
+  const top = commandWords(commands)
+    .map(c => c.word)
+    .join(' ');
+  const subCase = groups
+    .map(group => {
+      const aliases = group.tokens.join('|');
+      const words = group.words.map(w => w.word).join(' ');
+      if (group.tokens[0] === 'directory') {
+        return `    ${aliases})
+      if [[ \${COMP_CWORD} -eq 2 ]]; then
+        COMPREPLY=( $(compgen -W "open" -- "\${cur}") )
+      elif [[ "\${COMP_WORDS[2]}" == "open" ]]; then
+        COMPREPLY=( $(compgen -W "${DIR_TARGETS.join(' ')}" -- "\${cur}") )
+      fi
+      ;;`;
+      }
+      return `    ${aliases})
+      if [[ \${COMP_CWORD} -eq 2 ]]; then
+        COMPREPLY=( $(compgen -W "${words}" -- "\${cur}") )
+      fi
+      ;;`;
+    })
+    .join('\n');
   return `# mihomo-cli bash 补全（mihomo completion bash 生成；安装: eval "$(mihomo completion bash)"）
 
 _mihomo_completions() {
@@ -139,23 +159,7 @@ _mihomo_completions() {
   fi
 
   case "\${COMP_WORDS[1]}" in
-    subscription|sub|subs|subscriptions)
-      if [[ \${COMP_CWORD} -eq 2 ]]; then
-        COMPREPLY=( $(compgen -W "use add update remove rm delete" -- "\${cur}") )
-      fi
-      ;;
-    overwrite|ow)
-      if [[ \${COMP_CWORD} -eq 2 ]]; then
-        COMPREPLY=( $(compgen -W "on off enable disable" -- "\${cur}") )
-      fi
-      ;;
-    directory|dir|dirs|directories)
-      if [[ \${COMP_CWORD} -eq 2 ]]; then
-        COMPREPLY=( $(compgen -W "open" -- "\${cur}") )
-      elif [[ "\${COMP_WORDS[2]}" == "open" ]]; then
-        COMPREPLY=( $(compgen -W "${DIR_TARGETS.join(' ')}" -- "\${cur}") )
-      fi
-      ;;
+${subCase}
     logs)
       COMPREPLY=( $(compgen -W "-f -n -o --help" -- "\${cur}") )
       ;;
@@ -177,23 +181,19 @@ complete -F _mihomo_completions mihomo mhm mh mihomo-cli
 `;
 }
 
-function buildFish(): string {
+function buildFish(commands: Command[], groups: SubGroup[]): string {
   const lines: string[] = [
     '# mihomo-cli fish 补全（mihomo completion fish 生成；安装: mihomo completion fish | source）',
     '',
     'for cmd in mihomo mhm mh mihomo-cli',
   ];
-  for (const c of COMMAND_WORDS) {
+  for (const c of commandWords(commands)) {
     lines.push(`    complete -c $cmd -f -a '${c.word}' -d '${c.desc.replace(/'/g, "\\'")}'`);
   }
-  const subAliases: Record<string, string> = {
-    subscription: 'subscription sub subs subscriptions',
-    overwrite: 'overwrite ow',
-    directory: 'directory dir dirs directories',
-  };
-  for (const [group, subs] of Object.entries(SUBCOMMANDS)) {
-    for (const s of subs) {
-      lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from ${subAliases[group]}" -a '${s.word}' -d '${s.desc}'`);
+  for (const group of groups) {
+    const seen = group.tokens.join(' ');
+    for (const s of group.words) {
+      lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from ${seen}" -a '${s.word}' -d '${s.desc.replace(/'/g, "\\'")}'`);
     }
   }
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from directory dir dirs directories open" -a '${DIR_TARGETS.join(' ')}'`);
@@ -206,14 +206,15 @@ function buildFish(): string {
 }
 
 /** 生成指定 shell 的补全脚本；未知 shell 抛 CliError（带 did-you-mean） */
-export function buildCompletionScript(shell: string): string {
+export function buildCompletionScript(shell: string, commands: Command[]): string {
+  const groups = subGroups(commands);
   switch (shell) {
     case 'zsh':
-      return buildZsh();
+      return buildZsh(commands, groups);
     case 'bash':
-      return buildBash();
+      return buildBash(commands, groups);
     case 'fish':
-      return buildFish();
+      return buildFish(commands, groups);
     default: {
       const suggestion = suggestSimilar(shell, [...SHELLS]);
       throw new CliError(`未知的 shell: ${shell}`, {
@@ -224,12 +225,13 @@ export function buildCompletionScript(shell: string): string {
   }
 }
 
-export function cmdCompletion(args: string[]): void {
+/** completion 命令入口。词表由 registry 传入（避免 import 成环）。 */
+export function cmdCompletion(args: string[], commands: Command[]): void {
   const shell = args[1];
   if (!shell) {
     throw new CliError('请指定 shell', {
       hint: [`用法: mihomo completion <${SHELLS.join('|')}>`, '安装: eval "$(mihomo completion zsh)"，或写入对应 shell 的补全目录'],
     });
   }
-  console.log(buildCompletionScript(shell));
+  console.log(buildCompletionScript(shell, commands));
 }

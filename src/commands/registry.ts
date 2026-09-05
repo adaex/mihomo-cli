@@ -47,6 +47,11 @@ export interface Command {
   group: CommandGroup;
   /** 该命令在帮助中的用法行(单一真相源);空数组表示不单独列出(如纯别名 open/on/off) */
   usage: UsageLine[];
+  /**
+   * 隐藏命令：不参与 shell 补全词表（墓碑命令、纯过渡别名）。
+   * 帮助是否展示由 usage 是否为空决定，与此标记正交。
+   */
+  hidden?: boolean;
 }
 
 /**
@@ -96,7 +101,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: printStatus,
     group: 'control',
-    usage: [{ signature: 'status', description: '查看状态' }],
+    usage: [{ signature: 'status [-j|--json] [--no-probe]', description: '查看状态' }],
   },
   // === 已移除（墓碑：显式报错指引迁移，不在帮助中列出） ===
   {
@@ -112,6 +117,7 @@ export const COMMANDS: Command[] = [
     ]),
     group: 'meta',
     usage: [],
+    hidden: true,
   },
   {
     name: 'up',
@@ -119,6 +125,7 @@ export const COMMANDS: Command[] = [
     handler: removedCommand('up', 'v4.1.0', ['请用: mihomo start']),
     group: 'meta',
     usage: [],
+    hidden: true,
   },
   {
     name: 'down',
@@ -126,6 +133,7 @@ export const COMMANDS: Command[] = [
     handler: removedCommand('down', 'v4.1.0', ['请用: mihomo stop']),
     group: 'meta',
     usage: [],
+    hidden: true,
   },
   // === 界面 ===
   {
@@ -136,13 +144,14 @@ export const COMMANDS: Command[] = [
     usage: [{ signature: 'ui [zash|dash|yacd]', description: '打开 Web UI（默认 zash）' }],
   },
   {
-    // 已并入 `logs -f`；保留为隐藏别名过渡，不在帮助中列出（usage 留空）
+    // 已并入 `logs -f`；保留为隐藏别名过渡，不在帮助中列出（usage 留空），也不进补全词表
     name: 'log',
     aliases: [],
     handler: cmdLogs,
     rewrite: args => ['logs', '0', '-f', ...args.slice(1)],
     group: 'interface',
     usage: [],
+    hidden: true,
   },
   {
     name: 'logs',
@@ -227,7 +236,7 @@ export const COMMANDS: Command[] = [
   {
     name: 'completion',
     aliases: [],
-    handler: cmdCompletion,
+    handler: args => cmdCompletion(args, COMMANDS),
     group: 'system',
     usage: [{ signature: 'completion <zsh|bash|fish>', description: '输出 shell 补全脚本（eval 或写入补全目录）' }],
   },

@@ -5,13 +5,14 @@ import { colors } from '../colors.js';
 import { getConfigInfo, getKernelVersion, hasKernel } from '../config.js';
 import { CliError } from '../errors.js';
 import { PATHS, USER_DATA_DIR } from '../paths.js';
+import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
 import { detectLegacySystemInstall, getServiceStatus } from '../service.js';
-import { getSubscriptionsWithCache, readSubscriptionRawConfig } from '../settings.js';
+import { getSubscriptionsWithCache, isValidSettingsContent, readSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription, prepareConfigForStart, resolveUpdateInterval } from '../subscription.js';
 import { formatRelativeTime } from '../utils.js';
 
-type CheckStatus = 'ok' | 'warn' | 'fail';
+type CheckStatus = 'ok' | 'warn' | 'fail' | 'skip';
 
 interface Check {
   name: string;
@@ -30,7 +31,7 @@ function isPortListening(port: number): boolean {
   }
 }
 
-function collectChecks(): Check[] {
+async function collectChecks(): Promise<Check[]> {
   const checks: Check[] = [];
   const push = (name: string, status: CheckStatus, detail: string, fix?: string): void => {
     checks.push({ name, status, detail, fix });
@@ -59,15 +60,10 @@ function collectChecks(): Check[] {
 
   // === settings.json ===
   if (fs.existsSync(PATHS.settingsFile)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(PATHS.settingsFile, 'utf8'));
-      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        push('设置文件', 'ok', '格式有效');
-      } else {
-        push('设置文件', 'warn', '非对象，读取时会回退默认并备份为 .bak', '删除或修复 settings.json');
-      }
-    } catch {
-      push('设置文件', 'warn', 'JSON 损坏，读取时会回退默认并备份为 .bak', '删除或修复 settings.json');
+    if (isValidSettingsContent(fs.readFileSync(PATHS.settingsFile, 'utf8'))) {
+      push('设置文件', 'ok', '格式有效');
+    } else {
+      push('设置文件', 'warn', '格式损坏或非对象，读取时会回退默认并备份为 .bak', '删除或修复 settings.json');
     }
   } else {
     push('设置文件', 'ok', '未创建（使用默认设置）');
@@ -90,7 +86,7 @@ function collectChecks(): Check[] {
       const cached = subs.find(s => s.name === active.name);
       if (cached?.updated_at) {
         const rel = formatRelativeTime(cached.updated_at);
-        const intervalH = resolveUpdateInterval(cached.url, cached.update_interval);
+        const intervalH = resolveUpdateInterval(cached.update_interval);
         const ageH = (Date.now() - new Date(cached.updated_at).getTime()) / 3_600_000;
         if (ageH > intervalH) {
           push('订阅新鲜度', 'warn', `${rel ?? '未知'}前更新，已超过 ${intervalH} 小时间隔`, 'mihomo sub update');
@@ -117,7 +113,13 @@ function collectChecks(): Check[] {
       push('服务稳定性', 'warn', `内核上次异常退出（退出码 ${service.lastExitCode}）`, 'mihomo logs 0 查看原因');
     }
   } else {
-    push('服务', 'ok', `已安装，未运行${service.disabled ? '（自启已关闭）' : ''}`);
+    // installed && !running：装着、自启开着、却没在跑且上次非 0 退出 —— 内核在被
+    // KeepAlive 反复拉起。与「用户主动 stop」（disabled）区分开，前者是崩溃循环，必须醒目告警
+    if (!service.disabled && service.lastExitCode !== null && service.lastExitCode !== 0) {
+      push('服务', 'fail', `内核上次异常退出（退出码 ${service.lastExitCode}），launchd 正在反复拉起`, 'mihomo logs 0 查看原因，mihomo stop 停止重试');
+    } else {
+      push('服务', 'ok', `已安装，未运行${service.disabled ? '（自启已关闭）' : ''}`);
+    }
   }
 
   // === 端口 ===
@@ -151,62 +153,27 @@ function collectChecks(): Check[] {
 
   // === 连通性 ===
   if (state.running && info?.mixedPort) {
-    const probe = probeProxyConnectivitySyncShim(info.mixedPort);
+    const probe = await probeProxyConnectivity(info.mixedPort);
     if (probe.ok) {
       push('代理连通', 'ok', `HTTP ${probe.statusCode}（${probe.durationMs}ms）`);
     } else {
       push('代理连通', 'warn', `不通: ${probe.error}`, '节点可能失效，mihomo ui 切换节点');
     }
   } else {
-    push('代理连通', 'ok', '未运行，跳过');
+    push('代理连通', 'skip', '未运行');
   }
 
   return checks;
 }
 
-/**
- * doctor 的连通性探测。collectChecks 是同步收集（lsof/ps 等全是 spawnSync），
- * 为保持单趟收集的简单性，这里同步调 curl——doctor 本就是一次性诊断命令，
- * 阻塞几秒可接受（与 status 的异步探测不同，status 是高频命令）。
- */
-function probeProxyConnectivitySyncShim(port: number): { ok: boolean; statusCode: number | null; error: string | null; durationMs: number } {
-  const start = Date.now();
-  try {
-    const r = spawnSync(
-      'curl',
-      [
-        '-x',
-        `http://127.0.0.1:${port}`,
-        '-s',
-        '-o',
-        '/dev/null',
-        '-w',
-        '%{http_code}',
-        '--connect-timeout',
-        '3',
-        '--max-time',
-        '5',
-        'https://www.gstatic.com/generate_204',
-      ],
-      { encoding: 'utf8', timeout: 8_000 },
-    );
-    const code = Number.parseInt((r.stdout || '').trim(), 10);
-    const statusCode = Number.isFinite(code) ? code : null;
-    const ok = statusCode !== null && statusCode >= 200 && statusCode < 300;
-    return { ok, statusCode, error: ok ? null : `HTTP ${statusCode ?? '无响应'}`, durationMs: Date.now() - start };
-  } catch (e) {
-    return { ok: false, statusCode: null, error: (e as Error).message, durationMs: Date.now() - start };
-  }
-}
-
 export async function cmdDoctor(): Promise<void> {
-  const checks = collectChecks();
+  const checks = await collectChecks();
 
   console.log('');
   for (const c of checks) {
-    const mark = c.status === 'ok' ? colors.green('✓') : c.status === 'warn' ? colors.yellow('!') : colors.red('✗');
+    const mark = c.status === 'ok' ? colors.green('✓') : c.status === 'warn' ? colors.yellow('!') : c.status === 'fail' ? colors.red('✗') : colors.gray('·');
     console.log(`${mark} ${colors.bold(c.name)}: ${c.detail}`);
-    if (c.status !== 'ok' && c.fix) {
+    if (c.status !== 'ok' && c.status !== 'skip' && c.fix) {
       console.log(colors.gray(`  修复: ${c.fix}`));
     }
   }
@@ -214,8 +181,9 @@ export async function cmdDoctor(): Promise<void> {
   const ok = checks.filter(c => c.status === 'ok').length;
   const warn = checks.filter(c => c.status === 'warn').length;
   const fail = checks.filter(c => c.status === 'fail').length;
+  const skip = checks.filter(c => c.status === 'skip').length;
   console.log('');
-  console.log(`体检完成: ${ok} 项正常，${warn} 项警告，${fail} 项异常`);
+  console.log(`体检完成: ${ok} 项正常，${warn} 项警告，${fail} 项异常${skip > 0 ? `，${skip} 项跳过` : ''}`);
   console.log('');
 
   if (fail > 0) {

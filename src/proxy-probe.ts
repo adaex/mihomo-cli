@@ -22,8 +22,11 @@ export function isProbeSuccessStatus(code: number | null): boolean {
  * 用 curl 而非 Node 原生 http：Node 不支持 HTTP 代理（CONNECT），引第三方依赖
  * 又不值当——内核下载本就依赖 curl。探测失败不抛错，返回 ok=false + 原因，
  * 由调用方决定如何展示（status 黄灯 / start 提示）。
+ *
+ * 默认超时 2s：status 是高频命令，代理不通时（订阅过期/节点死了）用户最想查 status，
+ * 不该每次干等 5s。2s 对 gstatic generate_204 经代理足够。
  */
-export async function probeProxyConnectivity(port: number, timeoutMs = 5000): Promise<ProxyProbeResult> {
+export async function probeProxyConnectivity(port: number, timeoutMs = 2000): Promise<ProxyProbeResult> {
   const start = Date.now();
   try {
     const { stdout } = await execFileAsync(

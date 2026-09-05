@@ -107,7 +107,7 @@ mihomo ui yacd     # YACD
 | `mihomo start [tun\|mixed]` | 启动代理并开启登录自启（`-s` 跳过订阅更新，`-u` 更新超时） |
 | `mihomo stop`               | 停止代理并关闭登录自启                                                       |
 | `mihomo uninstall`          | 卸载服务                                                                     |
-| `mihomo status`             | 查看运行状态（含订阅流量、到期时间；`--json` 机器可读）             |
+| `mihomo status`             | 查看运行状态（含订阅流量、到期时间；`--json` 机器可读，`--no-probe` 跳过连通性探测）             |
 | `mihomo logs`               | 列出所有日志（当前 + 历史归档）                                              |
 | `mihomo logs <编号>`        | 查看指定日志（`0`=当前，`1+`=归档，`-f` 实时跟随，`-n N` 行数，`-o` 打开）  |
 | `mihomo logs -f`            | 跟随当前日志（省略编号时默认当前，等价 `logs 0 -f`）                        |
@@ -322,7 +322,7 @@ mihomo kernel --no-mirror
 
 ## 订阅自动更新
 
-- 默认更新间隔：GitHub 订阅 6 小时，其他订阅 12 小时（订阅服务端可通过 `profile-update-interval` 覆盖）
+- 默认更新间隔：12 小时（订阅服务端可通过 `profile-update-interval` 覆盖）
 - 触发时机：`start` 命令（`sub` 列表为纯只读，不再触发更新）
 - 更新失败时继续使用本地缓存，不影响使用
 - 自动更新默认超时 10 秒，可通过 `-u <ms>` 调整；使用 `-s` 可完全跳过自动更新

@@ -5,7 +5,7 @@ import { PATHS } from './paths.js';
 import { getStatus } from './process-probe.js';
 import { startTun } from './process-start.js';
 import { getServiceStatus, isServiceInstalled, restartService, startService, waitServiceHealthy } from './service.js';
-import type { ProcessInfo } from './types.js';
+import type { ProcessInfo, ServiceStatus } from './types.js';
 
 /**
  * 运行时门面：收敛「launchd 服务(Mixed) vs 临时进程(TUN)」双轨的差异。
@@ -46,9 +46,12 @@ export interface RunningState {
  *
  * 先服务后 TUN：两者互斥（start 会拦「服务在跑时起 TUN」），
  * 但服务残留未清时以服务为准更安全——它是会被 KeepAlive 拉起的那个。
+ *
+ * @param serviceStatus 可选的已查服务状态（printStatus 一次查询多处复用，
+ *   避免 getServiceStatus 内部的 launchctl print + print-disabled 重复执行）
  */
-export function getRunningState(): RunningState {
-  const service = getServiceStatus();
+export function getRunningState(serviceStatus?: ServiceStatus): RunningState {
+  const service = serviceStatus ?? getServiceStatus();
   if (service.running) {
     return { running: true, pid: service.pid, kind: 'service', processInfo: null };
   }

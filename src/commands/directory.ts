@@ -57,7 +57,7 @@ function printDirectoryInfo(): void {
   console.log('');
 }
 
-const SUBCOMMANDS: SubCommand[] = [{ name: 'open', handler: openDirectory }];
+export const SUBCOMMANDS: SubCommand[] = [{ name: 'open', description: '打开目录', handler: openDirectory }];
 
 export async function cmdDirectory(args: string[]): Promise<void> {
   // 无子命令 → 目录信息；未知子命令 → 报错（与 sub/ow 同构，避免 `dir opn` 静默当成 list）

@@ -1,6 +1,6 @@
 import { colors } from './colors.js';
 import { buildConfig, parseYamlOrJson, writeDebugConfig, writeMihomoConfig } from './config.js';
-import { DEFAULT_AUTO_UPDATE_TIMEOUT, DEFAULT_UPDATE_INTERVAL_HOURS, DEFAULT_UPDATE_INTERVAL_HOURS_GITHUB } from './constants.js';
+import { DEFAULT_AUTO_UPDATE_TIMEOUT, DEFAULT_UPDATE_INTERVAL_HOURS } from './constants.js';
 import { CliError, TimeoutError, withTimeout } from './errors.js';
 import { createHttpClient } from './http.js';
 import {
@@ -25,17 +25,9 @@ import type {
   UserInfo,
 } from './types.js';
 
-export function isGithubUrl(url: string): boolean {
-  return /github\.com|raw\.githubusercontent\.com/i.test(url);
-}
-
-function getDefaultUpdateInterval(url: string): number {
-  return isGithubUrl(url) ? DEFAULT_UPDATE_INTERVAL_HOURS_GITHUB : DEFAULT_UPDATE_INTERVAL_HOURS;
-}
-
 /** 取有效更新间隔（小时）：缓存值需为正整数，否则回退默认值。 */
-export function resolveUpdateInterval(url: string, cachedInterval?: number | null): number {
-  return cachedInterval && cachedInterval > 0 ? cachedInterval : getDefaultUpdateInterval(url);
+export function resolveUpdateInterval(cachedInterval?: number | null): number {
+  return cachedInterval && cachedInterval > 0 ? cachedInterval : DEFAULT_UPDATE_INTERVAL_HOURS;
 }
 
 const HTTP_CLIENT = createHttpClient({ timeout: 60_000 });
@@ -335,7 +327,7 @@ function needsAutoUpdate(sub: SubscriptionWithCache): boolean {
   // 视为「缓存不可信」立即更新，顺带把 updated_at 纠正回当前时间。
   if (lastUpdate > Date.now()) return true;
   // 防御历史坏缓存：update_interval 为 0/负数/非数时回退默认值
-  const intervalHours = resolveUpdateInterval(sub.url, sub.update_interval);
+  const intervalHours = resolveUpdateInterval(sub.update_interval);
   const intervalMs = intervalHours * 60 * 60 * 1000;
   return Date.now() - lastUpdate > intervalMs;
 }
@@ -368,7 +360,7 @@ export async function autoUpdateStaleSubscription(options: { timeout?: number } 
 
   if (staleSubs.length === 1) {
     const sub = staleSubs[0];
-    const interval = resolveUpdateInterval(sub.url, sub.update_interval);
+    const interval = resolveUpdateInterval(sub.update_interval);
     console.log(`订阅 "${sub.name}" 超过 ${interval} 小时未更新，正在更新...`);
   } else {
     console.log(`检查到 ${staleSubs.length} 个订阅需要更新，正在并行更新...`);

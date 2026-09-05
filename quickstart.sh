@@ -142,6 +142,13 @@ setup_dirs() {
     mkdir -p "$DIR_KERNEL" "$DIR_SUBSCRIPTIONS" "$DIR_DATA" "$DIR_RUNTIME"
 }
 
+# 内核资产的标准版命名形态：mihomo-<platform>-<arch>-vX.Y.Z（可能带 v 前缀）。
+# 精确匹配而非黑名单枚举后缀变体（-go/-compatible/-v1/-v2 等全都以版本号结尾，
+# 黑名单永远枚举不完，且 -v1 变体会按名称排序挤在标准版之前被选中）。
+asset_pattern() {
+    printf 'mihomo-%s-%s-v?[0-9]+\\.[0-9]+\\.[0-9]+\\.gz$' "$PLATFORM" "$ARCH"
+}
+
 download_kernel() {
     if [ -x "$BINARY_PATH" ] && [ "$FORCE_DOWNLOAD" -eq 0 ]; then
         info "Kernel already exists, skipping download (use --force to re-download)"
@@ -150,7 +157,7 @@ download_kernel() {
 
     info "Fetching latest release info..."
     api_url="$(with_mirror "$GITHUB_API")"
-    releases_json="$(curl -fsSL --connect-timeout 30 -H 'User-Agent: mihomo-quickstart' "$api_url")" || die "Failed to fetch release info"
+    releases_json="$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 30 -H 'User-Agent: mihomo-quickstart' "$api_url")" || die "Failed to fetch release info"
 
     if command -v jq >/dev/null 2>&1; then
         all_urls="$(printf '%s' "$releases_json" | jq -r '
@@ -167,14 +174,23 @@ download_kernel() {
             grep '\.gz$')" || true
     fi
 
-    download_url="$(printf '%s\n' "$all_urls" | grep -v '\-go' | head -1)" || true
+    # 精确匹配标准版形态；无标准版时回退第一个匹配项（仍能装上可用内核）
+    pattern="$(asset_pattern)"
+    download_url="$(printf '%s\n' "$all_urls" | grep -E "$pattern" | head -1)" || true
     if [ -z "$download_url" ]; then
-        download_url="$(printf '%s\n' "$all_urls" | head -1)"
+        download_url="$(printf '%s\n' "$all_urls" | head -1)" || true
     fi
 
     if [ -z "$download_url" ]; then
         die "No matching kernel asset found for ${PLATFORM}-${ARCH}"
     fi
+
+    # 来源钉死：产物 URL 必须指向 GitHub（API 可能走镜像，browser_download_url
+    # 理论上可被篡改；内核随后以 root 运行，不能让镜像自己指定下载地址）
+    case "$download_url" in
+        https://github.com/*|https://objects.githubusercontent.com/*|https://release-assets.githubusercontent.com/*) ;;
+        *) die "Kernel download URL not in GitHub allowlist: $download_url" ;;
+    esac
 
     asset_name="$(basename "$download_url")"
     mirrored_url="$(with_mirror "$download_url")"
@@ -185,12 +201,25 @@ download_kernel() {
         info "Mirror: $MIRROR"
     fi
 
-    curl -L --progress-bar --connect-timeout 30 --max-time 300 \
+    # --proto '=https' / --proto-redir '=https'：-L 默认跟随任意协议重定向，
+    # 会降级到明文 http 并落盘。产物随后以 root 运行，全链路强制 https
+    curl -L --proto '=https' --proto-redir '=https' --progress-bar --connect-timeout 30 --max-time 300 \
         -o "$temp_path" "$mirrored_url" || die "Kernel download failed"
 
     info "Extracting..."
     case "$asset_name" in
         *.tar.gz|*.tgz)
+            # 两道守卫，各用一种列表格式：
+            # 1) -tzf 给出干净的条目名 → 查路径穿越（绝对路径 / .. ）
+            tar -tzf "$temp_path" > /dev/null 2>&1 || die "tar list failed (corrupt archive?)"
+            if tar -tzf "$temp_path" 2>/dev/null | grep -qE '^/|(^|/)\.\./'; then
+                die "Archive contains illegal path entries (absolute or .. traversal)"
+            fi
+            # 2) -tvzf 首列权限串首字符给出条目类型 → 拒绝符号/硬链接成员
+            # （symlink 条目名合法，能过路径检查，却会让后续 chmod/执行沿链接作用到任意文件）
+            if tar -tvzf "$temp_path" 2>/dev/null | grep -qE '^[lh]'; then
+                die "Archive contains symlink/hardlink entries (refused)"
+            fi
             tar -xzf "$temp_path" -C "$DIR_KERNEL"
             rm -f "$temp_path"
             found="$(find "$DIR_KERNEL" -maxdepth 2 -type f \( -name 'mihomo' -o -name 'mihomo-*' \) ! -name '*.gz' 2>/dev/null | head -1)"
@@ -217,11 +246,17 @@ download_kernel() {
 download_subscription() {
     info "Downloading subscription..."
 
-    curl -fsSL --connect-timeout 30 --max-time 60 \
+    curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 30 --max-time 60 \
         -o "$SUB_PATH" "$SUBSCRIPTION_URL" || die "Subscription download failed"
 
     if [ ! -s "$SUB_PATH" ]; then
         die "Subscription content is empty"
+    fi
+
+    # 订阅内容校验：必须含 proxies / proxy-groups / proxy-providers 之一，
+    # 否则机场返回的配额/错误 JSON 会被当成配置，启动后零节点断网
+    if ! grep -qE '(proxies|proxy-groups|proxy-providers)[[:space:]]*:' "$SUB_PATH"; then
+        die "Subscription content has no node sources (proxies/proxy-groups/proxy-providers); likely an error or quota JSON"
     fi
 
     info "Subscription saved"

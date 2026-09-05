@@ -15,6 +15,8 @@ import { cmdStart } from './start.js';
 export interface SubCommand {
   name: string;
   aliases?: string[];
+  /** 一句话说明，供 shell 补全派生（completion.ts）；缺省补全只给词不给说明 */
+  description?: string;
   handler: (args: string[]) => void | Promise<void>;
 }
 

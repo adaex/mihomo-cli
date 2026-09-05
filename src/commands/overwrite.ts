@@ -56,9 +56,9 @@ async function setOverwrite(enabled: boolean, args: string[]): Promise<void> {
   printOverwriteList();
 }
 
-const SUBCOMMANDS: SubCommand[] = [
-  { name: 'on', aliases: ['enable'], handler: args => setOverwrite(true, args) },
-  { name: 'off', aliases: ['disable'], handler: args => setOverwrite(false, args) },
+export const SUBCOMMANDS: SubCommand[] = [
+  { name: 'on', aliases: ['enable'], description: '启用覆写', handler: args => setOverwrite(true, args) },
+  { name: 'off', aliases: ['disable'], description: '禁用覆写', handler: args => setOverwrite(false, args) },
 ];
 
 export async function cmdOverwrite(args: string[]): Promise<void> {

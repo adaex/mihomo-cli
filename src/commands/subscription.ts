@@ -31,7 +31,7 @@ function printSubscriptionList(): void {
     const rel = formatRelativeTime(s.updated_at);
     const time = rel ? `${formatDate(s.updated_at)}（${rel}）` : formatDate(s.updated_at);
     const defaultMark = activeSub && s.name === activeSub.name ? colors.green(' [使用中]') : '';
-    const interval = subscription.resolveUpdateInterval(s.url, s.update_interval);
+    const interval = subscription.resolveUpdateInterval(s.update_interval);
     console.log(`  ${i + 1}. ${s.name}${defaultMark}`);
     console.log(`    ${colors.gray('更新: ')}${time} (间隔: ${interval}h)`);
 
@@ -225,11 +225,11 @@ async function subRemove(args: string[]): Promise<void> {
 // list 刻意不注册：裸 `sub` 就是列表（fallback），与 `dir` / `ow` 同口径。
 // v3.11.0 已删掉 `dir list` / `ow list`，若这里保留 `sub list`，同一批命令
 // 一半能敲 list 一半不能，用户只能靠试。
-const SUBCOMMANDS: SubCommand[] = [
-  { name: 'add', handler: subAdd },
-  { name: 'update', handler: subUpdate },
-  { name: 'use', handler: subUse },
-  { name: 'remove', aliases: ['rm', 'delete'], handler: subRemove },
+export const SUBCOMMANDS: SubCommand[] = [
+  { name: 'add', description: '添加订阅', handler: subAdd },
+  { name: 'update', description: '更新订阅', handler: subUpdate },
+  { name: 'use', description: '切换订阅', handler: subUse },
+  { name: 'remove', aliases: ['rm', 'delete'], description: '删除订阅', handler: subRemove },
 ];
 
 export async function cmdSubscription(args: string[]): Promise<void> {

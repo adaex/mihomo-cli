@@ -98,9 +98,8 @@ export const BASE_CONFIG: Record<string, unknown> = {
 
 // === 订阅更新默认值 ===
 
-/** 非 GitHub 订阅默认更新间隔（小时） */
+/** 默认更新间隔（小时）。此前对 GitHub 订阅设过更短的 6h，但国内直连 GitHub 更难，
+ * 更频繁地撞墙只产生失败噪音，故统一 12h */
 export const DEFAULT_UPDATE_INTERVAL_HOURS = 12;
-/** GitHub 订阅默认更新间隔（小时，更新更频繁） */
-export const DEFAULT_UPDATE_INTERVAL_HOURS_GITHUB = 6;
 /** 启动时自动更新订阅的默认超时（毫秒），超时后使用缓存配置 */
 export const DEFAULT_AUTO_UPDATE_TIMEOUT = 10_000;

@@ -43,6 +43,19 @@ function recoverCorruptedSettings(): Settings {
 }
 
 /**
+ * 校验 settings 内容是否为合法 JSON 对象（纯函数，不触发恢复/备份/缓存）。
+ * 供 doctor 等只读诊断复用，避免各处自己 JSON.parse 后对「损坏」的定义漂移。
+ */
+export function isValidSettingsContent(content: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(content);
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 写入设置。**持跨进程锁 + 先丢缓存重读盘再合并**：`settingsCache` 是进程级的，
  * 而两个 CLI 进程会并发跑（慢速 `sub add` 跨整个网络下载期间，用户在另一个终端
  * 做别的操作是日常）。此前拿启动时的陈旧缓存做全量合并写回，会把对方刚落盘的

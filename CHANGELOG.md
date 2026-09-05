@@ -1,5 +1,29 @@
 # Changelog
 
+## [4.4.0] - 2026-09-05
+
+工程去重与安全加固：消除补全词表的第二真相源，doctor 连通性/设置校验复用核心模块，quickstart.sh 对齐 CLI 的安全水位。单测 225 → 229。
+
+### 新增
+
+- **`status --no-probe`**：跳过连通性探测（脚本场景或已知不通时避免 2s 等待）；`--json` 同样支持
+- **`start` Mixed 模式提示系统代理**：启动成功后提示「需在系统设置配置 HTTP/SOCKS 代理 127.0.0.1:7890」（TUN 模式无需）——进程活着 ≠ 流量走代理
+- **doctor 服务崩溃循环告警**：装着、自启开着、却没在跑且上次非 0 退出时判异常（此前与「用户主动 stop」混为 ok）
+
+### 变更
+
+- **补全词表从注册表派生**：`completion` 的命令/子命令词表不再手写，从 `COMMANDS` 与各命令导出的 `SUBCOMMANDS` 派生（`SubCommand` 加 `description`），新增命令自动进补全；`Command` 加 `hidden` 标记，墓碑命令与隐藏别名不再进词表
+- **doctor 连通性复用 `probeProxyConnectivity`**：删掉同步 shim（curl 参数漂移风险），`collectChecks` 改 async；settings 校验复用 `isValidSettingsContent` 纯函数（与 `readSettings` 的损坏恢复同源）
+- **doctor 未运行项改中性**：代理连通在未运行时从 ok「未运行，跳过」改为 skip（`·`），汇总单列「N 项跳过」
+- **连通性探测超时 5s → 2s**：status 是高频命令，代理不通时不该每次干等 5s
+- **订阅更新间隔统一 12h**：删 `isGithubUrl` 与 `DEFAULT_UPDATE_INTERVAL_HOURS_GITHUB`——国内直连 GitHub 更难，更频繁地撞墙只产生失败噪音
+- **`update` EACCES 提示去 sudo**：改为「检查 npm 全局目录权限或使用 nvm」，与项目拒绝 sudo 运行的立场一致
+- **`status` 复用服务查询**：`getRunningState` 接受可选 `ServiceStatus`，printStatus 一次查询多处复用，省一次 launchctl print + print-disabled
+
+### 安全
+
+- **quickstart.sh 对齐 CLI 安全水位**：内核资产精确匹配标准版命名形态（不再黑名单枚举后缀变体，`-v1` 微架构变体不会再被选中）；tar 解压前双守卫（`-tzf` 查路径穿越 + `-tvzf` 拒符号/硬链接）；curl 全链路强制 https（`--proto '=https'`）；订阅内容校验含节点来源；下载 URL 钉死 GitHub 白名单
+
 ## [4.3.0] - 2026-09-05
 
 用户体验打磨：把「成功路径」的确认从「进程活着」推进到「代理真的通」，补齐首次上手引导与自助排障。单测 203 → 225。

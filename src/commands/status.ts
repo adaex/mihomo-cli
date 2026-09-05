@@ -94,8 +94,11 @@ function buildStatusJson(args: {
 /** 全程免 sudo：launchctl print / print-disabled 均可读，pgrep/ps 亦然。 */
 export async function printStatus(args: string[] = []): Promise<void> {
   const asJson = hasFlag(args, '-j', '--json');
-  const state = getRunningState();
+  const skipProbe = hasFlag(args, '--no-probe');
+  // 服务状态只查一次：getRunningState 与 buildStatusJson/printServiceLines 共用，
+  // 避免 getServiceStatus 内部的 launchctl print + print-disabled 重复执行
   const service = getServiceStatus();
+  const state = getRunningState(service);
   const info = getConfigInfo();
   const overwriteEnabled = isOverwriteEnabled();
   const overwriteFiles = listOverwriteFile().files;
@@ -105,9 +108,10 @@ export async function printStatus(args: string[] = []): Promise<void> {
 
   const { running, pid, kind } = state;
 
-  // 连通性探测：运行中且有混合端口才发（TUN 模式下混合端口同样在监听，可作备用入口）
+  // 连通性探测：运行中且有混合端口才发（TUN 模式下混合端口同样在监听，可作备用入口）。
+  // --no-probe 跳过（脚本场景或已知不通时避免 2s 等待）
   let probe: ProxyProbeResult | null = null;
-  if (running && info?.mixedPort) {
+  if (running && info?.mixedPort && !skipProbe) {
     probe = await probeProxyConnectivity(info.mixedPort);
   }
 

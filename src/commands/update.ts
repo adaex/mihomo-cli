@@ -47,13 +47,13 @@ export async function cmdUpdate(): Promise<void> {
       if (code === 0) {
         resolve();
       } else {
-        reject(new CliError('更新失败。若为权限问题（EACCES），可尝试: sudo npm install -g mihomo-cli', { exitCode: code || 1 }));
+        reject(new CliError('更新失败。若为权限问题（EACCES），请检查 npm 全局目录权限或使用 nvm 管理 Node', { exitCode: code || 1 }));
       }
     });
 
     npm.on('error', e => {
       const perm = e.message.includes('EACCES') || e.message.includes('permission');
-      reject(perm ? new CliError('权限不足，可尝试: sudo npm install -g mihomo-cli') : new CliError(`执行失败: ${e.message}`));
+      reject(perm ? new CliError('权限不足（EACCES），请检查 npm 全局目录权限或使用 nvm 管理 Node') : new CliError(`执行失败: ${e.message}`));
     });
   });
 

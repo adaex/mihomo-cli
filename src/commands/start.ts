@@ -116,4 +116,11 @@ export async function cmdStart(args: string[]): Promise<void> {
   }
 
   await printStatus();
+
+  // Mixed 模式需手动配置系统代理：进程活着 ≠ 流量走代理，这是 Mixed 最大的日常摩擦。
+  // TUN 模式由虚拟网卡接管全局流量，无需此步。start 是低频命令（重启/首次），提示不烦
+  if (targetMode === 'mixed') {
+    console.log(colors.gray('提示: Mixed 模式需在系统设置配置 HTTP/SOCKS 代理 127.0.0.1:7890（TUN 模式无需）'));
+    console.log('');
+  }
 }
