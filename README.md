@@ -495,6 +495,18 @@ rules+:
 
 provider 节点与订阅节点同池参与分组选择；节点延迟与手动切换在 Web UI（`mihomo ui`）里操作。若想让订阅里已有的某个分组也纳入第二机场的节点，用 `~proxy-groups` 按 name 就地 patch 该分组、加 `use` 字段
 
+### 用 ssh -D 做节点
+
+v4.0 之前的 ssh 隧道功能已移除（维护面大于价值）。等效做法：自己起一条 `ssh -D 127.0.0.1:1080 -N host`，再把它作为 socks5 节点写进覆写：
+
+```yaml
+# ~/.mihomo-cli/overwrite.ssh.yaml
+~proxies:
+  - {name: SSH-work, type: socks5, server: 127.0.0.1, port: 1080}
++rules:
+  - DOMAIN-SUFFIX,example.internal,SSH-work
+```
+
 ## Web UI
 
 内置三个常用 Web UI：

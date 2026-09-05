@@ -20,5 +20,6 @@ Thumbs.db
 *.temp
 .cache/
 
-# Claude Code
-.claude/
+# Claude Code（本地状态不进仓，项目级命令随仓共享）
+.claude/*
+!.claude/commands/

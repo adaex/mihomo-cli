@@ -1,9 +1,11 @@
 # 代码审查：风险与教训
 
-> 当前基线：v4.6.0
-> 上次全面审查：2026-09-05（本轮：3 个维度并行扫描全部 src + 独立交叉验证，修复 30 项，见 CHANGELOG v4.6.0）
+> 当前基线：v4.7.0
+> 上次全面审查：2026-09-05（v4.6.0：3 个维度并行扫描全部 src + 独立交叉验证，修复 30 项）
 
 **这份文档只记录两类内容**：本轮发现的未处理项，以及**验证过、下轮不必重查**的结论。
+
+**与 CLAUDE.md 的分工**：规则与纪律（改代码必须遵守的）以 CLAUDE.md 为唯一真相源；本文只记验证结论与未处理技术债，规则本身不重复，需要时指向 CLAUDE.md。
 
 已修复条目不在此长期留存——规则类教训提炼进 `CLAUDE.md` 的「工作规则」，事故的实测细节锚进对应代码的函数头注释（co-located、随代码 review），修复细节留在 `CHANGELOG.md` 与 git 历史里。此前本文积累了 v3.6.0/v3.8.0 两轮的逐项修复清单共 24+10 条，其中涉及已删除功能（ssh 隧道、节点测速、多源合并订阅）的条目占了近三分之一，复核时才发现「记录属实但代码已不存在」——这种维护成本没有对应收益，故不再保留。
 
@@ -30,17 +32,10 @@ v4.2.4 服务层去 bash 化后，`waitUntilUnloaded` 的未装载 happy path �
 
 订阅/覆写显式 `dns.enable: false`（mixed 场景合法）+ `mihomo tun`：生成 `dns: {enable: false, ...}` 同时保留 `tun.dns-hijack: [any:53, tcp://any:53]`，还向已关闭的 dns 块补注 fake-ip 字段（实测，生成端矛盾确定；内核侧确切行为未验证）。修复方向是语义决策：TUN 模式把 `dns.enable` 视为锁定项强制 true，或显式拒绝这个组合——待定。
 
-### 服务操作无跨进程串行化（v4.2.3 发现，v4.6.0 已修）
-
-~~settings.json 有 `withFileLock`，launchd 服务操作没有~~ → v4.6.0 已修：`startService`/`stopService`/`installService`/`uninstallService` 的 enable/bootstrap/bootout/disable 共持 `service.lock`，start 在锁内再查 disabled 防「stop 在等待期间已跑完」
-
 ### 低优先级未处理（v4.2.3 扫描发现，影响面小）
 
-- ~~`start`/`logs`/`ow`/`sub` 不校验未知 flag~~ → v4.6.0 已修：`assertKnownFlags` 通用校验
-- ~~`update` 当前版本领先 registry latest 时静默降级~~ → v4.6.0 已修：`compareVersions` 比对，领先时跳过
 - `getLatestRelease` 页内全是预发布时 fallback `releases[0]` 会把 alpha 当稳定版返回（今日不可达：上游同时只挂一条 alpha）
 - 信号死亡的内核对 `isCrashed`/`status` 不可见：launchd 写 `last terminating signal = Killed: 9` 而非 `last exit code`（实测确认），解析器读不到——错误提示会指向相反方向
-- ~~`sub add` 切换默认订阅后运行中实例零提示~~ → v4.6.0 已修：补 `printRestartHintIfRunning`
 - TUN dns 为非映射值时已转 `CliError`（v4.2.3 顺手修），但 `assertConfigShape` 仍不校验 dns 形态（mixed 路径无此守卫）
 
 仍缺的是「真的起一个服务再停掉」这类端到端流程。方向是「用一次性 label 装一个假内核（shell 脚本桩），跑真实 launchctl」——本轮验证 KeepAlive 重启行为时的临时脚本证明这条路可行且快（单轮约 20 秒，全程用户域免 root），但要解决「测试失败时确保 bootout + 删 plist」的清理保证。
@@ -56,7 +51,7 @@ v4.2.4 服务层去 bash 化后，`waitUntilUnloaded` 的未装载 happy path �
 避免下轮重复排查。每条都实际验证过，不是静态推测。
 
 **并发与数据完整性**
-- `settings.json` / `cache.json` 的读-改-写全部持 `withFileLock`；4 进程 × 15 条的 `updateSettings` 并发与 `saveSubscriptionCache` 并发均不丢条目（`settings.spec.ts` 用真实 spawn 子进程验证，必须 spawn 并行起、spawnSync 逐个跑完测不出并发）
+- 锁的并发正确性：4 进程 × 15 条的 `updateSettings` 并发与 `saveSubscriptionCache` 并发均不丢条目（`settings.spec.ts` 用真实 spawn 子进程验证，必须 spawn 并行起、spawnSync 逐个跑完测不出并发）——规则见 CLAUDE.md「settings.json / cache.json 的读-改-写必须持锁」
 - **锁释放校验所有权**（v4.2.3 修）：锁文件写 `pid+hrtime` token，释放前内容一致才删。此前被强夺者的 finally 无条件 rm，删掉的是**新持有者**的锁——三进程实测 B/C 并发 4.6s，正是锁要防的静默丢数据。`paths.spec.ts` 锁定
 - 陈旧锁（>10s）会被强夺，一次崩溃不会永久锁死 CLI；实测 0.045s 完成不卡死
 - 原子写：临时名带 pid + 进程内自增序号，同进程并发写同一目标不互相踩踏
@@ -70,29 +65,28 @@ v4.2.4 服务层去 bash 化后，`waitUntilUnloaded` 的未装载 happy path �
 
 **进程与状态**
 - PID 复用：`isRunning` 与 `cleanupAll` 都走命令行匹配，不裸信 pid 文件
-- `MAIN_INSTANCE_PATTERN` 覆盖符号链与真实二进制两种命令行形态，且**语法为 POSIX ERE**——`process-probe.spec.ts` 直接调真实 `pgrep` 编译它。v4.2.0 曾误用 JS 非捕获组 `(?:a|b)`，pgrep 编译失败退 2、无输出，被 `getMihomoPids` 吞成「没有进程」，导致 `stop` 不杀内核却报「不在运行」（v4.2.1 修）
-- `getMihomoPids` 对 `pgrep` 退出码只接受 0/1，其余抛 `CliError`：探测失败不得伪装成「没有进程」
+- `MAIN_INSTANCE_PATTERN` 覆盖符号链与真实二进制两种命令行形态，语法为 POSIX ERE，`process-probe.spec.ts` 直接调真实 `pgrep` 编译它（v4.2.0 曾误用 JS 非捕获组导致 pgrep 编译失败、`stop` 不杀内核却报「不在运行」）；pgrep/pkill 退出码只接受 0/1 也已锁定——规则见 CLAUDE.md「pgrep/pkill 的 pattern 必须是 POSIX ERE」
 - `killAllMihomo` 同样只接受 pkill 退出码 0/1；批量分支按返回值记 `killedCount`，不再无条件记成全部
-- `launchctl` 退出码分级：只有 `113` 是「未装载」，`112`/`125` 为查询失败并抛错（`service-exitcode.spec.ts` 调真实 launchctl 锁住）
-- **root 守卫**：`sudo mihomo` 被入口拒绝。以 root 运行时域拼成 `gui/0`（不存在），所有服务操作静默跳过却报成功，随后 KeepAlive 拉回内核（`commands/root-guard.spec.ts` 端到端锁住，含「守卫先于 ensureDirs」）
-- **TUN 与服务共用 config.yaml**：`mihomo tun` 启动前关掉服务自启，`startService` 拒绝 TUN 配置。否则 TUN 未停就关机时，重启后 LaunchAgent 会以普通用户身份拿 TUN 配置反复拉起注定失败的内核
-- `launchctl print` 解析锚定行首单 tab，`service.spec.ts` 用倒序 fixture 锁死（不依赖 launchd 的字段顺序）
+- `launchctl` 退出码分级（113 未装载 / 112/125 查询失败）由 `service-exitcode.spec.ts` 调真实 launchctl 锁住——规则见 CLAUDE.md「launchd 服务层」
+- **root 守卫**端到端锁住（`commands/root-guard.spec.ts`，含「守卫先于 ensureDirs」）：以 root 运行时域拼成 `gui/0`（不存在），服务操作静默跳过却报成功、KeepAlive 再把内核拉回——规则见 CLAUDE.md「平台与 root 守卫」
+- **TUN 与服务共用 config.yaml** 的两层防御均已实现（`mihomo tun` 启动前关自启、`startService` 拒绝 TUN 配置）——机理与规则见 CLAUDE.md「TUN 与服务共用 config.yaml」
+- `launchctl print` 解析锚定行首单 tab，`service.spec.ts` 倒序 fixture 锁死（不依赖字段顺序）——规则见 CLAUDE.md「launchd 服务层」
 - **停止/卸载有装载级判定**（v4.2.3 修）：`waitUntilUnloaded` 不再「只等待不判定」——轮询用尽仍装载即抛错，112/125 查询失败也不当「已卸载」；`launchctl disable` 执行后经 `print-disabled` 复核位真生效（TUN 防线第一层的唯一执行点）；uninstall 补上等待 + `rm` 失败可见。v4.2.4 起服务层去 bash 化：用户域 launchctl 全部直接 spawn（不再拼脚本 + 退出码协议），`waitUntilUnloaded` 改为 async 轮询（让出事件循环），happy path 由 `service-exitcode.spec.ts` 只读验证
 - **TUN 启动观察满 1.2s 窗口**（v4.2.3 修）：此前 0.4s 单次 `kill -0` 首次存活即收口，且 `kill -0` 对僵尸进程（bash 未收割的已死子进程）也返回成功——判活以 `ps -o stat=` 状态列为准（Z 开头或查不到都算死）；CLI 收口用 `isRunning()` 复核而非纯读 pid 文件
 - **install 重装恢复运行走健康确认**（v4.2.3 修）：`wasRunning` 分支 bootstrap 后复用 `assertServiceHealthy`，不再以「bootstrap 没报错」打印「已按原状态重新启动」（v4.2.0 给 start 修的同族缺陷，防线此前只铺了主路径）
 - **stop/tun/reset 覆盖遗留 root daemon**（v4.2.3 修）：`detectLegacySystemInstall` 此前只被 install/uninstall/status/reset(checkEmpty) 使用，stop 与 start(tun) 不查——legacy daemon 的 KeepAlive 会把刚杀掉的内核约 10s 拉回，「已停止」成谎报；`reset service` 的 onAfter 也不处理 legacy，报「已重置」原样保留。现在五处统一经 `cleanupLegacyInstallOrThrow()`（含 sudo 取消的 CliError 包装）
 
 **内核下载**
-- 来源钉死（host 白名单 + 强制 https + 校验在加镜像前缀之前）、curl 全链路强制 https、下载后比对 `asset.size`、自检 `-v`
-- **多通道下载**（v4.7.0）：显式 `--mirror`/`--mirror direct` 手动覆盖最高优先，默认 gh > 本机代理 > 直连（`resolveDownloadChannel` 纯函数 + 优先级矩阵单测）。镜像选择不持久化——每次按当前环境独立决策。gh 通道信任锚是 gh 本身 + 精确资产名（glob 元字符/路径成分拒绝）；API 经本机代理是传输层转发（TLS 端到端），镜像仍绝不碰 API。裸 `--mirror` 默认镜像按本机 IPv6 选（v6 子域/裸域），短别名 cdn/v4/v6/axisnow；`--no-mirror`/`--direct` 已移除（显式报错给迁移指引），强制直连走 `--mirror direct`。四通道均过端到端实测（隔离目录各下载一次真实内核）
-- **资产选择精确匹配标准版形态**（v4.2.3 修）：`mihomo-<platform>-<arch>-vX.Y.Z` 收尾。此前只黑名单 `-go`/`-compatible`，漏了 `-v1/-v2/-v3` GOAMD64 微架构变体——它们同样以版本号结尾，且名称排序 `-`<`.` 使 `-v1` 变体排在标准版前被优先选中，Intel Mac 每次更新都静默装上 baseline 构建（`kernel.spec.ts` 用 v1.19.30 真实资产名锁定）
-- tar 双守卫（路径穿越 + 条目类型），攻击归档实测被挡下且正常归档不误拒
+- 来源钉死、curl 全链路强制 https、下载后比对 `asset.size`、自检 `-v` 均已实现——规则见 CLAUDE.md「内核下载的来源信任」
+- **多通道下载**（v4.7.0）：四通道（gh/本机代理/镜像/直连）均过端到端实测（隔离目录各下载一次真实内核），`resolveDownloadChannel` 优先级矩阵有单测——规则见 CLAUDE.md「内核下载的来源信任」
+- **资产选择精确匹配标准版形态**（`kernel.spec.ts` 用 v1.19.30 真实资产名锁定）：v4.2.3 前漏了 `-v1/-v2/-v3` GOAMD64 变体，Intel Mac 每次更新静默装上 baseline 构建——规则见 CLAUDE.md「内核下载的来源信任」
+- tar 双守卫（路径穿越 + 条目类型）：攻击归档实测被挡下、正常归档不误拒——规则见 CLAUDE.md「内核下载的来源信任」
 - 上游确无 checksums（127 个资产实测），故无法做哈希校验——别再提议加
 
 **命令行与错误处理**
-- flag 登记表无漂移：`src/flags.ts` 单表派生 `VALUE_FLAGS` 与 start 重启透传集合（v4.2.4 起；此前是 utils.ts 两张硬编码表，漏登记即静默失效）
-- 非 TTY 退出码：`reset` 与 `sub remove` 模糊匹配都正确抛 `CliError` 退 1
-- 已移除的选项/命令（`--no-ssh`、`--mirror-all`、`daemon`/`up`/`down`）均显式报错并给迁移指引，不静默按默认行为继续
+- flag 单表派生（`src/flags.ts` → `VALUE_FLAGS` 与 start 重启透传集合）——规则与旧设计教训见 CLAUDE.md「命令行选项」
+- 非 TTY 退出码：`reset` 与 `sub remove` 模糊匹配都正确抛 `CliError` 退 1——规则见 CLAUDE.md「交互确认与退出码」
+- 已移除的选项/命令（`--no-ssh`、`--mirror-all`、`daemon`/`up`/`down`）均显式报错并给迁移指引——规则见 CLAUDE.md「命令行选项」与「服务模型的既定决策」
 - HTTP 超时覆盖响应体读取（abort 中断流）；错误体限量 64KB 读取
 
 ---
@@ -117,7 +111,5 @@ macOS 硬依赖，无其他平台后端：
 
 ## 工程
 
-- 单测 203（`npm test`，经 tsx 跑 `*.spec.ts`）
-- CI 在 `macos-latest` 上跑 typecheck/check/test/build。因 `os: ["darwin"]`，ubuntu runner 上 `npm ci` 会平台不匹配失败
+- 单测 246（`npm test`，经 tsx 跑 `*.spec.ts`）
 - `prepublishOnly: npm run build`：`dist/` 被 gitignore，漏跑 build 即发布陈旧产物
-- **`npm run check` 在 worktree 里是空转**：`biome.json` 的 `files.includes` 排除 `**/.claude`，而 worktree 建在 `.claude/worktrees/` 下，于是「Checked 0 files」直接通过。worktree 中改完要显式跑 `npx biome check src/`

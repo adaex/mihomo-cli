@@ -25,6 +25,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/utils.ts`             | 纯函数小工具：sleep、escapeRegExp/shellQuote、格式化、显示宽度、flag 解析、did-you-mean |
 | `src/colors.ts`            | 颜色与 NO_COLOR                   |
 | `src/errors.ts`            | CliError、TimeoutError、withTimeout |
+| `src/flags.ts`             | 选项登记单一 `FLAGS` 表，派生 `VALUE_FLAGS` 与 start 重启透传集合 |
 | `src/http.ts`              | HTTP 客户端（超时、响应体大小上限） |
 | `src/paths.ts`             | 路径常量、目录管理、原子写、跨进程锁 |
 | `src/settings.ts`          | settings.json 读写（含损坏恢复）、订阅缓存、订阅列表增删、URL 遮蔽 |
@@ -64,6 +65,8 @@ This file provides guidance to Claude Code when working with this repository.
 | `commands/directory.ts`       | directory (open)               |
 | `commands/service.ts`         | install, uninstall             |
 | `commands/reset.ts`           | reset                          |
+| `commands/doctor.ts`          | doctor（体检诊断，复用核心探测模块） |
+| `commands/completion.ts`      | completion（zsh/bash/fish 补全脚本生成与安装） |
 | `commands/update.ts`          | update                         |
 
 ---
@@ -153,6 +156,15 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 ---
 
+## 项目级命令
+
+`.claude/commands/` 下固化了两个反复执行的流程（随仓共享）：
+
+- `/release [版本号]`：发布新版本——检查清单、步骤、发布结果核实
+- `/wt-done`：worktree 改动合并进 `main` 并就地收尾清理
+
+---
+
 ## 工作规则
 
 ### 错误处理
@@ -227,6 +239,8 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 **`cache.json` 同理**：`saveSubscriptionCache` / `deleteSubscriptionCache` 一律持 `withFileLock`。并发回归测试必须用 `spawn` 并行起子进程，`spawnSync` 逐个跑完根本测不出并发。实测细节见 `settings.ts`/`paths.ts` 注释与 `settings.spec.ts`。
 
+**服务操作同理**：`startService`/`stopService`/`installService`/`uninstallService` 的 enable/bootstrap/bootout/disable 共持 `service.lock`（`service.ts`）——慢速 `start`（订阅更新约 10s）期间另一终端 `stop` 跑完后，start 随后的 `enable` 会把自启位重新打开，终态与用户最后一条命令相反。start 在锁内要再查一次 disabled 再决定是否启动。
+
 ### 等进程退出的轮询必须让出事件循环
 
 同步忙等（`Atomics.wait`）会阻塞整个事件循环，**期间 SIGINT 完全不被处理**。故 `cleanupAll` / `stop` / `waitUntilUnloaded` 都是 async，用 `sleep`。
@@ -245,6 +259,12 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 - curl 必须带 `--proto '=https' --proto-redir '=https'`：`-L` 默认跟随任意协议重定向，会降级到明文 http 并落盘。产物随后 `chmod 755` 并在 TUN/daemon 下**以 root 运行**。参数构造在 `buildKernelCurlArgs` 纯函数里，单测锁死
 - tar 守卫要同时查**路径**（`-tzf`，条目名干净）与**类型**（`-tvzf` 首字符，拒 `l`/`h`）：symlink 成员的条目名完全合法，能过路径检查却让 `chmod 755` 沿链接作用到任意文件。遍历用 `lstatSync` 不用 `statSync`
 - **资产选择必须精确匹配标准版形态**（`mihomo-<platform>-<arch>-vX.Y.Z` 收尾），不能黑名单枚举变体（`-compatible`/`-go`/`-v1`/`-v2`/`-v3` 等后缀全都以版本号结尾）
+
+### quickstart.sh 是内核下载的平行实现
+
+仓根 `quickstart.sh`（curl|sh 一键入口，不经 npm/CLI，给不想装 Node 的用户）用 shell 重新实现了一套：镜像选择、GitHub API 取资产、标准版形态精确匹配、来源 host 白名单、curl 全链路强制 https、tar 双守卫、订阅内容校验。它与 `kernel.ts` 的信任规则**必须保持一致**——改任一侧的下载/校验逻辑，都要同步检查另一侧（历史上两次对齐——安全水位、资产选择形态——都是漂移被人肉发现后补的，没有机制兜底）。
+
+已知分歧（刻意，别当 bug 修）：脚本默认镜像硬编码 v6 子域（无 `getDefaultMirror` 的 IPv6 探测）、无标准版资产时回退第一个匹配项（CLI 不回退）、支持 linux、不经 launchd 直接前台跑、`--no-mirror`/`--direct` 作为脚本参数保留。
 
 ### 覆写语义
 
@@ -337,16 +357,7 @@ plist 的 `ProgramArguments` 与 TUN 启动脚本指向**同一个** `runtime/co
 
 ### ssh 隧道已移除（v4.0.0）
 
-功能价值撑不起维护面（防 `-oProxyCommand=` 注入、真实探测端口识别「假活」、`started_by` 的 auto/manual 语义），而它做的事等价于用户自己跑一条 `ssh -D 127.0.0.1:1080 -N host`。别再加回来。
-
-要恢复等效能力：自己起 `ssh -D`，节点与分流规则写进 `overwrite.yaml`：
-
-```yaml
-~proxies:
-  - {name: SSH-work, type: socks5, server: 127.0.0.1, port: 1080}
-+rules:
-  - DOMAIN-SUFFIX,example.internal,SSH-work
-```
+功能价值撑不起维护面（防 `-oProxyCommand=` 注入、真实探测端口识别「假活」、`started_by` 的 auto/manual 语义），而它做的事等价于用户自己跑一条 `ssh -D 127.0.0.1:1080 -N host`。别再加回来。等效能力的配置方法见 README「用 ssh -D 做节点」。
 
 升级残留：老用户的 `settings.json` 里会留着 `ssh` 键、数据目录里会留着 `ssh/` 与 `logs/ssh-*.log`。**刻意不自动清理**——settings 的未知键本就被忽略（`Settings` 接口只读已知字段），孤儿目录不影响任何行为，而自动删用户数据的风险远大于收益。
 
@@ -356,56 +367,17 @@ plist 的 `ProgramArguments` 与 TUN 启动脚本指向**同一个** `runtime/co
 
 **不需要**添加 `Co-Authored-By` 行。
 
-### worktree 收尾：合并后立刻清理，不用等人催
+### worktree 纪律
 
-本仓的改动默认在 `.claude/worktrees/` 下的 git worktree 里做（见用户级规则）。**合并进 `main` 之后就地收尾，不要把清理留给下一次对话**：
+本仓改动默认在 `.claude/worktrees/` 下的 git worktree 里做（见用户级规则）。**合并进 `main` 之后就地收尾，不用等人催**——完整步骤用 `/wt-done` 执行。日常两条易踩的坑：
 
-1. 先退出 worktree（`ExitWorktree`，保留分支）
-2. 合并到 `main`。若 `main` 期间有了新提交，`--ff-only` 会失败——用 cherry-pick 或 rebase，**别急着 `--no-ff` 制造无谓的合并提交**
-3. cherry-pick 会生成新哈希，于是 `git log main..<分支>` 仍显示「未合入」。判断是否真的合入要比对树内容（`git diff <分支> main --stat`），不是看 `git log`
-4. 确认无遗漏后 `git worktree remove` + `git branch -D`
-5. 顺手核实临时产物已清：`/tmp` 下的测试数据目录、一次性 label 的 LaunchAgent plist、自己起的进程
+- worktree 隔离会话里，带 heredoc / `&&` 组合的复杂 git 命令会被 harness 拒绝（无法验证操作是否留在 worktree 内）：提交信息先写临时文件再 `git commit -F`，多步操作拆成单条命令执行
+- worktree 默认从 `origin/main` 切出（baseRef=fresh）：本地 main 有未推送的提交时，新 worktree 是落后的，开工前先 `git merge --ff-only main` 同步
 
 合并时若 worktree 与 `main` 改了同一处文档，**保留双方的实测结论**——它们通常是各自独立验证出来的，丢掉任何一条都是白跑一次验证。
-
-worktree 隔离会话里，带 heredoc / `&&` 组合的复杂 git 命令会被 harness 拒绝（无法验证操作是否留在 worktree 内）：提交信息先写临时文件再 `git commit -F`，多步操作拆成单条命令执行。
-
-worktree 默认从 `origin/main` 切出（baseRef=fresh）：本地 main 有未推送的提交时，新 worktree 是落后的，开工前先 `git merge --ff-only main` 同步。
 
 ---
 
 ## 发布流程
 
-### 版本号: 主.次.修订 (语义化版本)
-
-### 检查清单（发布前必须完成）
-
-- [ ] `npm run typecheck && npm test && npm run check` 全绿（CI 也会跑，但发布不经 CI）
-- [ ] 所有新增功能已在 `README.md` 中说明
-- [ ] 命令列表与实际代码一致
-- [ ] `CHANGELOG.md` 已更新
-- [ ] 若本轮改了 `CODE_REVIEW.md` 涉及的代码，同步更新该文档的状态
-
-### 步骤
-
-1. 更新 `package.json` 中的 `version`
-2. 在 `CHANGELOG.md` 顶部添加新版本记录
-3. **检查并更新 `README.md`**（新增功能、命令变更、示例）
-4. 构建: `npm run build`（`prepublishOnly` 已兜底，此步为提前验证）
-5. 提交: `git add . && git commit -m "chore: 发布 vX.Y.Z"`
-6. 发布: `npm publish`
-7. 推送: `git push`
-
-### 发布结果核实
-
-**`npm publish` 不报错即视为发布成功，就此收工，不等 CDN 落地。**
-
-registry 的 CDN 同步可滞后数分钟：期间版本文档与产物 URL 都是 404、`npm view` 的 `latest` 仍是旧版本、重跑 `npm publish` 会得到 `409 Cannot publish over previously staged version`（staged ≠ published，说明还在处理队列）。这些都**不是**失败信号，只是还没同步完，不必守着等它变 200。
-
-若确实需要确认某个版本已对外可见（比如要通知别人升级），再查：
-
-```bash
-curl -s -o /dev/null -w "%{http_code}\n" https://registry.npmjs.org/mihomo-cli/X.Y.Z
-```
-
-200 即已落地。重跑 `npm publish` 得到 `403 You cannot publish over the previously published versions` 同样是已落地的证据。
+版本号：主.次.修订（语义化版本）。发布不经 CI，**发布前必须本地 `npm run typecheck && npm test && npm run check` 全绿**。完整清单、步骤与发布结果核实（CDN 滞后的识别）用 `/release` 执行。
