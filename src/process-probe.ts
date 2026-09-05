@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 
 import { getKernelVersion, hasConfig, hasKernel } from './config.js';
+import { CliError } from './errors.js';
 import { PATHS } from './paths.js';
 import type { ProcessInfo, ProcessStatus, StaleState } from './types.js';
 import { escapeRegExp } from './utils.js';
@@ -63,8 +64,15 @@ export function isProcessRoot(pid: number): boolean {
  * tun 经真实二进制 `kernel/mihomo` 启动,而进程命令行记录的是**启动时用的那个路径**——
  * 实测 `ps -ww -o command=` 对符号链启动的进程输出符号链名,用真实文件名 pgrep 匹配不到。
  * 只认一种会漏掉另一种:残留进程杀不掉、getMihomoPids 漏报、状态误判。
+ *
+ * **分组必须是 POSIX ERE 的 `(a|b)`,不能写 JS 的非捕获组 `(?:a|b)`**:pgrep/pkill 用
+ * `regcomp(REG_EXTENDED)` 编译,ERE 里 `(` 后面紧跟 `?` 是「重复操作符缺少操作数」的语法错误。
+ * 实测报 `Cannot compile regular expression ... (repetition-operator operand invalid)` 并以
+ * **退出码 2** 结束——而 pgrep 无匹配也只是非 0,pkill 更是全程无副作用地返回,于是
+ * `getMihomoPids()` 恒为空、`pkill -9 -f` 一个进程都不杀,`stop` 照常打印「已停止」。
+ * 这就是「报告成功前必须确认事情真的成立」在本仓的第四例(v4.2.1 修)。
  */
-const BINARY_ALTERNATION = `(?:${escapeRegExp(PATHS.serviceBinary)}|${escapeRegExp(PATHS.mihomoBinary)})`;
+const BINARY_ALTERNATION = `(${escapeRegExp(PATHS.serviceBinary)}|${escapeRegExp(PATHS.mihomoBinary)})`;
 export const MAIN_INSTANCE_PATTERN = `${BINARY_ALTERNATION}.*${escapeRegExp(PATHS.configFile)}`;
 
 /**
@@ -91,19 +99,38 @@ export function isRunning(): boolean {
   return isProcessRunning(pid) && (isProcessCommandMatching(pid, PATHS.mihomoBinary) || isProcessCommandMatching(pid, PATHS.serviceBinary));
 }
 
+/**
+ * 查询所有主实例 PID。
+ *
+ * **pgrep 的退出码 0/1 之外一律抛错,不能吞成空数组**:`2` 是正则编译失败、`3` 是 fatal error,
+ * 两者都表示「这次探测根本没跑成」,而非「没有进程」。历史上 `(?:a|b)` 的 ERE 语法错误
+ * 就是被这里的 `return []` 吞掉的——`stop` 因此认为无事可做、`start` 认为没有残留,
+ * 内核一直在跑而 CLI 全程报告成功。宁可报错让用户看见,也不能让探测失败伪装成「不在运行」。
+ */
 export function getMihomoPids(): number[] {
-  try {
-    const result = spawnSync('pgrep', ['-f', MAIN_INSTANCE_PATTERN], { encoding: 'utf8', timeout: 10_000 });
-    const output = (result.stdout || '').trim();
-    if (!output) return [];
-    return output
-      .split('\n')
-      .filter(Boolean)
-      .map(p => parseInt(p, 10))
-      .filter(p => Number.isInteger(p) && p > 0);
-  } catch {
-    return [];
+  const result = spawnSync('pgrep', ['-f', MAIN_INSTANCE_PATTERN], { encoding: 'utf8', timeout: 10_000 });
+
+  // spawnSync 自身失败(ENOENT/超时): status 为 null。pgrep 不存在于 macOS 之外的环境时不该崩,
+  // 但也不能假装「没有进程」——同样归入探测失败
+  if (result.error || result.status === null) {
+    throw new CliError('无法探测 mihomo 进程（pgrep 执行失败）', {
+      hint: ['这不代表内核未运行，只表示查不到。', '请手动确认: pgrep -fl mihomo'],
+    });
   }
+
+  if (result.status !== 0 && result.status !== 1) {
+    throw new CliError(`进程探测失败（pgrep 退出码 ${result.status}）`, {
+      hint: [(result.stderr || '').trim(), '', '这是 CLI 的缺陷，请反馈。手动确认内核状态: pgrep -fl mihomo'].filter(Boolean),
+    });
+  }
+
+  const output = (result.stdout || '').trim();
+  if (!output) return [];
+  return output
+    .split('\n')
+    .filter(Boolean)
+    .map(p => parseInt(p, 10))
+    .filter(p => Number.isInteger(p) && p > 0);
 }
 
 export function isPidFileOwnedByRoot(): boolean {

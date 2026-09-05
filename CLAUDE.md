@@ -161,13 +161,27 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 ### 报告成功前必须确认事情真的成立
 
-反复踩的同一类 bug：**把「命令返回 0」当成「目标达成」**。这类失效不报错、行为却不对，用户没有任何线索，是本仓最贵的一类缺陷。已知的三处（都实测复现过）：
+反复踩的同一类 bug：**把「命令返回 0」当成「目标达成」**。这类失效不报错、行为却不对，用户没有任何线索，是本仓最贵的一类缺陷。已知的四处（都实测复现过）：
 
 - **`bootstrap` 成功 ≠ 内核活着**：坏配置下 launchd 照样返回 0，`start` 曾据此打印「已启动 (PID xxx)」，而内核正在崩溃循环。现由 `waitServiceHealthy` 观察满一个窗口再下结论，失败时把日志尾部附进 `CliError`
 - **热重载返回 2xx ≠ 配置生效**：9090 若被别的程序占用，它对未知路径的 PUT 也可能回 2xx。现先探 `/version` 确认应答方是 mihomo，再发 PUT
 - **写入返回成功 ≠ 数据落盘**：并发下裸读-改-写会让后写者抹掉先写者的条目，而先写者已经打印「已添加」。现由 `withFileLock` 收口（见下文）
+- **`pkill` 返回 ≠ 进程被杀，`pgrep` 空输出 ≠ 没有进程**：pattern 编译失败时两者都以退出码 2 结束、无任何副作用，而 `getMihomoPids` 曾把它吞成 `[]`（v4.2.1 修，详见下条）
 
 新增「执行某操作并报告结果」的代码时，先问一句：**报告成功的依据，是不是只有「调用没报错」？** 如果是，就需要一次独立的事后确认。
+
+### pgrep/pkill 的 pattern 必须是 POSIX ERE，不是 JS 正则
+
+`MAIN_INSTANCE_PATTERN` 交给 `pgrep -f` / `pkill -f`，它们用 `regcomp(REG_EXTENDED)` 编译——**ERE 没有非捕获组**，`(?:a|b)` 里 `(` 后紧跟 `?` 被判为「重复操作符缺少操作数」，实测报 `Cannot compile regular expression ... (repetition-operator operand invalid)` 并以**退出码 2** 结束。
+
+这个错的代价极大，因为它的失效方式是全线静默（v4.2.1 实测复现）：`pgrep` 无输出 → `getMihomoPids()` 恒返回 `[]` → `stop` 判定「不在运行」直接 return 0；`pkill -9 -f` 一个进程都不杀却照常继续。于是**内核一直在跑，而 `stop`/`start`/`status`/`reset` 全部认为它不存在**。
+
+两条防线，别只留一条：
+
+- pattern 用 `(a|b)` 而非 `(?:a|b)`。`escapeRegExp` 转义的是**内容**里的元字符，管不了你手写的分组语法
+- `getMihomoPids` 对 `pgrep` 退出码只接受 `0`（有匹配）/ `1`（无匹配），其余一律抛 `CliError`。探测失败与「没有进程」必须区分开——前者伪装成后者正是这个 bug 能潜伏下来的原因
+
+回归测试在 `process-probe.spec.ts`，**直接调真实 `pgrep` 编译该 pattern**，不做字符串断言：断言「不含 `(?:`」只能挡住已知写法，而 `\d`、`(?=)`、`{,n}` 等任何 JS-only 语法都会以同样方式失效，让 libc 的 regcomp 当裁判才真的把得住关。
 
 ### 新增命令行选项要同步 utils.ts
 
