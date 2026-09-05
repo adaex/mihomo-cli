@@ -50,14 +50,14 @@ npm link
 ### 1. 下载内核
 
 ```bash
-# 默认直连下载
+# 自动选择通道：gh > 本机代理 > 镜像 > 直连
 mihomo kernel
 
-# 国内网络使用镜像加速
+# 国内网络强制走镜像（有 IPv6 走 v6，否则裸域），并记住偏好
 mihomo kernel --mirror
 
-# 或指定镜像
-mihomo kernel --mirror hk.gh-proxy.org
+# 或用短别名指定镜像
+mihomo kernel --mirror cdn
 ```
 
 ### 2. 添加订阅

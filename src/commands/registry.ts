@@ -217,7 +217,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdKernel,
     group: 'system',
-    usage: [{ signature: 'kernel [--mirror [镜像]]', description: '更新内核（默认直连，--mirror 走镜像下载）' }],
+    usage: [{ signature: 'kernel [--mirror [镜像]]', description: '更新内核（自动选择通道：gh > 本机代理 > 镜像 > 直连）' }],
   },
   {
     name: 'update',

@@ -418,7 +418,7 @@ export function parseMirrorArg(args: string[] | undefined, savedMirror?: string 
     throw new CliError('--mirror-all 已移除（v3.10.0）', {
       label: '参数错误',
       hint: [
-        '版本查询（GitHub API）现在恒直连，镜像只作用于内核产物下载。',
+        '版本查询（GitHub API）绝不经过镜像，镜像只作用于内核产物下载。',
         'API 若走镜像，下载地址就由镜像说了算，而内核随后以 root 运行。',
         '',
         '改用: mihomo kernel --mirror [镜像]',
