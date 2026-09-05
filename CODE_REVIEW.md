@@ -84,7 +84,7 @@ v4.2.4 服务层去 bash 化后，`waitUntilUnloaded` 的未装载 happy path �
 
 **内核下载**
 - 来源钉死（host 白名单 + 强制 https + 校验在加镜像前缀之前）、curl 全链路强制 https、下载后比对 `asset.size`、自检 `-v`
-- **多通道下载**（v4.7.0）：显式 `--mirror`/`--mirror direct` 手动覆盖最高优先，默认 gh > 本机代理 > 已存镜像偏好 > 直连（`resolveDownloadChannel` 纯函数 + 优先级矩阵单测）。gh 通道信任锚是 gh 本身 + 精确资产名（glob 元字符/路径成分拒绝）；API 经本机代理是传输层转发（TLS 端到端），镜像仍绝不碰 API。裸 `--mirror` 默认镜像按本机 IPv6 选（v6 子域/裸域），短别名 cdn/v4/v6/axisnow；`--no-mirror`/`--direct` 已移除（显式报错给迁移指引），强制直连走 `--mirror direct`。四通道均过端到端实测（隔离目录各下载一次真实内核）
+- **多通道下载**（v4.7.0）：显式 `--mirror`/`--mirror direct` 手动覆盖最高优先，默认 gh > 本机代理 > 直连（`resolveDownloadChannel` 纯函数 + 优先级矩阵单测）。镜像选择不持久化——每次按当前环境独立决策。gh 通道信任锚是 gh 本身 + 精确资产名（glob 元字符/路径成分拒绝）；API 经本机代理是传输层转发（TLS 端到端），镜像仍绝不碰 API。裸 `--mirror` 默认镜像按本机 IPv6 选（v6 子域/裸域），短别名 cdn/v4/v6/axisnow；`--no-mirror`/`--direct` 已移除（显式报错给迁移指引），强制直连走 `--mirror direct`。四通道均过端到端实测（隔离目录各下载一次真实内核）
 - **资产选择精确匹配标准版形态**（v4.2.3 修）：`mihomo-<platform>-<arch>-vX.Y.Z` 收尾。此前只黑名单 `-go`/`-compatible`，漏了 `-v1/-v2/-v3` GOAMD64 微架构变体——它们同样以版本号结尾，且名称排序 `-`<`.` 使 `-v1` 变体排在标准版前被优先选中，Intel Mac 每次更新都静默装上 baseline 构建（`kernel.spec.ts` 用 v1.19.30 真实资产名锁定）
 - tar 双守卫（路径穿越 + 条目类型），攻击归档实测被挡下且正常归档不误拒
 - 上游确无 checksums（127 个资产实测），故无法做哈希校验——别再提议加

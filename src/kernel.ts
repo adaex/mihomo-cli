@@ -68,12 +68,10 @@ function assertTrustedAssetUrl(rawUrl: string): void {
 export type DownloadChannel = { kind: 'gh' } | { kind: 'proxy'; port: number } | { kind: 'mirror'; mirror: string } | { kind: 'direct' };
 
 export interface ChannelResolutionInput {
-  /** parseMirrorArg 解析出的镜像（显式值或已存偏好），无则 null */
+  /** parseMirrorArg 解析出的镜像 URL，无（未指定或 --mirror direct）则 null */
   mirror: string | null;
-  /** 显式 --mirror（裸或带值） */
+  /** 是否显式传了 --mirror（含 bare/direct） */
   isOverride: boolean;
-  /** 显式 --mirror direct：强制直连，绕过 gh/代理自动通道 */
-  clearSaved: boolean;
   ghAvailable: boolean;
   proxyRunning: boolean;
   /** 仅 proxyRunning 时有意义 */
@@ -81,15 +79,16 @@ export interface ChannelResolutionInput {
 }
 
 /**
- * 下载通道决策。显式手动覆盖最高优先；默认路径 gh > 本机代理 > 已存镜像偏好 > 直连。
+ * 下载通道决策。显式 --mirror / --mirror direct 手动覆盖最高优先；
+ * 默认路径 gh > 本机代理 > 直连（镜像不持久化，每次按当前环境独立决策）。
  * 纯函数：运行状态（gh 是否存在、代理是否在跑）由命令层探测后注入，便于单测。
  */
 export function resolveDownloadChannel(input: ChannelResolutionInput): DownloadChannel {
-  if (input.clearSaved) return { kind: 'direct' };
+  // 显式 --mirror direct（isOverride 但 mirror 为 null）：强制直连，绕过 gh/代理
+  if (input.isOverride && !input.mirror) return { kind: 'direct' };
   if (input.isOverride && input.mirror) return { kind: 'mirror', mirror: input.mirror };
   if (input.ghAvailable) return { kind: 'gh' };
   if (input.proxyRunning && input.proxyPort !== null) return { kind: 'proxy', port: input.proxyPort };
-  if (input.mirror) return { kind: 'mirror', mirror: input.mirror };
   return { kind: 'direct' };
 }
 

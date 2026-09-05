@@ -142,7 +142,7 @@ mihomo ui yacd     # YACD
 
 | 命令                              | 说明                                                                |
 | --------------------------------- | ------------------------------------------------------------------- |
-| `mihomo kernel [--mirror [镜像]]` | 更新内核（自动选择通道：gh > 本机代理 > 镜像 > 直连；`--mirror` 强制镜像并记住偏好，`--mirror direct` 强制直连） |
+| `mihomo kernel [--mirror [镜像]]` | 更新内核（自动选择通道：gh > 本机代理 > 直连；`--mirror` 强制镜像，`--mirror direct` 强制直连） |
 | `mihomo update`                   | 更新 mihomo-cli（先查 npm 最新版，已是最新则跳过重装）              |
 | `mihomo ui [zash\|dash\|yacd]`    | 打开 Web UI（配了访问密钥时自动复制到剪贴板）                       |
 | `mihomo dir`                      | 显示数据目录位置                                                    |
@@ -305,8 +305,9 @@ mihomo logs 1       # 查看最新的归档
 
 1. **gh**：检测到 GitHub CLI（`gh`）时，经 `gh release download` 直连 GitHub
 2. **本机代理**：mihomo 代理在跑时，经混合端口直连 GitHub（TLS 端到端）
-3. **镜像**：已记住镜像偏好时，走第三方镜像
-4. **直连**：以上都不可用时
+3. **直连**：以上都不可用时
+
+镜像不持久化——每次按当前环境独立决策，换网络不会用到上次的镜像。
 
 版本查询（GitHub API）在代理开着时同样经本机代理；镜像**绝不**作用于 API——
 内核二进制随后会以 root 运行（TUN/保活），下载地址必须由 GitHub 官方 API 给出，不能让镜像自己指定。
@@ -315,10 +316,10 @@ mihomo logs 1       # 查看最新的归档
 
 ```bash
 mihomo kernel                # 自动选择通道
-mihomo kernel --mirror       # 强制走镜像（有 IPv6 走 v6.gh-proxy.org，否则 gh-proxy.org），并记住偏好
-mihomo kernel --mirror cdn   # 短别名指定镜像（cdn/v4/v6/axisnow），同样记住偏好
+mihomo kernel --mirror       # 强制走镜像（有 IPv6 走 v6.gh-proxy.org，否则 gh-proxy.org）
+mihomo kernel --mirror cdn   # 短别名指定镜像（cdn/v4/v6/axisnow）
 mihomo kernel --mirror hk.gh-proxy.org  # 任意镜像主机名或完整 URL
-mihomo kernel --mirror direct  # 强制直连（绕过 gh/代理自动通道），并清除镜像偏好
+mihomo kernel --mirror direct  # 强制直连（绕过 gh/代理自动通道）
 ```
 
 > 镜像经第三方中转，无法验证来源完整性；gh 与本机代理通道直连 GitHub，优先使用。

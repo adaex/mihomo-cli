@@ -368,7 +368,7 @@ export function getDefaultMirror(): string {
 
 function normalizeMirrorUrl(val: string): string | null {
   if (!val) return null;
-  if (val === 'direct' || val === 'no' || val === 'none') return null;
+  if (val === 'direct') return null;
 
   // 短别名：cdn/v4/v6/axisnow → https://<别名>.gh-proxy.org/
   const alias = MIRROR_ALIASES[val.toLowerCase()];
@@ -403,13 +403,12 @@ function normalizeMirrorUrl(val: string): string | null {
  * `chmod 755` 并在 TUN / 系统级服务下以 root 运行——上游不提供 checksums，
  * 把来源钉死（assertTrustedAssetUrl）是主要防线，不能让镜像自己指定下载地址。
  *
- * `savedMirror`（settings.kernel_mirror）是无显式选项时的回退：
- * 国内用户不必每次更新都带 `--mirror`。显式 `--mirror` 会记住偏好，
- * `--mirror direct` 本次直连并清除偏好。
+ * 镜像选择**不持久化**：每次调用按当前环境独立决策（gh/代理是否可用、网络是否有
+ * IPv6），记住偏好反而会在换环境后用到错误的镜像。
  */
-export function parseMirrorArg(args: string[] | undefined, savedMirror?: string | null): MirrorArg {
+export function parseMirrorArg(args: string[] | undefined): MirrorArg {
   if (!args || args.length < 2) {
-    return savedMirror ? { mirror: savedMirror, isOverride: false } : { mirror: null, isOverride: false };
+    return { mirror: null, isOverride: false };
   }
 
   // 已移除的选项要显式报错，不能静默按直连继续：用户敲了 --mirror-all 却拿到直连行为，
@@ -430,7 +429,7 @@ export function parseMirrorArg(args: string[] | undefined, savedMirror?: string 
   if (args.includes('--no-mirror') || args.includes('--direct')) {
     throw new CliError('--no-mirror/--direct 已移除（v4.7.0）', {
       label: '参数错误',
-      hint: ['强制直连并清除镜像偏好改用: mihomo kernel --mirror direct', '不带选项时自动选择通道: gh > 本机代理 > 镜像 > 直连'],
+      hint: ['强制直连改用: mihomo kernel --mirror direct', '不带选项时自动选择通道: gh > 本机代理 > 镜像 > 直连'],
     });
   }
 
@@ -441,14 +440,13 @@ export function parseMirrorArg(args: string[] | undefined, savedMirror?: string 
     const inline = mirrorEq?.slice('--mirror='.length);
     const nextArg = inline ?? args[mirrorIdx + 1];
     if (!nextArg || nextArg.startsWith('-')) {
-      // 显式表达「我要用镜像」：按当前网络选默认（有 IPv6 走 v6，否则裸域），记住偏好免得下次还要带
-      return { mirror: getDefaultMirror(), isOverride: true, remember: true };
+      // 显式表达「我要用镜像」：按当前网络选默认（有 IPv6 走 v6，否则裸域）
+      return { mirror: getDefaultMirror(), isOverride: true };
     }
-    // `--mirror direct` 等显式直连值：normalize 返回 null，按「直连并清除偏好」处理
+    // `--mirror direct`：normalize 返回 null，按强制直连处理
     const normalized = normalizeMirrorUrl(nextArg);
-    return normalized ? { mirror: normalized, isOverride: true, remember: true } : { mirror: null, isOverride: true, clearSaved: true };
+    return { mirror: normalized, isOverride: true };
   }
 
-  // 无显式选项：回退已记住的偏好
-  return savedMirror ? { mirror: savedMirror, isOverride: false } : { mirror: null, isOverride: false };
+  return { mirror: null, isOverride: false };
 }

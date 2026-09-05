@@ -94,12 +94,11 @@ describe('parseMirrorArg：--mirror-all 已移除（v3.10.0）', () => {
     );
   });
 
-  it('--mirror 仍正常工作（仅作用于产物下载），并记住偏好', () => {
+  it('--mirror 仍正常工作（仅作用于产物下载），不持久化偏好', () => {
     // 裸 --mirror 的默认镜像按当前网络选择（有 IPv6 走 v6，否则裸域），与 getDefaultMirror 对齐
     assert.equal(parseMirrorArg(['kernel', '--mirror']).mirror, getDefaultMirror());
     assert.equal(parseMirrorArg(['kernel', '--mirror', 'gh.example.com']).mirror, 'https://gh.example.com/');
-    assert.equal(parseMirrorArg(['kernel', '--mirror']).remember, true);
-    assert.equal(parseMirrorArg(['kernel', '--mirror=gh.example.com']).remember, true);
+    assert.equal(parseMirrorArg(['kernel', '--mirror=gh.example.com']).mirror, 'https://gh.example.com/');
   });
 
   it('--mirror 短别名展开为完整镜像地址', () => {
@@ -107,6 +106,10 @@ describe('parseMirrorArg：--mirror-all 已移除（v3.10.0）', () => {
     assert.equal(parseMirrorArg(['kernel', '--mirror', 'v4']).mirror, 'https://v4.gh-proxy.org/');
     assert.equal(parseMirrorArg(['kernel', '--mirror', 'v6']).mirror, 'https://v6.gh-proxy.org/');
     assert.equal(parseMirrorArg(['kernel', '--mirror', 'axisnow']).mirror, 'https://axisnow.gh-proxy.org/');
+  });
+
+  it('--mirror direct 强制直连（isOverride 但 mirror 为 null）', () => {
+    assert.deepEqual(parseMirrorArg(['kernel', '--mirror', 'direct']), { mirror: null, isOverride: true });
   });
 
   it('--no-mirror/--direct 已移除：显式报错给迁移指引，不静默按直连继续', () => {
@@ -128,24 +131,6 @@ describe('parseMirrorArg：--mirror-all 已移除（v3.10.0）', () => {
 describe('getDefaultMirror', () => {
   it('按本机 IPv6 情况返回 v6 或裸域', () => {
     assert.ok(['https://v6.gh-proxy.org/', 'https://gh-proxy.org/'].includes(getDefaultMirror()));
-  });
-});
-
-describe('parseMirrorArg：镜像偏好（settings.kernel_mirror）', () => {
-  it('无显式选项时回退已记住的偏好', () => {
-    const r = parseMirrorArg(['kernel'], 'https://hk.gh-proxy.org/');
-    assert.deepEqual(r, { mirror: 'https://hk.gh-proxy.org/', isOverride: false });
-  });
-
-  it('显式 --mirror 覆盖偏好并记住新值', () => {
-    const r = parseMirrorArg(['kernel', '--mirror', 'cdn.gh-proxy.org'], 'https://hk.gh-proxy.org/');
-    assert.equal(r.mirror, 'https://cdn.gh-proxy.org/');
-    assert.equal(r.remember, true);
-  });
-
-  it('--mirror direct 按直连处理并清除偏好', () => {
-    const r = parseMirrorArg(['kernel', '--mirror', 'direct'], 'https://hk.gh-proxy.org/');
-    assert.deepEqual(r, { mirror: null, isOverride: true, clearSaved: true });
   });
 });
 

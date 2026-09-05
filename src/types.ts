@@ -12,11 +12,6 @@ export interface Settings {
   /** external-controller 访问密钥（可选，多用户环境建议设置）；不设置则控制器无鉴权 */
   controller_secret?: string;
   /**
-   * 内核下载的镜像偏好（`mihomo kernel --mirror` 记住、`--mirror direct` 清除）。
-   * 存 normalize 后的 https URL；缺省 = 直连。
-   */
-  kernel_mirror?: string;
-  /**
    * 端口覆盖（可选，逃生口：默认端口被其他代理工具占用时调整）。
    * 两键均可选；值必须是 1-65535 的整数，非法值在使用点抛错（getPorts）而非静默回退默认——
    * 端口突降会让 UI/热重载连到错误地址且毫无线索。
@@ -257,12 +252,10 @@ export interface ConfigInfo {
 // === Mirror ===
 
 export interface MirrorArg {
+  /** 镜像 URL；null = 直连（显式 --mirror direct 或未指定） */
   mirror: string | null;
+  /** 是否显式传了 --mirror（含 bare/direct） */
   isOverride: boolean;
-  /** 显式 `--mirror`（裸或带值）：把选择写入 settings.kernel_mirror */
-  remember?: boolean;
-  /** 显式 `--mirror direct`：清除已记住的镜像偏好 */
-  clearSaved?: boolean;
 }
 
 // === Proxy connectivity probe ===

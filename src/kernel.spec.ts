@@ -58,7 +58,7 @@ describe('findMatchingAsset（标准版形态精确匹配）', () => {
 });
 
 describe('resolveDownloadChannel（下载通道优先级）', () => {
-  const base = { mirror: null, isOverride: false, clearSaved: false, ghAvailable: false, proxyRunning: false, proxyPort: null };
+  const base = { mirror: null, isOverride: false, ghAvailable: false, proxyRunning: false, proxyPort: null };
 
   it('显式 --mirror 优先于 gh 与代理（手动覆盖最高）', () => {
     const ch = resolveDownloadChannel({
@@ -73,11 +73,10 @@ describe('resolveDownloadChannel（下载通道优先级）', () => {
     assert.equal(ch.kind === 'mirror' && ch.mirror, 'https://v6.gh-proxy.org/');
   });
 
-  it('--mirror direct（clearSaved）强制直连，即使 gh/代理/镜像偏好都在', () => {
+  it('--mirror direct（isOverride 但 mirror 为 null）强制直连，即使 gh/代理都在', () => {
     const ch = resolveDownloadChannel({
       ...base,
-      mirror: 'https://v6.gh-proxy.org/',
-      clearSaved: true,
+      isOverride: true,
       ghAvailable: true,
       proxyRunning: true,
       proxyPort: 7890,
@@ -90,15 +89,10 @@ describe('resolveDownloadChannel（下载通道优先级）', () => {
     assert.equal(ch.kind, 'gh');
   });
 
-  it('无 gh 时代理优先于镜像偏好，且端口透传', () => {
-    const ch = resolveDownloadChannel({ ...base, mirror: 'https://v6.gh-proxy.org/', proxyRunning: true, proxyPort: 7890 });
+  it('无 gh 时走代理，且端口透传', () => {
+    const ch = resolveDownloadChannel({ ...base, proxyRunning: true, proxyPort: 7890 });
     assert.equal(ch.kind, 'proxy');
     assert.equal(ch.kind === 'proxy' && ch.port, 7890);
-  });
-
-  it('无 gh 无代理时用已记住的镜像偏好', () => {
-    const ch = resolveDownloadChannel({ ...base, mirror: 'https://v6.gh-proxy.org/' });
-    assert.equal(ch.kind, 'mirror');
   });
 
   it('全无条件时直连', () => {

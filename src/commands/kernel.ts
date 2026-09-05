@@ -3,7 +3,7 @@ import { AVAILABLE_MIRRORS } from '../constants.js';
 import { CliError } from '../errors.js';
 import * as kernel from '../kernel.js';
 import { getRunningState } from '../runtime.js';
-import { getPorts, readSettings, writeSettings } from '../settings.js';
+import { getPorts } from '../settings.js';
 import { withSpinner } from '../spinner.js';
 import { parseMirrorArg } from '../utils.js';
 
@@ -29,9 +29,9 @@ function assertKnownKernelFlags(args: string[]): void {
       hint: [
         '',
         '可用选项:',
-        '  --mirror [镜像]   强制走镜像（默认按网络选 v6/裸域），并记住偏好',
+        '  --mirror [镜像]   强制走镜像（默认按网络选 v6/裸域）',
         '',
-        '不带选项时自动选择通道: gh > 本机代理 > 已记住的镜像偏好 > 直连',
+        '不带选项时自动选择通道: gh > 本机代理 > 直连',
         '',
         `可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`,
         '短别名: --mirror cdn | v4 | v6 | axisnow',
@@ -42,27 +42,18 @@ function assertKnownKernelFlags(args: string[]): void {
 
 export async function cmdKernel(args: string[]): Promise<void> {
   assertKnownKernelFlags(args);
-  const savedMirror = readSettings().kernel_mirror ?? null;
-  const mirrorInfo = parseMirrorArg(args, savedMirror);
+  const mirrorInfo = parseMirrorArg(args);
   const effectiveMirror = mirrorInfo.mirror;
 
-  // 显式 --mirror 记住偏好（下次裸 mihomo kernel 在 gh/代理都不可用时默认走镜像）；--mirror direct 清除
-  if (mirrorInfo.remember) {
-    writeSettings({ kernel_mirror: mirrorInfo.mirror ?? undefined });
-  } else if (mirrorInfo.clearSaved && savedMirror) {
-    writeSettings({ kernel_mirror: undefined });
-  }
-
-  // 下载通道：显式手动覆盖最高优先，默认 gh > 本机代理 > 已存镜像偏好 > 直连。
-  // 运行状态（gh 是否存在、代理是否在跑）由命令层探测后注入——kernel.ts 不依赖
-  // runtime/settings，通道决策保持纯函数可测
+  // 下载通道：显式 --mirror / --mirror direct 手动覆盖最高优先，默认 gh > 本机代理 > 直连。
+  // 镜像选择不持久化——每次按当前环境独立决策（gh/代理是否可用、网络是否有 IPv6）。
+  // 运行状态由命令层探测后注入——kernel.ts 不依赖 runtime/settings，通道决策保持纯函数可测
   const proxyRunning = getRunningState().running;
   const proxyPort = proxyRunning ? getPorts().mixed : null;
-  const forceDirect = mirrorInfo.clearSaved === true;
+  const forceDirect = mirrorInfo.isOverride && !mirrorInfo.mirror;
   const channel = kernel.resolveDownloadChannel({
     mirror: mirrorInfo.mirror,
     isOverride: mirrorInfo.isOverride,
-    clearSaved: mirrorInfo.clearSaved ?? false,
     ghAvailable: kernel.hasGh(),
     proxyRunning,
     proxyPort,
@@ -76,12 +67,7 @@ export async function cmdKernel(args: string[]): Promise<void> {
     console.log('');
   } else if (channel.kind === 'mirror') {
     const host = channel.mirror.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    const note = mirrorInfo.remember
-      ? '已记住偏好：gh/本机代理不可用时默认走镜像（--mirror direct 清除偏好）'
-      : !mirrorInfo.isOverride
-        ? '已记住的偏好：gh/本机代理不可用时生效（--mirror direct 清除偏好）'
-        : '仅本次下载走镜像';
-    console.log(`镜像: ${host} (${note})`);
+    console.log(`镜像: ${host}`);
     console.log('');
   }
 
@@ -110,7 +96,7 @@ export async function cmdKernel(args: string[]): Promise<void> {
         hint.push(
           '',
           '提示: 直连失败或下载过慢时可使用镜像:',
-          '  mihomo kernel --mirror [镜像]   # 强制走镜像（默认按网络选 v6/裸域），一次使用后记住偏好',
+          '  mihomo kernel --mirror [镜像]   # 强制走镜像（默认按网络选 v6/裸域）',
           `  可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`,
         );
       }
