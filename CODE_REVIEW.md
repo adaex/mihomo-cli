@@ -45,7 +45,7 @@
 
 ---
 
-## v5.0.0 服务化改造对本文条目的影响
+## v4.1.0 服务化改造对本文条目的影响
 
 `daemon` 保活重构为 install/start/stop 服务模型（`daemon.ts` → `service.ts`，默认域从 root
 LaunchDaemon 改为用户级 LaunchAgent）。上文「本轮已修复」表中 4 条 daemon 相关条目的现状：

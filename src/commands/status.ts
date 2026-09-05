@@ -101,7 +101,7 @@ function printServiceLines(service: ReturnType<typeof getServiceStatus>): void {
     printAutoStart(service);
   }
 
-  // 旧版本（v4 及以前）的 root LaunchDaemon 会与用户级服务抢端口，且用户态动不了它
+  // 旧版本（v4.0 及更早）的 root LaunchDaemon 会与用户级服务抢端口，且用户态动不了它
   if (legacy) {
     console.log(colors.yellow('  异常: 检测到旧版本的系统级服务（root LaunchDaemon）'));
     console.log(colors.gray('  它会抢占同一组端口，清理: mihomo uninstall（需一次管理员密码）'));

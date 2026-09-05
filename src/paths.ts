@@ -44,7 +44,7 @@ export const PATHS = {
   configStage3System: path.join(DIRS.runtime, '3.system.yaml'),
   // 用户级 LaunchAgent（默认）：gui/<uid> 域，全程免 sudo。随 homedir 走
   userAgentPlist: path.join(os.homedir(), 'Library/LaunchAgents', `${SERVICE_LABEL}.plist`),
-  // 旧版本（v3.0–v4.x 的 daemon on）装的系统级 LaunchDaemon：root:wheel 拥有。
+  // 旧版本（v3.0–v4.0 的 daemon on）装的系统级 LaunchDaemon：root:wheel 拥有。
   // 本版不再往这里安装，仅用于识别并清理遗留安装（它带 KeepAlive，不清就是抢端口的幽灵）
   systemDaemonPlist: path.join('/Library/LaunchDaemons', `${SERVICE_LABEL}.plist`),
 } as const;

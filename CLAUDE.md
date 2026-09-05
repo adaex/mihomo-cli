@@ -174,7 +174,7 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 原因：launchd 服务、`open`、`sudo`、BSD 专有命令语法（`stat -f%z`、`ps -o command=`）均无其他平台实现，且 `openUrl` 吞掉 ENOENT 后恒返回 true，非 macOS 上会「报告成功但什么都没做」。
 
-### launchd 实测事实（v5.0.0 服务化时逐条验证）
+### launchd 实测事实（v4.1.0 服务化时逐条验证）
 
 改这块前先读这里，几条都是「文档不写、猜错就静默出错」的：
 
@@ -183,7 +183,7 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 - **`launchctl print <target>` 与 `print-disabled <domain>` 均免 sudo**（对 system 域也是），实测 3ms。退出码 `113` = 未装载，`0` = 已装载。这让状态查询能拿到真实 state/pid，取代早期 pgrep + root 属主过滤的近似判断
 - **`launchctl print` 输出里顶层字段是单 tab（`\tstate = running`），嵌套 endpoint 是双 tab（`\t\tstate = active`）**。解析必须锚定 `^\t`。实测多个真实服务顶层 state 都排在嵌套之前，不锚定「碰巧」也对——但那是 launchd 的实现细节不是契约，`service.spec.ts` 用倒序 fixture 锁死了锚定行为
 - **`KeepAlive.PathState` 不能用来实现 stop**：删掉 flag 文件后进程照跑不误，`KeepAlive` 只决定「退出后是否重启」，不主动终止运行中的任务。这条排除了「flag 文件 + root daemon 免密」的方案
-- **本地网络隐私的豁免条件是「以 root 运行」，不是「身为 daemon」**（Apple DTS 原话）。用户级 LaunchAgent 不豁免，但走的是正常弹框授权流程，不是被静默拦死——被拦死的是无人登录、没人能点弹框的服务器场景。这是 v5.0.0 敢把默认域从 system 改成 user 的依据
+- **本地网络隐私的豁免条件是「以 root 运行」，不是「身为 daemon」**（Apple DTS 原话）。用户级 LaunchAgent 不豁免，但走的是正常弹框授权流程，不是被静默拦死——被拦死的是无人登录、没人能点弹框的服务器场景。这是 v4.1.0 敢把默认域从 system 改成 user 的依据
 - **进程命令行记录的是启动时用的路径**：服务经符号链 `kernel/mihomo-cli-service` 启动，`ps -ww -o command=` 输出的就是符号链名，用真实二进制名 `pgrep -f` 匹配不到。`MAIN_INSTANCE_PATTERN` 因此是二选一分支，两条都要留
 
 ### 平台命令细节
@@ -278,7 +278,7 @@ runtime/                # pid, config.yaml, 分阶段调试文件(1.subscription
 plist 的 `ProgramArguments[0]` 指向它，只为让「登录项与扩展」显示有意义的名字。
 `reset kernel` 会连它一起删，故 `install`/`start` 都用 `ensureServiceSymlink()` 幂等重建。
 
-### daemon → 服务模型（v5.0.0）
+### daemon → 服务模型（v4.1.0）
 
 `daemon` 命令、`src/daemon.ts` / `commands/daemon.ts`、`up`/`down` 别名全部删除，
 换成 `install`/`start`/`stop`/`uninstall`。三个已移除 token 在 registry 里留了墓碑条目

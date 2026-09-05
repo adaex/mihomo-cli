@@ -178,7 +178,7 @@ export async function cmdReset(args: string[]): Promise<void> {
 
   const needsStop = targets.some(t => t.needsStop);
   const warnRunning = targets.some(t => t.warnIfRunning);
-  // 「停止」与「卸载」必须分开——v4 及以前二者混为一谈（一律卸载保活）。
+  // 「停止」与「卸载」必须分开——v4.0 及更早二者混为一谈（一律卸载保活）。
   //   needsStop（subs/data/runtime）→ 只 **stop**：删了 config.yaml 而服务还 enabled 的话，
   //     下次登录 launchd 会用不存在的 -f 拉起内核，KeepAlive 每几秒崩溃重启一次刷爆日志。
   //     stop 恒置 disable 位，正好堵住这个组合。但不该顺手把用户的安装卸掉。

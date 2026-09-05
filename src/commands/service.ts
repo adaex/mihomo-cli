@@ -15,7 +15,7 @@ import { cleanupLegacySystemInstall, detectLegacySystemInstall, getServiceStatus
  */
 
 /**
- * 遗留的系统级安装（v3.0–v4.x 的 `daemon on`）会与用户级服务抢端口，
+ * 遗留的系统级安装（v3.0–v4.0 的 `daemon on`）会与用户级服务抢端口，
  * 且带 KeepAlive 会持续拉起内核。安装前必须先清掉，否则两个实例互相打架。
  */
 async function handleLegacyInstall(): Promise<void> {

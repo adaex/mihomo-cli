@@ -27,8 +27,8 @@ export const UI_URLS: Record<string, string> = {
  * 抛出可读错误——不能在模块顶层抛：constants 在 import 阶段求值，早于 index.ts 的
  * main().catch 注册，抛出会直接打印堆栈而绕过统一收口。
  *
- * **值与环境变量名都保持 `daemon` 字样不变**（v5.0.0 只改常量名不改值）：改了值会让老用户
- * v4 装的 /Library/LaunchDaemons/com.mihomo-cli.daemon.plist 变成新 CLI 看不见的幽灵，
+ * **值与环境变量名都保持 `daemon` 字样不变**（v4.1.0 只改常量名不改值）：改了值会让老用户
+ * v4.0 及更早装的 /Library/LaunchDaemons/com.mihomo-cli.daemon.plist 变成新 CLI 看不见的幽灵，
  * 而它带 KeepAlive 会持续拉起内核，用户没有任何途径卸载它。保持不变则 detectInstalledDomain()
  * 天然识别出旧的系统级安装并可直接接管。
  */

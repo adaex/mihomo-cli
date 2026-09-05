@@ -161,7 +161,7 @@ mihomo ui yacd     # YACD
 | ---------------------- | -------------------------- |
 | `mihomo tun`           | `mihomo start tun`         |
 
-> `up` / `down` 别名已于 v5.0.0 移除（命令名统一为 `install`/`start`/`stop`/`uninstall`）。执行它们会给出明确的迁移提示。
+> `up` / `down` 别名已于 v4.1.0 移除（命令名统一为 `install`/`start`/`stop`/`uninstall`）。执行它们会给出明确的迁移提示。
 
 ## 模式说明
 
@@ -221,7 +221,7 @@ mihomo status          # 查看状态
 自己起 `ssh -D 127.0.0.1:1080` 再把节点指过去（v4.0.0 移除内置 ssh 后推荐的做法）完全不受影响。
 只有节点直接指向 `192.168.x.x`、`10.x.x.x`、`*.local` 这类地址时才会触发。
 
-> **为什么不用 root 服务绕开**：早期版本（v3.0–v4.x）确实用 root LaunchDaemon 绕开了这个限制
+> **为什么不用 root 服务绕开**：早期版本（v3.0–v4.0）确实用 root LaunchDaemon 绕开了这个限制
 > （Apple 的规则是「以 root 运行的程序自动获得本地网络访问」——豁免条件是 root，而非「是不是 daemon」），
 > 代价是每次 `start`/`stop` 都要输管理员密码。权衡后选择免密：授权点一次，密码要输一辈子。
 

@@ -87,7 +87,7 @@ export const COMMANDS: Command[] = [
   {
     name: 'daemon',
     aliases: [],
-    handler: removedCommand('daemon', 'v5.0.0', [
+    handler: removedCommand('daemon', 'v4.1.0', [
       '保活已成为 Mixed 模式的唯一运行方式，改用服务命令族：',
       '  mihomo daemon on   →  mihomo install（一次）+ mihomo start',
       '  mihomo daemon off  →  mihomo stop（停止并关闭自启）',
@@ -101,14 +101,14 @@ export const COMMANDS: Command[] = [
   {
     name: 'up',
     aliases: [],
-    handler: removedCommand('up', 'v5.0.0', ['请用: mihomo start']),
+    handler: removedCommand('up', 'v4.1.0', ['请用: mihomo start']),
     group: 'meta',
     usage: [],
   },
   {
     name: 'down',
     aliases: [],
-    handler: removedCommand('down', 'v5.0.0', ['请用: mihomo stop']),
+    handler: removedCommand('down', 'v4.1.0', ['请用: mihomo stop']),
     group: 'meta',
     usage: [],
   },

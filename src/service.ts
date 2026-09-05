@@ -18,7 +18,7 @@ import { formatLocalTimestamp, shellQuote } from './utils.js';
  * 装在用户域：`~/Library/LaunchAgents` + `gui/<uid>`，**全程免 sudo**——
  * install/start/stop/uninstall 一次密码都不用输。
  *
- * 为什么不用 root LaunchDaemon（v3.0–v4.x 的做法）：system 域的
+ * 为什么不用 root LaunchDaemon（v3.0–v4.0 的做法）：system 域的
  * bootstrap/bootout/enable/disable 一律需要 root，那样每次启停都要输密码。
  * 旧实现选 root 是为了绕开 macOS 本地网络隐私对局域网设备访问的限制，
  * 但 Apple DTS 明确「豁免条件是**以 root 运行**，不是身为 daemon」——
@@ -26,7 +26,7 @@ import { formatLocalTimestamp, shellQuote } from './utils.js';
  * 且 loopback（`127.0.0.1`，如自建 `ssh -D` 的 SOCKS 出口）根本不属于「本地网络」，
  * 完全不触发该机制。权衡后不再提供 root 安装。
  *
- * 仍会**识别**遗留的系统级安装（老用户 v4 装的）：它带 KeepAlive 会持续拉起内核抢端口，
+ * 仍会**识别**遗留的系统级安装（v4.0 及更早装的）：它带 KeepAlive 会持续拉起内核抢端口，
  * 不认它的话就是个用户无从卸载的幽灵。识别后引导 `uninstall` 清理，见 detectLegacySystemInstall。
  */
 
@@ -71,7 +71,7 @@ export function isServiceInstalled(): boolean {
 }
 
 /**
- * 是否存在遗留的**系统级**安装（v3.0–v4.x 的 `daemon on` 装的 root LaunchDaemon）。
+ * 是否存在遗留的**系统级**安装（v3.0–v4.0 的 `daemon on` 装的 root LaunchDaemon）。
  *
  * 必须识别：它带 KeepAlive，会持续把内核拉起并抢占端口，而用户态的 launchctl
  * 根本动不了它。不认的话对用户就是个「代理停不掉、CLI 说没装」的幽灵。
@@ -463,7 +463,7 @@ export function uninstallService(): void {
 }
 
 /**
- * 清理遗留的系统级安装（v3.0–v4.x 的 `daemon on` 装的 root LaunchDaemon）。
+ * 清理遗留的系统级安装（v3.0–v4.0 的 `daemon on` 装的 root LaunchDaemon）。
  *
  * 需要一次密码：plist 是 root:wheel 拥有的，且 `launchctl bootout system/...` 需 root。
  * 顺带把 root 属主的日志/数据归还当前用户——不归还的话，之后的用户级服务会因

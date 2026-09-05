@@ -12,7 +12,7 @@ import { shellQuote } from './utils.js';
  * TUN 内核的启动（临时 sudo 脚本，不走 launchd）。
  *
  * Mixed 模式**没有**用户态启动路径了：它由 launchd 服务托管（service.ts），
- * 此前的 startMixedMode（detached spawn + pid 文件）已随 v5.0.0 删除。
+ * 此前的 startMixedMode（detached spawn + pid 文件）已随 v4.1.0 删除。
  * TUN 保持临时进程语义——本就需要提权，且用完即走，交给 launchd 托管没有意义。
  *
  * 停止与清理在 process-stop.ts，探测在 process-probe.ts。
