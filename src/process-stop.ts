@@ -58,22 +58,30 @@ function killProcess(pid: number): boolean {
   }
 }
 
+/**
+ * 批量终止内核。**返回值是「pkill 真的跑成功了」，不是「调用没抛异常」**。
+ *
+ * 早先无条件 `return true`，于是 pkill 因 pattern 编译失败退 2 时（v4.2.1 那个 bug），
+ * `cleanupAll` 照样把 `killedCount` 记成全部、`stop` 照样打印「已停止」。
+ * pkill 的退出码：0 = 有匹配且已发信号，1 = 无匹配（此时本就无事可做，算成功），
+ * 2 = 语法/正则错误，3 = 内部错误——后两者是「这次调用根本没执行」，必须报 false。
+ *
+ * 注意 sudo 分支：退出码 1 在这里有歧义（sudo 鉴权失败也是 1），但 pkill 无匹配同样是 1，
+ * 两者都不该让调用方误以为杀干净了。真正的把关在调用方——`cleanupAll` 之后会重新
+ * `getMihomoPids()` 复核，本函数的返回值只用于统计。
+ */
 function killAllMihomo(forceSudo = false): boolean {
   const pattern = MAIN_INSTANCE_PATTERN;
-  if (forceSudo) {
-    try {
-      spawnSync('sudo', ['pkill', '-9', '-f', pattern], { stdio: 'inherit', timeout: 15_000 });
-      return true;
-    } catch {
-      return false;
-    }
-  } else {
-    try {
-      spawnSync('pkill', ['-9', '-f', pattern], { timeout: 10_000 });
-      return true;
-    } catch {
-      return false;
-    }
+  const argv: [string, string[]] = forceSudo ? ['sudo', ['pkill', '-9', '-f', pattern]] : ['pkill', ['-9', '-f', pattern]];
+  const options = forceSudo ? { stdio: 'inherit' as const, timeout: 15_000 } : { timeout: 10_000 };
+
+  try {
+    const result = spawnSync(argv[0], argv[1], options);
+    if (result.error) return false;
+    // 0 = 已发信号，1 = 无匹配（无事可做）；2/3 = pkill 自身出错，没有任何进程被处理
+    return result.status === 0 || result.status === 1;
+  } catch {
+    return false;
   }
 }
 
@@ -99,8 +107,13 @@ export async function cleanupAll(forceSudo = false): Promise<CleanupResult> {
     }
   } else {
     if (pids.length > BATCH_KILL_THRESHOLD) {
-      killAllMihomo(false);
-      killedCount = pids.length;
+      // 与 sudo 分支同构：批量 pkill 失败时不能照记 killedCount。
+      // 早先无视返回值直接记全部，pkill 编译失败（退 2）时统计与事实完全相反
+      if (killAllMihomo(false)) {
+        killedCount = pids.length;
+      } else {
+        failedPids.push(...pids);
+      }
     } else {
       for (const pid of pids) {
         if (killProcess(pid)) {

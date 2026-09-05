@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-
+import { getConfigInfo } from './config.js';
 import { CONTROLLER_BASE_URL, isValidServiceLabel, RAW_SERVICE_LABEL_INPUT, SERVICE_BINARY_NAME, SERVICE_LABEL } from './constants.js';
 import { CliError } from './errors.js';
 import { cleanupOldLogs, rotateAndCleanupLogs } from './log-files.js';
@@ -143,6 +143,18 @@ export function parseDisabledList(output: string, label: string): boolean {
 
 // === 状态查询（全程免 sudo） ===
 
+/**
+ * launchctl 的退出码（本机实测，macOS 26.6）：
+ *   0   成功
+ *   112 域不存在（如 `gui/99999`）
+ *   113 目标未找到 —— 服务未装载，**正常状态**，不是错误
+ *   125 请求非法（如 `gui/0`，root 下拼出的域）
+ *
+ * 只有 113 是「查到了，答案是没有」；112/125 是「这次查询根本没成立」，
+ * 把它们当成「未装载」会让 status 谎报、stop 静默跳过（v4.2.2 修，详见 index.ts 的 root 守卫）。
+ */
+const LAUNCHCTL_NOT_LOADED = 113;
+
 function runLaunchctl(args: string[]): { status: number | null; stdout: string } {
   try {
     const result = spawnSync('launchctl', args, { encoding: 'utf8', timeout: LAUNCHCTL_TIMEOUT_MS });
@@ -150,6 +162,21 @@ function runLaunchctl(args: string[]): { status: number | null; stdout: string }
   } catch {
     return { status: null, stdout: '' };
   }
+}
+
+/**
+ * 查询失败（而非「未装载」）时抛错，不让它伪装成「服务不存在」。
+ *
+ * root 守卫已挡掉 `gui/0` 这个主要来源，但域参数并非只有一条来路（`MIHOMO_CLI_DAEMON_LABEL`
+ * 异常、launchctl 缺失、超时都会走到这里），故保留这道独立检查——
+ * 与 `getMihomoPids` 对 pgrep 退出码的处理同一原则：**探测失败 ≠ 目标不存在**。
+ */
+function assertLaunchctlQueryOk(status: number | null, what: string): void {
+  if (status === 0 || status === LAUNCHCTL_NOT_LOADED) return;
+
+  throw new CliError(`无法查询服务状态（launchctl ${what} 退出码 ${status ?? '执行失败'}）`, {
+    hint: [status === null ? 'launchctl 未能执行（缺失或超时）。' : '这不代表服务未安装，只表示查不到。', '', `手动确认: launchctl print ${serviceTarget()}`],
+  });
 }
 
 /**
@@ -164,6 +191,7 @@ function runLaunchctl(args: string[]): { status: number | null; stdout: string }
 export function getServiceStatus(): ServiceStatus {
   const installed = isServiceInstalled();
   const print = runLaunchctl(['print', serviceTarget()]);
+  assertLaunchctlQueryOk(print.status, 'print');
   const loaded = print.status === 0;
 
   if (!installed && !loaded) {
@@ -172,6 +200,7 @@ export function getServiceStatus(): ServiceStatus {
 
   const { state, pid, lastExitCode } = loaded ? parseServicePrint(print.stdout) : { state: null, pid: null, lastExitCode: null };
   const disabledOut = runLaunchctl(['print-disabled', bootstrapDomain()]);
+  assertLaunchctlQueryOk(disabledOut.status, 'print-disabled');
   const disabled = disabledOut.status === 0 ? parseDisabledList(disabledOut.stdout, SERVICE_LABEL) : false;
 
   return { installed, loaded, running: state === 'running', pid, disabled, lastExitCode };
@@ -493,6 +522,24 @@ export function startService(): void {
     throw new CliError('未找到运行时配置', { hint: '请先添加订阅: mihomo sub add <url>' });
   }
 
+  // 拒绝用 TUN 配置启动服务。服务是用户级 LaunchAgent（非 root），而创建 utun 设备需要 root——
+  // 真启起来就是崩溃后被 KeepAlive 每约 10 秒拉起一次，日志刷爆而代理不通。
+  //
+  // 正常路径下 cmdStart 会先按 mixed 重建配置，走不到这里；这是防御另外两条来路：
+  // 用户手工改了 config.yaml，或从旧版本升上来时数据目录里恰好躺着一份 TUN 配置。
+  // 与 cmdStart 里「起 TUN 前先关服务自启」是同一问题的两层——那层堵源头，这层兜底。
+  if (getConfigInfo()?.tun) {
+    throw new CliError('运行时配置为 TUN 模式，服务无法使用', {
+      hint: [
+        '服务以普通用户身份运行（用户级 LaunchAgent），无权创建 TUN 设备，',
+        '强行启动只会让内核反复崩溃重启。',
+        '',
+        '按 Mixed 重建配置并启动:  mihomo start mixed',
+        '确实要用 TUN:            mihomo tun',
+      ],
+    });
+  }
+
   // tun 残留是 root 属主，会与服务抢端口；有才清（这是唯一可能弹密码的地方），无则免密
   cleanupRootResidue();
 
@@ -514,6 +561,24 @@ export function startService(): void {
     action: '启动服务',
     codeMessages: { 2: '启用服务失败（launchctl enable）', 3: '装载服务失败（launchctl bootstrap）' },
   });
+}
+
+/**
+ * 只关自启，不动运行中的实例（`disable` 决定「退出/登录后是否再拉起」，不终止当前进程）。
+ *
+ * 为 TUN 而设：plist 指向的 `config.yaml` 与 TUN 写的是**同一个文件**，TUN 跑起来后
+ * 那份配置就是 `tun.enable = true`。此时若服务的自启位还开着，用户不 stop 直接关机，
+ * 下次开机 launchd 会拿这份 TUN 配置、以**普通用户身份**（LaunchAgent 非 root）启动内核——
+ * 而创建 utun 设备需要 root，内核必然失败退出，再被 `KeepAlive` 每约 10 秒拉起一次。
+ * 用户开机看到的是「代理不通、日志被刷爆」，且与自己上次用 TUN 毫无表面关联。
+ *
+ * 幂等：已 disable 时再调一次无副作用（launchctl 照常写一条同值记录）。
+ */
+export function disableServiceAutoStart(): void {
+  assertServiceLabelSafe();
+
+  const target = shellQuote(serviceTarget());
+  runLaunchctlSteps([`launchctl disable ${target} 2>/dev/null || true`], { action: '关闭服务自启' });
 }
 
 /**

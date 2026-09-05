@@ -2,7 +2,7 @@ import { colors } from '../colors.js';
 import { hasKernel } from '../config.js';
 import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
-import { getServiceStatus } from '../service.js';
+import { disableServiceAutoStart, getServiceStatus } from '../service.js';
 import * as subscription from '../subscription.js';
 import type { PreparedConfig } from '../types.js';
 import { assertNoRemovedSshFlag, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
@@ -43,6 +43,21 @@ export async function cmdStart(args: string[]): Promise<void> {
       throw new CliError('服务正在运行，无法启动 TUN', {
         hint: ['两者会抢占同一组端口与配置。请先停止服务:', '  mihomo stop', '', 'TUN 用完后 mihomo start 可恢复服务'],
       });
+    }
+
+    // 服务未装载但自启位还开着时，必须先关掉自启再起 TUN。
+    //
+    // plist 指向的 config.yaml 与 TUN 写的是同一个文件，TUN 一跑它就变成 tun.enable=true。
+    // 用户此时不 stop 直接关机，下次开机 launchd 会拿这份 TUN 配置、以普通用户身份启动内核
+    // （LaunchAgent 非 root），而创建 utun 需要 root —— 内核崩溃后被 KeepAlive 每约 10 秒
+    // 拉起一次，用户开机只看到「代理不通」，完全联想不到是上次用 TUN 留下的。
+    //
+    // 放在启动前而非启动后：中途失败/被 Ctrl+C 也不会留下「自启开着 + TUN 配置」的组合。
+    if (serviceBefore.installed && !serviceBefore.disabled) {
+      disableServiceAutoStart();
+      console.log(colors.gray('已临时关闭服务自启（避免重启后服务拿 TUN 配置启动）'));
+      console.log(colors.gray('TUN 用完后 mihomo start 可恢复'));
+      console.log('');
     }
   } else if (!serviceBefore.installed) {
     // Mixed 恒由 launchd 服务托管，没有用户态直启路径。

@@ -244,6 +244,14 @@ mihomo stop      # 收掉 TUN
 mihomo start     # 恢复服务
 ```
 
+**`mihomo tun` 会自动关掉服务的登录自启**，并在启动时提示。原因是服务与 TUN 共用同一份运行时配置：TUN 一跑，那份配置就是 TUN 模式，而服务以普通用户身份运行、无权创建 TUN 设备。若自启还开着，用户不 `stop` 直接关机，下次开机 launchd 就会拿这份配置反复拉起一个必然失败的内核。
+
+TUN 用完后 `mihomo start` 会按 Mixed 重建配置并恢复自启。
+
+### 不要用 sudo 运行
+
+`sudo mihomo …` 会被直接拒绝。服务是用户级 LaunchAgent（域 `gui/<uid>`），以 root 运行时域变成 `gui/0` —— 一个不存在的域，所有服务操作都会静默跳过却报成功。TUN 需要的 root 权限由 CLI 内部按需申请，无需在外层加 `sudo`。
+
 ### 日志
 
 每次 `mihomo start` 会把上一次的 `mihomo.log` 归档为 `mihomo.<时间戳>.log`，归档保留 7 天。运行期间日志持续追加到 `mihomo.log`；若单次运行就写超 10MB，配置变更触发的重启会顺便轮转，不会无限增长。

@@ -161,12 +161,14 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 ### 报告成功前必须确认事情真的成立
 
-反复踩的同一类 bug：**把「命令返回 0」当成「目标达成」**。这类失效不报错、行为却不对，用户没有任何线索，是本仓最贵的一类缺陷。已知的四处（都实测复现过）：
+反复踩的同一类 bug：**把「命令返回 0」当成「目标达成」**。这类失效不报错、行为却不对，用户没有任何线索，是本仓最贵的一类缺陷。已知的六处（都实测复现过）：
 
 - **`bootstrap` 成功 ≠ 内核活着**：坏配置下 launchd 照样返回 0，`start` 曾据此打印「已启动 (PID xxx)」，而内核正在崩溃循环。现由 `waitServiceHealthy` 观察满一个窗口再下结论，失败时把日志尾部附进 `CliError`
 - **热重载返回 2xx ≠ 配置生效**：9090 若被别的程序占用，它对未知路径的 PUT 也可能回 2xx。现先探 `/version` 确认应答方是 mihomo，再发 PUT
 - **写入返回成功 ≠ 数据落盘**：并发下裸读-改-写会让后写者抹掉先写者的条目，而先写者已经打印「已添加」。现由 `withFileLock` 收口（见下文）
 - **`pkill` 返回 ≠ 进程被杀，`pgrep` 空输出 ≠ 没有进程**：pattern 编译失败时两者都以退出码 2 结束、无任何副作用，而 `getMihomoPids` 曾把它吞成 `[]`（v4.2.1 修，详见下条）
+- **`launchctl` 非 0 ≠ 服务未装载**：`gui/0` 之类的坏域返回 125，被当成「未装载」后 `stop` 会跳过全部服务操作却报「已停止」（v4.2.2 修，见 launchd 实测事实）
+- **`bootout` + `kill` ≠ 服务停了**：plist 带 `KeepAlive`，只要任务还装载着，约 10s 后 launchd 就把内核拉回来。判「停止成功」必须确认任务已卸载，不能只看进程没了
 
 新增「执行某操作并报告结果」的代码时，先问一句：**报告成功的依据，是不是只有「调用没报错」？** 如果是，就需要一次独立的事后确认。
 
@@ -210,6 +212,8 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 - **disable 位持久化在 `/var/db/com.apple.xpc.launchd/disabled*.plist`，与 plist 文件相互独立**：删掉 plist 后该位仍在。且 launchctl **没有「清除记录」的动词**，`enable` 同样写一条 `=> enabled`。故 `parseDisabledList` 必须区分 `disabled`/`enabled` 两种值，只判断「在不在表里」会把 enable 过的服务误判成已禁用
 - **要真正抹掉那条记录只能直接改 plist**：user 域是 `disabled.<uid>.plist`（system 域为 `disabled.plist`），`sudo plutil -remove` 删键，**keypath 里 `.` 是层级分隔符，label 必须转义成 `com\.foo\.bar`**。但 launchd 在内存里持有该表，改磁盘不触发重读——`print-disabled` 仍显示旧值，重启后才一致。故这条路**不能做进 CLI 的自动清理**（既要提权又不立即生效），只作开发期手工收尾用
 - **`launchctl print <target>` 与 `print-disabled <domain>` 均免 sudo**（对 system 域也是），实测 3ms。退出码 `113` = 未装载，`0` = 已装载。这让状态查询能拿到真实 state/pid，取代早期 pgrep + root 属主过滤的近似判断
+- **launchctl 的失败码要分清「查到了，没有」与「查询没成立」**（实测 macOS 26.6）：`113` = 目标未找到（服务未装载，**正常状态**），`112` = 域不存在（如 `gui/99999`），`125` = 请求非法（如 `gui/0`）。只有 113 能当「未装载」，112/125 是查询本身失败——混为一谈就是 v4.2.2 那个 sudo 缺陷的成因。`assertLaunchctlQueryOk` 收口，`service-exitcode.spec.ts` 调真实 launchctl 锁住这三个码
+- **`gui/0` 不是「root 的用户域」，是个不存在的域**：`sudo mihomo …` 下 `process.getuid()` 为 0，域拼成 `gui/0`，所有 launchctl 恒 125。而 `stopService` 的每条命令都带 `|| true`，脚本照样退 0 → CLI 报「已停止」，实际只有 `killResidualKernels()` 生效，随后 KeepAlive 把内核拉回来（实测约 10s 后 pid 变化）。现由 `index.ts` 的 `assertNotRoot` 在入口拒绝，**不做 `SUDO_UID` 自动降级**——sudo 下 `HOME` 是否保留取决于 sudoers，静默改域只会让「数据目录用 root 的、服务装用户的」这类错位更难查
 - **`launchctl print` 输出里顶层字段是单 tab（`\tstate = running`），嵌套 endpoint 是双 tab（`\t\tstate = active`）**。解析必须锚定 `^\t`。实测多个真实服务顶层 state 都排在嵌套之前，不锚定「碰巧」也对——但那是 launchd 的实现细节不是契约，`service.spec.ts` 用倒序 fixture 锁死了锚定行为
 - **运行中无法用 rename 轮转日志**：launchd 的 `StandardOutPath` fd 指向旧 inode，改名后内核继续往归档文件里写。只有两条路：卡在「旧进程已退出、新进程未起」的窗口里 rename（`startService` 的做法），或 copy-truncate（`restartService` 的做法，fd 为 O_APPEND，truncate 后从 0 续写不丢句柄）
 - **`KeepAlive.PathState` 不能用来实现 stop**：删掉 flag 文件后进程照跑不误，`KeepAlive` 只决定「退出后是否重启」，不主动终止运行中的任务。这条排除了「flag 文件 + root daemon 免密」的方案
@@ -317,6 +321,19 @@ Mixed 由用户级 LaunchAgent 托管（`gui/<uid>`，全程免密）。三条�
 - **label 值刻意不改名**（`com.mihomo-cli.daemon`，环境变量 `MIHOMO_CLI_DAEMON_LABEL`）：它是 plist 文件名与 launchd 的注册键，改值等于要求所有老用户做一次带幽灵进程风险的迁移（旧 plist 会持续拉起内核，而新 CLI 完全看不见它），而这个字符串对用户不可见。别再提议改值
 
 `daemon` / `up` / `down` 三个已移除 token 在 registry 里留了墓碑条目（`commands/removed.ts`），执行时报迁移指引而非 did-you-mean 乱猜。
+
+### TUN 与服务共用 config.yaml，故 `tun` 必须关掉服务自启
+
+plist 的 `ProgramArguments` 与 TUN 启动脚本指向**同一个** `runtime/config.yaml`。TUN 一跑，那份配置就是 `tun.enable = true`——而服务是用户级 LaunchAgent，**以普通用户身份运行，无权创建 utun 设备**。
+
+于是「跑 TUN → 不 stop 直接关机 → 开机」这条极常见的路径会让 launchd 拿 TUN 配置反复拉起一个必然失败的内核（KeepAlive 约 10s 一次），用户开机只看到「代理不通、日志刷爆」，完全联想不到是上次用 TUN 留下的。
+
+两层防御，都要留：
+
+- **`cmdStart` 的 tun 分支在启动前 `disableServiceAutoStart()`**（堵源头）。放在启动前而非启动后：中途失败或 Ctrl+C 也不会留下「自启开着 + TUN 配置」的组合
+- **`startService` 拒绝 `getConfigInfo()?.tun` 为真的配置**（兜底）。正常路径下 `cmdStart` 会先按 mixed 重建配置、走不到这里，这层防的是用户手工改 config.yaml 或从旧版本升上来时目录里恰好躺着一份 TUN 配置
+
+不要改成「TUN 退出时自动恢复自启」：TUN 是 sudo 起的独立进程，CLI 早已退出，没有可靠的退出钩子；而「关机」这个场景本就没有任何进程能跑收尾逻辑。恢复自启由用户显式 `mihomo start` 完成。
 
 ### ssh 隧道已移除（v4.0.0）
 

@@ -46,6 +46,10 @@
 - PID 复用：`isRunning` 与 `cleanupAll` 都走命令行匹配，不裸信 pid 文件
 - `MAIN_INSTANCE_PATTERN` 覆盖符号链与真实二进制两种命令行形态，且**语法为 POSIX ERE**——`process-probe.spec.ts` 直接调真实 `pgrep` 编译它。v4.2.0 曾误用 JS 非捕获组 `(?:a|b)`，pgrep 编译失败退 2、无输出，被 `getMihomoPids` 吞成「没有进程」，导致 `stop` 不杀内核却报「不在运行」（v4.2.1 修）
 - `getMihomoPids` 对 `pgrep` 退出码只接受 0/1，其余抛 `CliError`：探测失败不得伪装成「没有进程」
+- `killAllMihomo` 同样只接受 pkill 退出码 0/1；批量分支按返回值记 `killedCount`，不再无条件记成全部
+- `launchctl` 退出码分级：只有 `113` 是「未装载」，`112`/`125` 为查询失败并抛错（`service-exitcode.spec.ts` 调真实 launchctl 锁住）
+- **root 守卫**：`sudo mihomo` 被入口拒绝。以 root 运行时域拼成 `gui/0`（不存在），所有服务操作静默跳过却报成功，随后 KeepAlive 拉回内核（`commands/root-guard.spec.ts` 端到端锁住，含「守卫先于 ensureDirs」）
+- **TUN 与服务共用 config.yaml**：`mihomo tun` 启动前关掉服务自启，`startService` 拒绝 TUN 配置。否则 TUN 未停就关机时，重启后 LaunchAgent 会以普通用户身份拿 TUN 配置反复拉起注定失败的内核
 - `launchctl print` 解析锚定行首单 tab，`service.spec.ts` 用倒序 fixture 锁死（不依赖 launchd 的字段顺序）
 
 **内核下载**
@@ -78,7 +82,7 @@ macOS 硬依赖，无其他平台后端：
 
 ## 工程
 
-- 单测 168（`npm test`，经 tsx 跑 `*.spec.ts`）
+- 单测 178（`npm test`，经 tsx 跑 `*.spec.ts`）
 - CI 在 `macos-latest` 上跑 typecheck/check/test/build。因 `os: ["darwin"]`，ubuntu runner 上 `npm ci` 会平台不匹配失败
 - `prepublishOnly: npm run build`：`dist/` 被 gitignore，漏跑 build 即发布陈旧产物
 - **`npm run check` 在 worktree 里是空转**：`biome.json` 的 `files.includes` 排除 `**/.claude`，而 worktree 建在 `.claude/worktrees/` 下，于是「Checked 0 files」直接通过。worktree 中改完要显式跑 `npx biome check src/`
