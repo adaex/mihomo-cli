@@ -1,5 +1,32 @@
 # Changelog
 
+## [4.5.0] - 2026-09-05
+
+产品面打磨：补齐「服务常驻」与「用户会回来敲命令」假设之间的缺口。单测 229 → 234。
+
+### 新增
+
+- **`status` 订阅新鲜度**：订阅块新增「更新: N 小时前」行，超过更新间隔时黄标并建议 `mihomo sub update`——服务常驻期间订阅不会自动更新（launchd 只拉起内核，不跑 `start`），陈旧订阅是「运行中（代理不通）」的高频根因。`--json` 的 `subscription` 补 `updatedAt`/`stale` 字段。判断收敛为 `isSubscriptionStale` 纯函数，与 doctor 订阅新鲜度共用口径
+
+- **`sub add` 剪贴板**：交互下不带 URL 参数时自动读取剪贴板（pbpaste），`maskUrl` 遮蔽展示 + y/N 确认后添加——「机场页面点复制 → 终端粘贴」不再需要重打一遍命令。剪贴板非 URL / 非 TTY 环境维持原有报错
+
+- **端口逃生口**：`settings.json` 新增 `ports: { mixed, controller }`，可覆盖默认 7890/9090（与其他代理工具并存的场景）。`getPorts()` 为唯一解析入口，非法值（非 1-65535 整数、两端口相同）直接抛错而非静默回退默认——端口突降会让热重载/UI 连错地址且毫无线索。配置构建、热重载、`ui` 提示、`start` 系统代理提示、doctor 端口检查全部跟随实际值；订阅/覆写仍不可改端口（系统锁定语义不变）
+
+- **`completion install <shell>`**：一键安装补全到对应 shell 的默认位置（zsh → `~/.zsh/completions/_mihomo`，bash → 追加 `~/.bash_completion` 含幂等标记、不覆盖已有内容，fish → `~/.config/fish/completions/mihomo.fish`）。zsh 不自动改 `.zshrc`，fpath 缺失时提示用户补一行。三 shell 的补全词表同步支持 `install` 子命令
+
+- **doctor CLI 版本检查**：落后于 npm latest 时 warn 并提示 `mihomo update`（短超时 4s，registry 不可达静默跳过，不产生红色噪音）——本项目连修多个高危缺陷，老用户需要被提醒升级
+
+### 变更
+
+- **doctor 增加 ports 合法性检查**：`settings.ports` 非法（超范围/非整数/两端口相同/非对象）时报 ✗ 检查项并给修复指引，而不是让整个体检崩在半路
+- **`uninstall` 收尾提示彻底清理**：卸载只移除 launchd 托管，结束时提示 `mihomo reset --full`（删数据）与 `npm uninstall -g mihomo-cli`（删包）两步
+- **`start` 系统代理提示跟随实际端口**：文案硬编码的 7890 改为 `getPorts().mixed`（配置逃生口后提示不会指错端口）
+- **README**：「订阅自动更新」节写实「服务常驻期间不会自动更新」及对策；覆写配置节新增「同时使用多个机场」的 `proxy-providers` 完整示例（单活跃订阅模型下并入第二机场的正路）
+
+### 决策记录
+
+- **不自动配置系统代理、不提供 `proxy on/off` 开关**（owner 决策，记入 CLAUDE.md 服务模型既定决策）：owner 的用法是「日常只有部分程序需要代理，需要者各自配置」，全局代理是错误状态。Mixed 启动保持只提示端口
+
 ## [4.4.0] - 2026-09-05
 
 工程去重与安全加固：消除补全词表的第二真相源，doctor 连通性/设置校验复用核心模块，quickstart.sh 对齐 CLI 的安全水位。单测 225 → 229。

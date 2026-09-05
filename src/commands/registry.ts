@@ -231,7 +231,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdDoctor,
     group: 'system',
-    usage: [{ signature: 'doctor', description: '体检诊断（内核/服务/端口/订阅/配置/连通性，有异常退出码 1）' }],
+    usage: [{ signature: 'doctor', description: '体检诊断（内核/服务/端口/订阅/配置/连通性/CLI 版本，有异常退出码 1）' }],
   },
   {
     name: 'completion',
