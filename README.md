@@ -225,6 +225,9 @@ mihomo status          # 查看状态
 > **为什么不用 root 服务绕开**：早期版本（v3.0–v4.0）确实用 root LaunchDaemon 绕开了这个限制
 > （Apple 的规则是「以 root 运行的程序自动获得本地网络访问」——豁免条件是 root，而非「是不是 daemon」），
 > 代价是每次 `start`/`stop` 都要输管理员密码。权衡后选择免密：授权点一次，密码要输一辈子。
+>
+> 从旧版本升级的用户若还留着 root 安装（`~/Library/LaunchDaemons` 下带 KeepAlive 的幽灵，会抢端口且停不掉），
+> `install`/`uninstall`/`stop`/`tun`/`reset` 检测到它都会引导清理——清理要删 root 属主的文件，需要输一次管理员密码。
 
 若确实有局域网节点且始终不弹框、连不通，本地网络授权**没有便捷的重置手段**（它不在 TCC 数据库里，
 `tccutil reset LocalNetwork` 会直接失败），只能进恢复模式删 `/Library/Preferences/com.apple.networkextension.*.plist`，
@@ -390,6 +393,8 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 | ------------- | ----------------------------- |
 | `subscription` | 按订阅名匹配（大小写不敏感，与 `sub use` 口径一致） |
 | `url-domain`   | 按订阅 URL 的 hostname 后缀匹配（大小写不敏感） |
+
+`match` 块**写错会直接报错**（键名拼错、值为空、空块），而不是静默忽略后对所有订阅生效——写了 `match` 显然是想限定作用域，悄悄放宽比报错危险得多。
 
 ### 示例
 
