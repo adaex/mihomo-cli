@@ -66,8 +66,18 @@ function rotateLog(): string | null {
   const stat = fs.statSync(logFile);
   if (stat.size === 0) return null;
 
-  const rotatedName = `mihomo.${formatLocalTimestamp()}.log`;
-  const rotatedPath = path.join(DIRS.logs, rotatedName);
+  const timestamp = formatLocalTimestamp();
+  let rotatedName = `mihomo.${timestamp}.log`;
+  let rotatedPath = path.join(DIRS.logs, rotatedName);
+
+  // 同一秒内两次轮转（start 失败后立即重试、tun 紧接 start）会互相覆盖归档，
+  // POSIX rename 静默覆盖已存在文件。加序号后缀避免丢日志
+  let seq = 1;
+  while (fs.existsSync(rotatedPath)) {
+    rotatedName = `mihomo.${timestamp}.${seq}.log`;
+    rotatedPath = path.join(DIRS.logs, rotatedName);
+    seq++;
+  }
 
   fs.renameSync(logFile, rotatedPath);
   return rotatedPath;
@@ -85,7 +95,7 @@ export function cleanupOldLogs(maxAgeDays = DEFAULT_LOG_RETENTION_DAYS): { delet
   let errors = 0;
 
   for (const file of files) {
-    if (!file.match(/^mihomo\.\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.log$/)) continue;
+    if (!file.match(/^mihomo\.\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(\.\d+)?\.log$/)) continue;
 
     try {
       const filePath = path.join(logsDir, file);

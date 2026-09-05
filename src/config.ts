@@ -33,8 +33,12 @@ export function parseYamlOrJson(content: string, errorMsg?: string): Record<stri
     // fall through to JSON
   }
   try {
-    return JSON.parse(content) as Record<string, unknown>;
-  } catch {
+    const result = JSON.parse(content) as unknown;
+    // 与 YAML 路径同构：只接受对象，标量/数组不是合法配置
+    if (result != null && typeof result === 'object' && !Array.isArray(result)) return result as Record<string, unknown>;
+    throw new Error(`${errorMsg || '内容'}不是有效的配置对象`);
+  } catch (e) {
+    if (e instanceof Error && e.message.includes('不是有效的配置对象')) throw e;
     throw new Error(`${errorMsg || '内容'}格式错误，无法解析为 YAML 或 JSON`);
   }
 }
@@ -330,11 +334,15 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   const allFiles = overwriteEnabled ? loadOverwriteFile() : [];
   // 作用域过滤统一在此做一次，后续 applyOverwrite / excludeOverwrite / 返回值全部沿用这份已过滤列表
   const overwriteFiles = filterOverwriteFilesByScope(allFiles, scope);
-  // applyOverwrite 恒返回浅拷贝，下面可以放心 delete 锁定键而不污染 subscriptionConfig
-  const withOverwrites = applyOverwrite(subscriptionConfig, overwriteFiles);
+  // 深拷贝后再传给 applyOverwrite：它只做浅拷贝（{...base}），proxy-groups 等嵌套对象
+  // 仍与原对象共享引用，excludeOverwriteProxiesFromIncludeAll / validateConfig 会原地改它们，
+  // 污染 subscriptionConfig 导致 debug stage1（本应是「原始订阅」）失真
+  const working = structuredClone(subscriptionConfig);
+  const withOverwrites = applyOverwrite(working, overwriteFiles);
 
   if (overwriteFiles.length > 0) {
     // 订阅原有节点名单：~proxies patch 已有节点不该被排除出 include-all（见 collectOverwriteProxyNames）
+    // 从原始 subscriptionConfig 读，不用 working（它可能已被覆写改了 proxies）
     const baseProxies = Array.isArray(subscriptionConfig.proxies) ? (subscriptionConfig.proxies as unknown[]) : [];
     const baseProxyNames = new Set(
       baseProxies.filter(p => p && typeof p === 'object' && typeof (p as { name?: unknown }).name === 'string').map(p => (p as { name: string }).name),

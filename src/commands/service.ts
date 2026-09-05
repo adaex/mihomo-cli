@@ -6,8 +6,7 @@ import { CliError } from '../errors.js';
 import { PATHS } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
 import * as runtime from '../runtime.js';
-import { detectLegacySystemInstall, getServiceStatus, installService, SERVICE_BINARY_NAME, uninstallService } from '../service.js';
-import { cleanupLegacyInstallOrThrow } from './shared.js';
+import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, getServiceStatus, installService, SERVICE_BINARY_NAME, uninstallService } from '../service.js';
 
 /**
  * 服务的安装与卸载。启停在 start.ts / stop.ts。

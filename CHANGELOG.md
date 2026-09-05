@@ -1,5 +1,51 @@
 # Changelog
 
+## [4.6.0] - 2026-09-05
+
+全面审查修复：内核更新安全、服务操作并发、订阅下载防降级、补全死代码、循环依赖等 30 项。单测 234（无新增，本轮以修复为主）。
+
+### 修复（中高）
+
+- **内核更新先自检再替换**：此前 `.gz` 路径先删旧内核再自检，自检失败时系统无内核可用（KeepAlive 崩溃循环）；且 `findBinaryInDir` 扫描整个 kernel 目录，归档不含二进制时会选中旧内核自检通过、报「已更新」但二进制没变。现改为解压到临时目录 → 自检 → 版本对账 → 原子替换，旧内核在新内核验证通过前不受影响
+- **订阅下载防 https→http 降级**：Node fetch 默认静默跟随协议降级重定向，恶意 WiFi/路由器可 MITM 替换订阅配置。内核下载有 `curl --proto =https` 防线，订阅下载没有。现 fetch 后检查 `response.url` 协议，降级即报错
+- **zsh 补全 `dir open <TAB>` 死代码**：group 循环生成的 directory 分支与硬编码分支同名，zsh 取第一个匹配，硬编码的目标补全（`root/subs/logs/...`）永不可达，`dir open <TAB>` 补的是本地文件。bash/fish 正常，只有 zsh 坏
+- **`shared.ts` ↔ `start.ts` 循环依赖**：`cleanupLegacyInstallOrThrow` 在 shared.ts 造成 shared ↔ start 运行时循环，注释声称「无循环」已过期。移至 service.ts（`cleanupLegacySystemInstall` 所在地），依赖方向恢复单向
+- **`maskUrl` 黑名单改启发式**：黑名单只有 8 个参数名，`uuid`/`sid`/`id` 等常见 token 参数不遮蔽。改为「值长度 ≥16 的 query 参数一律遮蔽」+ 扩充黑名单，误伤率低、token 几乎都是长串
+
+### 修复（中）
+
+- **服务操作跨进程锁**：慢速 `start`（订阅更新 ~10s）期间另一终端 `stop`，start 随后的 `enable` 会把自启位又打开，终态与用户最后一条命令相反。`startService`/`stopService`/`installService`/`uninstallService` 的 enable/bootstrap/bootout/disable 现共持 `service.lock`；start 在锁内再查一次 disabled，若 stop 已跑完则跳过启动
+- **`sub add` 补重启提示**：成功切换订阅后运行中实例仍用旧配置，`subUpdate`/`subUse` 都有提示，唯独 `subAdd` 漏了
+- **`update` 防静默降级**：当前版本领先 registry（预发/源码安装）时 `npm install -g` 会静默降级。现用 `compareVersions` 比对，领先时跳过并提示
+- **未知 flag 校验**：`start`/`logs`/`ow`/`sub`/`status` 此前不校验未知 flag，拼错（`logs -F`）被静默跳过。新增 `assertKnownFlags` 通用校验，白名单外的 flag 一律报错
+- **`--no-ssh` 全局检查**：此前只在 `start`/`stop` 报错，其他命令静默忽略。移至 `index.ts` 守卫后、分发前统一检查
+- **attached 短选项**：`logs -n200`、`start -u5000` 此前被静默忽略（`parseIntArg` 只认 `-n 200` 和 `--lines=200`）。现支持 `-n200` 形式
+- **日志轮转撞名**：同一秒内两次轮转（start 失败后立即重试）会互相覆盖归档。`rotateLog` 和 `restartService` 的 copy-truncate 都加了序号后缀
+- **`tryHotReload` pid 校验**：`/version` 探针只确认「端口上是个 mihomo」，挡不住「另一个 mihomo」。新增 `lsof` 取监听 pid 与服务 pid 比对
+- **`cleanupLegacySystemInstall` 不再 `|| true`**：`launchctl bootout` 的 `|| true` 吞掉所有错误，daemon 仍在跑却继续 rm plist 并报「已清理」。现只容忍退出码 113（未装载），其余按失败处理
+- **ANSI 转义消毒**：服务器返回的字符串（订阅名、错误信息、Content-Disposition）可能含 `\x1b[2J` 等转义序列伪造 CLI 输出。新增 `sanitizeTerminal`，在入口点消毒
+- **`parseYamlOrJson` 校验非对象**：JSON 回退路径此前不校验结果类型，标量/数组也能返回。现与 YAML 路径同构，只接受对象
+- **`buildConfig` 深拷贝**：`applyOverwrite` 只做浅拷贝，`excludeOverwriteProxiesFromIncludeAll`/`validateConfig` 原地改嵌套对象，污染 `subscriptionConfig` 导致 debug stage1 失真。现深拷贝后再传
+- **`saveSubscriptionCache` 防展开垃圾**：损坏的非对象条目（字符串）被 `{...}` 展开成字符键垃圾。现检查类型后再合并
+- **`removeSubscription` 锁内删文件**：原始配置的 rm 此前在锁外，与并发 `sub add` 同名存在 TOCTOU。现挪进 `updateSettings` mutator（锁内）
+
+### 修复（低）
+
+- **`sub use -s foo` flag 顺序**：`args[2]` 直取改为 `getNonFlagArg`，flag 写在名字前不再报「未找到订阅」
+- **`completion install` 落盘失败包 CliError**：此前抛裸 Error 带完整堆栈，现包成友好提示
+- **doctor 内核自检区分 spawn 错误**：`spawnSync` 失败（EACCES/ENOENT）时显示「退出码 null」，现区分 spawn 错误与非零退出
+- **`reset` 多目标空目标不报成功**：多目标时空目标（如内核未安装）无删除却出现在成功文案里。现跟踪实际删除的目标
+- **`reset overwrites` 关闭覆写开关**：删了覆写文件却留着 `overwrite_enabled=true`，ow/status 显示「已启用 (无文件)」。现重置开关
+- **`reset logs` 运行中先停服务**：`needsStop` 从 false 改为 true，避免内核继续写已删 inode
+- **补全词表补别名**：顶层补全此前只建议命令主名，不建议 `sub`/`ow`/`dir`/`restart` 等别名。bash `logs` 补全建议不存在的 `--help`，改为 `--lines`/`--follow`/`--open`。三 shell 的 `completion` 分支补 shell 名
+- **`mihomo log 1` 尊重编号**：隐藏别名 `log` 的 rewrite 硬编码 `'0'`，`log 1` 跟随当前日志而非归档 1。现尊重用户传的编号
+- **startTun 文案**：仅有 root pid 文件无进程时不再打印「清理 0 个残留进程」，改为「清理残留的 root pid 文件」
+
+### 文档
+
+- **TODO.md**：删除「Mixed 模式系统代理开关」条目——该功能已被 owner 在 v4.5.0 明确否决（CLAUDE.md 决策记录），TODO 条目会误导后续实现
+- **CLAUDE.md 架构表**：补 `proxy-probe.ts` 和 `spinner.ts` 两个模块（v4.3.0 新增，文档未同步）
+
 ## [4.5.0] - 2026-09-05
 
 产品面打磨：补齐「服务常驻」与「用户会回来敲命令」假设之间的缺口。单测 229 → 234。

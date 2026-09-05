@@ -39,6 +39,8 @@ export const PATHS = {
   configFile: path.join(DIRS.runtime, 'config.yaml'),
   logFile: path.join(DIRS.logs, 'mihomo.log'),
   pidFile: path.join(DIRS.runtime, 'pid'),
+  /** 服务操作跨进程锁：start/stop/install/uninstall 的 enable/bootstrap/bootout/disable 串行化 */
+  serviceLock: path.join(DIRS.runtime, 'service.lock'),
   configStage1Subscription: path.join(DIRS.runtime, '1.subscription.yaml'),
   configStage2Overwrite: path.join(DIRS.runtime, '2.overwrite.yaml'),
   configStage3System: path.join(DIRS.runtime, '3.system.yaml'),

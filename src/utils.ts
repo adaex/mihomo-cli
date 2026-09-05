@@ -21,6 +21,19 @@ export function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * 剥除终端控制字符与 ANSI 转义序列：服务器返回的字符串（订阅名、错误信息等）
+ * 可能含 \x1b[2J（清屏）、光标上移等序列，伪造 CLI 输出。展示前必须消毒。
+ * 保留 \t（制表）和 \n（换行），其余 C0 控制字符与 ESC 序列一律剥除。
+ */
+export function sanitizeTerminal(s: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: 消毒必须匹配 ESC 序列
+  const ansiEscape = /\x1b\[[0-9;]*[a-zA-Z]/g;
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: 消毒必须匹配 C0 控制字符
+  const controlChars = /[\x00-\x08\x0b\x0c\x0e-\x1f]/g;
+  return s.replace(ansiEscape, '').replace(controlChars, '');
+}
+
 /** 单引号包裹并转义嵌入的单引号,安全地把任意字符串作为 bash 字面量(防御路径中的 `"`/`$`/反引号注入)。 */
 export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`;
@@ -160,6 +173,31 @@ export function hasFlag(args: string[] | undefined, short: string, long?: string
 }
 
 /**
+ * 校验 args 中的 flag 是否都在白名单内。拼错的 flag（如 `logs -F`）此前被静默跳过，
+ * 用户以为选项生效了，实际行为完全没变。仅 `kernel`/`reset` 有此校验，其余命令靠这里补齐。
+ *
+ * 白名单同时接受短/长形式（`-n` 与 `--lines`），attached 短选项（`-n200`）按前缀匹配，
+ * 等号长选项（`--lines=200`）按前缀匹配。`--mirror` 是可选值选项，由 parseMirrorArg 自己管。
+ */
+export function assertKnownFlags(args: string[] | undefined, known: readonly string[], command: string): void {
+  if (!args) return;
+  const knownSet = new Set(known);
+  for (const a of args) {
+    if (!a.startsWith('-') || a === '-') continue;
+    if (knownSet.has(a)) continue;
+    // --opt=value 形式：按等号前的部分匹配
+    const eqIdx = a.indexOf('=');
+    if (eqIdx > 0 && knownSet.has(a.slice(0, eqIdx))) continue;
+    // -n200 attached 短选项：按前缀匹配已知短选项
+    if (a.length > 2 && a.startsWith('-') && !a.startsWith('--') && knownSet.has(a.slice(0, 2))) continue;
+    throw new CliError(`未知的选项: ${a}`, {
+      label: '参数错误',
+      hint: [`可用选项: ${known.join(', ')}`, '', `用法: mihomo ${command}`],
+    });
+  }
+}
+
+/**
  * 解析整数选项。全部调用点（-n 行数 / -u 更新超时）语义上都是正整数，
  * 故 <1、非数字、带尾随垃圾（`5s`）一律抛错而非静默取值：
  * `-u 5s` 静默取 5（ms）会让自动更新立刻超时。
@@ -189,6 +227,10 @@ export function parseIntArg(args: string[] | undefined, short: string, long: str
     }
     if (args[i].startsWith(`${long}=`)) {
       return parse(args[i].slice(long.length + 1), long);
+    }
+    // attached 短选项：-n200 / -u5000（字符紧贴选项，无空格）
+    if (args[i].startsWith(short) && args[i].length > short.length && /^\d+$/.test(args[i].slice(short.length))) {
+      return parse(args[i].slice(short.length), short);
     }
   }
   return defaultValue;

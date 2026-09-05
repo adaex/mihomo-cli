@@ -5,7 +5,7 @@ import { printStatus } from './commands/status.js';
 import { CliError } from './errors.js';
 import { isSilentSigint } from './lifecycle.js';
 import { ensureDirs } from './paths.js';
-import { suggestSimilar } from './utils.js';
+import { assertNoRemovedSshFlag, suggestSimilar } from './utils.js';
 
 process.on('SIGINT', () => {
   if (!isSilentSigint()) {
@@ -138,6 +138,9 @@ async function main(): Promise<void> {
   assertSupportedPlatform(command.name);
   assertNotRoot(command.name);
   ensureDirs();
+
+  // 已移除选项的全局检查：此前只在 start/stop 调用，其他命令静默忽略 --no-ssh
+  assertNoRemovedSshFlag(args);
 
   // rewrite 把顶层快捷命令(tun/use/on/off/open)映射为子命令形式;其余命令原样透传。
   await command.handler(command.rewrite ? command.rewrite(args) : args);

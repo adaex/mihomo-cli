@@ -24,6 +24,11 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
           signal,
           headers: { 'User-Agent': `mihomo-cli/${VERSION}` },
         });
+        // 防 https→http 降级重定向：fetch 默认静默跟随协议降级，
+        // 订阅配置等敏感内容明文传输可被 MITM 替换。内核下载走 curl --proto =https 有同等防线。
+        if (url.startsWith('https://') && !response.url.startsWith('https://')) {
+          throw new Error(`请求被重定向到非 https 地址（${response.url}），已拒绝`);
+        }
         if (!response.ok) {
           const error: Error & { response?: { status: number; data?: Record<string, unknown> } } = new Error(`HTTP ${response.status}`);
           error.response = { status: response.status };

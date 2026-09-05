@@ -5,7 +5,7 @@ import { getConfigInfo } from './config.js';
 import { isValidServiceLabel, RAW_SERVICE_LABEL_INPUT, SERVICE_BINARY_NAME, SERVICE_LABEL } from './constants.js';
 import { CliError } from './errors.js';
 import { cleanupOldLogs, rotateAndCleanupLogs } from './log-files.js';
-import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
+import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './paths.js';
 import { getMihomoPids, isPidFileOwnedByRoot, isProcessRoot, MAIN_INSTANCE_PATTERN } from './process-probe.js';
 import { getPorts, readSettings } from './settings.js';
 import { runSudoScript } from './sudo.js';
@@ -519,8 +519,10 @@ export async function installService(wasRunning: boolean): Promise<void> {
     fs.chmodSync(PATHS.userAgentPlist, 0o644);
 
     if (wasRunning) {
-      runLaunchctlOrThrow(['enable', serviceTarget()], '启用服务');
-      runLaunchctlOrThrow(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist], '装载服务');
+      withFileLock(PATHS.serviceLock, () => {
+        runLaunchctlOrThrow(['enable', serviceTarget()], '启用服务');
+        runLaunchctlOrThrow(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist], '装载服务');
+      });
     }
 
     // bootstrap 失败**不删 plist**：失败后落到「已安装未装载」这个干净可恢复的状态，
@@ -602,8 +604,20 @@ export async function startService(): Promise<void> {
 
   // enable 必须在 bootstrap 之前（见 installService 的注释）；stop 恒置 disable 位，
   // 「stop 之后再 start」是最常走的路径
-  runLaunchctlOrThrow(['enable', serviceTarget()], '启用服务');
-  runLaunchctlOrThrow(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist], '启动服务');
+  //
+  // 跨进程锁：慢速 start（订阅自动更新 ~10s）期间另一终端 stop 会 bootout+disable，
+  // start 随后的 enable+bootstrap 会把自启位又打开，终态与用户最后一条命令相反。
+  // 锁串行化 enable/bootstrap 与 stop 的 bootout/disable；锁内再查一次 disabled，
+  // 若 stop 在等待期间已跑完则跳过启动（用户最后一条命令是 stop）
+  withFileLock(PATHS.serviceLock, () => {
+    if (isServiceDisabledInLaunchd()) {
+      // 服务在等待期间被 stop（或 TUN 启动前的 disableServiceAutoStart）停掉了，
+      // 不重新拉起——用户最后一条命令是 stop
+      return;
+    }
+    runLaunchctlOrThrow(['enable', serviceTarget()], '启用服务');
+    runLaunchctlOrThrow(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist], '启动服务');
+  });
 }
 
 /**
@@ -644,12 +658,14 @@ export function disableServiceAutoStart(): void {
 export async function stopService(): Promise<void> {
   assertServiceLabelSafe();
 
-  await bootoutService();
-  await waitUntilUnloaded();
+  // 跨进程锁：与 startService 的 enable/bootstrap 串行化，
+  // 防止慢速 start（订阅更新 ~10s）期间 stop 的 bootout/disable 被 start 随后的 enable 覆盖
+  await withFileLock(PATHS.serviceLock, () => {
+    bootoutService();
+    disableServiceAutoStart();
+  });
 
-  // disable 放 bootout 之后单独执行并复核。「已停止」的完整语义 = 任务已卸载
-  // （上方 waitUntilUnloaded 的判定）+ 自启已关（disableServiceAutoStart 内的事后确认）
-  disableServiceAutoStart();
+  await waitUntilUnloaded();
 
   // bootout 通常已终止托管内核；tun 起的 root 内核与手动残留在此收口
   killResidualKernels();
@@ -666,7 +682,12 @@ export async function stopService(): Promise<void> {
 export async function uninstallService(): Promise<void> {
   assertServiceLabelSafe();
 
-  await bootoutService();
+  // 跨进程锁：与 startService 的 enable/bootstrap 串行化
+  await withFileLock(PATHS.serviceLock, () => {
+    bootoutService();
+    disableServiceAutoStart();
+  });
+
   await waitUntilUnloaded();
 
   // rm 失败必须可见：plist 还在的话登录时又被扫到，「已卸载」就是谎报
@@ -703,7 +724,14 @@ export function cleanupLegacySystemInstall(): void {
 
   const script = [
     '#!/bin/bash',
-    `launchctl bootout ${shellQuote(`system/${SERVICE_LABEL}`)} 2>/dev/null || true`,
+    // bootout 退出码分级：113=未装载（daemon 已不在，正常），其余是真实失败。
+    // 此前 || true 吞掉所有错误，daemon 仍在跑却继续 rm plist 并报「已清理」
+    `bootout_code=0`,
+    `launchctl bootout ${shellQuote(`system/${SERVICE_LABEL}`)} 2>/dev/null || bootout_code=$?`,
+    `if [ $bootout_code -ne 0 ] && [ $bootout_code -ne 113 ]; then`,
+    `  echo "launchctl bootout 失败（退出码 $bootout_code）" >&2`,
+    `  exit 1`,
+    `fi`,
     `rm -f ${shellQuote(PATHS.systemDaemonPlist)}`,
     `chown "$SUDO_UID:$SUDO_GID" ${shellQuote(PATHS.logFile)} 2>/dev/null || true`,
     `chown -R "$SUDO_UID:$SUDO_GID" ${shellQuote(DIRS.data)} 2>/dev/null || true`,
@@ -713,6 +741,26 @@ export function cleanupLegacySystemInstall(): void {
   ].join('\n');
 
   runSudoScript(script, { action: '清理遗留的系统级服务', file: 'legacy-cleanup.sh' });
+}
+
+/**
+ * 清理遗留 root LaunchDaemon 并把 runSudoScript 的普通 Error 包成 CliError——
+ * 否则 sudo 取消密码 / 非 TTY 这类常规操作会带完整堆栈按「未预期错误」渲染。
+ * install / uninstall / stop / start(tun) / reset 共用。
+ *
+ * 放在 service.ts 而非 commands/shared.ts：shared.ts 被 start.ts 导入（restartToApply），
+ * 若 start.ts 再反向导入 shared.ts 就成环。放这里依赖方向单向（commands → service）。
+ */
+export function cleanupLegacyInstallOrThrow(): void {
+  try {
+    cleanupLegacySystemInstall();
+  } catch (e) {
+    if (e instanceof CliError) throw e;
+    throw new CliError((e as Error).message, {
+      label: '清理遗留服务失败',
+      hint: ['也可手动清理:', `  sudo launchctl bootout system/$(basename ${PATHS.systemDaemonPlist} .plist)`, `  sudo rm -f ${PATHS.systemDaemonPlist}`],
+    });
+  }
 }
 
 // === 热重载与重启 ===
@@ -760,6 +808,14 @@ async function tryHotReload(): Promise<boolean> {
     const info = (await probe.json()) as { version?: unknown };
     if (typeof info?.version !== 'string') return false;
 
+    // /version 只确认「端口上是个 mihomo」，挡不住「另一个 mihomo」（手工起的实例、
+    // 端口冲突）。用 lsof 取监听 pid 与服务 pid 比对，不一致则回退 kickstart
+    const port = getPorts().controller;
+    const lsofResult = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', timeout: 5000 });
+    if (lsofResult.status !== 0) return false;
+    const listenerPid = Number.parseInt(lsofResult.stdout.trim(), 10);
+    if (!Number.isFinite(listenerPid) || listenerPid !== status.pid) return false;
+
     const res = await fetch(`${baseUrl}/configs?force=true`, {
       method: 'PUT',
       headers,
@@ -798,7 +854,14 @@ export async function restartService(): Promise<{ hotReloaded: boolean }> {
   // launchd 的 StandardOutPath fd 指向旧 inode，rename 后日志会继续写进归档文件。
   // 只能 copy-truncate（fd 为 O_APPEND，truncate 后从 0 续写不丢句柄）。
   if (logOversized()) {
-    const archiveFile = path.join(DIRS.logs, `mihomo.${formatLocalTimestamp()}.log`);
+    // 同一秒内两次轮转会互相覆盖归档（copyFileSync 静默覆盖），加序号后缀
+    const timestamp = formatLocalTimestamp();
+    let archiveFile = path.join(DIRS.logs, `mihomo.${timestamp}.log`);
+    let seq = 1;
+    while (fs.existsSync(archiveFile)) {
+      archiveFile = path.join(DIRS.logs, `mihomo.${timestamp}.${seq}.log`);
+      seq++;
+    }
     try {
       fs.copyFileSync(PATHS.logFile, archiveFile);
       fs.writeFileSync(PATHS.logFile, '');

@@ -26,9 +26,11 @@ interface CompletionWord {
   desc: string;
 }
 
-/** 命令词表：注册表中所有非 hidden 命令，desc 取首条用法行说明 */
+/** 命令词表：注册表中所有非 hidden 命令（含别名），desc 取首条用法行说明 */
 function commandWords(commands: Command[]): CompletionWord[] {
-  return commands.filter(c => !c.hidden).map(c => ({ word: c.name, desc: c.usage[0]?.description ?? '' }));
+  return commands
+    .filter(c => !c.hidden)
+    .flatMap(c => [{ word: c.name, desc: c.usage[0]?.description ?? '' }, ...c.aliases.map(a => ({ word: a, desc: c.usage[0]?.description ?? '' }))]);
 }
 
 /** 子命令词表：主名 + 别名展开，desc 取 SubCommand.description */
@@ -80,23 +82,28 @@ function buildZsh(commands: Command[], groups: SubGroup[]): string {
   ];
   for (const group of groups) {
     const aliases = group.tokens.join('|');
+    const isDirectory = group.tokens.includes('directory');
     lines.push(`        ${aliases})`);
     lines.push('          subcmds=(');
     for (const s of group.words) lines.push(`            '${s.word}:${s.desc.replace(/'/g, "''")}'`);
     lines.push('          )');
     lines.push('          if (( CURRENT == 2 )); then');
     lines.push("            _describe 'subcommand' subcmds");
-    lines.push('          else');
-    lines.push('            _files');
+    if (isDirectory) {
+      // dir open <TAB> 补目标列表（此前硬编码了一个同名 case，但 zsh 取第一个匹配，
+      // group 分支先生成、硬编码分支永不可达，dir open <TAB> 补的是本地文件）
+      lines.push('          elif (( CURRENT == 3 )) && [[ ${words[2]} == open ]]; then');
+      lines.push(`            _values 'target' ${DIR_TARGETS.join(' ')}`);
+      lines.push('          else');
+      lines.push('            _files');
+    } else {
+      lines.push('          else');
+      lines.push('            _files');
+    }
     lines.push('          fi');
     lines.push('          ;;');
   }
   lines.push(
-    '        directory|dir|dirs|directories)',
-    '          if (( CURRENT == 3 )); then',
-    `            _values 'target' ${DIR_TARGETS.join(' ')}`,
-    '          fi',
-    '          ;;',
     '        logs)',
     "          _arguments '-f[实时跟随]' '-n[显示行数]:行数:' '-o[系统默认程序打开]' '1::编号:'",
     '          ;;',
@@ -112,7 +119,7 @@ function buildZsh(commands: Command[], groups: SubGroup[]): string {
     '          ;;',
     '        completion)',
     '          if (( CURRENT == 2 )); then',
-    "            _values 'action' install",
+    `            _values 'action' install ${SHELLS.join(' ')}`,
     '          elif (( CURRENT == 3 )) && [[ ${words[2]} == install ]]; then',
     `            _values 'shell' ${SHELLS.join(' ')}`,
     '          fi',
@@ -170,7 +177,7 @@ _mihomo_completions() {
   case "\${COMP_WORDS[1]}" in
 ${subCase}
     logs)
-      COMPREPLY=( $(compgen -W "-f -n -o --help" -- "\${cur}") )
+      COMPREPLY=( $(compgen -W "-f -n -o --lines --follow --open" -- "\${cur}") )
       ;;
     ui)
       COMPREPLY=( $(compgen -W "${UI_NAMES.join(' ')}" -- "\${cur}") )
@@ -183,7 +190,7 @@ ${subCase}
       ;;
     completion)
       if [[ \${COMP_CWORD} -eq 2 ]]; then
-        COMPREPLY=( $(compgen -W "install" -- "\${cur}") )
+        COMPREPLY=( $(compgen -W "install ${SHELLS.join(' ')}" -- "\${cur}") )
       elif [[ \${COMP_CWORD} -eq 3 ]] && [[ "\${COMP_WORDS[2]}" == install ]]; then
         COMPREPLY=( $(compgen -W "${SHELLS.join(' ')}" -- "\${cur}") )
       fi
@@ -211,7 +218,7 @@ function buildFish(commands: Command[], groups: SubGroup[]): string {
   }
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from directory dir dirs directories open" -a '${DIR_TARGETS.join(' ')}'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from ui" -a '${UI_NAMES.join(' ')}'`);
-  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion" -a 'install' -d '安装补全到默认位置'`);
+  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion" -a 'install ${SHELLS.join(' ')}' -d '安装补全到默认位置'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion; and __fish_seen_subcommand_from install" -a '${SHELLS.join(' ')}'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from kernel" -a '\\--mirror' -d '走镜像下载'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from kernel" -a '\\--no-mirror' -d '直连下载'`);
@@ -271,23 +278,30 @@ function installCompletion(shell: string | undefined, commands: Command[]): void
   const script = buildCompletionScript(shell, commands);
   console.log(`安装 ${shell} 补全: ${target}`);
 
-  if (shell === 'bash') {
-    // ~/.bash_completion 可能已有用户自己的补全：含标记则幂等跳过，否则追加
-    const existing = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
-    if (existing.includes(BASH_MARKER)) {
-      console.log('已安装过（~/.bash_completion 已包含 mihomo 补全），跳过');
+  try {
+    if (shell === 'bash') {
+      // ~/.bash_completion 可能已有用户自己的补全：含标记则幂等跳过，否则追加
+      const existing = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
+      if (existing.includes(BASH_MARKER)) {
+        console.log('已安装过（~/.bash_completion 已包含 mihomo 补全），跳过');
+        return;
+      }
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.appendFileSync(target, `\n${BASH_MARKER}\n${script}${BASH_MARKER.replace('>>>', '<<<')}\n`);
+      console.log(colors.green('已追加到 ~/.bash_completion（重新打开终端生效）'));
       return;
     }
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.appendFileSync(target, `\n${BASH_MARKER}\n${script}${BASH_MARKER.replace('>>>', '<<<')}\n`);
-    console.log(colors.green('已追加到 ~/.bash_completion（重新打开终端生效）'));
-    return;
-  }
 
-  // zsh: #compdef 必须是文件首行（compinit 的约定），标记无处放——独占文件名直接覆盖
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, script, { mode: 0o644 });
-  console.log(colors.green('已写入（重新打开终端生效）'));
+    // zsh: #compdef 必须是文件首行（compinit 的约定），标记无处放——独占文件名直接覆盖
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, script, { mode: 0o644 });
+    console.log(colors.green('已写入（重新打开终端生效）'));
+  } catch (e) {
+    throw new CliError(`补全安装失败: ${(e as Error).message}`, {
+      label: '安装失败',
+      hint: ['请检查目标目录的写权限，或手动重定向补全脚本:', `  mihomo completion ${shell} >> ${target}`],
+    });
+  }
 
   if (shell === 'zsh') {
     // ~/.zsh/completions 不在 zsh 默认 fpath 里（oh-my-zsh 默认包含）：

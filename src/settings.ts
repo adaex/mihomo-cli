@@ -146,9 +146,31 @@ export function getPorts(): { mixed: number; controller: number } {
 function maskSingleUrl(url: string): string {
   try {
     const parsed = new URL(url);
-    const tokenKeys = ['token', 'key', 'secret', 'pass', 'password', 'auth', 'access_token', 'api_key'];
-    for (const key of tokenKeys) {
-      if (parsed.searchParams.has(key)) {
+    // 已知 token 参数名（值可能很短，如 ?token=abc）
+    const tokenKeys = new Set([
+      'token',
+      'key',
+      'secret',
+      'pass',
+      'password',
+      'auth',
+      'access_token',
+      'api_key',
+      'uuid',
+      'sid',
+      'id',
+      'sub',
+      'user',
+      'email',
+      'passwd',
+      'apikey',
+      'api_key',
+      'access',
+    ]);
+    // 启发式：值长度 ≥16 的 query 参数一律遮蔽（token 几乎都是长串，误伤率低）。
+    // 黑名单永远枚举不完（uuid/sid/id 等都曾漏网），启发式更耐久。
+    for (const [key, value] of parsed.searchParams) {
+      if (tokenKeys.has(key.toLowerCase()) || value.length >= 16) {
         parsed.searchParams.set(key, '***');
       }
     }
@@ -234,7 +256,9 @@ export function saveSubscriptionCache(subName: string, data: Partial<Subscriptio
   ensureDirs();
   withFileLock(PATHS.subscriptionsCacheFile, () => {
     const cache = readSubscriptionCache();
-    cache[subName] = { ...cache[subName], ...data };
+    // 损坏的条目可能是字符串/数字（cache.json 被手改），展开会产生字符键垃圾
+    const old = cache[subName];
+    cache[subName] = { ...(old && typeof old === 'object' && !Array.isArray(old) ? old : {}), ...data };
     writeSubscriptionCache(cache);
   });
 }
@@ -339,20 +363,21 @@ export function removeSubscription(name: string): string | null {
       switchedTo = subs.length > 0 ? subs[0].name : null;
       updates.active_subscription = switchedTo ?? undefined;
     }
+
+    // 在锁内删原始配置：锁外 rm 与并发 sub add 同名存在 TOCTOU——
+    // A 删 foo（锁内提交）→ B 加 foo（锁内提交 + 下载写 foo.yaml）→ A 锁外 rm 删掉 B 刚写的配置
+    try {
+      fs.rmSync(getSubscriptionRawConfigPath(name), { force: true });
+    } catch {
+      /* 名字非法时跳过文件清理 */
+    }
+
     return updates;
   });
 
   if (!found) return null;
 
   deleteSubscriptionCache(name);
-
-  // 名字非法（手改 settings.json）时 getSubscriptionRawConfigPath 会抛错；
-  // 此处跳过文件清理即可——订阅已从设置移除，非法路径的文件本就不应存在
-  try {
-    fs.rmSync(getSubscriptionRawConfigPath(name), { force: true });
-  } catch {
-    /* ignore */
-  }
 
   return switchedTo;
 }

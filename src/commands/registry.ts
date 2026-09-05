@@ -148,7 +148,14 @@ export const COMMANDS: Command[] = [
     name: 'log',
     aliases: [],
     handler: cmdLogs,
-    rewrite: args => ['logs', '0', '-f', ...args.slice(1)],
+    // 隐藏别名：log = logs 0 -f。用户传了编号时尊重编号（log 1 = logs 1 -f），
+    // 而非恒为 0——此前编号被 '0' 顶掉，log 1 跟随的是当前日志而非归档 1
+    rewrite: args => {
+      const hasNum = args[1] !== undefined && /^\d+$/.test(args[1]);
+      const num = hasNum ? args[1] : '0';
+      const rest = hasNum ? args.slice(2) : args.slice(1);
+      return ['logs', num, '-f', ...rest];
+    },
     group: 'interface',
     usage: [],
     hidden: true,

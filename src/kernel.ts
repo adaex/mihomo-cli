@@ -185,90 +185,85 @@ export async function downloadKernel(
   // 先钉死上游来源，再套镜像前缀（顺序不可换：加了前缀就看不出原始 host 了）
   assertTrustedAssetUrl(asset.browser_download_url);
   const downloadUrl = withMirror(asset.browser_download_url, mirror);
-  // basename 剥离 asset.name 里的任何目录成分：API 响应/镜像若被篡改带 ../ 可写出 kernel 目录外
-  const tempPath = path.join(DIRS.kernel, path.basename(asset.name));
+
+  // 下载、解压、自检都在临时目录里完成，自检通过后才原子替换旧内核。
+  // 此前先删旧内核再自检，自检失败时系统无内核可用（KeepAlive 崩溃循环）；
+  // 且解压直接在 DIRS.kernel 里进行，findBinaryInDir 能选中旧内核造成假「已更新」。
+  // 临时目录建在 DIRS.kernel 内（同文件系统，rename 原子），findBinaryInDir 只搜它。
+  const tempDir = fs.mkdtempSync(path.join(DIRS.kernel, '.tmp-'));
+  // basename 剥离 asset.name 里的任何目录成分：API 响应/镜像若被篡改带 ../ 可写出临时目录外
+  const tempPath = path.join(tempDir, path.basename(asset.name));
   const sizeMB = (asset.size / 1024 / 1024).toFixed(2);
 
-  if (mirror && progressCallback) {
-    progressCallback('提示: 经第三方镜像中转下载，无法验证来源完整性，建议直连或自行校验产物');
-  }
-
-  if (progressCallback) {
-    progressCallback(`下载内核: ${asset.name} (${sizeMB} MB)`);
-  }
-
-  // --proto '=https' / --proto-redir '=https': curl -L 默认跟随任意协议的重定向,
-  // 实测会跟着 302 降级到明文 http 并把响应落盘。产物随后以 root 运行,
-  // 故全链路(含重定向)强制 https。--max-filesize 防止被喂超大文件撑爆磁盘。
-  const maxBytes = Number.isFinite(asset.size) && asset.size > 0 ? Math.floor(asset.size * 2 + 1024 * 1024) : 512 * 1024 * 1024;
-  const curlResult = spawnSync(
-    'curl',
-    [
-      '-L',
-      '--proto',
-      '=https',
-      '--proto-redir',
-      '=https',
-      '--max-filesize',
-      String(maxBytes),
-      '--progress-bar',
-      '--connect-timeout',
-      '30',
-      '--max-time',
-      String(Math.floor(KERNEL_DOWNLOAD_TIMEOUT / 1000)),
-      '-o',
-      tempPath,
-      downloadUrl,
-    ],
-    { stdio: 'inherit' },
-  );
-
-  if (curlResult.error) {
-    if ((curlResult.error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error('未找到 curl 命令，请先安装 curl 后重试');
-    }
-    throw new Error(`下载失败: ${curlResult.error.message}`);
-  }
-
-  if (curlResult.status !== 0) {
-    try {
-      fs.unlinkSync(tempPath);
-    } catch {
-      /* ignore */
-    }
-    throw new Error(`下载失败 (curl 退出码 ${curlResult.status})`);
-  }
-
-  if (!fs.existsSync(tempPath)) {
-    throw new Error('下载失败: 文件未生成');
-  }
-
-  // 比对 API 声明的资产大小：`asset.size` 此前只用于显示。不匹配说明下载被截断
-  // （网络中断留下半个文件）或内容被替换。无 checksum 可校验时这是唯一的完整性信号——
-  // 强度有限（攻击者可填充到同样字节数），但能挡住截断与不等长的偷换。
-  // 要求精确相等：release 资产是不可变的，字节数不该有任何偏差。
-  if (Number.isFinite(asset.size) && asset.size > 0) {
-    const actual = fs.statSync(tempPath).size;
-    if (actual !== asset.size) {
-      try {
-        fs.unlinkSync(tempPath);
-      } catch {
-        /* ignore */
-      }
-      throw new Error(
-        `下载的文件大小与 release 元数据不符（期望 ${asset.size} 字节，实际 ${actual} 字节）\n  可能是下载被截断或内容被替换，请重试或改用 --no-mirror 直连`,
-      );
-    }
-  }
-
-  if (progressCallback) {
-    progressCallback('解压内核...');
-  }
-
-  const extractPath = DIRS.kernel;
-  let extractedBinary: string | null = null;
-
   try {
+    if (mirror && progressCallback) {
+      progressCallback('提示: 经第三方镜像中转下载，无法验证来源完整性，建议直连或自行校验产物');
+    }
+
+    if (progressCallback) {
+      progressCallback(`下载内核: ${asset.name} (${sizeMB} MB)`);
+    }
+
+    // --proto '=https' / --proto-redir '=https': curl -L 默认跟随任意协议的重定向,
+    // 实测会跟着 302 降级到明文 http 并把响应落盘。产物随后以 root 运行,
+    // 故全链路(含重定向)强制 https。--max-filesize 防止被喂超大文件撑爆磁盘。
+    const maxBytes = Number.isFinite(asset.size) && asset.size > 0 ? Math.floor(asset.size * 2 + 1024 * 1024) : 512 * 1024 * 1024;
+    const curlResult = spawnSync(
+      'curl',
+      [
+        '-L',
+        '--proto',
+        '=https',
+        '--proto-redir',
+        '=https',
+        '--max-filesize',
+        String(maxBytes),
+        '--progress-bar',
+        '--connect-timeout',
+        '30',
+        '--max-time',
+        String(Math.floor(KERNEL_DOWNLOAD_TIMEOUT / 1000)),
+        '-o',
+        tempPath,
+        downloadUrl,
+      ],
+      { stdio: 'inherit' },
+    );
+
+    if (curlResult.error) {
+      if ((curlResult.error as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new Error('未找到 curl 命令，请先安装 curl 后重试');
+      }
+      throw new Error(`下载失败: ${curlResult.error.message}`);
+    }
+
+    if (curlResult.status !== 0) {
+      throw new Error(`下载失败 (curl 退出码 ${curlResult.status})`);
+    }
+
+    if (!fs.existsSync(tempPath)) {
+      throw new Error('下载失败: 文件未生成');
+    }
+
+    // 比对 API 声明的资产大小：`asset.size` 此前只用于显示。不匹配说明下载被截断
+    // （网络中断留下半个文件）或内容被替换。无 checksum 可校验时这是唯一的完整性信号——
+    // 强度有限（攻击者可填充到同样字节数），但能挡住截断与不等长的偷换。
+    // 要求精确相等：release 资产是不可变的，字节数不该有任何偏差。
+    if (Number.isFinite(asset.size) && asset.size > 0) {
+      const actual = fs.statSync(tempPath).size;
+      if (actual !== asset.size) {
+        throw new Error(
+          `下载的文件大小与 release 元数据不符（期望 ${asset.size} 字节，实际 ${actual} 字节）\n  可能是下载被截断或内容被替换，请重试或改用 --no-mirror 直连`,
+        );
+      }
+    }
+
+    if (progressCallback) {
+      progressCallback('解压内核...');
+    }
+
+    let extractedBinary: string | null = null;
+
     if (tempPath.endsWith('.tar.gz') || tempPath.endsWith('.tgz')) {
       // 两道守卫，各用一种列表格式（刻意分开：-tv 的条目名在含空格的文件名下无法可靠切出，
       // 而 -t 又不带类型信息，硬从 -tv 里解析名字会误判）：
@@ -298,7 +293,7 @@ export async function downloadKernel(
       }
 
       // --no-same-owner: 即便前面漏判也不让归档改变属主
-      const tarResult = spawnSync('tar', ['--no-same-owner', '-xzf', tempPath, '-C', extractPath], {
+      const tarResult = spawnSync('tar', ['--no-same-owner', '-xzf', tempPath, '-C', tempDir], {
         stdio: ['ignore', 'ignore', 'inherit'],
         timeout: 60_000,
       });
@@ -306,7 +301,7 @@ export async function downloadKernel(
       if (tarResult.status !== 0) throw new Error(`tar 退出码 ${tarResult.status}`);
     } else if (tempPath.endsWith('.gz')) {
       const baseName = path.basename(tempPath, '.gz');
-      const outputPath = path.join(extractPath, baseName);
+      const outputPath = path.join(tempDir, baseName);
       // gzip -dc 输出到 stdout，捕获为 buffer 后写文件，避免 shell 重定向（注入风险）
       const gzipResult = spawnSync('gzip', ['-dc', tempPath], { maxBuffer: 256 * 1024 * 1024, timeout: 60_000 });
       if (gzipResult.error) throw gzipResult.error;
@@ -314,69 +309,50 @@ export async function downloadKernel(
       fs.writeFileSync(outputPath, gzipResult.stdout, { mode: 0o755 });
       extractedBinary = outputPath;
     }
-  } catch (e) {
-    try {
-      fs.unlinkSync(tempPath);
-    } catch {
-      /* ignore */
+
+    const foundBinary = extractedBinary || findBinaryInDir(tempDir);
+
+    if (!foundBinary) {
+      throw new Error('解压后未找到可执行文件');
     }
-    throw new Error(`解压失败: ${(e as Error).message}`);
-  }
 
-  const foundBinary = extractedBinary || findBinaryInDir(extractPath);
-
-  if (!foundBinary) {
-    try {
-      fs.unlinkSync(tempPath);
-    } catch {
-      /* ignore */
+    // 自检在临时位置进行（旧内核尚未被触碰）：跑一次 -v 确认二进制可执行且未损坏/架构匹配
+    // （上游 release 不提供 checksums，无法哈希校验）。通过后才原子替换。
+    if (progressCallback) {
+      progressCallback('校验内核...');
     }
-    throw new Error('解压后未找到可执行文件');
-  }
+    fs.chmodSync(foundBinary, 0o755);
+    const check = spawnSync(foundBinary, ['-v'], { encoding: 'utf8', timeout: 5000 });
+    const checkOutput = `${check.stdout || ''}${check.stderr || ''}`.trim();
+    if (check.error || check.status !== 0 || !/v?\d+\.\d+\.\d+/.test(checkOutput)) {
+      throw new Error(`内核自检失败（可能下载损坏或架构不匹配），旧内核未受影响\n  退出码: ${check.status}\n  输出: ${checkOutput || '(空)'}`);
+    }
 
-  const targetPath = PATHS.mihomoBinary;
-
-  if (foundBinary !== targetPath) {
-    if (fs.existsSync(targetPath)) {
-      fs.chmodSync(targetPath, 0o755);
-      try {
-        fs.unlinkSync(targetPath);
-      } catch {
-        /* ignore */
+    // 版本对账：自检通过不代表版本对——归档可能含旧版本二进制（镜像返回错误资产等）。
+    // 与 latest.tag_name 比对，不一致即失败，避免「报已更新但二进制没变」。
+    const versionMatch = checkOutput.match(/v?(\d+\.\d+\.\d+)/);
+    if (versionMatch && latest.tag_name) {
+      const binaryVersion = versionMatch[1];
+      const expectedVersion = latest.tag_name.replace(/^v/, '');
+      if (binaryVersion !== expectedVersion) {
+        throw new Error(`内核版本不匹配（期望 ${expectedVersion}，实际 ${binaryVersion}），旧内核未受影响`);
       }
     }
+
+    // 原子替换：同文件系统内 rename 是原子的，旧内核要么完全是旧版、要么完全是新版
+    const targetPath = PATHS.mihomoBinary;
     fs.renameSync(foundBinary, targetPath);
-  }
+    fs.chmodSync(targetPath, 0o755);
 
-  fs.chmodSync(targetPath, 0o755);
+    clearKernelVersionCache();
 
-  // 下载后自检：跑一次 -v 确认二进制可执行且未损坏/架构匹配（上游 release 不提供 checksums，无法哈希校验）
-  if (progressCallback) {
-    progressCallback('校验内核...');
-  }
-  const check = spawnSync(targetPath, ['-v'], { encoding: 'utf8', timeout: 5000 });
-  const checkOutput = `${check.stdout || ''}${check.stderr || ''}`.trim();
-  if (check.error || check.status !== 0 || !/v?\d+\.\d+\.\d+/.test(checkOutput)) {
+    return { version: latest.tag_name, path: targetPath };
+  } finally {
+    // 清理临时目录（无论成功失败）；旧内核不受影响
     try {
-      fs.unlinkSync(targetPath);
+      fs.rmSync(tempDir, { recursive: true, force: true });
     } catch {
       /* ignore */
     }
-    try {
-      fs.unlinkSync(tempPath);
-    } catch {
-      /* ignore */
-    }
-    throw new Error(`内核自检失败（可能下载损坏或架构不匹配），已删除\n  退出码: ${check.status}\n  输出: ${checkOutput || '(空)'}`);
   }
-
-  try {
-    fs.unlinkSync(tempPath);
-  } catch {
-    /* ignore */
-  }
-
-  clearKernelVersionCache();
-
-  return { version: latest.tag_name, path: targetPath };
 }

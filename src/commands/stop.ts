@@ -2,10 +2,8 @@ import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { getMihomoPids } from '../process-probe.js';
 import { stop } from '../process-stop.js';
-import { detectLegacySystemInstall, getServiceStatus, stopService } from '../service.js';
+import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, getServiceStatus, stopService } from '../service.js';
 import type { StopResult } from '../types.js';
-import { assertNoRemovedSshFlag } from '../utils.js';
-import { cleanupLegacyInstallOrThrow } from './shared.js';
 
 /** 检查停止结果：若有进程未终止则报错并退出。 */
 export function handleStopResult(result: StopResult): void {
@@ -20,9 +18,7 @@ export function handleStopResult(result: StopResult): void {
  * `disable` 不能省，这是「停止」与「暂时杀掉」的区别：只 bootout 的话 enable 位还在，
  * 下次登录 launchd 扫到 plist 又会拉起——而 CLI 已经打印了「已停止」。
  */
-export async function cmdStop(args: string[]): Promise<void> {
-  assertNoRemovedSshFlag(args);
-
+export async function cmdStop(_args: string[]): Promise<void> {
   // 遗留 root daemon 带 KeepAlive：不清理它，下面杀掉的内核约 10s 后就被拉回，
   // 「已停止」即成谎报（与 v4.2.2 修的 gui/0 缺陷同一签名，幽灵换成 legacy daemon）。
   // detectLegacySystemInstall 只查 plist 文件，不要求任务在跑，幂等清理无副作用

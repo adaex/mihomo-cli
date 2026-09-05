@@ -1,14 +1,13 @@
 import readline from 'node:readline';
 import { CliError } from '../errors.js';
-import { PATHS } from '../paths.js';
 import * as runtime from '../runtime.js';
-import { cleanupLegacySystemInstall } from '../service.js';
 import { extractStartOptions } from '../utils.js';
 import { cmdStart } from './start.js';
 
 /**
  * 命令层公共工具：收敛跨命令重复的守卫、分发与重启模式。
- * 依赖方向单向：shared → start/runtime；start 不反向 import shared，无循环。
+ * 依赖方向单向：shared → start/runtime；start 不反向 import shared（cleanupLegacyInstallOrThrow
+ * 已移至 service.ts，此前它在 shared.ts 造成 shared ↔ start 循环依赖）。
  */
 
 /** 子命令表条目：主名 + 可选别名 + handler（收到完整 argv，自取 args[2..]）。 */
@@ -81,21 +80,4 @@ export async function restartToApply(args: string[]): Promise<boolean> {
   console.log('');
   await cmdStart(['start', currentMode, ...extractStartOptions(args)]);
   return true;
-}
-
-/**
- * 清理遗留 root LaunchDaemon（v3.0–v4.0 的 `daemon on` 装的），把 runSudoScript 的
- * 普通 Error（sudo 取消密码 / 非 TTY）包成 CliError——否则这类常规操作会带完整堆栈
- * 按「未预期错误」渲染。install / uninstall / stop / start(tun) / reset 共用。
- */
-export function cleanupLegacyInstallOrThrow(): void {
-  try {
-    cleanupLegacySystemInstall();
-  } catch (e) {
-    if (e instanceof CliError) throw e;
-    throw new CliError((e as Error).message, {
-      label: '清理遗留服务失败',
-      hint: ['也可手动清理:', `  sudo launchctl bootout system/$(basename ${PATHS.systemDaemonPlist} .plist)`, `  sudo rm -f ${PATHS.systemDaemonPlist}`],
-    });
-  }
 }

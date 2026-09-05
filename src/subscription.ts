@@ -24,6 +24,7 @@ import type {
   TryUpdateResult,
   UserInfo,
 } from './types.js';
+import { sanitizeTerminal } from './utils.js';
 
 /** 取有效更新间隔（小时）：缓存值需为正整数，否则回退默认值。 */
 export function resolveUpdateInterval(cachedInterval?: number | null): number {
@@ -118,8 +119,9 @@ function extractSubscriptionMeta(headers: Headers | undefined): SubscriptionMeta
   return {
     userInfo: parseUserInfo(headers?.get('subscription-userinfo') ?? null),
     updateInterval: parsePositiveInterval(headers?.get('profile-update-interval')),
-    webPageUrl: headers?.get('profile-web-page-url') || null,
-    username: parseUsernameFromContentDisposition(headers?.get('content-disposition') ?? null),
+    // 服务器返回的字符串可能含 ANSI 转义/控制字符，展示前消毒（防终端输出伪造）
+    webPageUrl: sanitizeTerminal(headers?.get('profile-web-page-url') || '') || null,
+    username: sanitizeTerminal(parseUsernameFromContentDisposition(headers?.get('content-disposition') ?? null) || '') || null,
   };
 }
 
@@ -227,7 +229,10 @@ function assertLooksLikeSubscription(parsed: Record<string, unknown>, maskedUrl:
   if (hasProxies || hasGroups || hasProviders) return;
 
   // 服务端常把错误信息放在这些字段，取出来直接展示比「无节点」更有助排查
-  const serverMsg = ['error', 'message', 'msg', 'info'].map(k => parsed[k]).find(v => typeof v === 'string' && v.length > 0) as string | undefined;
+  // 消毒：服务器返回的字符串可能含 ANSI 转义/控制字符，伪造 CLI 输出
+  const serverMsg = sanitizeTerminal(
+    (['error', 'message', 'msg', 'info'].map(k => parsed[k]).find(v => typeof v === 'string' && v.length > 0) as string | undefined) ?? '',
+  );
 
   throw new CliError('订阅内容不含任何节点来源（proxies / proxy-groups / proxy-providers 均为空）', {
     label: '订阅无效',

@@ -6,10 +6,10 @@ import { isOverwriteFilename } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
 import { cleanupAll, PROCESS_WAIT_ATTEMPTS, PROCESS_WAIT_INTERVAL } from '../process-stop.js';
-import { detectLegacySystemInstall, getServiceStatus, isServiceInstalled, stopService, uninstallService } from '../service.js';
+import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, getServiceStatus, isServiceInstalled, stopService, uninstallService } from '../service.js';
 import { invalidateSettingsCache, writeSettings } from '../settings.js';
 import type { ResetTarget } from '../types.js';
-import { cleanupLegacyInstallOrThrow, confirmOrThrow } from './shared.js';
+import { confirmOrThrow } from './shared.js';
 
 /**
  * 重置目标注册表。**顺序即执行顺序**（`resolveResetTargets` 会按本数组排序），
@@ -34,7 +34,8 @@ export const RESET_TARGETS: ResetTarget[] = [
     aliases: ['log', 'logs'],
     label: '日志',
     paths: () => [DIRS.logs],
-    needsStop: false,
+    // 内核运行时持有日志 fd，删文件后内核继续写已删 inode，logs 0 会 tail 不存在的路径
+    needsStop: true,
   },
   {
     id: 'data',
@@ -84,6 +85,11 @@ export const RESET_TARGETS: ResetTarget[] = [
         .map(f => `${dir}/${f}`);
     },
     needsStop: false,
+    onAfter: () => {
+      // 删了覆写文件却留着 enabled=true，ow/status 会显示「已启用 (无文件)」——
+      // 「重置覆写」语义上应把开关也归位
+      writeSettings({ overwrite_enabled: false });
+    },
   },
   {
     id: 'service',
@@ -267,9 +273,12 @@ export async function cmdReset(args: string[]): Promise<void> {
     }
   }
 
+  const deleted: string[] = [];
   for (const t of targets) {
+    let hadContent = false;
     for (const p of t.paths()) {
       if (fs.existsSync(p)) {
+        hadContent = true;
         try {
           rmrf(p);
         } catch (e) {
@@ -278,6 +287,10 @@ export async function cmdReset(args: string[]): Promise<void> {
       }
     }
     await t.onAfter?.();
+    // 多目标时空目标（如内核未安装）无任何删除，不应出现在成功文案里
+    if (hadContent || !t.checkEmpty) {
+      deleted.push(t.label);
+    }
   }
 
   ensureDirs();
@@ -285,5 +298,9 @@ export async function cmdReset(args: string[]): Promise<void> {
     invalidateSettingsCache();
   }
 
-  console.log(colors.green(`已重置: ${targets.map(t => t.label).join('、')}`));
+  if (deleted.length > 0) {
+    console.log(colors.green(`已重置: ${deleted.join('、')}`));
+  } else {
+    console.log('没有需要重置的内容');
+  }
 }

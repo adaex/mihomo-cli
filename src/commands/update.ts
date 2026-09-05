@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import { compareVersions } from 'compare-versions';
 import { colors } from '../colors.js';
 import { PKG_NAME, VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
@@ -29,11 +30,22 @@ export async function cmdUpdate(): Promise<void> {
   console.log('');
   const latest = await withSpinner('查询 npm 最新版本', getLatestNpmVersion);
 
-  if (latest && latest === VERSION) {
-    console.log(`已是最新版本 (${colors.green(VERSION)})，无需更新`);
-    return;
-  }
   if (latest) {
+    try {
+      const cmp = compareVersions(VERSION, latest);
+      if (cmp > 0) {
+        // 当前版本领先 registry（预发/源码安装）：npm install 会静默降级，必须拦住
+        console.log(colors.yellow(`当前版本 (${VERSION}) 领先于 npm 最新版 (${latest})，跳过更新（避免降级）`));
+        console.log(colors.gray('如需强制重装: npm install -g mihomo-cli'));
+        return;
+      }
+      if (cmp === 0) {
+        console.log(`已是最新版本 (${colors.green(VERSION)})，无需更新`);
+        return;
+      }
+    } catch {
+      // 版本号无法比较（非 semver），按「不等于 latest」继续更新
+    }
     console.log(`最新版本: ${colors.cyan(latest)}`);
   } else {
     console.log(colors.yellow('无法查询最新版本（网络问题？），将直接尝试重新安装'));

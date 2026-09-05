@@ -6,7 +6,7 @@ import * as runtime from '../runtime.js';
 import { addSubscription, getSubscriptions, getSubscriptionsWithCache, maskUrl, removeSubscription, setDefaultSubscription } from '../settings.js';
 import { withSpinner } from '../spinner.js';
 import * as subscription from '../subscription.js';
-import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic, getNonFlagArg, hasFlag, suggestSimilar } from '../utils.js';
+import { assertKnownFlags, formatDate, formatRelativeTime, formatTimestamp, formatTraffic, getNonFlagArg, hasFlag, suggestSimilar } from '../utils.js';
 import { confirmOrThrow, confirmPrompt, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 /** 订阅内容更新后，运行中的实例仍用旧配置，提示重启生效 */
@@ -138,11 +138,12 @@ async function subAdd(args: string[]): Promise<void> {
     throw new CliError((e as Error).message, { label: '添加失败' });
   }
   console.log('');
+  printRestartHintIfRunning();
   printSubscriptionList();
 }
 
 async function subUpdate(args: string[]): Promise<void> {
-  const name = args[2];
+  const name = getNonFlagArg(args, 2);
   const subs = getSubscriptions();
 
   if (subs.length === 0) {
@@ -179,7 +180,7 @@ async function subUpdate(args: string[]): Promise<void> {
 }
 
 async function subUse(args: string[]): Promise<void> {
-  const name = args[2];
+  const name = getNonFlagArg(args, 2);
   const subs = getSubscriptions();
 
   if (subs.length === 0) {
@@ -269,6 +270,7 @@ export const SUBCOMMANDS: SubCommand[] = [
 ];
 
 export async function cmdSubscription(args: string[]): Promise<void> {
+  assertKnownFlags(args, ['-y', '--yes', '-s', '--no-update', '-u', '--update-timeout'], 'sub [add|update|use|remove]');
   await dispatchSubcommand(args, SUBCOMMANDS, {
     // 无子命令 → 列表；未知子命令 → 报错
     fallback: printSubscriptionList,

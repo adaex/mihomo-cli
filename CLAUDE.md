@@ -31,10 +31,12 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/config.ts`            | 配置构建、YAML 解析/序列化、内核版本 |
 | `src/subscription.ts`      | 订阅下载、流量解析、自动更新      |
 | `src/process-probe.ts`     | 进程探测：ps/pgrep、pid 文件、运行状态、getStatus |
+| `src/proxy-probe.ts`       | 代理连通性探测（curl 经本机混合端口访问 gstatic generate_204） |
 | `src/process-start.ts`     | TUN 内核启动（sudo 脚本）。Mixed 无用户态路径，由 service.ts 托管 |
 | `src/process-stop.ts`      | 内核停止/清理：stop、cleanupAll、clearPid |
 | `src/log-files.ts`         | 日志轮转/清理/列表/路径、readLogTail（启动失败时附给用户的线索） |
 | `src/open.ts`              | openUrl/openLogFile/viewLogWithTail |
+| `src/spinner.ts`           | withSpinner：长操作的等待反馈（TTY 转圈动画，非 TTY 降级为一行） |
 | `src/sudo.ts`              | runSudoScript：TUN 与清理遗留 root 服务共用的 sudo 脚本范式 |
 | `src/service.ts`           | launchd 服务（用户级 LaunchAgent，全程免密）：install/start/stop/uninstall、启动健康确认、热重载、状态查询、符号链、遗留 root 安装的识别与清理 |
 | `src/runtime.ts`           | 运行时门面：收敛 service(Mixed)/tun 双轨（模式、状态、启停、启动结果校验） |

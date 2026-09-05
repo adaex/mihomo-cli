@@ -2,7 +2,7 @@ import path from 'node:path';
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { isOverwriteEnabled, listOverwriteFile, setOverwriteEnabled } from '../overwrite.js';
-import { suggestSimilar } from '../utils.js';
+import { assertKnownFlags, suggestSimilar } from '../utils.js';
 import { dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 function printOverwriteList(): void {
@@ -62,6 +62,7 @@ export const SUBCOMMANDS: SubCommand[] = [
 ];
 
 export async function cmdOverwrite(args: string[]): Promise<void> {
+  assertKnownFlags(args, ['-s', '--no-update', '-u', '--update-timeout'], 'ow [on|off]');
   await dispatchSubcommand(args, SUBCOMMANDS, {
     // 无子命令 → 列表；未知子命令 → 报错（与 sub/dir 同构，避免 `ow onn` 静默当成 list）
     fallback: () => {

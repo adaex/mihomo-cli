@@ -1,7 +1,7 @@
 # 代码审查：风险与教训
 
-> 当前基线：v4.2.3
-> 上次全面审查：2026-09-05（本轮：4 个维度并行扫描全部 src，修复 9 项高中优先级缺陷，见「已验证健壮」各 v4.2.3 条目与 git log）
+> 当前基线：v4.6.0
+> 上次全面审查：2026-09-05（本轮：3 个维度并行扫描全部 src + 独立交叉验证，修复 30 项，见 CHANGELOG v4.6.0）
 
 **这份文档只记录两类内容**：本轮发现的未处理项，以及**验证过、下轮不必重查**的结论。
 
@@ -30,17 +30,17 @@ v4.2.4 服务层去 bash 化后，`waitUntilUnloaded` 的未装载 happy path �
 
 订阅/覆写显式 `dns.enable: false`（mixed 场景合法）+ `mihomo tun`：生成 `dns: {enable: false, ...}` 同时保留 `tun.dns-hijack: [any:53, tcp://any:53]`，还向已关闭的 dns 块补注 fake-ip 字段（实测，生成端矛盾确定；内核侧确切行为未验证）。修复方向是语义决策：TUN 模式把 `dns.enable` 视为锁定项强制 true，或显式拒绝这个组合——待定。
 
-### 服务操作无跨进程串行化（v4.2.3 发现，未修）
+### 服务操作无跨进程串行化（v4.2.3 发现，v4.6.0 已修）
 
-settings.json 有 `withFileLock`，launchd 服务操作（bootout/enable/bootstrap/disable）没有。慢速 `mihomo start`（订阅自动更新占最长约 10s）期间另一终端 `mihomo stop`：stop 报「已停止」，start 随后的无条件 `enable` 把自启位又打开 + bootstrap，终态与用户最后一条命令相反。方向：服务操作共持一把锁，或 start 在动手前重查一次 `getServiceStatus()` 收窄窗口。
+~~settings.json 有 `withFileLock`，launchd 服务操作没有~~ → v4.6.0 已修：`startService`/`stopService`/`installService`/`uninstallService` 的 enable/bootstrap/bootout/disable 共持 `service.lock`，start 在锁内再查 disabled 防「stop 在等待期间已跑完」
 
 ### 低优先级未处理（v4.2.3 扫描发现，影响面小）
 
-- `start`/`logs`/`ow`/`sub` 不校验未知 flag：拼错（`logs -F`）被静默跳过，仅 `kernel`/`reset` 有白名单校验
-- `update` 当前版本领先 registry latest 时（预发/源码安装）会静默降级；nvm 多 prefix 下复核对象与 PATH 上实际运行的 `mihomo` 可能不一致
+- ~~`start`/`logs`/`ow`/`sub` 不校验未知 flag~~ → v4.6.0 已修：`assertKnownFlags` 通用校验
+- ~~`update` 当前版本领先 registry latest 时静默降级~~ → v4.6.0 已修：`compareVersions` 比对，领先时跳过
 - `getLatestRelease` 页内全是预发布时 fallback `releases[0]` 会把 alpha 当稳定版返回（今日不可达：上游同时只挂一条 alpha）
 - 信号死亡的内核对 `isCrashed`/`status` 不可见：launchd 写 `last terminating signal = Killed: 9` 而非 `last exit code`（实测确认），解析器读不到——错误提示会指向相反方向
-- `sub add` 切换默认订阅后运行中实例零提示（`sub use`/`sub update` 分别走 restartToApply/printRestartHint，口径不一）
+- ~~`sub add` 切换默认订阅后运行中实例零提示~~ → v4.6.0 已修：补 `printRestartHintIfRunning`
 - TUN dns 为非映射值时已转 `CliError`（v4.2.3 顺手修），但 `assertConfigShape` 仍不校验 dns 形态（mixed 路径无此守卫）
 
 仍缺的是「真的起一个服务再停掉」这类端到端流程。方向是「用一次性 label 装一个假内核（shell 脚本桩），跑真实 launchctl」——本轮验证 KeepAlive 重启行为时的临时脚本证明这条路可行且快（单轮约 20 秒，全程用户域免 root），但要解决「测试失败时确保 bootout + 删 plist」的清理保证。

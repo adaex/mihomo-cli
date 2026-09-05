@@ -122,7 +122,12 @@ export async function startTun(): Promise<StartResult> {
 
   const staleState = checkStaleState();
   if (staleState.needsCleanup) {
-    console.log(`清理 ${staleState.allPids.length} 个残留进程...`);
+    // needsCleanup 也可能仅因 root pid 文件存在（无进程），此时「清理 0 个残留进程」是误导
+    if (staleState.allPids.length > 0) {
+      console.log(`清理 ${staleState.allPids.length} 个残留进程...`);
+    } else {
+      console.log('清理残留的 root pid 文件...');
+    }
   }
   console.log('TUN 模式需要 sudo 权限...');
 

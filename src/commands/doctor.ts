@@ -49,6 +49,8 @@ async function collectChecks(): Promise<Check[]> {
     const r = spawnSync(PATHS.mihomoBinary, ['-v'], { encoding: 'utf8', timeout: 5_000 });
     if (r.status === 0 && /v?\d+\.\d+\.\d+/.test(`${r.stdout}${r.stderr}`)) {
       push('内核', 'ok', v || '可执行');
+    } else if (r.error) {
+      push('内核', 'fail', `二进制无法执行（${r.error.message}）`, '重新下载: mihomo kernel');
     } else {
       push('内核', 'fail', `二进制无法执行（退出码 ${r.status}）`, '重新下载: mihomo kernel');
     }

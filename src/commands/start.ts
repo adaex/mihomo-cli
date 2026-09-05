@@ -3,12 +3,12 @@ import { hasKernel } from '../config.js';
 import { DEFAULT_AUTO_UPDATE_TIMEOUT } from '../constants.js';
 import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
-import { detectLegacySystemInstall, disableServiceAutoStart, getServiceStatus } from '../service.js';
+import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, disableServiceAutoStart, getServiceStatus } from '../service.js';
 import { getPorts } from '../settings.js';
 import * as subscription from '../subscription.js';
 import type { PreparedConfig } from '../types.js';
-import { assertNoRemovedSshFlag, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
-import { cleanupLegacyInstallOrThrow } from './shared.js';
+import { assertKnownFlags, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
+
 import { printStatus } from './status.js';
 
 /**
@@ -27,7 +27,7 @@ export function resolveStartMode(args: string[]): 'tun' | 'mixed' {
 }
 
 export async function cmdStart(args: string[]): Promise<void> {
-  assertNoRemovedSshFlag(args);
+  assertKnownFlags(args, ['-s', '--no-update', '-u', '--update-timeout'], 'start [tun|mixed]');
   const targetMode = resolveStartMode(args);
 
   if (!hasKernel()) {
