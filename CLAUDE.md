@@ -325,6 +325,18 @@ Mixed 由用户级 LaunchAgent 托管（`gui/<uid>`，全程免密）。三条�
 
 **不需要**添加 `Co-Authored-By` 行。
 
+### worktree 收尾：合并后立刻清理，不用等人催
+
+本仓的改动默认在 `.claude/worktrees/` 下的 git worktree 里做（见用户级规则）。**合并进 `main` 之后就地收尾，不要把清理留给下一次对话**：
+
+1. 先退出 worktree（`ExitWorktree`，保留分支）
+2. 合并到 `main`。若 `main` 期间有了新提交，`--ff-only` 会失败——用 cherry-pick 或 rebase，**别急着 `--no-ff` 制造无谓的合并提交**
+3. cherry-pick 会生成新哈希，于是 `git log main..<分支>` 仍显示「未合入」。判断是否真的合入要比对树内容（`git diff <分支> main --stat`），不是看 `git log`
+4. 确认无遗漏后 `git worktree remove` + `git branch -D`
+5. 顺手核实临时产物已清：`/tmp` 下的测试数据目录、一次性 label 的 LaunchAgent plist、自己起的进程
+
+合并时若 worktree 与 `main` 改了同一处文档，**保留双方的实测结论**——它们通常是各自独立验证出来的，丢掉任何一条都是白跑一次验证。
+
 ---
 
 ## 发布流程
