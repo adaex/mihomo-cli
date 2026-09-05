@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { findMatchingAsset } from './kernel.js';
-import type { GitHubAsset } from './types.js';
+import { buildGhReleaseDownloadArgs, buildKernelCurlArgs, findMatchingAsset, pickLatestRelease, resolveDownloadChannel } from './kernel.js';
+import type { GitHubAsset, GitHubRelease } from './types.js';
 
 /** GitHub API 的 assets 按名称排序返回——fixture 顺序即 find() 的命中顺序，勿重排 */
 const asset = (name: string): GitHubAsset => ({
@@ -54,5 +54,120 @@ describe('findMatchingAsset（标准版形态精确匹配）', () => {
 
   it('无匹配返回 null', () => {
     assert.equal(findMatchingAsset(DARWIN_ASSETS, 'linux', 'amd64'), null);
+  });
+});
+
+describe('resolveDownloadChannel（下载通道优先级）', () => {
+  const base = { mirror: null, isOverride: false, clearSaved: false, ghAvailable: false, proxyRunning: false, proxyPort: null };
+
+  it('显式 --mirror 优先于 gh 与代理（手动覆盖最高）', () => {
+    const ch = resolveDownloadChannel({
+      ...base,
+      mirror: 'https://v6.gh-proxy.org/',
+      isOverride: true,
+      ghAvailable: true,
+      proxyRunning: true,
+      proxyPort: 7890,
+    });
+    assert.equal(ch.kind, 'mirror');
+    assert.equal(ch.kind === 'mirror' && ch.mirror, 'https://v6.gh-proxy.org/');
+  });
+
+  it('--no-mirror 强制直连，即使 gh/代理/镜像偏好都在', () => {
+    const ch = resolveDownloadChannel({
+      ...base,
+      mirror: 'https://v6.gh-proxy.org/',
+      clearSaved: true,
+      ghAvailable: true,
+      proxyRunning: true,
+      proxyPort: 7890,
+    });
+    assert.equal(ch.kind, 'direct');
+  });
+
+  it('无显式选项时 gh 优先于代理', () => {
+    const ch = resolveDownloadChannel({ ...base, ghAvailable: true, proxyRunning: true, proxyPort: 7890 });
+    assert.equal(ch.kind, 'gh');
+  });
+
+  it('无 gh 时代理优先于镜像偏好，且端口透传', () => {
+    const ch = resolveDownloadChannel({ ...base, mirror: 'https://v6.gh-proxy.org/', proxyRunning: true, proxyPort: 7890 });
+    assert.equal(ch.kind, 'proxy');
+    assert.equal(ch.kind === 'proxy' && ch.port, 7890);
+  });
+
+  it('无 gh 无代理时用已记住的镜像偏好', () => {
+    const ch = resolveDownloadChannel({ ...base, mirror: 'https://v6.gh-proxy.org/' });
+    assert.equal(ch.kind, 'mirror');
+  });
+
+  it('全无条件时直连', () => {
+    assert.equal(resolveDownloadChannel(base).kind, 'direct');
+  });
+});
+
+describe('buildGhReleaseDownloadArgs', () => {
+  it('参数精确：tag/repo/pattern/dir/clobber', () => {
+    const args = buildGhReleaseDownloadArgs('v1.19.30', 'mihomo-darwin-arm64-v1.19.30.gz', '/tmp/x');
+    assert.deepEqual(args, [
+      'release',
+      'download',
+      'v1.19.30',
+      '--repo',
+      'MetaCubeX/mihomo',
+      '--pattern',
+      'mihomo-darwin-arm64-v1.19.30.gz',
+      '--dir',
+      '/tmp/x',
+      '--clobber',
+    ]);
+  });
+});
+
+describe('buildKernelCurlArgs', () => {
+  const common = { url: 'https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-darwin-arm64.gz', maxBytes: 123, outputPath: '/tmp/x.gz' };
+
+  it('恒含 --proto =https / --proto-redir =https（防协议降级重定向）', () => {
+    const args = buildKernelCurlArgs({ ...common, proxyPort: null });
+    const i = args.indexOf('--proto');
+    assert.equal(args[i + 1], '=https');
+    const j = args.indexOf('--proto-redir');
+    assert.equal(args[j + 1], '=https');
+  });
+
+  it('proxy 通道含 -x 且指向本机混合端口', () => {
+    const args = buildKernelCurlArgs({ ...common, proxyPort: 7890 });
+    const i = args.indexOf('-x');
+    assert.equal(args[i + 1], 'http://127.0.0.1:7890');
+  });
+
+  it('非 proxy 通道不含 -x', () => {
+    const args = buildKernelCurlArgs({ ...common, proxyPort: null });
+    assert.ok(!args.includes('-x'));
+  });
+
+  it('-o 指向输出路径，末位为下载 URL', () => {
+    const args = buildKernelCurlArgs({ ...common, proxyPort: null });
+    const i = args.indexOf('-o');
+    assert.equal(args[i + 1], '/tmp/x.gz');
+    assert.equal(args[args.length - 1], common.url);
+  });
+});
+
+describe('pickLatestRelease', () => {
+  const rel = (tag: string, prerelease = false): GitHubRelease => ({ tag_name: tag, name: tag, prerelease, html_url: '', assets: [] });
+
+  it('空数组抛错', () => {
+    assert.throws(() => pickLatestRelease([]), /无法获取版本信息/);
+  });
+
+  it('过滤 prerelease 字段与 alpha/beta/prerelease 标记的 tag', () => {
+    const picked = pickLatestRelease([rel('v2.0.0-beta.1'), rel('v2.0.0', true), rel('v1.19.30'), rel('v1.19.0-alpha')]);
+    assert.equal(picked.tag_name, 'v1.19.30');
+  });
+
+  it('全是预发布时回退列表首个', () => {
+    const picked = pickLatestRelease([rel('v2.0.0-beta.1'), rel('v1.19.0-alpha')]);
+    assert.equal(picked.tag_name, 'v2.0.0-beta.1');
   });
 });

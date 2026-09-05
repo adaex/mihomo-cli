@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { compareVersions } from 'compare-versions';
 import { clearKernelVersionCache, getKernelVersion } from './config.js';
+import { VERSION } from './constants.js';
 import { createHttpClient } from './http.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
 import type { GitHubAsset, GitHubRelease, KernelUpdateInfo } from './types.js';
@@ -33,9 +34,11 @@ const ALLOWED_ASSET_HOSTS = new Set(['github.com', 'api.github.com', 'objects.gi
  * `browser_download_url` 能让 CLI 下载任意二进制。该产物随后被 `chmod 755`，
  * 并在 TUN / 系统级服务下**以 root 运行**——这是比「无 checksum」更实际的缺口
  * （上游 release 确实不提供 checksums，无法做哈希校验，故把来源钉死是主要防线）。
- * API 恒直连已消除镜像伪造该字段的路径，此校验是纵深防御的第二道。
+ * API 不经过镜像（代理开着时仅经本机代理转发，TLS 端到端，响应仍来自 GitHub），
+ * 已消除镜像伪造该字段的路径，此校验是纵深防御的第二道。
  *
  * 校验必须针对**加镜像前**的上游 URL：加了前缀后整串以镜像域名开头，无从判断来源。
+ * gh 通道不使用该 URL（gh 按 tag + 资产名自行解析），校验照跑——验证 API 响应未被篡改。
  */
 function assertTrustedAssetUrl(rawUrl: string): void {
   let parsed: URL;
@@ -51,6 +54,49 @@ function assertTrustedAssetUrl(rawUrl: string): void {
   if (!ALLOWED_ASSET_HOSTS.has(host)) {
     throw new Error(`内核下载地址的主机不在白名单内: ${host}\n  仅允许: ${[...ALLOWED_ASSET_HOSTS].join(', ')}`);
   }
+}
+
+// === 下载通道 ===
+
+/**
+ * 内核下载通道。选择逻辑见 resolveDownloadChannel：
+ * - gh：GitHub CLI 直连 GitHub，信任锚是 gh 本身 + 精确资产名，最优通道
+ * - proxy：经本机混合端口直连 GitHub，TLS 端到端
+ * - mirror：第三方镜像前缀，无法验证来源完整性，仅兜底
+ * - direct：curl 直连
+ */
+export type DownloadChannel = { kind: 'gh' } | { kind: 'proxy'; port: number } | { kind: 'mirror'; mirror: string } | { kind: 'direct' };
+
+export interface ChannelResolutionInput {
+  /** parseMirrorArg 解析出的镜像（显式值或已存偏好），无则 null */
+  mirror: string | null;
+  /** 显式 --mirror（裸或带值） */
+  isOverride: boolean;
+  /** 显式 --no-mirror/--direct：强制直连，绕过 gh/代理自动通道 */
+  clearSaved: boolean;
+  ghAvailable: boolean;
+  proxyRunning: boolean;
+  /** 仅 proxyRunning 时有意义 */
+  proxyPort: number | null;
+}
+
+/**
+ * 下载通道决策。显式手动覆盖最高优先；默认路径 gh > 本机代理 > 已存镜像偏好 > 直连。
+ * 纯函数：运行状态（gh 是否存在、代理是否在跑）由命令层探测后注入，便于单测。
+ */
+export function resolveDownloadChannel(input: ChannelResolutionInput): DownloadChannel {
+  if (input.clearSaved) return { kind: 'direct' };
+  if (input.isOverride && input.mirror) return { kind: 'mirror', mirror: input.mirror };
+  if (input.ghAvailable) return { kind: 'gh' };
+  if (input.proxyRunning && input.proxyPort !== null) return { kind: 'proxy', port: input.proxyPort };
+  if (input.mirror) return { kind: 'mirror', mirror: input.mirror };
+  return { kind: 'direct' };
+}
+
+/** 检测 gh（GitHub CLI）是否可用：gh 直连 GitHub 且自带认证/代理环境，是最优下载通道 */
+export function hasGh(): boolean {
+  const result = spawnSync('gh', ['--version'], { stdio: 'ignore' });
+  return !result.error && result.status === 0;
 }
 
 function getArch(): string {
@@ -81,12 +127,8 @@ export function findMatchingAsset(assets: GitHubAsset[], platform: string, arch:
   return standardAsset || matchingAssets[0];
 }
 
-/** 拉取 release 列表。**恒直连 GitHub API**：镜像只用于产物下载，见 assertTrustedAssetUrl 的说明。 */
-async function getLatestRelease(repo: string): Promise<GitHubRelease> {
-  const url = `https://api.github.com/repos/${repo}/releases`;
-  const response = await HTTP_CLIENT.get<GitHubRelease[]>(url, { responseType: 'json' });
-  const releases = response.data;
-
+/** 从 release 列表挑最新稳定版：排除 prerelease 与 alpha/beta/prerelease 标记的 tag，无稳定版回退最新 */
+export function pickLatestRelease(releases: GitHubRelease[]): GitHubRelease {
   if (!Array.isArray(releases) || releases.length === 0) {
     throw new Error('无法获取版本信息');
   }
@@ -102,9 +144,69 @@ async function getLatestRelease(repo: string): Promise<GitHubRelease> {
   return stableReleases.length > 0 ? stableReleases[0] : releases[0];
 }
 
-export async function checkUpdate(): Promise<KernelUpdateInfo> {
+/**
+ * 拉取 release 列表。**绝不经过镜像**：镜像只作用于产物下载，API 若走镜像，
+ * `browser_download_url` 就完全由镜像说了算（见 assertTrustedAssetUrl 的说明）。
+ * 代理开着时经本机混合端口转发——本地代理只是传输层，TLS 端到端，响应仍来自 GitHub。
+ * fetch 不支持 HTTP 代理（CONNECT），代理路径走 curl（下载/探测本就依赖 curl）。
+ */
+async function getLatestRelease(repo: string, proxyPort?: number | null): Promise<GitHubRelease> {
+  const url = `https://api.github.com/repos/${repo}/releases`;
+
+  if (proxyPort) {
+    const result = spawnSync(
+      'curl',
+      [
+        '-s',
+        '-x',
+        `http://127.0.0.1:${proxyPort}`,
+        '--proto',
+        '=https',
+        '--proto-redir',
+        '=https',
+        '--connect-timeout',
+        '10',
+        '--max-time',
+        String(Math.floor(KERNEL_HTTP_TIMEOUT / 1000)),
+        '-H',
+        `User-Agent: mihomo-cli/${VERSION}`,
+        url,
+      ],
+      { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024, timeout: KERNEL_HTTP_TIMEOUT + 10_000 },
+    );
+    if (result.error) {
+      if ((result.error as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new Error('未找到 curl 命令，请先安装 curl 后重试');
+      }
+      throw new Error(`版本查询失败: ${result.error.message}`);
+    }
+    if (result.status !== 0) {
+      // 错误行形如「curl: (7) Failed to connect to ...」，剥前缀取末行更可读（口径同 proxy-probe）
+      const stderr = (result.stderr || '').trim();
+      const lastLine = stderr
+        ? stderr
+            .split('\n')
+            .pop()
+            ?.replace(/^curl: \(\d+\)\s*/, '')
+        : undefined;
+      throw new Error(`版本查询失败 (curl 退出码 ${result.status}${lastLine ? `: ${lastLine}` : ''})`);
+    }
+    let releases: GitHubRelease[];
+    try {
+      releases = JSON.parse(result.stdout) as GitHubRelease[];
+    } catch {
+      throw new Error('版本查询失败: 响应不是合法 JSON（代理可能返回了错误页面）');
+    }
+    return pickLatestRelease(releases);
+  }
+
+  const response = await HTTP_CLIENT.get<GitHubRelease[]>(url, { responseType: 'json' });
+  return pickLatestRelease(response.data);
+}
+
+export async function checkUpdate(proxyPort?: number | null): Promise<KernelUpdateInfo> {
   const currentVersion = getKernelVersion();
-  const latest = await getLatestRelease(GITHUB_REPO);
+  const latest = await getLatestRelease(GITHUB_REPO, proxyPort);
   const latestVersion = latest.tag_name;
 
   let needsUpdate = false;
@@ -162,14 +264,48 @@ function findBinaryInDir(dir: string, maxDepth = 4): string | null {
   return null;
 }
 
+/**
+ * 构造内核下载的 curl 参数。纯函数：`--proto '=https'` 全链路强制 https 是安全防线
+ * （curl -L 默认跟随协议降级重定向），参数数组值得单测锁死，防后续改动误删。
+ */
+export function buildKernelCurlArgs(args: { url: string; proxyPort: number | null; maxBytes: number; outputPath: string }): string[] {
+  const argv = [
+    '-L',
+    '--proto',
+    '=https',
+    '--proto-redir',
+    '=https',
+    '--max-filesize',
+    String(args.maxBytes),
+    '--progress-bar',
+    '--connect-timeout',
+    '30',
+    '--max-time',
+    String(Math.floor(KERNEL_DOWNLOAD_TIMEOUT / 1000)),
+  ];
+  if (args.proxyPort) {
+    argv.push('-x', `http://127.0.0.1:${args.proxyPort}`);
+  }
+  argv.push('-o', args.outputPath, args.url);
+  return argv;
+}
+
+/**
+ * 构造 `gh release download` 参数。纯函数：gh 通道的信任锚是「gh 只与 GitHub 通信」
+ * + 精确资产名（--pattern 是 glob），参数数组单测锁死。
+ */
+export function buildGhReleaseDownloadArgs(tag: string, assetName: string, dir: string): string[] {
+  return ['release', 'download', tag, '--repo', GITHUB_REPO, '--pattern', assetName, '--dir', dir, '--clobber'];
+}
+
 export async function downloadKernel(
   progressCallback: ((msg: string) => void) | null,
-  mirror: string | null,
+  channel: DownloadChannel,
   releaseInfo?: GitHubRelease,
 ): Promise<{ version: string; path: string }> {
   ensureDirs();
 
-  const latest = releaseInfo || (await getLatestRelease(GITHUB_REPO));
+  const latest = releaseInfo || (await getLatestRelease(GITHUB_REPO, channel.kind === 'proxy' ? channel.port : null));
   const arch = getArch();
   const platform = process.platform;
 
@@ -184,7 +320,8 @@ export async function downloadKernel(
 
   // 先钉死上游来源，再套镜像前缀（顺序不可换：加了前缀就看不出原始 host 了）
   assertTrustedAssetUrl(asset.browser_download_url);
-  const downloadUrl = withMirror(asset.browser_download_url, mirror);
+  // 下载 URL：仅 mirror 通道套前缀；gh 通道不用 URL（gh 按 tag + 资产名自行解析）
+  const downloadUrl = channel.kind === 'mirror' ? withMirror(asset.browser_download_url, channel.mirror) : asset.browser_download_url;
 
   // 下载、解压、自检都在临时目录里完成，自检通过后才原子替换旧内核。
   // 此前先删旧内核再自检，自检失败时系统无内核可用（KeepAlive 崩溃循环）；
@@ -196,49 +333,60 @@ export async function downloadKernel(
   const sizeMB = (asset.size / 1024 / 1024).toFixed(2);
 
   try {
-    if (mirror && progressCallback) {
-      progressCallback('提示: 经第三方镜像中转下载，无法验证来源完整性，建议直连或自行校验产物');
+    if (channel.kind === 'mirror' && progressCallback) {
+      progressCallback('提示: 经第三方镜像中转下载，无法验证来源完整性，建议改用 gh/本机代理通道或自行校验产物');
     }
 
     if (progressCallback) {
       progressCallback(`下载内核: ${asset.name} (${sizeMB} MB)`);
     }
 
-    // --proto '=https' / --proto-redir '=https': curl -L 默认跟随任意协议的重定向,
-    // 实测会跟着 302 降级到明文 http 并把响应落盘。产物随后以 root 运行,
-    // 故全链路(含重定向)强制 https。--max-filesize 防止被喂超大文件撑爆磁盘。
-    const maxBytes = Number.isFinite(asset.size) && asset.size > 0 ? Math.floor(asset.size * 2 + 1024 * 1024) : 512 * 1024 * 1024;
-    const curlResult = spawnSync(
-      'curl',
-      [
-        '-L',
-        '--proto',
-        '=https',
-        '--proto-redir',
-        '=https',
-        '--max-filesize',
-        String(maxBytes),
-        '--progress-bar',
-        '--connect-timeout',
-        '30',
-        '--max-time',
-        String(Math.floor(KERNEL_DOWNLOAD_TIMEOUT / 1000)),
-        '-o',
-        tempPath,
-        downloadUrl,
-      ],
-      { stdio: 'inherit' },
-    );
-
-    if (curlResult.error) {
-      if ((curlResult.error as NodeJS.ErrnoException).code === 'ENOENT') {
-        throw new Error('未找到 curl 命令，请先安装 curl 后重试');
+    if (channel.kind === 'gh') {
+      // gh 的 --pattern 是 glob 且按资产名落盘：名字含 *?[] 会匹配到非预期资产，
+      // 含路径成分（/、..）会写出临时目录。API 响应经 TLS 来自 GitHub，此处属纵深防御。
+      // gh 自带进度条，stdio inherit 即可；timeout 是 gh 无内置超时的兜底
+      if (/[*?[\]]/.test(asset.name) || asset.name !== path.basename(asset.name)) {
+        throw new Error(`内核资产名含非法字符: ${asset.name}`);
       }
-      throw new Error(`下载失败: ${curlResult.error.message}`);
-    }
+      const ghResult = spawnSync('gh', buildGhReleaseDownloadArgs(latest.tag_name, asset.name, tempDir), {
+        stdio: 'inherit',
+        timeout: KERNEL_DOWNLOAD_TIMEOUT + 30_000,
+      });
+      if (ghResult.error) {
+        if ((ghResult.error as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new Error('未找到 gh 命令（选择通道时明明可用），请重试或改用其他通道');
+        }
+        throw new Error(`下载失败: ${ghResult.error.message}`);
+      }
+      if (ghResult.status !== 0) {
+        throw new Error(`下载失败 (gh 退出码 ${ghResult.status})`);
+      }
+    } else {
+      // --proto '=https' / --proto-redir '=https': curl -L 默认跟随任意协议的重定向,
+      // 实测会跟着 302 降级到明文 http 并把响应落盘。产物随后以 root 运行,
+      // 故全链路(含重定向)强制 https。--max-filesize 防止被喂超大文件撑爆磁盘。
+      const maxBytes = Number.isFinite(asset.size) && asset.size > 0 ? Math.floor(asset.size * 2 + 1024 * 1024) : 512 * 1024 * 1024;
+      const curlResult = spawnSync(
+        'curl',
+        buildKernelCurlArgs({
+          url: downloadUrl,
+          proxyPort: channel.kind === 'proxy' ? channel.port : null,
+          maxBytes,
+          outputPath: tempPath,
+        }),
+        { stdio: 'inherit' },
+      );
 
-    if (curlResult.status !== 0) {
-      throw new Error(`下载失败 (curl 退出码 ${curlResult.status})`);
+      if (curlResult.error) {
+        if ((curlResult.error as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new Error('未找到 curl 命令，请先安装 curl 后重试');
+        }
+        throw new Error(`下载失败: ${curlResult.error.message}`);
+      }
+
+      if (curlResult.status !== 0) {
+        throw new Error(`下载失败 (curl 退出码 ${curlResult.status})`);
+      }
     }
 
     if (!fs.existsSync(tempPath)) {
@@ -253,7 +401,7 @@ export async function downloadKernel(
       const actual = fs.statSync(tempPath).size;
       if (actual !== asset.size) {
         throw new Error(
-          `下载的文件大小与 release 元数据不符（期望 ${asset.size} 字节，实际 ${actual} 字节）\n  可能是下载被截断或内容被替换，请重试或改用 --no-mirror 直连`,
+          `下载的文件大小与 release 元数据不符（期望 ${asset.size} 字节，实际 ${actual} 字节）\n  可能是下载被截断或内容被替换，请重试或改用其他通道（gh/本机代理/--no-mirror 直连）`,
         );
       }
     }

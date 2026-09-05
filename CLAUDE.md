@@ -41,7 +41,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/service.ts`           | launchd 服务（用户级 LaunchAgent，全程免密）：install/start/stop/uninstall、启动健康确认、热重载、状态查询、符号链、遗留 root 安装的识别与清理 |
 | `src/runtime.ts`           | 运行时门面：收敛 service(Mixed)/tun 双轨（模式、状态、启停、启动结果校验） |
 | `src/lifecycle.ts`         | 静默 SIGINT 标志（tail -f 场景下 Ctrl+C 不打印「正在退出」） |
-| `src/kernel.ts`            | GitHub Releases 检查、下载        |
+| `src/kernel.ts`            | GitHub Releases 检查、多通道下载（gh/本机代理/镜像/直连） |
 | `src/overwrite.ts`         | 覆写配置合并                      |
 | `src/commands/registry.ts` | 命令注册表（name/别名/handler/argv 改写/help 用法），路由与帮助的单一真相源 |
 | `src/commands/shared.ts`   | 命令层公共工具：dispatchSubcommand 子命令分发、confirmPrompt/confirmOrThrow、restartToApply |
@@ -240,8 +240,9 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 上游 release 不提供 checksums，故**把来源钉死是主要防线**，不是可选加固：
 
 - `assertTrustedAssetUrl` 必须在**加镜像前缀之前**调用——加了前缀整串就以镜像域名开头，无从判断原始 host
-- GitHub API **恒直连**，镜像只作用于产物下载。API 若走镜像，`browser_download_url` 就完全由镜像说了算
-- curl 必须带 `--proto '=https' --proto-redir '=https'`：`-L` 默认跟随任意协议重定向，会降级到明文 http 并落盘。产物随后 `chmod 755` 并在 TUN/daemon 下**以 root 运行**
+- GitHub API **绝不经过镜像**，镜像只作用于产物下载。API 若走镜像，`browser_download_url` 就完全由镜像说了算。代理开着时 API 经本机混合端口转发——本地代理只是传输层，TLS 端到端，响应仍来自 GitHub（fetch 不支持 HTTP 代理，代理路径走 curl）
+- 下载通道优先级：显式 `--mirror`/`--no-mirror` 手动覆盖最高；默认 **gh > 本机代理 > 已存镜像偏好 > 直连**（`resolveDownloadChannel` 纯函数，运行状态由命令层注入）。gh 通道（`gh release download`）只与 GitHub 通信，信任锚是 gh 本身 + 精确资产名；`--pattern` 是 glob，资产名含 `*?[]` 或路径成分一律拒绝
+- curl 必须带 `--proto '=https' --proto-redir '=https'`：`-L` 默认跟随任意协议重定向，会降级到明文 http 并落盘。产物随后 `chmod 755` 并在 TUN/daemon 下**以 root 运行**。参数构造在 `buildKernelCurlArgs` 纯函数里，单测锁死
 - tar 守卫要同时查**路径**（`-tzf`，条目名干净）与**类型**（`-tvzf` 首字符，拒 `l`/`h`）：symlink 成员的条目名完全合法，能过路径检查却让 `chmod 755` 沿链接作用到任意文件。遍历用 `lstatSync` 不用 `statSync`
 - **资产选择必须精确匹配标准版形态**（`mihomo-<platform>-<arch>-vX.Y.Z` 收尾），不能黑名单枚举变体（`-compatible`/`-go`/`-v1`/`-v2`/`-v3` 等后缀全都以版本号结尾）
 
