@@ -1,6 +1,6 @@
 # 代码审查：风险与教训
 
-> 当前基线：v4.2.0
+> 当前基线：v4.2.2
 > 上次全面审查：2026-09-05
 
 **这份文档只记录两类内容**：本轮发现的未处理项，以及**验证过、下轮不必重查**的结论。
@@ -16,11 +16,13 @@
 
 ## 未处理项
 
-### 覆盖面：跑 sudo 与杀进程的代码几乎零单测
+### 覆盖面：跑 sudo 与杀进程的代码单测仍稀疏
 
-`process-start.ts` / `process-stop.ts` / `service.ts` 的副作用路径（sudo 脚本、pkill、launchctl 调用）没有自动化测试，只有纯函数被 `service.spec.ts` 锁定。这是 `CLAUDE.md` 明确的取舍（「仅覆盖高危纯函数」），但值得记录：v4.2.0 修的两个高危（启动误报、日志不轮转）都是靠手工搭隔离环境（`MIHOMO_CLI_DIR` + `MIHOMO_CLI_DAEMON_LABEL` 一次性 label）才发现的，回归全靠再跑一遍同样的手工流程。
+`process-start.ts` / `process-stop.ts` / `service.ts` 的副作用路径（sudo 脚本、实际的 pkill、launchctl 写操作）仍没有自动化测试。这是 `CLAUDE.md` 明确的取舍（「仅覆盖高危纯函数」），但值得记录：v4.2.0 修的两个高危（启动误报、日志不轮转）都是靠手工搭隔离环境才发现的。
 
-若要补，方向是「用一次性 label 装一个假内核（shell 脚本桩），跑真实 launchctl」——v4.2.0 验证时的临时脚本证明这条路可行且快（单轮约 20 秒），但要解决「测试失败时确保 bootout + 删 plist」的清理保证。
+v4.2.1/v4.2.2 已补上三处**不需要 sudo 也能测**的：`process-probe.spec.ts`（真实 pgrep 编译 pattern）、`service-exitcode.spec.ts`（真实 launchctl 的 113/112/125 语义）、`commands/root-guard.spec.ts`（子进程跑真实入口 + 覆盖 `getuid` 模拟 root）。共同思路是**让真实的系统工具当裁判**，而非把猜到的行为写死进断言。
+
+仍缺的是「真的起一个服务再停掉」这类端到端流程。方向是「用一次性 label 装一个假内核（shell 脚本桩），跑真实 launchctl」——本轮验证 KeepAlive 重启行为时的临时脚本证明这条路可行且快（单轮约 20 秒，全程用户域免 root），但要解决「测试失败时确保 bootout + 删 plist」的清理保证。
 
 ### 观察窗之后才崩溃的内核判不出来
 
