@@ -44,7 +44,8 @@
 
 **进程与状态**
 - PID 复用：`isRunning` 与 `cleanupAll` 都走命令行匹配，不裸信 pid 文件
-- `MAIN_INSTANCE_PATTERN` 覆盖符号链与真实二进制两种命令行形态
+- `MAIN_INSTANCE_PATTERN` 覆盖符号链与真实二进制两种命令行形态，且**语法为 POSIX ERE**——`process-probe.spec.ts` 直接调真实 `pgrep` 编译它。v4.2.0 曾误用 JS 非捕获组 `(?:a|b)`，pgrep 编译失败退 2、无输出，被 `getMihomoPids` 吞成「没有进程」，导致 `stop` 不杀内核却报「不在运行」（v4.2.1 修）
+- `getMihomoPids` 对 `pgrep` 退出码只接受 0/1，其余抛 `CliError`：探测失败不得伪装成「没有进程」
 - `launchctl print` 解析锚定行首单 tab，`service.spec.ts` 用倒序 fixture 锁死（不依赖 launchd 的字段顺序）
 
 **内核下载**
@@ -77,7 +78,7 @@ macOS 硬依赖，无其他平台后端：
 
 ## 工程
 
-- 单测 166（`npm test`，经 tsx 跑 `*.spec.ts`）
+- 单测 168（`npm test`，经 tsx 跑 `*.spec.ts`）
 - CI 在 `macos-latest` 上跑 typecheck/check/test/build。因 `os: ["darwin"]`，ubuntu runner 上 `npm ci` 会平台不匹配失败
 - `prepublishOnly: npm run build`：`dist/` 被 gitignore，漏跑 build 即发布陈旧产物
 - **`npm run check` 在 worktree 里是空转**：`biome.json` 的 `files.includes` 排除 `**/.claude`，而 worktree 建在 `.claude/worktrees/` 下，于是「Checked 0 files」直接通过。worktree 中改完要显式跑 `npx biome check src/`
