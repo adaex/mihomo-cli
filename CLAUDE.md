@@ -368,6 +368,8 @@ plist 的 `ProgramArguments` 与 TUN 启动脚本指向**同一个** `runtime/co
 
 合并时若 worktree 与 `main` 改了同一处文档，**保留双方的实测结论**——它们通常是各自独立验证出来的，丢掉任何一条都是白跑一次验证。
 
+worktree 隔离会话里，带 heredoc / `&&` 组合的复杂 git 命令会被 harness 拒绝（无法验证操作是否留在 worktree 内）：提交信息先写临时文件再 `git commit -F`，多步操作拆成单条命令执行。
+
 ---
 
 ## 发布流程
