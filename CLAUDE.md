@@ -370,6 +370,8 @@ plist 的 `ProgramArguments` 与 TUN 启动脚本指向**同一个** `runtime/co
 
 worktree 隔离会话里，带 heredoc / `&&` 组合的复杂 git 命令会被 harness 拒绝（无法验证操作是否留在 worktree 内）：提交信息先写临时文件再 `git commit -F`，多步操作拆成单条命令执行。
 
+worktree 默认从 `origin/main` 切出（baseRef=fresh）：本地 main 有未推送的提交时，新 worktree 是落后的，开工前先 `git merge --ff-only main` 同步。
+
 ---
 
 ## 发布流程
