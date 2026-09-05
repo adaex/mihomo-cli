@@ -1,4 +1,6 @@
-import { DEFAULT_MIRROR } from './constants.js';
+import os from 'node:os';
+
+import { MIRROR_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
 import { START_RESTART_FLAGS, VALUE_FLAGS } from './flags.js';
 import type { MirrorArg, SubscriptionUrgency } from './types.js';
@@ -342,9 +344,35 @@ export function suggestSimilar(input: string, candidates: readonly string[]): st
  * 该产物随后以 root 运行，不能走明文），还会把 `ftp://e.test` 拼成
  * `https://ftp://e.test/` 这种畸形串。裸主机名（`gh.example.com`）补 https。
  */
+/**
+ * 本机是否有全局 IPv6 地址（非 loopback / link-local / 唯一本地）。
+ * 只看网卡地址、不做网络探测：有 v6 地址不保证 v6 路由通，但作为镜像选择
+ * 启发式足够——下载失败有错误提示与其他通道兜底。
+ */
+function hasGlobalIpv6(): boolean {
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const addr of addrs ?? []) {
+      if (addr.family !== 'IPv6' || addr.internal) continue;
+      // fe80::/10 link-local、fc00::/7 唯一本地地址不算「有 IPv6」
+      if (/^(fe80|f[c-d])/i.test(addr.address)) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+/** 裸 --mirror 的默认镜像：有全局 IPv6 走 v6 子域，否则走裸域 */
+export function getDefaultMirror(): string {
+  return hasGlobalIpv6() ? MIRROR_ALIASES.v6 : 'https://gh-proxy.org/';
+}
+
 function normalizeMirrorUrl(val: string): string | null {
   if (!val) return null;
   if (val === 'direct' || val === 'no' || val === 'none') return null;
+
+  // 短别名：cdn/v4/v6/axisnow → https://<别名>.gh-proxy.org/
+  const alias = MIRROR_ALIASES[val.toLowerCase()];
+  if (alias) return alias;
 
   // 无 scheme 的裸主机名补 https；有 scheme 的必须是 https
   const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(val) ? val : `https://${val}`;
@@ -355,7 +383,7 @@ function normalizeMirrorUrl(val: string): string | null {
   } catch {
     throw new CliError(`镜像地址无效: "${val}"`, {
       label: '参数错误',
-      hint: ['格式如: --mirror https://gh-proxy.org/ 或 --mirror gh-proxy.org', '不使用镜像: --no-mirror'],
+      hint: ['格式如: --mirror cdn（短别名）或 --mirror gh-proxy.org 或 --mirror https://gh-proxy.org/', '不使用镜像: --mirror direct'],
     });
   }
   if (parsed.protocol !== 'https:') {
@@ -370,14 +398,14 @@ function normalizeMirrorUrl(val: string): string | null {
 }
 
 /**
- * 解析 `--mirror`。镜像**只作用于产物下载**，GitHub API 恒直连：
+ * 解析 `--mirror`。镜像**只作用于产物下载**，GitHub API 绝不经过镜像：
  * API 若也走镜像，`browser_download_url` 就完全由镜像说了算，而内核产物随后
  * `chmod 755` 并在 TUN / 系统级服务下以 root 运行——上游不提供 checksums，
  * 把来源钉死（assertTrustedAssetUrl）是主要防线，不能让镜像自己指定下载地址。
  *
  * `savedMirror`（settings.kernel_mirror）是无显式选项时的回退：
  * 国内用户不必每次更新都带 `--mirror`。显式 `--mirror` 会记住偏好，
- * `--no-mirror`/`--direct` 本次直连并清除偏好。
+ * `--mirror direct` 本次直连并清除偏好。
  */
 export function parseMirrorArg(args: string[] | undefined, savedMirror?: string | null): MirrorArg {
   if (!args || args.length < 2) {
@@ -398,8 +426,12 @@ export function parseMirrorArg(args: string[] | undefined, savedMirror?: string 
     });
   }
 
+  // 已移除的 --no-mirror/--direct（v4.7.0）：显式报错给迁移指引，不静默按直连继续
   if (args.includes('--no-mirror') || args.includes('--direct')) {
-    return { mirror: null, isOverride: true, clearSaved: true };
+    throw new CliError('--no-mirror/--direct 已移除（v4.7.0）', {
+      label: '参数错误',
+      hint: ['强制直连并清除镜像偏好改用: mihomo kernel --mirror direct', '不带选项时自动选择通道: gh > 本机代理 > 镜像 > 直连'],
+    });
   }
 
   // 同时支持 `--mirror url` 与 `--mirror=url` 两种形式
@@ -409,8 +441,8 @@ export function parseMirrorArg(args: string[] | undefined, savedMirror?: string 
     const inline = mirrorEq?.slice('--mirror='.length);
     const nextArg = inline ?? args[mirrorIdx + 1];
     if (!nextArg || nextArg.startsWith('-')) {
-      // 显式表达「我要用镜像」：记住偏好，免得下次还要带
-      return { mirror: DEFAULT_MIRROR, isOverride: true, remember: true };
+      // 显式表达「我要用镜像」：按当前网络选默认（有 IPv6 走 v6，否则裸域），记住偏好免得下次还要带
+      return { mirror: getDefaultMirror(), isOverride: true, remember: true };
     }
     // `--mirror direct` 等显式直连值：normalize 返回 null，按「直连并清除偏好」处理
     const normalized = normalizeMirrorUrl(nextArg);

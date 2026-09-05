@@ -241,7 +241,7 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 - `assertTrustedAssetUrl` 必须在**加镜像前缀之前**调用——加了前缀整串就以镜像域名开头，无从判断原始 host
 - GitHub API **绝不经过镜像**，镜像只作用于产物下载。API 若走镜像，`browser_download_url` 就完全由镜像说了算。代理开着时 API 经本机混合端口转发——本地代理只是传输层，TLS 端到端，响应仍来自 GitHub（fetch 不支持 HTTP 代理，代理路径走 curl）
-- 下载通道优先级：显式 `--mirror`/`--no-mirror` 手动覆盖最高；默认 **gh > 本机代理 > 已存镜像偏好 > 直连**（`resolveDownloadChannel` 纯函数，运行状态由命令层注入）。gh 通道（`gh release download`）只与 GitHub 通信，信任锚是 gh 本身 + 精确资产名；`--pattern` 是 glob，资产名含 `*?[]` 或路径成分一律拒绝
+- 下载通道优先级：显式 `--mirror`/`--mirror direct` 手动覆盖最高；默认 **gh > 本机代理 > 已存镜像偏好 > 直连**（`resolveDownloadChannel` 纯函数，运行状态由命令层注入）。gh 通道（`gh release download`）只与 GitHub 通信，信任锚是 gh 本身 + 精确资产名；`--pattern` 是 glob，资产名含 `*?[]` 或路径成分一律拒绝。裸 `--mirror` 的默认镜像按本机 IPv6 情况选（`getDefaultMirror`：有全局 v6 地址走 v6 子域，否则裸域），短别名 `cdn/v4/v6/axisnow` 经 `MIRROR_ALIASES` 展开；`--no-mirror`/`--direct` 已移除，强制直连走 `--mirror direct`
 - curl 必须带 `--proto '=https' --proto-redir '=https'`：`-L` 默认跟随任意协议重定向，会降级到明文 http 并落盘。产物随后 `chmod 755` 并在 TUN/daemon 下**以 root 运行**。参数构造在 `buildKernelCurlArgs` 纯函数里，单测锁死
 - tar 守卫要同时查**路径**（`-tzf`，条目名干净）与**类型**（`-tvzf` 首字符，拒 `l`/`h`）：symlink 成员的条目名完全合法，能过路径检查却让 `chmod 755` 沿链接作用到任意文件。遍历用 `lstatSync` 不用 `statSync`
 - **资产选择必须精确匹配标准版形态**（`mihomo-<platform>-<arch>-vX.Y.Z` 收尾），不能黑名单枚举变体（`-compatible`/`-go`/`-v1`/`-v2`/`-v3` 等后缀全都以版本号结尾）

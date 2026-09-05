@@ -12,7 +12,7 @@ export interface Settings {
   /** external-controller 访问密钥（可选，多用户环境建议设置）；不设置则控制器无鉴权 */
   controller_secret?: string;
   /**
-   * 内核下载的镜像偏好（`mihomo kernel --mirror` 记住、`--no-mirror` 清除）。
+   * 内核下载的镜像偏好（`mihomo kernel --mirror` 记住、`--mirror direct` 清除）。
    * 存 normalize 后的 https URL；缺省 = 直连。
    */
   kernel_mirror?: string;
@@ -261,7 +261,7 @@ export interface MirrorArg {
   isOverride: boolean;
   /** 显式 `--mirror`（裸或带值）：把选择写入 settings.kernel_mirror */
   remember?: boolean;
-  /** 显式 `--no-mirror`/`--direct`：清除已记住的镜像偏好 */
+  /** 显式 `--mirror direct`：清除已记住的镜像偏好 */
   clearSaved?: boolean;
 }
 

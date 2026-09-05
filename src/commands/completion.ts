@@ -111,7 +111,7 @@ function buildZsh(commands: Command[], groups: SubGroup[]): string {
     `          _values 'ui' ${UI_NAMES.join(' ')}`,
     '          ;;',
     '        kernel)',
-    "          _arguments '--mirror[走镜像下载]:镜像:' '--no-mirror[直连下载]'",
+    "          _arguments '--mirror[走镜像下载]:镜像:(cdn v4 v6 axisnow)'",
     '          ;;',
     '        reset)',
     `          _values 'target' subs logs data runtime settings kernel overwrites service`,
@@ -183,7 +183,7 @@ ${subCase}
       COMPREPLY=( $(compgen -W "${UI_NAMES.join(' ')}" -- "\${cur}") )
       ;;
     kernel)
-      COMPREPLY=( $(compgen -W "--mirror --no-mirror" -- "\${cur}") )
+      COMPREPLY=( $(compgen -W "--mirror" -- "\${cur}") )
       ;;
     reset)
       COMPREPLY=( $(compgen -W "subs logs data runtime settings kernel overwrites service --full -y" -- "\${cur}") )
@@ -221,7 +221,6 @@ function buildFish(commands: Command[], groups: SubGroup[]): string {
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion" -a 'install ${SHELLS.join(' ')}' -d '安装补全到默认位置'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion; and __fish_seen_subcommand_from install" -a '${SHELLS.join(' ')}'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from kernel" -a '\\--mirror' -d '走镜像下载'`);
-  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from kernel" -a '\\--no-mirror' -d '直连下载'`);
   lines.push('end');
   return lines.join('\n');
 }

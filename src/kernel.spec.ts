@@ -73,7 +73,7 @@ describe('resolveDownloadChannel（下载通道优先级）', () => {
     assert.equal(ch.kind === 'mirror' && ch.mirror, 'https://v6.gh-proxy.org/');
   });
 
-  it('--no-mirror 强制直连，即使 gh/代理/镜像偏好都在', () => {
+  it('--mirror direct（clearSaved）强制直连，即使 gh/代理/镜像偏好都在', () => {
     const ch = resolveDownloadChannel({
       ...base,
       mirror: 'https://v6.gh-proxy.org/',

@@ -72,7 +72,7 @@ export interface ChannelResolutionInput {
   mirror: string | null;
   /** 显式 --mirror（裸或带值） */
   isOverride: boolean;
-  /** 显式 --no-mirror/--direct：强制直连，绕过 gh/代理自动通道 */
+  /** 显式 --mirror direct：强制直连，绕过 gh/代理自动通道 */
   clearSaved: boolean;
   ghAvailable: boolean;
   proxyRunning: boolean;
@@ -356,6 +356,9 @@ export async function downloadKernel(
         if ((ghResult.error as NodeJS.ErrnoException).code === 'ENOENT') {
           throw new Error('未找到 gh 命令（选择通道时明明可用），请重试或改用其他通道');
         }
+        if ((ghResult.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {
+          throw new Error(`下载超时（gh ${Math.floor((KERNEL_DOWNLOAD_TIMEOUT + 30_000) / 1000)}s 未完成），GitHub 直连过慢时改用: mihomo kernel --mirror`);
+        }
         throw new Error(`下载失败: ${ghResult.error.message}`);
       }
       if (ghResult.status !== 0) {
@@ -401,7 +404,7 @@ export async function downloadKernel(
       const actual = fs.statSync(tempPath).size;
       if (actual !== asset.size) {
         throw new Error(
-          `下载的文件大小与 release 元数据不符（期望 ${asset.size} 字节，实际 ${actual} 字节）\n  可能是下载被截断或内容被替换，请重试或改用其他通道（gh/本机代理/--no-mirror 直连）`,
+          `下载的文件大小与 release 元数据不符（期望 ${asset.size} 字节，实际 ${actual} 字节）\n  可能是下载被截断或内容被替换，请重试或改用其他通道（gh/本机代理/--mirror direct 直连）`,
         );
       }
     }

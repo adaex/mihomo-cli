@@ -142,7 +142,7 @@ mihomo ui yacd     # YACD
 
 | 命令                              | 说明                                                                |
 | --------------------------------- | ------------------------------------------------------------------- |
-| `mihomo kernel [--mirror [镜像]]` | 更新内核（自动选择通道：gh > 本机代理 > 镜像 > 直连；`--mirror` 强制镜像并记住偏好，`--no-mirror` 强制直连） |
+| `mihomo kernel [--mirror [镜像]]` | 更新内核（自动选择通道：gh > 本机代理 > 镜像 > 直连；`--mirror` 强制镜像并记住偏好，`--mirror direct` 强制直连） |
 | `mihomo update`                   | 更新 mihomo-cli（先查 npm 最新版，已是最新则跳过重装）              |
 | `mihomo ui [zash\|dash\|yacd]`    | 打开 Web UI（配了访问密钥时自动复制到剪贴板）                       |
 | `mihomo dir`                      | 显示数据目录位置                                                    |
@@ -314,22 +314,24 @@ mihomo logs 1       # 查看最新的归档
 手动覆盖：
 
 ```bash
-mihomo kernel              # 自动选择通道
-mihomo kernel --mirror     # 强制走镜像（默认 v6.gh-proxy.org），并记住偏好
-mihomo kernel --mirror hk.gh-proxy.org  # 指定镜像（同样记住偏好）
-mihomo kernel --no-mirror  # 强制直连（绕过 gh/代理自动通道），并清除镜像偏好
+mihomo kernel                # 自动选择通道
+mihomo kernel --mirror       # 强制走镜像（有 IPv6 走 v6.gh-proxy.org，否则 gh-proxy.org），并记住偏好
+mihomo kernel --mirror cdn   # 短别名指定镜像（cdn/v4/v6/axisnow），同样记住偏好
+mihomo kernel --mirror hk.gh-proxy.org  # 任意镜像主机名或完整 URL
+mihomo kernel --mirror direct  # 强制直连（绕过 gh/代理自动通道），并清除镜像偏好
 ```
 
 > 镜像经第三方中转，无法验证来源完整性；gh 与本机代理通道直连 GitHub，优先使用。
 
 **可用镜像：**
 
-| 镜像                   | 说明     |
-| ---------------------- | -------- |
-| `v6.gh-proxy.org`      | 默认镜像 |
-| `gh-proxy.org`         | 官方     |
-| `hk.gh-proxy.org`      | 香港     |
-| `cdn.gh-proxy.org`     | CDN      |
+| 镜像                 | 短别名 | 说明                 |
+| -------------------- | ------ | -------------------- |
+| `gh-proxy.org`       | —      | 无 IPv6 时的默认镜像 |
+| `v6.gh-proxy.org`    | `v6`   | 有 IPv6 时的默认镜像 |
+| `v4.gh-proxy.org`    | `v4`   | 强制 IPv4            |
+| `cdn.gh-proxy.org`   | `cdn`  | CDN 节点             |
+| `axisnow.gh-proxy.org` | `axisnow` |                  |
 
 ## 订阅自动更新
 

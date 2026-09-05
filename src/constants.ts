@@ -7,10 +7,16 @@ const pkg = require('../package.json');
 export const VERSION: string = pkg.version;
 export const PKG_NAME: string = pkg.name;
 
-export const AVAILABLE_MIRRORS = ['v6.gh-proxy.org', 'gh-proxy.org', 'hk.gh-proxy.org', 'cdn.gh-proxy.org'];
+/** 可用镜像（裸 --mirror 的默认选择见 utils.ts 的 getDefaultMirror：有 IPv6 走 v6，否则裸域） */
+export const AVAILABLE_MIRRORS = ['gh-proxy.org', 'v4.gh-proxy.org', 'v6.gh-proxy.org', 'cdn.gh-proxy.org', 'axisnow.gh-proxy.org'];
 
-/** --mirror 不带值时的默认镜像（与 AVAILABLE_MIRRORS 首项一致） */
-export const DEFAULT_MIRROR = 'https://v6.gh-proxy.org/';
+/** --mirror <短别名> 映射：cdn/v4/v6/axisnow → 完整镜像地址 */
+export const MIRROR_ALIASES: Record<string, string> = {
+  v4: 'https://v4.gh-proxy.org/',
+  v6: 'https://v6.gh-proxy.org/',
+  cdn: 'https://cdn.gh-proxy.org/',
+  axisnow: 'https://axisnow.gh-proxy.org/',
+};
 
 export const UI_URLS: Record<string, string> = {
   zash: 'https://board.zash.run.place',

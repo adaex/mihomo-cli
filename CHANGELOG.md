@@ -2,13 +2,18 @@
 
 ## [4.7.0] - 2026-09-06
 
-内核下载多通道：gh > 本机代理 > 镜像 > 直连。单测 248（+14）。
+内核下载多通道：gh > 本机代理 > 镜像 > 直连。单测 249（+15）。
 
 ### 新增
 
-- **内核下载自动选择通道**：默认按 gh（GitHub CLI 直连 GitHub）> 本机代理（代理在跑时经混合端口直连，TLS 端到端）> 已记住的镜像偏好 > 直连 的顺序选择，国内网络下不再只能手动敲 `--mirror`。显式 `--mirror`/`--no-mirror` 仍是最高优先的手动覆盖（`--no-mirror` 同时绕过 gh/代理自动通道）
+- **内核下载自动选择通道**：默认按 gh（GitHub CLI 直连 GitHub）> 本机代理（代理在跑时经混合端口直连，TLS 端到端）> 已记住的镜像偏好 > 直连 的顺序选择，国内网络下不再只能手动敲 `--mirror`。显式 `--mirror`/`--mirror direct` 仍是最高优先的手动覆盖（`--mirror direct` 同时绕过 gh/代理自动通道）
 - **版本查询（GitHub API）经本机代理**：代理开着时 `checkUpdate` 也走混合端口，不再卡在 API 检查这一步。镜像仍绝不作用于 API——下载地址必须由 GitHub 官方 API 给出
+- **镜像默认按网络选择**：裸 `--mirror` 有 IPv6 时走 `v6.gh-proxy.org`，否则走 `gh-proxy.org`；短别名 `--mirror cdn|v4|v6|axisnow` 直接指定。可用镜像更新为 gh-proxy.org / v4 / v6 / cdn / axisnow.gh-proxy.org
 - `mihomo kernel` 下载前打印当前通道；下载失败时提示通道优先级与手动覆盖用法
+
+### 变更
+
+- **`--no-mirror`/`--direct` 移除**：强制直连与清除镜像偏好统一走 `--mirror direct`；旧选项显式报错并给迁移指引，不静默按直连继续
 
 ### 安全
 
