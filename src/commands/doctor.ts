@@ -1,16 +1,20 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 
+import { compareVersions } from 'compare-versions';
+
 import { colors } from '../colors.js';
 import { getConfigInfo, getKernelVersion, hasKernel } from '../config.js';
+import { DEFAULT_MIXED_PORT, VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
 import { PATHS, USER_DATA_DIR } from '../paths.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
 import { detectLegacySystemInstall, getServiceStatus } from '../service.js';
-import { getSubscriptionsWithCache, isValidSettingsContent, readSubscriptionRawConfig } from '../settings.js';
-import { getActiveSubscription, prepareConfigForStart, resolveUpdateInterval } from '../subscription.js';
+import { getPorts, getSubscriptionsWithCache, isValidSettingsContent, readSubscriptionRawConfig } from '../settings.js';
+import { getActiveSubscription, isSubscriptionStale, prepareConfigForStart, resolveUpdateInterval } from '../subscription.js';
 import { formatRelativeTime } from '../utils.js';
+import { getLatestNpmVersion } from './update.js';
 
 type CheckStatus = 'ok' | 'warn' | 'fail' | 'skip';
 
@@ -86,10 +90,8 @@ async function collectChecks(): Promise<Check[]> {
       const cached = subs.find(s => s.name === active.name);
       if (cached?.updated_at) {
         const rel = formatRelativeTime(cached.updated_at);
-        const intervalH = resolveUpdateInterval(cached.update_interval);
-        const ageH = (Date.now() - new Date(cached.updated_at).getTime()) / 3_600_000;
-        if (ageH > intervalH) {
-          push('订阅新鲜度', 'warn', `${rel ?? '未知'}前更新，已超过 ${intervalH} 小时间隔`, 'mihomo sub update');
+        if (isSubscriptionStale(cached)) {
+          push('订阅新鲜度', 'warn', `${rel ?? '未知'}前更新，已超过 ${resolveUpdateInterval(cached.update_interval)} 小时间隔`, 'mihomo sub update');
         } else {
           push('订阅新鲜度', 'ok', `${rel ?? '未知'}前更新`);
         }
@@ -123,9 +125,18 @@ async function collectChecks(): Promise<Check[]> {
   }
 
   // === 端口 ===
+  // getPorts 对非法 ports 抛错：转成检查项（fail），不能让整个体检崩在半路。
+  // 兜底用默认端口继续查——配置非法已单独报出，端口检查项用默认值不产生误导
   const state = getRunningState();
   const info = getConfigInfo();
-  const mixedPort = info?.mixedPort ?? 7890;
+  let mixedPortDefault = DEFAULT_MIXED_PORT;
+  try {
+    const ports = getPorts();
+    mixedPortDefault = ports.mixed;
+  } catch (e) {
+    push('端口配置', 'fail', (e as Error).message, '修正 settings.json 的 ports（1-65535 整数，mixed 与 controller 不能相同）');
+  }
+  const mixedPort = info?.mixedPort ?? mixedPortDefault;
   if (state.running) {
     if (isPortListening(mixedPort)) {
       push('端口', 'ok', `${mixedPort} 正在监听`);
@@ -161,6 +172,18 @@ async function collectChecks(): Promise<Check[]> {
     }
   } else {
     push('代理连通', 'skip', '未运行');
+  }
+
+  // === CLI 版本 ===
+  // 短超时 + 失败 skip：registry 不可达很常见（国内网络），体检不该因此多红一项；
+  // 用 compareVersions 判方向，本地比 latest 新（dev 链接/beta）不告警
+  const latest = await getLatestNpmVersion(4_000);
+  if (latest === null) {
+    push('CLI 版本', 'skip', 'npm registry 不可达，跳过检查');
+  } else if (compareVersions(latest, VERSION) > 0) {
+    push('CLI 版本', 'warn', `当前 ${VERSION}，最新 ${latest}`, 'mihomo update');
+  } else {
+    push('CLI 版本', 'ok', `${VERSION}（最新）`);
   }
 
   return checks;

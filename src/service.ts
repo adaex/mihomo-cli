@@ -2,12 +2,12 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getConfigInfo } from './config.js';
-import { CONTROLLER_BASE_URL, isValidServiceLabel, RAW_SERVICE_LABEL_INPUT, SERVICE_BINARY_NAME, SERVICE_LABEL } from './constants.js';
+import { isValidServiceLabel, RAW_SERVICE_LABEL_INPUT, SERVICE_BINARY_NAME, SERVICE_LABEL } from './constants.js';
 import { CliError } from './errors.js';
 import { cleanupOldLogs, rotateAndCleanupLogs } from './log-files.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
 import { getMihomoPids, isPidFileOwnedByRoot, isProcessRoot, MAIN_INSTANCE_PATTERN } from './process-probe.js';
-import { readSettings } from './settings.js';
+import { getPorts, readSettings } from './settings.js';
 import { runSudoScript } from './sudo.js';
 import type { ServiceStatus } from './types.js';
 import { formatLocalTimestamp, shellQuote, sleep } from './utils.js';
@@ -737,13 +737,15 @@ function logOversized(): boolean {
  * 见 restartService 的返回值与 launchOrRestart。
  */
 async function tryHotReload(): Promise<boolean> {
-  // 先确认 9090 上确实是我们托管的服务内核，再把配置变更托付给它。
-  // 只看「服务已装」+ PUT 返回 2xx 是不够的：9090 被其他服务占用（另一个 Clash、
+  // 先确认 controller 端口上确实是我们托管的服务内核，再把配置变更托付给它。
+  // 只看「服务已装」+ PUT 返回 2xx 是不够的：该端口被其他服务占用（另一个 Clash、
   // 开发服务器）且对该 PUT 返回 2xx 时，CLI 会打印「已启动」而服务内核仍跑旧配置——
   // 配置变更静默未生效，是最难排查的一类失败。
   const status = getServiceStatus();
   if (!status.running || status.pid === null) return false;
 
+  // 端口经 settings.ports 解析（默认 9090），与 buildConfig 写进配置的值同源
+  const baseUrl = `http://127.0.0.1:${getPorts().controller}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HOT_RELOAD_TIMEOUT_MS);
   // 配置了 controller_secret 时必须带 Bearer，否则内核返回 401 → 热重载恒失败回退重启
@@ -753,12 +755,12 @@ async function tryHotReload(): Promise<boolean> {
   try {
     // /version 是 mihomo 特有端点，返回体带 version 字段；用它确认应答方是 mihomo
     // 而非碰巧监听同端口的其他程序（后者极可能对未知路径的 PUT 也返回 2xx）
-    const probe = await fetch(`${CONTROLLER_BASE_URL}/version`, { headers, signal: controller.signal });
+    const probe = await fetch(`${baseUrl}/version`, { headers, signal: controller.signal });
     if (!probe.ok) return false;
     const info = (await probe.json()) as { version?: unknown };
     if (typeof info?.version !== 'string') return false;
 
-    const res = await fetch(`${CONTROLLER_BASE_URL}/configs?force=true`, {
+    const res = await fetch(`${baseUrl}/configs?force=true`, {
       method: 'PUT',
       headers,
       body: '{}',

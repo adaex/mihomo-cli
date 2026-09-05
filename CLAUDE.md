@@ -310,11 +310,12 @@ plist 的 `ProgramArguments[0]` 指向它，只为让「登录项与扩展」显
 
 ### 服务模型的既定决策（勿重复推翻）
 
-Mixed 由用户级 LaunchAgent 托管（`gui/<uid>`，全程免密）。三条约束，都是有人提过反向意见后定下来的：
+Mixed 由用户级 LaunchAgent 托管（`gui/<uid>`，全程免密）。四条约束，前三条是有人提过反向意见后定下来的：
 
 - **只装 user 域，不提供 `--system` 回退**。曾实现过双域（`DomainSpec` 抽象 + sudo 双路径，约 60 行）后移除：system 域的启停一律需 root（每次输密码），而它想防的「局域网节点被本地网络隐私拦死」在本仓不成立——loopback 不算本地网络，`127.0.0.1` 的 SOCKS 出口根本不触发该机制。真遇到局域网节点被拦再说，别为假想场景预留分支
 - **但「识别」遗留 root 安装的能力必须留**（`detectLegacySystemInstall`）：v4.0 及更早装的 root LaunchDaemon 带 KeepAlive，不认它就是个会抢端口、用户无从卸载的幽灵。`install` 前自动清理（一次密码），`status` 检出并告警
 - **label 值刻意不改名**（`com.mihomo-cli.daemon`，环境变量 `MIHOMO_CLI_DAEMON_LABEL`）：它是 plist 文件名与 launchd 的注册键，改值等于要求所有老用户做一次带幽灵进程风险的迁移（旧 plist 会持续拉起内核，而新 CLI 完全看不见它），而这个字符串对用户不可见。别再提议改值
+- **不自动配置系统代理，也不提供 `proxy on/off` 一类开关**（2026-09 owner 决策）。owner 的用法是「日常只有部分程序需要代理，需要者各自配置」，全局代理反而是错误状态。故 Mixed 启动只提示端口（`cmdStart` 尾部那行文案），绝不碰 `networksetup`。别再提议「一键开系统代理」——要做的最多是把提示文案里的端口写对（跟随 `settings.ports`）
 
 `daemon` / `up` / `down` 三个已移除 token 在 registry 里留了墓碑条目（`commands/removed.ts`），执行时报迁移指引而非 did-you-mean 乱猜。
 

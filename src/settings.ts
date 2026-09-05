@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { CONTROLLER_PORT, DEFAULT_MIXED_PORT } from './constants.js';
 import { CliError } from './errors.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './paths.js';
 import type { Settings, Subscription, SubscriptionCache, SubscriptionCacheEntry, SubscriptionWithCache } from './types.js';
@@ -105,6 +106,40 @@ export function updateSettings(mutate: (current: Settings) => Partial<Settings>)
 
 export function invalidateSettingsCache(): void {
   settingsCache = null;
+}
+
+/** 校验单个端口覆盖值：1-65535 的整数。返回 undefined 表示「未配置，用默认」。 */
+function validatePort(value: unknown, key: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 65535) {
+    throw new CliError(`settings.json 的 ${key} 需为 1-65535 的整数，当前是 ${JSON.stringify(value)}`, {
+      label: '配置错误',
+      hint: ['示例:', '  "ports": { "mixed": 17890, "controller": 19090 }', '两个键均可选；删掉 ports 则回到默认端口 7890/9090'],
+    });
+  }
+  return value;
+}
+
+/**
+ * 端口解析的唯一入口（config 构建、热重载、ui 文案、doctor 共用）：
+ * settings.ports 覆盖默认 7890/9090，非法值直接抛错而非静默回退——
+ * 端口突降回默认会让 controller 调用与热重载连到错误地址，且用户毫无线索。
+ */
+export function getPorts(): { mixed: number; controller: number } {
+  const ports = readSettings().ports;
+  if (ports === undefined) return { mixed: DEFAULT_MIXED_PORT, controller: CONTROLLER_PORT };
+  if (ports === null || typeof ports !== 'object' || Array.isArray(ports)) {
+    throw new CliError('settings.json 的 ports 需为对象，如 { "mixed": 17890, "controller": 19090 }', { label: '配置错误' });
+  }
+  const mixed = validatePort(ports.mixed, 'ports.mixed');
+  const controller = validatePort(ports.controller, 'ports.controller');
+  if (mixed !== undefined && controller !== undefined && mixed === controller) {
+    throw new CliError(`ports.mixed 与 ports.controller 不能相同（当前均为 ${mixed}）`, {
+      label: '配置错误',
+      hint: ['混合端口与控制器端口各需独立端口，相同会导致内核启动失败'],
+    });
+  }
+  return { mixed: mixed ?? DEFAULT_MIXED_PORT, controller: controller ?? CONTROLLER_PORT };
 }
 
 /** 遮蔽单条 URL 里的敏感信息（query token / userinfo / 路径型令牌）。 */

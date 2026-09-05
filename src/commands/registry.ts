@@ -238,7 +238,10 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: args => cmdCompletion(args, COMMANDS),
     group: 'system',
-    usage: [{ signature: 'completion <zsh|bash|fish>', description: '输出 shell 补全脚本（eval 或写入补全目录）' }],
+    usage: [
+      { signature: 'completion install <zsh|bash|fish>', description: '安装补全到对应 shell 的默认位置' },
+      { signature: 'completion <zsh|bash|fish>', description: '输出补全脚本（重定向或 eval 使用）' },
+    ],
   },
   // === meta(不在分组清单展示,help 末尾单列) ===
   {

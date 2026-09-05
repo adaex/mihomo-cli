@@ -111,5 +111,10 @@ export async function cmdUninstall(_args: string[]): Promise<void> {
   }
 
   console.log(colors.gray('重新安装: mihomo install'));
+  // 卸服务 ≠ 清数据：订阅/内核/日志还在数据目录，npm 包也还在——想彻底移除的用户
+  // 需要知道三条路径，否则最常见的结局是「以为卸载了，目录和包都留着」
+  console.log(colors.gray('彻底移除 mihomo-cli:'));
+  console.log(colors.gray('  mihomo reset --full      # 删除全部数据（订阅/内核/日志等）'));
+  console.log(colors.gray('  npm uninstall -g mihomo-cli'));
   console.log('');
 }

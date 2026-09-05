@@ -6,7 +6,7 @@ import { BASE_CONFIG, TUN_CONFIG } from './constants.js';
 import { CliError } from './errors.js';
 import { applyOverwrite, filterOverwriteFilesByScope, isOverwriteEnabled, loadOverwriteFile } from './overwrite.js';
 import { atomicWriteFileSync, ensureDirs, PATHS } from './paths.js';
-import { readSettings } from './settings.js';
+import { getPorts, readSettings } from './settings.js';
 import type { BuildConfigResult, ConfigInfo, OverwriteScope, ParsedProxy, ParsedProxyGroup } from './types.js';
 import { escapeRegExp } from './utils.js';
 
@@ -350,9 +350,11 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   }
 
   // 系统锁定项：controller/端口固定是 UI 与热重载的统一依赖地址；secret 仅取自用户设置。
+  // 端口经 settings.ports（getPorts）解析——默认 7890/9090，可在 settings.json 覆盖（与其他代理工具共存的逃生口）。
   // allow-lan 不锁定——订阅/覆写显式提供时按其值（见入站需求），未提供时由上面的 BASE_CONFIG 循环兜底为 false。
-  systemConfig['external-controller'] = BASE_CONFIG['external-controller'];
-  systemConfig['mixed-port'] = BASE_CONFIG['mixed-port'];
+  const ports = getPorts();
+  systemConfig['external-controller'] = `127.0.0.1:${ports.controller}`;
+  systemConfig['mixed-port'] = ports.mixed;
   delete withOverwrites['mixed-port'];
   delete withOverwrites.port;
   delete withOverwrites['socks-port'];

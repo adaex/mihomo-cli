@@ -1,11 +1,13 @@
+import { spawnSync } from 'node:child_process';
+
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
-import { addSubscription, getSubscriptions, getSubscriptionsWithCache, removeSubscription, setDefaultSubscription } from '../settings.js';
+import { addSubscription, getSubscriptions, getSubscriptionsWithCache, maskUrl, removeSubscription, setDefaultSubscription } from '../settings.js';
 import { withSpinner } from '../spinner.js';
 import * as subscription from '../subscription.js';
 import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic, getNonFlagArg, hasFlag, suggestSimilar } from '../utils.js';
-import { confirmOrThrow, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
+import { confirmOrThrow, confirmPrompt, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 /** 订阅内容更新后，运行中的实例仍用旧配置，提示重启生效 */
 function printRestartHintIfRunning(): void {
@@ -72,12 +74,46 @@ function assertNotFlagLike(name: string, usage: string): void {
   }
 }
 
+/**
+ * 读剪贴板取订阅 URL（macOS pbpaste）；非 TTY / 读取失败 / 非 URL 一律返回 null。
+ * 取整串 trim 后整体校验，不猜「多行内容里哪一行是 URL」——猜错的代价是把
+ * 错误内容当订阅写盘。展示走 maskUrl，确认前不回显完整链接
+ */
+function readUrlFromClipboard(): string | null {
+  if (!process.stdin.isTTY) return null;
+  try {
+    const r = spawnSync('pbpaste', [], { encoding: 'utf8', timeout: 3_000 });
+    if (r.status !== 0) return null;
+    const text = (r.stdout || '').trim();
+    return subscription.isValidHttpUrl(text) ? text : null;
+  } catch {
+    return null;
+  }
+}
+
 async function subAdd(args: string[]): Promise<void> {
-  const url = args[2]?.trim();
+  let url = args[2]?.trim();
   const name = args[3] || 'default';
 
   if (!url) {
-    throw new CliError('请提供有效的订阅 URL');
+    // 高频流程是「机场页面点复制 → 终端粘贴」：交互下剪贴板里往往就是订阅链接，
+    // 直接读出来确认比让用户重打一遍命令再粘贴顺手
+    const clipped = readUrlFromClipboard();
+    if (clipped) {
+      console.log('未提供 URL，从剪贴板读取到:');
+      console.log(`  ${maskUrl(clipped)}`);
+      if (!(await confirmPrompt(`添加为订阅 "${name}"?`))) {
+        console.log('已取消');
+        return;
+      }
+      url = clipped;
+    } else if (process.stdin.isTTY) {
+      throw new CliError('剪贴板中没有有效的订阅 URL', {
+        hint: ['先复制订阅链接后重试，或显式传入:', '  mihomo sub add <url> [name]'],
+      });
+    } else {
+      throw new CliError('请提供有效的订阅 URL', { hint: ['用法: mihomo sub add <url> [name]'] });
+    }
   }
 
   if (!subscription.isValidHttpUrl(url)) {

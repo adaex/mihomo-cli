@@ -4,6 +4,7 @@ import { DEFAULT_AUTO_UPDATE_TIMEOUT } from '../constants.js';
 import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
 import { detectLegacySystemInstall, disableServiceAutoStart, getServiceStatus } from '../service.js';
+import { getPorts } from '../settings.js';
 import * as subscription from '../subscription.js';
 import type { PreparedConfig } from '../types.js';
 import { assertNoRemovedSshFlag, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
@@ -119,8 +120,9 @@ export async function cmdStart(args: string[]): Promise<void> {
 
   // Mixed 模式需手动配置系统代理：进程活着 ≠ 流量走代理，这是 Mixed 最大的日常摩擦。
   // TUN 模式由虚拟网卡接管全局流量，无需此步。start 是低频命令（重启/首次），提示不烦
+  // 端口取实际配置（settings.ports 可覆盖默认 7890）——提示错了端口用户会直接连不上
   if (targetMode === 'mixed') {
-    console.log(colors.gray('提示: Mixed 模式需在系统设置配置 HTTP/SOCKS 代理 127.0.0.1:7890（TUN 模式无需）'));
+    console.log(colors.gray(`提示: Mixed 模式需在系统设置配置 HTTP/SOCKS 代理 127.0.0.1:${getPorts().mixed}（TUN 模式无需）`));
     console.log('');
   }
 }

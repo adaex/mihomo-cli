@@ -14,8 +14,9 @@
 - 🚀 **进程管理** - 启动/停止/切换模式，自动清理残留进程
 - 🛡️ **服务托管** - 基于 launchd，崩溃/登录自动拉起，代理后台常驻；日常 `start`/`stop` **全程免密**
 - 🔄 **双模式支持** - Mixed 模式和 TUN 透明代理模式
-- 📊 **状态监控** - 查看运行状态、内存占用、订阅流量与到期时间（到期/流量紧急度着色，`--json` 机器可读）
-- 🩺 **体检诊断** - `mihomo doctor` 一键检查内核/服务/端口/订阅/配置/连通性并给修复指引
+- 📊 **状态监控** - 查看运行状态、内存占用、订阅流量、到期时间与更新新鲜度（紧急度着色，`--json` 机器可读）
+- 🩺 **体检诊断** - `mihomo doctor` 一键检查内核/服务/端口/订阅/配置/连通性/CLI 版本并给修复指引
+- 🔌 **端口逃生口** - 默认 7890/9090 可经 `settings.json` 的 `ports` 覆盖，与其他代理工具并存
 - 🔌 **连通性探测** - 启动与状态展示独立确认「代理真的通」，不通时归因到订阅过期/流量用尽/节点失效
 - ⌨️ **Shell 补全** - `mihomo completion zsh|bash|fish` 生成补全脚本
 - 📝 **日志管理** - 每次启动归档上一次日志，保留 7 天，支持列表/跟随/编号查看
@@ -63,6 +64,9 @@ mihomo kernel --mirror hk.gh-proxy.org
 
 ```bash
 mihomo sub add "https://your-subscription-url" "my-proxy"
+
+# 或先在机场页面复制订阅链接，再运行（交互下自动读取剪贴板，确认后添加）
+mihomo sub add
 ```
 
 ### 3. 安装服务
@@ -107,7 +111,7 @@ mihomo ui yacd     # YACD
 | `mihomo start [tun\|mixed]` | 启动代理并开启登录自启（`-s` 跳过订阅更新，`-u` 更新超时） |
 | `mihomo stop`               | 停止代理并关闭登录自启                                                       |
 | `mihomo uninstall`          | 卸载服务                                                                     |
-| `mihomo status`             | 查看运行状态（含订阅流量、到期时间；`--json` 机器可读，`--no-probe` 跳过连通性探测）             |
+| `mihomo status`             | 查看运行状态（含订阅流量、到期、更新新鲜度；`--json` 机器可读，`--no-probe` 跳过连通性探测）             |
 | `mihomo logs`               | 列出所有日志（当前 + 历史归档）                                              |
 | `mihomo logs <编号>`        | 查看指定日志（`0`=当前，`1+`=归档，`-f` 实时跟随，`-n N` 行数，`-o` 打开）  |
 | `mihomo logs -f`            | 跟随当前日志（省略编号时默认当前，等价 `logs 0 -f`）                        |
@@ -118,7 +122,7 @@ mihomo ui yacd     # YACD
 | ----------------------------- | -------------------------------------- |
 | `mihomo sub`                  | 列出所有订阅（含流量、到期时间）       |
 | `mihomo sub use <name>`       | 切换当前订阅（支持模糊匹配，自动重启） |
-| `mihomo sub add <url> [name]` | 添加订阅并自动切换（名称不可重复） |
+| `mihomo sub add [url] [name]` | 添加订阅并自动切换（名称不可重复；交互下不带 URL 时自动读剪贴板并确认） |
 | `mihomo sub update`           | 更新所有订阅                           |
 | `mihomo sub update <name>`    | 更新指定订阅（支持模糊匹配）           |
 | `mihomo sub remove <name>`    | 删除订阅（别名 `rm`/`delete`；精确名直接删，模糊匹配需确认，`-y` 跳过） |
@@ -144,8 +148,9 @@ mihomo ui yacd     # YACD
 | `mihomo dir`                      | 显示数据目录位置                                                    |
 | `mihomo dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `data`, `runtime`, `kernel`）  |
 | `mihomo reset [目标...] [--full] [-y]` | 重置用户数据（可用目标：`subs`, `logs`, `data`, `runtime`, `settings`, `kernel`, `overwrites`, `service`；`--full` 删全部，`-y` 跳过确认） |
-| `mihomo doctor`                   | 体检诊断（内核/服务/端口/订阅/配置/连通性，有异常退出码 1）         |
-| `mihomo completion <shell>`       | 输出 shell 补全脚本（`zsh`/`bash`/`fish`）                          |
+| `mihomo doctor`                   | 体检诊断（内核/服务/端口/订阅/配置/连通性/CLI 版本，有异常退出码 1） |
+| `mihomo completion install <shell>` | 安装 shell 补全到默认位置（`zsh`/`bash`/`fish`）                |
+| `mihomo completion <shell>`       | 输出 shell 补全脚本（重定向或 eval 使用）                           |
 | `mihomo version`                  | 显示版本信息                                                        |
 | `mihomo help`                     | 显示帮助信息                                                        |
 
@@ -175,15 +180,18 @@ mihomo ui yacd     # YACD
 ## Shell 补全
 
 ```bash
-# zsh（写入补全目录，或 eval "$(mihomo completion zsh)"）
-mihomo completion zsh > ~/.zsh/completions/_mihomo
+# 一键安装到对应 shell 的默认补全位置（推荐）
+mihomo completion install zsh     # → ~/.zsh/completions/_mihomo
+mihomo completion install bash    # → 追加到 ~/.bash_completion（幂等，不覆盖已有内容）
+mihomo completion install fish    # → ~/.config/fish/completions/mihomo.fish
 
-# bash
-eval "$(mihomo completion bash)"   # 或写入 ~/.bash_completion
-
-# fish
+# 或临时启用（不落盘）
+eval "$(mihomo completion zsh)"   # bash 同理
 mihomo completion fish | source
 ```
+
+> zsh 的 `~/.zsh/completions` 不在默认 `fpath` 里（oh-my-zsh 默认已包含）：
+> 补全不生效时在 `~/.zshrc` 加一行 `fpath=(~/.zsh/completions $fpath)`，重新打开终端。
 
 覆盖全部命令、订阅/覆写/目录子命令与常用选项（`logs` 的 `-f`/`-n`、`kernel` 的 `--mirror` 等）。
 
@@ -228,6 +236,8 @@ mihomo status          # 查看状态
 | `uninstall` | 停止 + 删 plist | 不启动 |
 
 `stop` 会一并关闭自启，这是它与「杀掉进程」的区别——只停不关的话，下次登录代理又自己回来了，而 CLI 已经告诉你「已停止」。
+
+> `uninstall` 只卸服务，订阅/内核/日志仍留在数据目录（重装后可继续用）。要彻底移除 mihomo-cli：`mihomo reset --full` 删全部数据，再 `npm uninstall -g mihomo-cli`——`uninstall` 结束时也会提示这两步。
 
 - **`KeepAlive`** — 内核崩溃或被杀后由 launchd 自动拉起（约 10 秒节流后重启）
 - **`RunAtLoad`** — 登录后自动启动
@@ -324,6 +334,7 @@ mihomo kernel --no-mirror
 
 - 默认更新间隔：12 小时（订阅服务端可通过 `profile-update-interval` 覆盖）
 - 触发时机：`start` 命令（`sub` 列表为纯只读，不再触发更新）
+- **服务常驻期间不会自动更新**：launchd 只负责拉起内核，不会跑 `start`。`status` 会在订阅超过更新间隔时黄标提醒（`已超过 N 小时间隔，建议 mihomo sub update`），此时手动跑 `mihomo sub update` 或 `mihomo start` 即可
 - 更新失败时继续使用本地缓存，不影响使用
 - 自动更新默认超时 10 秒，可通过 `-u <ms>` 调整；使用 `-s` 可完全跳过自动更新
 
@@ -359,7 +370,7 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 
 ```
 ~/.mihomo-cli/
-├── settings.json         # 用户设置（订阅列表等）
+├── settings.json         # 用户设置（订阅列表、端口覆盖、镜像偏好等）
 ├── overwrite.yaml        # 覆写配置（主文件，可选）
 ├── overwrite.*.yaml      # 覆写配置（扩展文件，如 overwrite.dns.yaml）
 ├── subscriptions/
@@ -450,6 +461,36 @@ match:
 
 > 注：`default-selected` 由 mihomo 内核决定默认选中项，优先级低于 `store-selected` 缓存的历史选择。若之前手动选过、且开启了 `store-selected`，需 `mihomo reset data` 清缓存后才能看到默认值接管。
 
+### 同时使用多个机场
+
+本 CLI 是单活跃订阅模型（`sub use` 切换），不合并多条订阅。要把第二个机场的节点并进当前订阅，用覆写引入 mihomo 原生的 `proxy-providers`——节点池由内核按 `interval` 自动刷新，不受单订阅模型限制：
+
+```yaml
+# ~/.mihomo-cli/overwrite.providers.yaml
+proxy-providers:
+  second-airport:
+    type: http
+    url: https://second-airport.example.com/api/v1/client/subscribe?token=xxx
+    interval: 86400              # 节点池自动刷新间隔（秒）
+    path: ./second-airport.yaml  # 缓存文件（mihomo 管理，相对运行时配置目录）
+    health-check:
+      enable: true
+      url: https://www.gstatic.com/generate_204
+      interval: 300
+
+# 新增一个走第二机场的分组（+ 是数组前置插入，订阅分组不动）
++proxy-groups:
+  - name: SecondAirport
+    type: select
+    use: [second-airport]
+
+# 需要分流到它时加规则
+rules+:
+  - 'DOMAIN-SUFFIX,corp.example.com,SecondAirport'
+```
+
+provider 节点与订阅节点同池参与分组选择；节点延迟与手动切换在 Web UI（`mihomo ui`）里操作。若想让订阅里已有的某个分组也纳入第二机场的节点，用 `~proxy-groups` 按 name 就地 patch 该分组、加 `use` 字段
+
 ## Web UI
 
 内置三个常用 Web UI：
@@ -468,8 +509,9 @@ match:
 mihomo doctor
 ```
 
-逐项检查内核可执行性、数据目录可写、settings 有效性、订阅配置与新鲜度、服务状态、端口占用、
-配置可构建性、代理连通性，每项给出 ✓/!/✗ 与修复命令；存在异常项时退出码为 1，可接入脚本。
+逐项检查内核可执行性、数据目录可写、settings 有效性（含端口覆盖合法性）、订阅配置与新鲜度、服务状态、端口占用、
+配置可构建性、代理连通性、CLI 版本（落后时提示 `mihomo update`；npm registry 不可达则跳过），
+每项给出 ✓/!/✗ 与修复命令；存在异常项时退出码为 1，可接入脚本。
 
 ### 启动失败
 
@@ -502,10 +544,20 @@ sudo pkill -9 mihomo
 
 ### 端口被占用
 
-默认端口（系统强制，不受订阅配置影响）：
+默认端口（CLI 强制，不受订阅/覆写影响）：
 
 - 混合端口 (HTTP + SOCKS5): `7890`
 - 外部控制器: `127.0.0.1:9090`
+
+与其他代理工具冲突或需要并存时，可在 `settings.json` 中覆盖端口（两键均可选，需为 1-65535 的整数且互不相同）：
+
+```json
+{
+  "ports": { "mixed": 17890, "controller": 19090 }
+}
+```
+
+改动后 `mihomo start` 重新生成配置即生效；Web UI 连接地址与系统代理里的端口请使用新值（`mihomo status` 会显示实际端口）
 
 ## 安全特性
 

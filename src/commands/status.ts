@@ -6,9 +6,9 @@ import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
 import { detectLegacySystemInstall, getServiceStatus } from '../service.js';
 import { getSubscriptionsWithCache } from '../settings.js';
-import { formatProxySummary, getActiveSubscription } from '../subscription.js';
+import { formatProxySummary, getActiveSubscription, isSubscriptionStale, resolveUpdateInterval } from '../subscription.js';
 import type { ProxyProbeResult, StatusJson, SubscriptionUrgency } from '../types.js';
-import { formatTimestamp, formatTraffic, hasFlag, subscriptionUrgency } from '../utils.js';
+import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic, hasFlag, subscriptionUrgency } from '../utils.js';
 
 /** 运行中但代理不通时的归因提示（订阅过期/流量用尽优先，其余归到节点） */
 function connectivityHint(urgency: SubscriptionUrgency): string {
@@ -76,6 +76,8 @@ function buildStatusJson(args: {
           ...(args.cached?.download !== undefined ? { download: args.cached.download } : {}),
           ...(args.cached?.total !== undefined ? { total: args.cached.total } : {}),
           ...(args.cached?.expire !== undefined ? { expire: args.cached.expire } : {}),
+          ...(args.cached?.updated_at !== undefined ? { updatedAt: args.cached.updated_at } : {}),
+          stale: args.cached ? isSubscriptionStale(args.cached) : false,
           urgency,
         }
       : null,
@@ -201,6 +203,16 @@ export async function printStatus(args: string[] = []): Promise<void> {
       subLine += ` (${formatProxySummary(info)})`;
     }
     console.log(subLine);
+    // 新鲜度：服务模式下用户可能数周不跑 start（唯一的自动更新触发点），
+    // 订阅陈旧是「运行中（代理不通）」的高频根因，超龄时黄标并给动作
+    if (cached?.updated_at) {
+      const rel = formatRelativeTime(cached.updated_at) || formatDate(cached.updated_at);
+      if (isSubscriptionStale(cached)) {
+        console.log(colors.yellow(`更新: ${rel}（已超过 ${resolveUpdateInterval(cached.update_interval)} 小时间隔，建议 mihomo sub update）`));
+      } else {
+        console.log(`${colors.gray('更新: ')}${rel}`);
+      }
+    }
     // 订阅流量/到期来自缓存（上次下载响应头），仅缓存里有才展示
     const traffic = cached ? formatTraffic(cached.upload, cached.download, cached.total) : null;
     if (traffic) {

@@ -5,7 +5,7 @@ import { UI_URLS } from '../constants.js';
 import { CliError } from '../errors.js';
 import { openUrl } from '../open.js';
 import { getRunningState } from '../runtime.js';
-import { readSettings } from '../settings.js';
+import { getPorts, readSettings } from '../settings.js';
 
 /** 复制到剪贴板（macOS pbcopy）；失败返回 false，调用方回退到手动提示 */
 function copyToClipboard(text: string): boolean {
@@ -38,7 +38,9 @@ export function cmdUI(args: string[]): void {
   if (secret) {
     // 用户接下来就要在 UI 里粘贴密钥：顺手放进剪贴板，省一次翻 settings.json
     console.log(
-      copyToClipboard(secret) ? '已配置访问密钥（已复制到剪贴板，UI 连接时粘贴）' : '已配置访问密钥（UI 连接 127.0.0.1:9090 时需输入，密钥见 settings.json）',
+      copyToClipboard(secret)
+        ? '已配置访问密钥（已复制到剪贴板，UI 连接时粘贴）'
+        : `已配置访问密钥（UI 连接 127.0.0.1:${getPorts().controller} 时需输入，密钥见 settings.json）`,
     );
   }
 

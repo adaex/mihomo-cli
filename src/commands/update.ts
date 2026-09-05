@@ -10,10 +10,13 @@ const execFileAsync = promisify(execFile);
 /** npm view 查询最新版的超时：网络不佳时降级为直接安装，不让用户干等 */
 const NPM_VIEW_TIMEOUT_MS = 15_000;
 
-/** 查询 npm registry 上的最新版本；失败/超时返回 null（调用方降级为直接安装） */
-async function getLatestNpmVersion(): Promise<string | null> {
+/**
+ * 查询 npm registry 上的最新版本；失败/超时返回 null（调用方降级为直接安装）。
+ * doctor 复用时传更短的超时，体检不该被 registry 拖慢
+ */
+export async function getLatestNpmVersion(timeoutMs: number = NPM_VIEW_TIMEOUT_MS): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync('npm', ['view', PKG_NAME, 'version'], { timeout: NPM_VIEW_TIMEOUT_MS });
+    const { stdout } = await execFileAsync('npm', ['view', PKG_NAME, 'version'], { timeout: timeoutMs });
     const version = stdout.trim().split('\n').pop()?.trim();
     return version || null;
   } catch {

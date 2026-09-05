@@ -30,6 +30,21 @@ export function resolveUpdateInterval(cachedInterval?: number | null): number {
   return cachedInterval && cachedInterval > 0 ? cachedInterval : DEFAULT_UPDATE_INTERVAL_HOURS;
 }
 
+/**
+ * 订阅缓存是否已超过更新间隔（新鲜度判断，status 与 doctor 共用口径）。
+ *
+ * 服务模式下用户可能数周不跑 `start`（唯一自动更新触发点），订阅陈旧是
+ * 「运行中（代理不通）」的高频根因——判断口径必须集中一处，两处各写一遍迟早漂移。
+ * 未来时间/非法时间戳不算超龄：与 formatRelativeTime 同口径，时钟偏移不该误报。
+ */
+export function isSubscriptionStale(cached: Pick<SubscriptionWithCache, 'updated_at' | 'update_interval'>, nowMs: number = Date.now()): boolean {
+  if (!cached.updated_at) return false;
+  const t = new Date(cached.updated_at).getTime();
+  if (Number.isNaN(t) || t > nowMs) return false;
+  const ageHours = (nowMs - t) / 3_600_000;
+  return ageHours > resolveUpdateInterval(cached.update_interval);
+}
+
 const HTTP_CLIENT = createHttpClient({ timeout: 60_000 });
 
 /** 校验是否为合法 http(s) 订阅 URL：必须 http/https 协议且能被 URL 解析（排除 httpfoo://、http-evil 等）。 */

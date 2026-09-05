@@ -56,13 +56,13 @@ export const SERVICE_LABEL: string = RAW_SERVICE_LABEL && isValidServiceLabel(RA
 export const SERVICE_BINARY_NAME = 'mihomo-cli-service';
 
 /**
- * external-controller 地址(系统强制,不受订阅/覆写影响)。
- * host 固定 127.0.0.1:loopback 必可达;控制面板 API 与热重载统一走此地址。
+ * 默认混合端口（HTTP + SOCKS5）与 external-controller 端口。
+ * 系统强制、不受订阅/覆写影响：端口是 UI 与热重载的统一依赖地址。
+ * 可在 settings.json 的 `ports` 里覆盖（见 settings.ts 的 getPorts）——
+ * 供默认端口被其他代理工具占用的场景逃生，不是给订阅/覆写的配置面。
  */
+export const DEFAULT_MIXED_PORT = 7890;
 export const CONTROLLER_PORT = 9090;
-export const CONTROLLER_ADDR = `127.0.0.1:${CONTROLLER_PORT}`;
-/** 控制面板 API 基址。config.ts 恒把 external-controller 覆盖为该地址，故调用方无需运行时解析 */
-export const CONTROLLER_BASE_URL = `http://${CONTROLLER_ADDR}`;
 
 export const TUN_CONFIG = {
   tun: {
@@ -76,9 +76,9 @@ export const TUN_CONFIG = {
 };
 
 export const BASE_CONFIG: Record<string, unknown> = {
-  'mixed-port': 7890,
+  // 注意：mixed-port 与 external-controller 不在此表——它们来自 settings.ports（getPorts），
+  // config.ts 单独写入 systemConfig，订阅/覆写恒不可改
   'allow-lan': false,
-  'external-controller': CONTROLLER_ADDR,
   'unified-delay': true,
   'tcp-concurrent': true,
   'geo-auto-update': true,

@@ -16,6 +16,15 @@ export interface Settings {
    * 存 normalize 后的 https URL；缺省 = 直连。
    */
   kernel_mirror?: string;
+  /**
+   * 端口覆盖（可选，逃生口：默认端口被其他代理工具占用时调整）。
+   * 两键均可选；值必须是 1-65535 的整数，非法值在使用点抛错（getPorts）而非静默回退默认——
+   * 端口突降会让 UI/热重载连到错误地址且毫无线索。
+   */
+  ports?: {
+    mixed?: number;
+    controller?: number;
+  };
 }
 
 // === Subscription Cache ===
@@ -291,6 +300,10 @@ export interface StatusJson {
     download?: number;
     total?: number;
     expire?: number;
+    /** 缓存里的上次更新时间（ISO）；缓存缺失则无此键 */
+    updatedAt?: string;
+    /** 已超过更新间隔未更新（与 doctor 订阅新鲜度同口径） */
+    stale: boolean;
     urgency: Exclude<SubscriptionUrgency, null> | null;
   } | null;
   overwrite: { enabled: boolean; files: string[] };

@@ -1,3 +1,8 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { suggestSimilar } from '../utils.js';
 import { SUBCOMMANDS as DIRECTORY_SUBCOMMANDS } from './directory.js';
@@ -54,7 +59,7 @@ function buildZsh(commands: Command[], groups: SubGroup[]): string {
   const lines: string[] = [
     '#compdef mihomo mhm mh mihomo-cli',
     '',
-    '# mihomo-cli zsh 补全（mihomo completion zsh 生成；安装: 写入 ~/.zsh/completions/_mihomo 或 eval "$(mihomo completion zsh)"）',
+    '# mihomo-cli zsh 补全（mihomo completion zsh 生成；安装: mihomo completion install zsh，或 eval "$(mihomo completion zsh)"）',
     '',
     '_mihomo() {',
     '  local -a commands subcmds',
@@ -106,7 +111,11 @@ function buildZsh(commands: Command[], groups: SubGroup[]): string {
     "          _arguments '-y[跳过确认]' '--full[删全部]'",
     '          ;;',
     '        completion)',
-    `          _values 'shell' ${SHELLS.join(' ')}`,
+    '          if (( CURRENT == 2 )); then',
+    "            _values 'action' install",
+    '          elif (( CURRENT == 3 )) && [[ ${words[2]} == install ]]; then',
+    `            _values 'shell' ${SHELLS.join(' ')}`,
+    '          fi',
     '          ;;',
     '        *)',
     '          _files',
@@ -145,7 +154,7 @@ function buildBash(commands: Command[], groups: SubGroup[]): string {
       ;;`;
     })
     .join('\n');
-  return `# mihomo-cli bash 补全（mihomo completion bash 生成；安装: eval "$(mihomo completion bash)"）
+  return `# mihomo-cli bash 补全（mihomo completion bash 生成；安装: mihomo completion install bash，或 eval "$(mihomo completion bash)"）
 
 _mihomo_completions() {
   local cur prev
@@ -173,7 +182,11 @@ ${subCase}
       COMPREPLY=( $(compgen -W "subs logs data runtime settings kernel overwrites service --full -y" -- "\${cur}") )
       ;;
     completion)
-      COMPREPLY=( $(compgen -W "${SHELLS.join(' ')}" -- "\${cur}") )
+      if [[ \${COMP_CWORD} -eq 2 ]]; then
+        COMPREPLY=( $(compgen -W "install" -- "\${cur}") )
+      elif [[ \${COMP_CWORD} -eq 3 ]] && [[ "\${COMP_WORDS[2]}" == install ]]; then
+        COMPREPLY=( $(compgen -W "${SHELLS.join(' ')}" -- "\${cur}") )
+      fi
       ;;
   esac
 }
@@ -183,7 +196,7 @@ complete -F _mihomo_completions mihomo mhm mh mihomo-cli
 
 function buildFish(commands: Command[], groups: SubGroup[]): string {
   const lines: string[] = [
-    '# mihomo-cli fish 补全（mihomo completion fish 生成；安装: mihomo completion fish | source）',
+    '# mihomo-cli fish 补全（mihomo completion fish 生成；安装: mihomo completion install fish，或 mihomo completion fish | source）',
     '',
     'for cmd in mihomo mhm mh mihomo-cli',
   ];
@@ -198,7 +211,8 @@ function buildFish(commands: Command[], groups: SubGroup[]): string {
   }
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from directory dir dirs directories open" -a '${DIR_TARGETS.join(' ')}'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from ui" -a '${UI_NAMES.join(' ')}'`);
-  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion" -a '${SHELLS.join(' ')}'`);
+  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion" -a 'install' -d '安装补全到默认位置'`);
+  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion; and __fish_seen_subcommand_from install" -a '${SHELLS.join(' ')}'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from kernel" -a '\\--mirror' -d '走镜像下载'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from kernel" -a '\\--no-mirror' -d '直连下载'`);
   lines.push('end');
@@ -225,12 +239,77 @@ export function buildCompletionScript(shell: string, commands: Command[]): strin
   }
 }
 
+/** bash 追加安装的幂等标记：~/.bash_completion 是共享文件，不能覆盖用户自己的内容 */
+const BASH_MARKER = '# >>> mihomo-cli completion (append)';
+
+/** 各 shell 的补全落盘位置：独占文件名的 shell（zsh/fish）直接覆盖写，天然幂等 */
+function completionInstallPath(shell: string): string | null {
+  const home = os.homedir();
+  switch (shell) {
+    case 'zsh':
+      return path.join(home, '.zsh', 'completions', '_mihomo');
+    case 'bash':
+      return path.join(home, '.bash_completion');
+    case 'fish':
+      return path.join(home, '.config', 'fish', 'completions', 'mihomo.fish');
+    default:
+      return null;
+  }
+}
+
+function installCompletion(shell: string | undefined, commands: Command[]): void {
+  if (!shell) {
+    throw new CliError('请指定 shell', { hint: [`用法: mihomo completion install <${SHELLS.join('|')}>`] });
+  }
+  const target = completionInstallPath(shell);
+  if (!target) {
+    // 复用 buildCompletionScript 的 did-you-mean 报错（它会因未知 shell 抛错）
+    buildCompletionScript(shell, commands);
+    return;
+  }
+
+  const script = buildCompletionScript(shell, commands);
+  console.log(`安装 ${shell} 补全: ${target}`);
+
+  if (shell === 'bash') {
+    // ~/.bash_completion 可能已有用户自己的补全：含标记则幂等跳过，否则追加
+    const existing = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
+    if (existing.includes(BASH_MARKER)) {
+      console.log('已安装过（~/.bash_completion 已包含 mihomo 补全），跳过');
+      return;
+    }
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.appendFileSync(target, `\n${BASH_MARKER}\n${script}${BASH_MARKER.replace('>>>', '<<<')}\n`);
+    console.log(colors.green('已追加到 ~/.bash_completion（重新打开终端生效）'));
+    return;
+  }
+
+  // zsh: #compdef 必须是文件首行（compinit 的约定），标记无处放——独占文件名直接覆盖
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, script, { mode: 0o644 });
+  console.log(colors.green('已写入（重新打开终端生效）'));
+
+  if (shell === 'zsh') {
+    // ~/.zsh/completions 不在 zsh 默认 fpath 里（oh-my-zsh 默认包含）：
+    // 只提示、不自动改 .zshrc——动用户的 rc 文件比让用户复制一行风险大得多
+    console.log(colors.gray('若补全不生效，在 ~/.zshrc 中加一行: fpath=(~/.zsh/completions $fpath)'));
+  }
+}
+
 /** completion 命令入口。词表由 registry 传入（避免 import 成环）。 */
 export function cmdCompletion(args: string[], commands: Command[]): void {
+  if (args[1] === 'install') {
+    installCompletion(args[2], commands);
+    return;
+  }
   const shell = args[1];
   if (!shell) {
     throw new CliError('请指定 shell', {
-      hint: [`用法: mihomo completion <${SHELLS.join('|')}>`, '安装: eval "$(mihomo completion zsh)"，或写入对应 shell 的补全目录'],
+      hint: [
+        `用法: mihomo completion <${SHELLS.join('|')}>`,
+        `安装到默认位置: mihomo completion install <${SHELLS.join('|')}>`,
+        '临时启用: eval "$(mihomo completion zsh)"',
+      ],
     });
   }
   console.log(buildCompletionScript(shell, commands));
