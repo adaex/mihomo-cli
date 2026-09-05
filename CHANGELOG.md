@@ -1,5 +1,21 @@
 # Changelog
 
+## [4.2.4] - 2026-09-05
+
+内部架构清理，无用户可见的功能或行为变更（命令、配置格式、输出均不变）。单测 195 → 203。
+
+### 重构
+
+- **service 层去 bash 化**：用户域 launchctl 操作（install/start/stop/uninstall/restart）从「拼 shell 脚本 + 自定义退出码协议」改为直接 `spawnSync` 逐条执行、TS 侧判定。消除了退出码协议这层不可测的 IPC 与 shell 注入面，失败时错误信息带 launchctl 原始 stderr。需要 root 的路径（TUN 启动、遗留清理）保留 sudo 脚本。`waitUntilUnloaded` 改为 async 轮询，停止期间 Ctrl+C 可响应
+
+- **命令行选项单表登记**：新增 `src/flags.ts`，`VALUE_FLAGS`（位置参数解析跳过带值选项）与重启透传集合都从单一 `FLAGS` 表派生，替掉 utils.ts 的两张硬编码表——旧设计漏登记即静默失效（`sub use foo -s` 丢选项、`logs -n 200` 的 200 被当位置参数）
+
+- **删死代码**：`http.ts` 未使用的 `secret` 选项（零调用，控制器 Bearer 鉴权一直在 service.ts）；合并 root/平台守卫的重复豁免名单；`getProcessInfo` 的两次 `ps` 合并为一次
+
+### 文档
+
+- CLAUDE.md 瘦身：与代码注释重复的事故叙事换成指针，只留稳定规则与元教训；两条独有的 launchd 实测事实（`plutil -remove` 手工收尾、`KeepAlive.PathState` 否定结论）移入 CODE_REVIEW.md
+
 ## [4.2.3] - 2026-09-05
 
 四维度全面扫描（launchd 服务 / 进程生命周期 / 数据层 / 命令层）后修复九项缺陷。共同模式是**防线只铺在主路径**：此前几轮修掉的「报告成功但目标未达成」，同类缺口在 install / tun / stop / uninstall 这些次路径上原样存在。每条都经真实系统实验或复现验证（真实 launchd、三进程锁竞态、真实 release 资产列表），并补了 17 条回归测试（单测 178 → 195）。

@@ -116,7 +116,7 @@ macOS 硬依赖，无其他平台后端：
 
 ## 工程
 
-- 单测 195（`npm test`，经 tsx 跑 `*.spec.ts`）
+- 单测 203（`npm test`，经 tsx 跑 `*.spec.ts`）
 - CI 在 `macos-latest` 上跑 typecheck/check/test/build。因 `os: ["darwin"]`，ubuntu runner 上 `npm ci` 会平台不匹配失败
 - `prepublishOnly: npm run build`：`dist/` 被 gitignore，漏跑 build 即发布陈旧产物
 - **`npm run check` 在 worktree 里是空转**：`biome.json` 的 `files.includes` 排除 `**/.claude`，而 worktree 建在 `.claude/worktrees/` 下，于是「Checked 0 files」直接通过。worktree 中改完要显式跑 `npx biome check src/`
