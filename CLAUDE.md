@@ -25,8 +25,8 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/utils.ts`             | 纯函数小工具：sleep、escapeRegExp/shellQuote、格式化、显示宽度、flag 解析、did-you-mean |
 | `src/colors.ts`            | 颜色与 NO_COLOR                   |
 | `src/errors.ts`            | CliError、TimeoutError、withTimeout |
-| `src/http.ts`              | HTTP 客户端（超时、响应体大小上限、Bearer） |
-| `src/paths.ts`             | 路径常量、目录管理                |
+| `src/http.ts`              | HTTP 客户端（超时、响应体大小上限） |
+| `src/paths.ts`             | 路径常量、目录管理、原子写、跨进程锁 |
 | `src/settings.ts`          | settings.json 读写（含损坏恢复）、订阅缓存、订阅列表增删、URL 遮蔽 |
 | `src/config.ts`            | 配置构建、YAML 解析/序列化、内核版本 |
 | `src/subscription.ts`      | 订阅下载、流量解析、自动更新      |
@@ -149,6 +149,10 @@ npm test               # node:test 单测（*.spec.ts，零新增依赖，经 ts
 
 CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.yml`）——因 `os: ["darwin"]`，ubuntu runner 上 `npm ci` 会平台不匹配失败。
 
+---
+
+## 工作规则
+
 ### 错误处理
 
 命令层与数据层的预期错误一律 `throw new CliError(msg, { label?, hint?, exitCode? })`，由 `index.ts` 的 `main().catch` 单点渲染（`label:` 前缀 + hint 多行 + exitCode）。**不在命令逻辑里 `console.error + process.exit`**。仅两类 exit 保留：信号/全局处理器、`viewLogWithTail` 的 tail 事件回调（main 已 resolve，无法收口）。catch 后重标签需先 `if (e instanceof CliError) throw e`（防双重包裹）。detached/事件回调中不得抛 CliError。
@@ -159,101 +163,71 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 给某命令补 `onUnknown` 时，原先靠 `fallback` 兜住的隐式子命令必须显式注册，否则会被判为未知子命令。
 
-### 报告成功前必须确认事情真的成立
+### 报告成功前必须独立确认
 
-反复踩的同一类 bug：**把「命令返回 0」当成「目标达成」**。这类失效不报错、行为却不对，用户没有任何线索，是本仓最贵的一类缺陷。已知的六处（都实测复现过）：
+本仓最贵的一类缺陷：**把「命令返回 0」当成「目标达成」**。这类失效不报错、行为却不对，用户没有任何线索。新增「执行某操作并报告结果」的代码时，先问一句：**报告成功的依据，是不是只有「调用没报错」？** 如果是，就需要一次独立的事后确认。
 
-- **`bootstrap` 成功 ≠ 内核活着**：坏配置下 launchd 照样返回 0，`start` 曾据此打印「已启动 (PID xxx)」，而内核正在崩溃循环。现由 `waitServiceHealthy` 观察满一个窗口再下结论，失败时把日志尾部附进 `CliError`
-- **热重载返回 2xx ≠ 配置生效**：9090 若被别的程序占用，它对未知路径的 PUT 也可能回 2xx。现先探 `/version` 确认应答方是 mihomo，再发 PUT
-- **写入返回成功 ≠ 数据落盘**：并发下裸读-改-写会让后写者抹掉先写者的条目，而先写者已经打印「已添加」。现由 `withFileLock` 收口（见下文）
-- **`pkill` 返回 ≠ 进程被杀，`pgrep` 空输出 ≠ 没有进程**：pattern 编译失败时两者都以退出码 2 结束、无任何副作用，而 `getMihomoPids` 曾把它吞成 `[]`（v4.2.1 修，详见下条）
-- **`launchctl` 非 0 ≠ 服务未装载**：`gui/0` 之类的坏域返回 125，被当成「未装载」后 `stop` 会跳过全部服务操作却报「已停止」（v4.2.2 修，见 launchd 实测事实）
-- **`bootout` + `kill` ≠ 服务停了**：plist 带 `KeepAlive`，只要任务还装载着，约 10s 后 launchd 就把内核拉回来。判「停止成功」必须确认任务已卸载，不能只看进程没了
+补防线时 grep 同类断言的**全部调用点**——同族路径（install/start/stop/uninstall、service/tun）几乎必然共享同一缺口（v4.2.3 一次修掉七处同族缺陷，共同模式正是「防线只铺了一条路径」）。测试同理：判据要精确匹配正确形态，不要黑名单枚举变体（`-v1` 后缀按名称排序挤在标准版之前，能通过全部旧判据）。
 
-新增「执行某操作并报告结果」的代码时，先问一句：**报告成功的依据，是不是只有「调用没报错」？** 如果是，就需要一次独立的事后确认。
+各事故的实测细节锚在对应代码的函数头注释里，复核结论见 `CODE_REVIEW.md` 的「已验证健壮」——不在本文重复，改代码时以那两处为准。
 
-### 防线只铺在主路径，是最常见的漏网形态
+### 平台与 root 守卫
 
-v4.2.3 扫描修掉的七处同族缺陷，共同模式不是「没写防线」，而是**防线只铺在一条路径上**：给 `start` 建了 `waitServiceHealthy`，`install` 的重装恢复路径仍以「bootstrap 没报错」打印「已按原状态重新启动」；服务路径观察满 1.2s 窗口，TUN 路径仍是 0.4s 单次检查——且 `kill -0` 对**僵尸进程**（bash 未收割的已死子进程）也返回成功，实测 10 次中 5 次误报存活，判活必须以 `ps -o stat=` 的状态列为准；`waitUnloadedSteps` 轮询 25 次后**静默放行**（只有等待、没有判定），且把 launchctl 112/125 查询失败也当「已卸载」；`launchctl disable` 整体 `|| true`，而它是 TUN 防线第一层的唯一执行点；`withFileLock` 被强夺者的 finally 无条件 rm——删掉的是**新持有者**的锁（三进程实测复现），释放前必须比对锁文件内容。
+`main()` 开头（`ensureDirs()` 之前）校验 `process.platform === 'darwin'` 与非 root，豁免 `help`/`version`（`index.ts` 的 `GUARD_EXEMPT_COMMANDS` 一份名单两守卫共用）；`MIHOMO_CLI_ALLOW_ANY_PLATFORM=1` 为开发逃生阀。守卫必须先于 `ensureDirs`，避免在不支持的平台或 root 的 HOME（可能是 /var/root）创建数据目录。
 
-**给一条路径补「事后确认」时，grep 同类断言的全部调用点**——同类路径（install/tun/stop/uninstall）几乎必然共享同一缺口。测试同理：`kernel.ts` 的变体选择曾在每台 Intel Mac 上静默装错微架构构建（`-v1` 后缀按名称排序挤在标准版之前、能通过全部旧判据），靠的是「精确匹配标准版形态」而非逐个黑名单变体。
+原因与实测后果（`gui/0` 域恒 125、`openUrl` 吞 ENOENT 恒 true 等）见 `index.ts` 守卫函数的注释。launchd、`open`、sudo、BSD 专有语法均无其他平台实现。
 
+### launchd 服务层
 
+改 `service.ts` 前先读该文件的函数头注释——launchd 的实测事实都锚在对应代码处，且由测试用真实 launchctl 锁住：
+
+- bootstrap 成功 ≠ 进程活着（假健康窗口长度不固定，必须观察满一个窗口）；判据是 `last exit code`
+- `enable` 必须在 `bootstrap` 之前；`stop` 恒置 disable 位，「stop 之后 start」是必经路径
+- disable 位持久化在 plist 之外，launchctl 没有「清除记录」的动词；uninstall 不清位是刻意的
+- 退出码分级：只有 `113` 是「未装载」，`112`/`125` 是查询失败（`assertLaunchctlQueryOk` 收口，`service-exitcode.spec.ts` 锁住）
+- 运行中无法 rename 轮转日志（fd 指向旧 inode），只有「旧进程已退出、新进程未起」的窗口或 copy-truncate 两条路
+- `launchctl print` 输出顶层字段单 tab、嵌套双 tab，解析必须锚定 `^\t`（`service.spec.ts` 倒序 fixture 锁死）
+- 进程命令行记录的是启动时的路径（符号链名），`MAIN_INSTANCE_PATTERN` 必须二选一分支
+
+另有两条只记一次的事实（手工收尾流程与被排除的设计方案）在 `CODE_REVIEW.md`。
 
 ### pgrep/pkill 的 pattern 必须是 POSIX ERE，不是 JS 正则
 
-`MAIN_INSTANCE_PATTERN` 交给 `pgrep -f` / `pkill -f`，它们用 `regcomp(REG_EXTENDED)` 编译——**ERE 没有非捕获组**，`(?:a|b)` 里 `(` 后紧跟 `?` 被判为「重复操作符缺少操作数」，实测报 `Cannot compile regular expression ... (repetition-operator operand invalid)` 并以**退出码 2** 结束。
-
-这个错的代价极大，因为它的失效方式是全线静默（v4.2.1 实测复现）：`pgrep` 无输出 → `getMihomoPids()` 恒返回 `[]` → `stop` 判定「不在运行」直接 return 0；`pkill -9 -f` 一个进程都不杀却照常继续。于是**内核一直在跑，而 `stop`/`start`/`status`/`reset` 全部认为它不存在**。
+`MAIN_INSTANCE_PATTERN` 交给 `pgrep -f` / `pkill -f`，它们用 `regcomp(REG_EXTENDED)` 编译——**ERE 没有非捕获组**，`(?:a|b)` 编译失败并以**退出码 2** 结束，失效方式是全线静默（`getMihomoPids()` 恒返回 `[]` → `stop` 判定「不在运行」直接 return 0，内核一直在跑而 CLI 全部认为它不存在）。
 
 两条防线，别只留一条：
 
 - pattern 用 `(a|b)` 而非 `(?:a|b)`。`escapeRegExp` 转义的是**内容**里的元字符，管不了你手写的分组语法
-- `getMihomoPids` 对 `pgrep` 退出码只接受 `0`（有匹配）/ `1`（无匹配），其余一律抛 `CliError`。探测失败与「没有进程」必须区分开——前者伪装成后者正是这个 bug 能潜伏下来的原因
+- `getMihomoPids` 对 `pgrep` 退出码只接受 `0`（有匹配）/ `1`（无匹配），其余一律抛 `CliError`。探测失败与「没有进程」必须区分开
 
-回归测试在 `process-probe.spec.ts`，**直接调真实 `pgrep` 编译该 pattern**，不做字符串断言：断言「不含 `(?:`」只能挡住已知写法，而 `\d`、`(?=)`、`{,n}` 等任何 JS-only 语法都会以同样方式失效，让 libc 的 regcomp 当裁判才真的把得住关。
-
-### 新增命令行选项要同步 utils.ts
-
-`hasFlag`/`parseIntArg`/`parseStringArg` 只管解析，**新选项还要登记到 `utils.ts` 的两张表**，否则在真实用法里静默失效：
-
-- **布尔选项 → `extractStartOptions` 的 `BOOL_FLAGS`**：不登记则 `sub use foo -s` 触发的重启会丢掉该选项（`ow on/off`、`sub use` 都经 `restartToApply` 重新调 `cmdStart`）
-- **带值选项 → `VALUE_FLAGS`**：不登记则 `getNonFlagArg` 会把选项的值误当位置参数（`logs -n 200` 里的 `200` 被当成日志编号）
-
-两者都是「不报错但行为不对」的失效方式，写完选项顺手 grep 一下这两张表。
-
-### 平台守卫
-
-`main()` 开头（`ensureDirs()` 之前）校验 `process.platform === 'darwin'`，`package.json` 声明 `"os": ["darwin"]`。豁免 `help`/`version`；`MIHOMO_CLI_ALLOW_ANY_PLATFORM=1` 为开发逃生阀。守卫必须先于 `ensureDirs`，避免在不支持的平台创建数据目录。
-
-原因：launchd 服务、`open`、`sudo`、BSD 专有命令语法（`stat -f%z`、`ps -o command=`）均无其他平台实现，且 `openUrl` 吞掉 ENOENT 后恒返回 true，非 macOS 上会「报告成功但什么都没做」。
-
-### launchd 实测事实
-
-改这块前先读这里，几条都是「文档不写、猜错就静默出错」的：
-
-- **`bootstrap` 成功不代表进程活着**（v4.2.0 实测）。它只表示任务被装载。内核因坏配置立即退出时，`bootstrap` 返回 0、`start` 却什么问题都看不出来，而 KeepAlive 会每隔约 10s 反复拉起它。判据是 `last exit code` 非 0（`runs` 不能用——KeepAlive 有约 10s 重启节流，崩溃后 2s 内它仍是 1）。见 `waitServiceHealthy`
-- **全新 bootstrap 后存在「假健康窗口」**：`state = running` 且 `pid` 拿得到，而进程其实马上就要退出。窗口长度**不固定**，同一台机器上实测过 180ms 与 540ms 两种（取决于内核从 spawn 到 exit 实际花多久）。故健康判定必须观察满一个足够宽的窗口，**不能一看到 running 就收口，也不能按某次实测值卡边**
-- **`last exit code` 在健康服务上是字符串 `(never exited)`**，不是数字，也不是 0。解析要把它归成「无退出码」，否则崩溃判定失效
-- **`last exit code` 在重新 bootstrap 后重置**，不跨 `bootout` 残留 → 可安全用作「本次启动」的判据。但它在服务恢复运行后仍保留历史值，故判崩溃必须同时要求「当前不在 running」
-- **`bootstrap` 一个被 disable 的 label 是硬失败**（`Bootstrap failed: 5: Input/output error`），不是「加载了但不启动」。故 `enable` 必须在 `bootstrap` 之前，顺序不可换。而 `stop` 恒置 disable 位，「stop 之后 start」是最常走的路径——少了 enable 就 100% 失败
-- **disable 位持久化在 `/var/db/com.apple.xpc.launchd/disabled*.plist`，与 plist 文件相互独立**：删掉 plist 后该位仍在。且 launchctl **没有「清除记录」的动词**，`enable` 同样写一条 `=> enabled`。故 `parseDisabledList` 必须区分 `disabled`/`enabled` 两种值，只判断「在不在表里」会把 enable 过的服务误判成已禁用
-- **要真正抹掉那条记录只能直接改 plist**：user 域是 `disabled.<uid>.plist`（system 域为 `disabled.plist`），`sudo plutil -remove` 删键，**keypath 里 `.` 是层级分隔符，label 必须转义成 `com\.foo\.bar`**。但 launchd 在内存里持有该表，改磁盘不触发重读——`print-disabled` 仍显示旧值，重启后才一致。故这条路**不能做进 CLI 的自动清理**（既要提权又不立即生效），只作开发期手工收尾用
-- **`launchctl print <target>` 与 `print-disabled <domain>` 均免 sudo**（对 system 域也是），实测 3ms。退出码 `113` = 未装载，`0` = 已装载。这让状态查询能拿到真实 state/pid，取代早期 pgrep + root 属主过滤的近似判断
-- **launchctl 的失败码要分清「查到了，没有」与「查询没成立」**（实测 macOS 26.6）：`113` = 目标未找到（服务未装载，**正常状态**），`112` = 域不存在（如 `gui/99999`），`125` = 请求非法（如 `gui/0`）。只有 113 能当「未装载」，112/125 是查询本身失败——混为一谈就是 v4.2.2 那个 sudo 缺陷的成因。`assertLaunchctlQueryOk` 收口，`service-exitcode.spec.ts` 调真实 launchctl 锁住这三个码
-- **`gui/0` 不是「root 的用户域」，是个不存在的域**：`sudo mihomo …` 下 `process.getuid()` 为 0，域拼成 `gui/0`，所有 launchctl 恒 125。而 `stopService` 的每条命令都带 `|| true`，脚本照样退 0 → CLI 报「已停止」，实际只有 `killResidualKernels()` 生效，随后 KeepAlive 把内核拉回来（实测约 10s 后 pid 变化）。现由 `index.ts` 的 `assertNotRoot` 在入口拒绝，**不做 `SUDO_UID` 自动降级**——sudo 下 `HOME` 是否保留取决于 sudoers，静默改域只会让「数据目录用 root 的、服务装用户的」这类错位更难查
-- **`launchctl print` 输出里顶层字段是单 tab（`\tstate = running`），嵌套 endpoint 是双 tab（`\t\tstate = active`）**。解析必须锚定 `^\t`。实测多个真实服务顶层 state 都排在嵌套之前，不锚定「碰巧」也对——但那是 launchd 的实现细节不是契约，`service.spec.ts` 用倒序 fixture 锁死了锚定行为
-- **运行中无法用 rename 轮转日志**：launchd 的 `StandardOutPath` fd 指向旧 inode，改名后内核继续往归档文件里写。只有两条路：卡在「旧进程已退出、新进程未起」的窗口里 rename（`startService` 的做法），或 copy-truncate（`restartService` 的做法，fd 为 O_APPEND，truncate 后从 0 续写不丢句柄）
-- **`KeepAlive.PathState` 不能用来实现 stop**：删掉 flag 文件后进程照跑不误，`KeepAlive` 只决定「退出后是否重启」，不主动终止运行中的任务。这条排除了「flag 文件 + root daemon 免密」的方案
-- **本地网络隐私的豁免条件是「以 root 运行」，不是「身为 daemon」**（Apple DTS 原话）。用户级 LaunchAgent 不豁免，但走的是正常弹框授权流程，不是被静默拦死——被拦死的是无人登录、没人能点弹框的服务器场景。这是把默认域从 system 改成 user 的依据
-- **进程命令行记录的是启动时用的路径**：服务经符号链 `kernel/mihomo-cli-service` 启动，`ps -ww -o command=` 输出的就是符号链名，用真实二进制名 `pgrep -f` 匹配不到。`MAIN_INSTANCE_PATTERN` 因此是二选一分支，两条都要留
+回归测试在 `process-probe.spec.ts`，**直接调真实 `pgrep` 编译该 pattern**，不做字符串断言——`\d`、`(?=)`、`{,n}` 等任何 JS-only 语法都会以同样方式失效，让 libc 的 regcomp 当裁判才真的把得住关。
 
 ### 平台命令细节
 
-`ps -o command=` 必须带 `-ww`：BSD/macOS 即使 stdout 非 tty 也把该列截断到 79 列，needle 偏移靠后的匹配会恒失败（当前唯一 needle 是偏移 0 的 binary 路径，新增调用方时别把 `-ww` 去掉）。同理写 BSD/GNU 都要跑的脚本时留意 `stat -f%z`（GNU 为 `-c%s`）。
+`ps -o command=` 必须带 `-ww`：BSD/macOS 即使 stdout 非 tty 也把该列截断到 79 列，needle 偏移靠后的匹配会恒失败。同理写 BSD/GNU 都要跑的脚本时留意 `stat -f%z`（GNU 为 `-c%s`）。
 
 ### 数据写盘前置校验
 
 - **订阅内容**：`saveSubscriptionRawConfig` 是原子覆盖、无备份。写盘前必须经 `assertLooksLikeSubscription`（要求 `proxies`/`proxy-groups`/`proxy-providers` 至少其一非空），否则机场返回的配额/错误 JSON 会不可恢复地覆盖可用订阅
 - **订阅列表**：一律经 `getSubscriptions()` 读取，不直接访问 `settings.subscriptions`——非数组值会被展开运算符按字符展开成垃圾列表
-- **URL 逗号**：逗号在 query/path 中合法，一律**不切分**（v3.10.0 起，随多源合并订阅一并移除）。`maskUrl` 按整条 URL 遮蔽——按逗号切分会把 `?nodes=us,hk&token=xxx` 劈开，两段都识别不出 token 参数 → 密钥明文输出
+- **URL 逗号**：逗号在 query/path 中合法，一律**不切分**。`maskUrl` 按整条 URL 遮蔽——按逗号切分会把 `?nodes=us,hk&token=xxx` 劈开，两段都识别不出 token 参数 → 密钥明文输出
 - **`writeFileSync` 的 `mode`** 仅在创建新文件时生效；对可能已存在的文件（sudo 中间脚本）需显式 `chmodSync`
 
-### settings.json 的读-改-写必须持锁
+### settings.json / cache.json 的读-改-写必须持锁
 
-`settings.json` 装订阅列表，而多个 CLI 进程会并发跑（慢速 `sub add` 跨整个网络下载期间，用户在另一个终端操作是日常）。`readSettings` 又有进程级缓存，拿陈旧缓存全量写回会把对方刚落盘的改动整块抹掉——**且写入方收到的是成功回执**（实测 6 并发 `sub add` 丢 3 条）。
+多个 CLI 进程会并发跑（慢速 `sub add` 跨整个网络下载期间，用户在另一个终端操作是日常）。`readSettings` 又有进程级缓存，拿陈旧缓存全量写回会把对方刚落盘的改动整块抹掉——**且写入方收到的是成功回执**。
 
-- **数组类改动（`subscriptions`）一律走 `updateSettings(mutate)`**：它持 `withFileLock` 完成「丢缓存 → 读盘上最新 → mutator 算改动 → 写回」。只在 `writeSettings` 里重读盘**不够**，读与写之间仍有窗口（实测 6 并发仍丢 3 条）
+- **数组类改动（`subscriptions`）一律走 `updateSettings(mutate)`**：它持 `withFileLock` 完成「丢缓存 → 读盘上最新 → mutator 算改动 → 写回」。只在 `writeSettings` 里重读盘**不够**，读与写之间仍有窗口
 - `writeSettings` 只安全用于单键/整值替换
 - mutator 必须同步，且不得再调 `updateSettings`/`writeSettings`——**锁不可重入**，会死等到强夺陈旧锁
 - 锁超过 10s 视为持锁进程已崩溃并强夺：宁可退回竞态，也不能让一次崩溃永久锁死 CLI
-- **释放前必须校验锁还是自己的**：被强夺者的 finally 若无条件 rm，删掉的是新持有者的锁——第三方随即直接进门，与持锁者并发（三进程实测：B/C 并发 4.6s），发生的正是锁要防的静默丢数据且双方都拿到成功回执。锁文件写入 `pid+hrtime` token，内容一致才删（`paths.spec.ts` 锁定）
+- **释放前必须校验锁还是自己的**：锁文件写入 `pid+hrtime` token，内容一致才删（被强夺者的 finally 无条件 rm，删掉的是新持有者的锁）
 
-**`cache.json` 同理，别只想着 settings**（v3.12.1 修）：`saveSubscriptionCache` 曾以「全程同步、读写之间无 await」自证安全，但那只在单进程内成立。跨进程下它就是裸读-改-写——实测 4 进程各写 30 条丢 7 条。丢的是 `updated_at` → `needsAutoUpdate` 恒 true → 该订阅每次 `start` 都重新下载，且流量/到期展示一并消失。写入路径（`saveSubscriptionCache` / `deleteSubscriptionCache`）一律持 `withFileLock`，回归测试在 `settings.spec.ts`（必须用 `spawn` 并行起子进程，`spawnSync` 逐个跑完根本测不出并发）。
+**`cache.json` 同理**：`saveSubscriptionCache` / `deleteSubscriptionCache` 一律持 `withFileLock`。并发回归测试必须用 `spawn` 并行起子进程，`spawnSync` 逐个跑完根本测不出并发。实测细节见 `settings.ts`/`paths.ts` 注释与 `settings.spec.ts`。
 
 ### 等进程退出的轮询必须让出事件循环
 
-同步忙等（`Atomics.wait`）会阻塞整个事件循环，**期间 SIGINT 完全不被处理**：`cleanupAll` 的 50×100ms 忙等实测要走完全程、5.3 秒后才响应 Ctrl+C，用户会以为 CLI 挂死。故 `cleanupAll` / `stop` 都是 async，用 `sleep`。改后实测 102ms 响应。
+同步忙等（`Atomics.wait`）会阻塞整个事件循环，**期间 SIGINT 完全不被处理**。故 `cleanupAll` / `stop` / `waitUntilUnloaded` 都是 async，用 `sleep`。
 
 反例是 `withFileLock` 里的 `sleepSyncMs`（该文件内的私有函数，全仓唯一的同步睡眠）：那里**必须同步**——持锁期间让出事件循环，慢速网络下另一进程会等到强夺陈旧锁，等于没锁。两处别混。
 
@@ -261,13 +235,13 @@ v4.2.3 扫描修掉的七处同族缺陷，共同模式不是「没写防线」�
 
 ### 内核下载的来源信任
 
-上游 release 不提供 checksums（127 个资产实测，注释属实），故**把来源钉死是主要防线**，不是可选加固：
+上游 release 不提供 checksums，故**把来源钉死是主要防线**，不是可选加固：
 
 - `assertTrustedAssetUrl` 必须在**加镜像前缀之前**调用——加了前缀整串就以镜像域名开头，无从判断原始 host
-- GitHub API **恒直连**（v3.10.0 移除 `--mirror-all`），镜像只作用于产物下载。API 若走镜像，`browser_download_url` 就完全由镜像说了算，而 `withMirror` 对非 github URL 原样放行 —— `assertTrustedAssetUrl` 因此是纵深防御的第二道，不可省
-- curl 必须带 `--proto '=https' --proto-redir '=https'`：`-L` 默认跟随任意协议重定向，实测会降级到明文 http 并落盘。产物随后 `chmod 755` 并在 TUN/daemon 下**以 root 运行**
+- GitHub API **恒直连**，镜像只作用于产物下载。API 若走镜像，`browser_download_url` 就完全由镜像说了算
+- curl 必须带 `--proto '=https' --proto-redir '=https'`：`-L` 默认跟随任意协议重定向，会降级到明文 http 并落盘。产物随后 `chmod 755` 并在 TUN/daemon 下**以 root 运行**
 - tar 守卫要同时查**路径**（`-tzf`，条目名干净）与**类型**（`-tvzf` 首字符，拒 `l`/`h`）：symlink 成员的条目名完全合法，能过路径检查却让 `chmod 755` 沿链接作用到任意文件。遍历用 `lstatSync` 不用 `statSync`
-- **资产选择必须精确匹配标准版形态**（`mihomo-<platform>-<arch>-vX.Y.Z` 收尾），不能黑名单枚举变体：上游有 `-compatible`/`-go`/`-v1`/`-v2`/`-v3`（GOAMD64 微架构）等多种后缀变体，全都以版本号结尾；按名称排序 `-`(0x2D) < `.`(0x2E) 使 `mihomo-darwin-amd64-v1-v1.19.30.gz` 排在标准版之前被 `find()` 优先命中——每台 Intel Mac 每次更新都静默装上性能最低档的 baseline 构建，下载/大小校验/自检全过（`kernel.spec.ts` 用真实资产名锁定）
+- **资产选择必须精确匹配标准版形态**（`mihomo-<platform>-<arch>-vX.Y.Z` 收尾），不能黑名单枚举变体（`-compatible`/`-go`/`-v1`/`-v2`/`-v3` 等后缀全都以版本号结尾）
 
 ### 覆写语义
 
@@ -276,6 +250,18 @@ v4.2.3 扫描修掉的七处同族缺陷，共同模式不是「没写防线」�
 `exclude-filter` 在 mihomo 侧是无锚点正则搜索，注入节点的排除模式必须 `^(?:...)$` 整名锚定，否则会连带排除名字包含它的订阅节点。
 
 `match` 的订阅名匹配大小写不敏感，与 `findSubscriptionFuzzy` 口径一致。`match` 块**加载侧同样 fail-closed**：块存在但键名打错/值滤空/为空对象时抛 `CliError`，不能 warn 后静默全局生效——运行侧 `matchesScope` 缺 scope 字段时不应用，加载侧降级成「无 match」会让文件作用域反而扩大到所有订阅。`~proxies` 就地 patch 已有节点时**不**注入 exclude-filter（节点本就在池子里，再排除等于把它踢出所有 include-all 分组）；只收「订阅里没有的名字」，判定依据是 buildConfig 传入的订阅原节点集合。
+
+### 命令行选项
+
+选项登记在 `src/flags.ts` 的单一 `FLAGS` 表，`VALUE_FLAGS`（`getNonFlagArg` 跳过带值选项的值）与 start 的重启透传集合（`extractStartOptions`）都从它派生——新增选项只加一条，不再需要同步两张表（旧设计漏登记即静默失效：`sub use foo -s` 丢选项、`logs -n 200` 的 200 被当位置参数）。
+
+- 只登记**带值**选项与 **start 的选项**：布尔选项（`-f`/`-y` 等）以 `-` 开头，`getNonFlagArg` 本就跳过
+- `--mirror` 是可选值选项、只走 `parseMirrorArg`，故意不登记
+- 已移除的选项（`--no-ssh`、`--mirror-all`）显式报错并给迁移指引，不静默按默认行为继续
+
+### 交互确认与退出码
+
+破坏性操作（`reset`、`sub remove` 模糊匹配）在非 TTY 下**必须抛 `CliError` 退出 1**，不能打印"已取消"后 `return`——退出 0 会让脚本把"什么都没做"误判成执行成功。`confirmPrompt`（`commands/shared.ts`）自带 `!process.stdin.isTTY` 守卫返回 false，调用方需自行区分这两种语义。
 
 ---
 
@@ -415,8 +401,3 @@ curl -s -o /dev/null -w "%{http_code}\n" https://registry.npmjs.org/mihomo-cli/X
 ```
 
 200 即已落地。重跑 `npm publish` 得到 `403 You cannot publish over the previously published versions` 同样是已落地的证据。
-
-### 交互确认与退出码
-
-破坏性操作（`reset`、`sub remove` 模糊匹配）在非 TTY 下**必须抛 `CliError` 退出 1**，不能打印"已取消"后 `return`——退出 0 会让脚本把"什么都没做"误判成执行成功。`confirmPrompt`（`commands/shared.ts`）自带 `!process.stdin.isTTY` 守卫返回 false，调用方需自行区分这两种语义。
-
