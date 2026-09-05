@@ -12,9 +12,7 @@ const MAX_RESPONSE_BYTES = 50 * 1024 * 1024;
 const MAX_ERROR_BODY_BYTES = 64 * 1024;
 
 export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
-  const { timeout = 60_000, secret } = options;
-  // 访问带鉴权的 external-controller 时附带 Bearer token；secret 为空则退化为无鉴权（订阅下载等外部 HTTP 不受影响）
-  const authHeaders: Record<string, string> = secret ? { Authorization: `Bearer ${secret}` } : {};
+  const { timeout = 60_000 } = options;
 
   return {
     async get<T = string>(url: string, config?: { responseType?: 'text' | 'json'; signal?: AbortSignal }): Promise<HttpResponse<T>> {
@@ -24,7 +22,7 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
       try {
         const response = await fetch(url, {
           signal,
-          headers: { 'User-Agent': `mihomo-cli/${VERSION}`, ...authHeaders },
+          headers: { 'User-Agent': `mihomo-cli/${VERSION}` },
         });
         if (!response.ok) {
           const error: Error & { response?: { status: number; data?: Record<string, unknown> } } = new Error(`HTTP ${response.status}`);

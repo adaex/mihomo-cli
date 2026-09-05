@@ -1,5 +1,6 @@
 import { DEFAULT_MIRROR } from './constants.js';
 import { CliError } from './errors.js';
+import { START_RESTART_FLAGS, VALUE_FLAGS } from './flags.js';
 import type { MirrorArg } from './types.js';
 
 /**
@@ -172,27 +173,23 @@ export function assertNoRemovedSshFlag(args: string[] | undefined): void {
 }
 
 /**
- * 需要「跳过其后一个值」的选项名（空格分隔、带值），与全部 parseIntArg 调用一一对应。
- * getNonFlagArg 识别位置参数时借此避免把 `-n 200` 里的 `200` 误当位置参数。
- * 注意：--mirror 是可选值选项、只走 parseMirrorArg，故意不收录。
- */
-const VALUE_FLAGS: ReadonlySet<string> = new Set(['-n', '--lines', '-u', '--update-timeout']);
-
-/**
  * 从任意命令的 argv 中抽取 start 支持的启动选项（含其值），供 sub use / ow on|off 触发的重启透传。
  * 否则 `mihomo sub use foo -s` 里的 -s 等选项会被丢弃，重启仍走默认行为。
+ *
+ * 选项集合从 flags.ts 的 START_RESTART_FLAGS 派生（单一登记表），不再维护本地 BOOL_FLAGS。
+ * `--opt=value` 等号形式按前缀匹配（仅长选项），整体作为一个 token 透传。
  */
 export function extractStartOptions(args: string[] | undefined): string[] {
   if (!args) return [];
-  const BOOL_FLAGS = new Set(['-s', '--no-update']);
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (VALUE_FLAGS.has(a)) {
-      out.push(a);
+    const spec = START_RESTART_FLAGS.find(f => f.forms.includes(a) || f.forms.some(form => form.startsWith('--') && a.startsWith(`${form}=`)));
+    if (!spec) continue;
+    out.push(a);
+    // 带值选项且不是 --opt=value 形式：值是下一个 token，一并透传
+    if (spec.takesValue && !a.includes('=')) {
       if (i + 1 < args.length) out.push(args[++i]);
-    } else if (BOOL_FLAGS.has(a) || /^--update-timeout=/.test(a)) {
-      out.push(a);
     }
   }
   return out;

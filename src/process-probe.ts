@@ -159,16 +159,18 @@ export function checkStaleState(): StaleState {
 
 function getProcessInfo(pid: number): ProcessInfo | null {
   try {
-    const result = spawnSync('ps', ['-p', String(pid), '-o', 'rss='], { encoding: 'utf8', timeout: 5000 });
+    // 一次 ps 同时取 rss 与 uid（此前分两次调用，同一 pid 查两遍）
+    const result = spawnSync('ps', ['-p', String(pid), '-o', 'rss=,uid='], { encoding: 'utf8', timeout: 5000 });
     const psOutput = (result.stdout || '').trim();
     if (!psOutput) return null;
 
-    const rss = parseInt(psOutput, 10);
+    const [rssRaw, uidRaw] = psOutput.split(/\s+/);
+    const rss = parseInt(rssRaw, 10);
 
     return {
       pid,
       memory: rss ? `${(rss / 1024).toFixed(1)} MB` : '未知',
-      isRoot: isProcessRoot(pid),
+      isRoot: uidRaw === '0',
     };
   } catch {
     return { pid, memory: '未知', isRoot: false };

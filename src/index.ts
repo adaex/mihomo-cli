@@ -62,12 +62,16 @@ function clearProxyEnv(): void {
  * 但那是 CLI 自己按需提权，与用户在外面套一层 sudo 不同：后者会把整个 CLI 连同
  * 服务操作、数据目录写入一起变成 root 身份。
  */
-const ROOT_ALLOWED_COMMANDS = new Set(['help', 'version']);
+/**
+ * 守卫豁免命令：纯信息命令不碰服务、目录与提权，root 与非 macOS 下都安全。
+ * （root 守卫与平台守卫共用同一份豁免名单——两者的豁免语义完全一致，没必要维护两张表）
+ */
+const GUARD_EXEMPT_COMMANDS = new Set(['help', 'version']);
 
 function assertNotRoot(commandName: string): void {
   const uid = process.getuid?.();
   if (uid !== 0) return;
-  if (ROOT_ALLOWED_COMMANDS.has(commandName)) return;
+  if (GUARD_EXEMPT_COMMANDS.has(commandName)) return;
 
   throw new CliError('请不要用 sudo 运行 mihomo', {
     label: '身份错误',
@@ -91,11 +95,9 @@ function assertNotRoot(commandName: string): void {
  * 快速失败优于这种静默误行为。help/version 为纯信息命令，不受限。
  * MIHOMO_CLI_ALLOW_ANY_PLATFORM=1 可绕过，仅供在非 macOS 上开发调试。
  */
-const PLATFORM_FREE_COMMANDS = new Set(['help', 'version']);
-
 function assertSupportedPlatform(commandName: string): void {
   if (process.platform === 'darwin') return;
-  if (PLATFORM_FREE_COMMANDS.has(commandName)) return;
+  if (GUARD_EXEMPT_COMMANDS.has(commandName)) return;
   if (process.env.MIHOMO_CLI_ALLOW_ANY_PLATFORM === '1') return;
   throw new CliError(`mihomo-cli 目前仅支持 macOS（当前平台: ${process.platform}）`, {
     label: '平台不支持',

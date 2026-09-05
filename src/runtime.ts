@@ -94,7 +94,7 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
     const { hotReloaded } = await restartService();
     if (hotReloaded) return getServiceStatus().pid;
   } else {
-    startService();
+    await startService();
   }
 
   return assertServiceHealthy();

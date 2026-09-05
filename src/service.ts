@@ -6,7 +6,7 @@ import { CONTROLLER_BASE_URL, isValidServiceLabel, RAW_SERVICE_LABEL_INPUT, SERV
 import { CliError } from './errors.js';
 import { cleanupOldLogs, rotateAndCleanupLogs } from './log-files.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
-import { getMihomoPids, isProcessRoot, MAIN_INSTANCE_PATTERN } from './process-probe.js';
+import { getMihomoPids, isPidFileOwnedByRoot, isProcessRoot, MAIN_INSTANCE_PATTERN } from './process-probe.js';
 import { readSettings } from './settings.js';
 import { runSudoScript } from './sudo.js';
 import type { ServiceStatus } from './types.js';
@@ -155,12 +155,12 @@ export function parseDisabledList(output: string, label: string): boolean {
  */
 const LAUNCHCTL_NOT_LOADED = 113;
 
-function runLaunchctl(args: string[]): { status: number | null; stdout: string } {
+function runLaunchctl(args: string[], timeoutMs: number = LAUNCHCTL_TIMEOUT_MS): { status: number | null; stdout: string; stderr: string } {
   try {
-    const result = spawnSync('launchctl', args, { encoding: 'utf8', timeout: LAUNCHCTL_TIMEOUT_MS });
-    return { status: result.status, stdout: result.stdout || '' };
+    const result = spawnSync('launchctl', args, { encoding: 'utf8', timeout: timeoutMs });
+    return { status: result.status, stdout: result.stdout || '', stderr: result.stderr || '' };
   } catch {
-    return { status: null, stdout: '' };
+    return { status: null, stdout: '', stderr: '' };
   }
 }
 
@@ -365,22 +365,80 @@ export function ensureServiceSymlink(): void {
 // === 操作 ===
 
 /**
- * 执行一组 launchctl 步骤。user 域直接跑（免密）；system 域拼成单个 sudo 脚本
- * （一次密码完成全部 root 步骤，与 TUN 启动共用 runSudoScript 范式）。
+ * 执行一条 launchctl 写操作并要求成功（退出码 0）。
  *
- * `steps` 里的每项是完整的 shell 命令行，调用方负责 shellQuote。
- * 拼成一个脚本经 /bin/bash -c 跑（而非逐条 spawn），以保留 `|| true`、while 循环等语义。
- * **全程无 sudo**——用户域的 launchctl 操作不需要 root。
+ * 用户域操作全程免密，直接 spawn 即可——此前拼成 bash 脚本 + 自定义退出码协议
+ * （2/3/4/5/6/7 + codeMessages 映射）的做法既不可单测，又多一层 shell 注入面；
+ * 只有需要 root 的路径（cleanupRootResidue / cleanupLegacySystemInstall / TUN）
+ * 才保留 runSudoScript 的脚本形式。
+ *
+ * launchctl 失败时把 stderr 收进 hint——它的报错文本（如 "Bootstrap failed: 5: I/O error"）
+ * 是排查的主要线索；旧脚本经 stdio:'inherit' 直接漏给终端，错误消息里反而没有。
  */
-function runLaunchctlSteps(steps: string[], opts: { action: string; codeMessages?: Record<number, string> }): void {
-  const script = ['#!/bin/bash', ...steps, 'exit 0', ''].join('\n');
+function runLaunchctlOrThrow(args: string[], what: string): void {
+  const result = runLaunchctl(args);
+  if (result.status === 0) return;
+  const detail = result.stderr.trim();
+  throw new CliError(`${what}失败（launchctl 退出码 ${result.status ?? '执行失败'}）`, {
+    hint: [detail, `手动确认: launchctl ${args.join(' ')}`].filter(Boolean),
+  });
+}
 
-  const result = spawnSync('/bin/bash', ['-c', script], { stdio: 'inherit', timeout: 60_000 });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    const custom = result.status !== null ? opts.codeMessages?.[result.status] : undefined;
-    throw new CliError(custom || `${opts.action}失败（退出码 ${result.status ?? '信号中断'}）`);
+/**
+ * bootout 旧实例。容忍「未装载」：实测该情形退出码为 **3**（"Boot-out failed: 3:
+ * No such process"），文档化的 113（目标未找到）同样收下——旧脚本用 `|| true` 全吞、
+ * 再靠 waitUntilUnloaded 判定。这里把「未装载」与「查询失败」分开：
+ * 112/125 域错误等其他退出码直接抛，不伪装成「无事发生」。
+ */
+function bootoutService(): void {
+  const result = runLaunchctl(['bootout', serviceTarget()]);
+  if (result.status === 0 || result.status === 3 || result.status === LAUNCHCTL_NOT_LOADED) return;
+  const detail = result.stderr.trim();
+  throw new CliError(`卸载旧服务实例失败（launchctl bootout 退出码 ${result.status ?? '执行失败'}）`, {
+    hint: [detail, `手动确认: launchctl print ${serviceTarget()}`].filter(Boolean),
+  });
+}
+
+/** 轮询上限与节奏（与旧 bash 实现一致：最多 5s） */
+const UNLOADED_POLL_ATTEMPTS = 25;
+const UNLOADED_POLL_INTERVAL_MS = 200;
+
+/**
+ * 等待 bootout 真正完成并**判定结果**（轮询最多 5s）。
+ *
+ * `launchctl bootout` 返回不代表任务已卸载——内核可能还持着监听端口。紧接着的
+ * bootstrap 若撞上「尚未卸载完成」会报 error 5，与 disabled 的报错完全同形，极难排查。
+ *
+ * 判定语义（旧实现只有等待、没有判定，轮询用尽后静默放行）：
+ *   - print 退出码 113（未装载）= 已卸载，通过
+ *   - 112/125 等 = **查询失败**，抛错——不能当「已卸载」，与 assertLaunchctlQueryOk
+ *     「查询失败 ≠ 目标不存在」同一原则
+ *   - 25 次轮询用尽仍装载 = bootout 未生效，抛错——带着「任务仍装载」往下走，
+ *     正是「报停止成功而 KeepAlive 约 10s 后拉回内核」的静默失效
+ *
+ * async + sleep：轮询必须让出事件循环，否则 stop 卡住期间 Ctrl+C 无响应
+ * （与 cleanupAll 同一原则；旧实现把轮询塞进 spawnSync 的 bash 脚本，同样阻塞事件循环）。
+ *
+ * 注：本机实测 16 次连续 `bootout → bootstrap`（含持监听端口的进程）**未能复现**该竞态，
+ * 故这是预防性防御而非已复现问题的修复。成本是不发生时零开销（首轮 print 即退出），
+ * 留着比赌它不发生划算。
+ *
+ * @param target 仅供测试注入（默认本服务目标）：传一个保证未装载的 label 即可只读验证
+ */
+export async function waitUntilUnloaded(target: string = serviceTarget()): Promise<void> {
+  for (let i = 0; i < UNLOADED_POLL_ATTEMPTS; i++) {
+    const result = runLaunchctl(['print', target]);
+    if (result.status === LAUNCHCTL_NOT_LOADED) return;
+    if (result.status !== 0) {
+      throw new CliError(`无法确认服务已卸载（launchctl print 退出码 ${result.status ?? '执行失败'}）`, {
+        hint: ['这不代表服务仍装载，只表示查询没成立。', `手动确认: launchctl print ${target}`],
+      });
+    }
+    await sleep(UNLOADED_POLL_INTERVAL_MS);
   }
+  throw new CliError('服务卸载超时，任务仍处于装载状态（bootout 未生效）', {
+    hint: ['带着「任务仍装载」往下走，正是「报停止成功而 KeepAlive 约 10s 后拉回内核」的静默失效。', `手动确认: launchctl print ${target}`],
+  });
 }
 
 /**
@@ -390,16 +448,7 @@ function runLaunchctlSteps(steps: string[], opts: { action: string; codeMessages
  */
 function cleanupRootResidue(): void {
   const rootPids = getMihomoPids().filter(isProcessRoot);
-  const pidFileIsRoot =
-    fs.existsSync(PATHS.pidFile) &&
-    (() => {
-      try {
-        return fs.statSync(PATHS.pidFile).uid === 0;
-      } catch {
-        return false;
-      }
-    })();
-  if (rootPids.length === 0 && !pidFileIsRoot) return;
+  if (rootPids.length === 0 && !isPidFileOwnedByRoot()) return;
 
   const script = [
     '#!/bin/bash',
@@ -433,41 +482,6 @@ function killResidualKernels(): void {
 }
 
 /**
- * 等待 bootout 真正完成并**判定结果**的脚本片段（轮询最多 5s）。
- *
- * `launchctl bootout` 返回不代表任务已卸载——内核可能还持着监听端口。紧接着的
- * bootstrap 若撞上「尚未卸载完成」会报 error 5，与 disabled 的报错完全同形，极难排查。
- *
- * 判定语义（此前只有等待、没有判定，轮询用尽后静默放行）：
- *   - print 退出码 113（未装载）= 已卸载，通过
- *   - 112/125 等 = **查询失败**，exit 6——不能当「已卸载」，与 assertLaunchctlQueryOk
- *     「查询失败 ≠ 目标不存在」同一原则
- *   - 25 次轮询用尽仍装载 = bootout 未生效，exit 7——带着「任务仍装载」往下走，
- *     正是「报停止成功而 KeepAlive 约 10s 后拉回内核」的静默失效
- *
- * 注：本机实测 16 次连续 `bootout → bootstrap`（含持监听端口的进程）**未能复现**该竞态，
- * 故这是预防性防御而非已复现问题的修复。成本是不发生时零开销（首轮 print 即退出），
- * 留着比赌它不发生划算。
- */
-function waitUnloadedSteps(): string[] {
-  const target = shellQuote(serviceTarget());
-  return [
-    'n=0',
-    'while [ $n -lt 25 ]; do',
-    `  launchctl print ${target} >/dev/null 2>&1`,
-    '  rc=$?',
-    '  [ $rc -eq 113 ] && break',
-    '  [ $rc -ne 0 ] && exit 6',
-    '  sleep 0.2',
-    '  n=$((n+1))',
-    'done',
-    `launchctl print ${target} >/dev/null 2>&1; rc=$?`,
-    '[ $rc -eq 0 ] && exit 7',
-    '[ $rc -ne 113 ] && exit 6',
-  ];
-}
-
-/**
  * 安装/重装服务。
  *
  * 幂等：可反复执行。`wasRunning` 为真时装完恢复运行（避免「代理开着时更新后重装静默关掉代理」），
@@ -475,7 +489,7 @@ function waitUnloadedSteps(): string[] {
  *
  * 前置只要求内核存在（plist 指向它）；**不要求 config.yaml**，因为装完不启动。
  */
-export function installService(wasRunning: boolean): void {
+export async function installService(wasRunning: boolean): Promise<void> {
   assertServiceLabelSafe();
   ensureDirs();
   ensureServiceSymlink();
@@ -483,54 +497,47 @@ export function installService(wasRunning: boolean): void {
   const stagePath = path.join(DIRS.runtime, 'service.plist.stage');
   atomicWriteFileSync(stagePath, buildPlist(), { mode: 0o600 });
 
-  const target = shellQuote(serviceTarget());
-  const dest = shellQuote(PATHS.userAgentPlist);
-  const stage = shellQuote(stagePath);
-  const destDir = shellQuote(path.dirname(PATHS.userAgentPlist));
-
-  // plutil -lint 先行：坏 plist 绝不进系统目录（bootstrap 失败后还得手工清理）。
-  //
-  // 重装分支必须 enable 在 bootstrap 之前，且顺序不可换：**bootstrap 一个 disabled 的
-  // label 不是「加载后不启动」，而是硬失败 `Bootstrap failed: 5: Input/output error`**
-  // （本机实测）。而 `stop` 恒置 disable 位，所以「stop 之后重装」是必经路径，
-  // 少了 enable 这里就 100% 失败。
-  //
-  // bootstrap 失败**不删 plist**：失败后落到「已安装未装载」这个干净可恢复的状态，
-  // 用户 `mh start` 即可重试。删掉的话，「重装」会被静默升级成「卸载」——
-  // 用户以为装着，实际什么都没有。
-  const steps = [
-    `plutil -lint ${stage} >/dev/null || exit 2`,
-    `launchctl bootout ${target} 2>/dev/null || true`,
-    ...waitUnloadedSteps(),
-    // ~/Library/LaunchAgents 在全新系统上可能不存在；只在缺失时创建，避免改动已有目录权限
-    `[ -d ${destDir} ] || mkdir -p ${destDir}`,
-    `install -m 644 ${stage} ${dest} || exit 3`,
-    ...(wasRunning ? [`launchctl enable ${target} || exit 5`, `launchctl bootstrap ${bootstrapDomain()} ${dest} || exit 4`] : []),
-  ];
-
   try {
-    runLaunchctlSteps(steps, {
-      action: '安装服务',
-      codeMessages: {
-        2: 'plist 语法校验失败（plutil -lint）',
-        3: `安装 plist 到 ${path.dirname(PATHS.userAgentPlist)} 失败`,
-        4: '装载服务失败（launchctl bootstrap）',
-        5: '启用服务失败（launchctl enable）',
-        6: '无法确认旧服务已卸载（launchctl 查询失败）',
-        7: '旧服务卸载超时，任务仍处于装载状态',
-      },
-    });
-    if (!wasRunning) {
-      // 首装关自启放脚本外：disableServiceAutoStart 自带事后确认。此前在脚本里
-      // `|| true` 地跑，失败时用户拿到「已安装」，而 RunAtLoad 会让它下次登录自启
-      disableServiceAutoStart();
+    // plutil -lint 先行：坏 plist 绝不进系统目录（bootstrap 失败后还得手工清理）
+    const lint = spawnSync('plutil', ['-lint', stagePath], { encoding: 'utf8', timeout: 10_000 });
+    if (lint.status !== 0) {
+      throw new CliError('plist 语法校验失败（plutil -lint）', {
+        hint: [(lint.stderr || lint.stdout || '').trim()].filter(Boolean),
+      });
     }
+
+    // 重装分支必须 enable 在 bootstrap 之前，且顺序不可换：**bootstrap 一个 disabled 的
+    // label 不是「加载后不启动」，而是硬失败 `Bootstrap failed: 5: Input/output error`**
+    // （本机实测）。而 `stop` 恒置 disable 位，所以「stop 之后重装」是必经路径，
+    // 少了 enable 这里就 100% 失败。
+    await bootoutService();
+    await waitUntilUnloaded();
+
+    // ~/Library/LaunchAgents 在全新系统上可能不存在；recursive 对已存在目录是 no-op，不改权限
+    fs.mkdirSync(path.dirname(PATHS.userAgentPlist), { recursive: true });
+    fs.copyFileSync(stagePath, PATHS.userAgentPlist);
+    fs.chmodSync(PATHS.userAgentPlist, 0o644);
+
+    if (wasRunning) {
+      runLaunchctlOrThrow(['enable', serviceTarget()], '启用服务');
+      runLaunchctlOrThrow(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist], '装载服务');
+    }
+
+    // bootstrap 失败**不删 plist**：失败后落到「已安装未装载」这个干净可恢复的状态，
+    // 用户 `mh start` 即可重试。删掉的话，「重装」会被静默升级成「卸载」——
+    // 用户以为装着，实际什么都没有。
   } finally {
     try {
       fs.unlinkSync(stagePath);
     } catch {
       /* ignore */
     }
+  }
+
+  if (!wasRunning) {
+    // 首装关自启放脚本外：disableServiceAutoStart 自带事后确认。此前在脚本里
+    // `|| true` 地跑，失败时用户拿到「已安装」，而 RunAtLoad 会让它下次登录自启
+    disableServiceAutoStart();
   }
 }
 
@@ -548,7 +555,7 @@ export function installService(wasRunning: boolean): void {
  * 只在「旧进程已退出、新进程未起」这个窗口里有效，见下方注释。两次调用都在用户域，
  * 全程免密，拆开不额外弹密码。
  */
-export function startService(): void {
+export async function startService(): Promise<void> {
   assertServiceLabelSafe();
   ensureServiceSymlink();
 
@@ -580,16 +587,9 @@ export function startService(): void {
   // tun 残留是 root 属主，会与服务抢端口；有才清（这是唯一可能弹密码的地方），无则免密
   cleanupRootResidue();
 
-  const target = shellQuote(serviceTarget());
-  const dest = shellQuote(PATHS.userAgentPlist);
-
-  runLaunchctlSteps([`launchctl bootout ${target} 2>/dev/null || true`, ...waitUnloadedSteps()], {
-    action: '卸载旧服务实例',
-    codeMessages: {
-      6: '无法确认旧服务已卸载（launchctl 查询失败）',
-      7: '旧服务卸载超时，任务仍处于装载状态',
-    },
-  });
+  // 先 bootout 清旧使重复调用幂等（改过 plist 后 start 一下即按新配置重载，无需 kickstart）
+  await bootoutService();
+  await waitUntilUnloaded();
 
   // 轮转日志。**必须卡在这个窗口**：旧进程已退出、新进程尚未 bootstrap，此时无人持有
   // 日志 fd，rename 才真正生效。运行中做 rename 是无效的——launchd 的 StandardOutPath
@@ -600,10 +600,10 @@ export function startService(): void {
   // 「自动轮转，保留 7 天」不符。
   rotateAndCleanupLogs();
 
-  runLaunchctlSteps([`launchctl enable ${target} || exit 2`, `launchctl bootstrap ${bootstrapDomain()} ${dest} || exit 3`], {
-    action: '启动服务',
-    codeMessages: { 2: '启用服务失败（launchctl enable）', 3: '装载服务失败（launchctl bootstrap）' },
-  });
+  // enable 必须在 bootstrap 之前（见 installService 的注释）；stop 恒置 disable 位，
+  // 「stop 之后再 start」是最常走的路径
+  runLaunchctlOrThrow(['enable', serviceTarget()], '启用服务');
+  runLaunchctlOrThrow(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist], '启动服务');
 }
 
 /**
@@ -620,11 +620,7 @@ export function startService(): void {
 export function disableServiceAutoStart(): void {
   assertServiceLabelSafe();
 
-  const target = shellQuote(serviceTarget());
-  runLaunchctlSteps([`launchctl disable ${target} || exit 2`], {
-    action: '关闭服务自启',
-    codeMessages: { 2: '关闭服务自启失败（launchctl disable）' },
-  });
+  runLaunchctlOrThrow(['disable', serviceTarget()], '关闭服务自启');
 
   // 事后确认：命令成功 ≠ 位生效。这是 TUN 防线的第一层，而开机自启路径不经过 CLI
   // （登录时 launchd 直接扫 plist），第二层「startService 拒绝 TUN 配置」在那条路径上
@@ -645,20 +641,14 @@ export function disableServiceAutoStart(): void {
  * 即便 plist 不存在也照常执行：用户手动删掉 plist 后任务仍处 bootstrapped 状态，
  * KeepAlive 会继续拉起内核，此时只有 bootout 能救。
  */
-export function stopService(): void {
+export async function stopService(): Promise<void> {
   assertServiceLabelSafe();
 
-  const target = shellQuote(serviceTarget());
-  runLaunchctlSteps([`launchctl bootout ${target} 2>/dev/null || true`, ...waitUnloadedSteps()], {
-    action: '停止服务',
-    codeMessages: {
-      6: '无法确认服务已卸载（launchctl 查询失败）',
-      7: '服务卸载超时，任务仍处于装载状态（bootout 未生效）',
-    },
-  });
+  await bootoutService();
+  await waitUntilUnloaded();
 
   // disable 放 bootout 之后单独执行并复核。「已停止」的完整语义 = 任务已卸载
-  // （上方 waitUnloadedSteps 的判定）+ 自启已关（disableServiceAutoStart 内的事后确认）
+  // （上方 waitUntilUnloaded 的判定）+ 自启已关（disableServiceAutoStart 内的事后确认）
   disableServiceAutoStart();
 
   // bootout 通常已终止托管内核；tun 起的 root 内核与手动残留在此收口
@@ -673,26 +663,19 @@ export function stopService(): void {
  * 既然两者都留痕，就选语义更安全的那个：plist 若被别的途径放回也不会自动启动。
  * 而 startService 恒无条件 `enable`，残留位不影响任何正常路径。
  */
-export function uninstallService(): void {
+export async function uninstallService(): Promise<void> {
   assertServiceLabelSafe();
 
-  const target = shellQuote(serviceTarget());
-  runLaunchctlSteps(
-    [
-      `launchctl bootout ${target} 2>/dev/null || true`,
-      ...waitUnloadedSteps(),
-      // rm 失败被尾部 exit 0 吞掉的话，「已卸载」而 plist 还在——登录时又被扫到
-      `rm -f ${shellQuote(PATHS.userAgentPlist)} || exit 3`,
-    ],
-    {
-      action: '卸载服务',
-      codeMessages: {
-        3: `删除 plist 失败（${PATHS.userAgentPlist}）`,
-        6: '无法确认服务已卸载（launchctl 查询失败）',
-        7: '服务卸载超时，任务仍处于装载状态（bootout 未生效）',
-      },
-    },
-  );
+  await bootoutService();
+  await waitUntilUnloaded();
+
+  // rm 失败必须可见：plist 还在的话登录时又被扫到，「已卸载」就是谎报
+  // （旧脚本 `rm -f ... || exit 3` 同一语义）
+  try {
+    fs.rmSync(PATHS.userAgentPlist, { force: true });
+  } catch (e) {
+    throw new CliError(`删除 plist 失败（${PATHS.userAgentPlist}）: ${(e as Error).message}`);
+  }
 
   // disable 位残留表里是刻意的（见函数头注释），但必须确认它真的是 disabled——
   // enable 位还开着的话，plist 被别的途径放回（重装、备份恢复）即自启
@@ -702,7 +685,7 @@ export function uninstallService(): void {
 
   // 符号链是本工具装的，卸载时一并清掉（内核本体保留，那是 kernel 命令的资产）
   try {
-    fs.unlinkSync(PATHS.serviceBinary);
+    fs.rmSync(PATHS.serviceBinary, { force: true });
   } catch {
     /* ignore：不存在或已被 reset kernel 带走 */
   }
@@ -809,22 +792,29 @@ export async function restartService(): Promise<{ hotReloaded: boolean }> {
 
   if (!logOversized() && (await tryHotReload())) return { hotReloaded: true };
 
-  const target = shellQuote(serviceTarget());
-  const dest = shellQuote(PATHS.userAgentPlist);
-  const logFile = shellQuote(PATHS.logFile);
-  const archiveFile = shellQuote(path.join(DIRS.logs, `mihomo.${formatLocalTimestamp()}.log`));
+  // 日志超阈值时跳过热重载、强制 kickstart 顺便轮转：运行中不能 rename 轮转——
+  // launchd 的 StandardOutPath fd 指向旧 inode，rename 后日志会继续写进归档文件。
+  // 只能 copy-truncate（fd 为 O_APPEND，truncate 后从 0 续写不丢句柄）。
+  if (logOversized()) {
+    const archiveFile = path.join(DIRS.logs, `mihomo.${formatLocalTimestamp()}.log`);
+    try {
+      fs.copyFileSync(PATHS.logFile, archiveFile);
+      fs.writeFileSync(PATHS.logFile, '');
+    } catch {
+      /* 轮转失败不阻塞重启（与旧脚本的 best-effort 语义一致） */
+    }
+  }
 
-  runLaunchctlSteps(
-    [
-      `if [ -f ${logFile} ] && [ "$(stat -f%z ${logFile} 2>/dev/null || echo 0)" -gt ${LOG_ROTATE_MAX_BYTES} ]; then`,
-      `  cp ${logFile} ${archiveFile} 2>/dev/null && : > ${logFile}`,
-      'fi',
-      `if launchctl kickstart -k ${target} 2>/dev/null; then exit 0; fi`,
-      `launchctl enable ${target} 2>/dev/null || true`,
-      `launchctl bootstrap ${bootstrapDomain()} ${dest} || exit 3`,
-    ],
-    { action: '重启服务', codeMessages: { 3: '重启服务失败（launchctl bootstrap）' } },
-  );
+  // kickstart -k 是命令式重启，不与 KeepAlive 冲突；任务未装载（plist 在但被手动 bootout）
+  // 则 enable + bootstrap 自愈（旧脚本：kickstart 失败 → enable || true → bootstrap || exit 3）。
+  //
+  // kickstart -k 会**阻塞等进程死亡**（实测对不立即响应 SIGTERM 的进程可超过 5s），
+  // 不能用 runLaunchctl 的查询超时（5s）——旧脚本整体超时是 60s，这里单独放宽
+  const kick = runLaunchctl(['kickstart', '-k', serviceTarget()], 60_000);
+  if (kick.status !== 0) {
+    runLaunchctl(['enable', serviceTarget()]); // 容忍失败：bootstrap 会再判一次
+    runLaunchctlOrThrow(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist], '重启服务');
+  }
 
   // 顺手清理过期归档：归档可能为 root 属主，但 logs/ 目录归用户所有，unlink 只看目录权限
   cleanupOldLogs();

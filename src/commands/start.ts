@@ -1,5 +1,6 @@
 import { colors } from '../colors.js';
 import { hasKernel } from '../config.js';
+import { DEFAULT_AUTO_UPDATE_TIMEOUT } from '../constants.js';
 import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
 import { detectLegacySystemInstall, disableServiceAutoStart, getServiceStatus } from '../service.js';
@@ -33,7 +34,7 @@ export async function cmdStart(args: string[]): Promise<void> {
   }
 
   const skipUpdate = hasFlag(args, '-s', '--no-update');
-  const updateTimeout = parseIntArg(args, '-u', '--update-timeout', subscription.DEFAULT_AUTO_UPDATE_TIMEOUT);
+  const updateTimeout = parseIntArg(args, '-u', '--update-timeout', DEFAULT_AUTO_UPDATE_TIMEOUT);
 
   const serviceBefore = getServiceStatus();
 

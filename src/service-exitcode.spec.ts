@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 
+import { waitUntilUnloaded } from './service.js';
+
 /**
  * launchctl 退出码的语义回归。
  *
@@ -31,5 +33,13 @@ describe('launchctl 退出码语义', () => {
   it('当前用户域可正常查询（print-disabled 免 sudo）', () => {
     const r = spawnSync('launchctl', ['print-disabled', `gui/${uid}`], { encoding: 'utf8', timeout: 10_000 });
     assert.equal(r.status, 0, '用户域的 print-disabled 应免 sudo 且成功');
+  });
+
+  it('waitUntilUnloaded 对未装载目标立即通过（113 = 已卸载）', async () => {
+    // 只读验证：该 label 保证未装载，print 首轮即 113，函数应立即返回而非轮询满 5s。
+    // （此前该逻辑是 bash 脚本里的 while 循环，完全不可测；去 bash 化后可直接断言）
+    const start = Date.now();
+    await waitUntilUnloaded(`gui/${uid}/com.mihomo-cli.definitely-not-loaded`);
+    assert.ok(Date.now() - start < 1000, '未装载目标应在首轮判定后立即返回');
   });
 });

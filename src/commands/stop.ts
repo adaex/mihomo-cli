@@ -54,7 +54,7 @@ export async function cmdStop(args: string[]): Promise<void> {
     return;
   }
 
-  stopService();
+  await stopService();
 
   const remaining = getMihomoPids();
   if (remaining.length > 0) {

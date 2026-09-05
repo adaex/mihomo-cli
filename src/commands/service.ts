@@ -44,7 +44,7 @@ export async function cmdInstall(_args: string[]): Promise<void> {
   // 重装保持原运行状态：不这么做的话，「代理开着时更新内核后重装」会静默把代理关掉
   const wasRunning = getServiceStatus().running;
 
-  installService(wasRunning);
+  await installService(wasRunning);
 
   console.log(`${colors.green('已安装服务')}`);
   console.log(colors.gray(`  plist: ${PATHS.userAgentPlist}`));
@@ -93,7 +93,7 @@ export async function cmdUninstall(_args: string[]): Promise<void> {
   }
 
   if (status.installed || status.loaded) {
-    uninstallService();
+    await uninstallService();
     console.log(colors.green('已卸载服务'));
   }
 

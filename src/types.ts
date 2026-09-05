@@ -255,7 +255,7 @@ export interface ResetTarget {
   label: string;
   paths: () => string[];
   needsStop: boolean;
-  onAfter?: () => void;
+  onAfter?: () => void | Promise<void>;
   checkEmpty?: () => boolean;
   emptyMsg?: string;
   warnIfRunning?: boolean;
@@ -291,8 +291,6 @@ export interface ParsedSubscription {
 
 export interface HttpClientOptions {
   timeout?: number;
-  /** external-controller 访问密钥；设置后所有请求带 Authorization: Bearer <secret> */
-  secret?: string;
 }
 
 export interface HttpResponse<T = string> {

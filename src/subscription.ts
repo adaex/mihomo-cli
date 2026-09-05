@@ -24,9 +24,6 @@ import type {
   UserInfo,
 } from './types.js';
 
-// 供命令层沿用 `subscription.XXX` 引用（实际定义在 constants.ts，集中管理默认值）
-export { DEFAULT_AUTO_UPDATE_TIMEOUT };
-
 export function isGithubUrl(url: string): boolean {
   return /github\.com|raw\.githubusercontent\.com/i.test(url);
 }

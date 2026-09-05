@@ -23,9 +23,11 @@ export const RESET_TARGETS: ResetTarget[] = [
     label: '订阅',
     paths: () => [DIRS.subscriptions],
     needsStop: true,
-    // 同步清空 settings 里的订阅列表：只删缓存文件会留下"列表存在但无配置"的半重置状态
-    // （start 会报"未找到订阅配置"）。active_subscription 一并清除
-    onAfter: () => writeSettings({ subscriptions: undefined, active_subscription: undefined }),
+    onAfter: () => {
+      // 同步清空 settings 里的订阅列表：只删缓存文件会留下"列表存在但无配置"的半重置状态
+      // （start 会报"未找到订阅配置"）。active_subscription 一并清除
+      writeSettings({ subscriptions: undefined, active_subscription: undefined });
+    },
   },
   {
     id: 'logs',
@@ -92,9 +94,9 @@ export const RESET_TARGETS: ResetTarget[] = [
     // onAfter 因幂等守卫成为 no-op，仅作单独 reset 未走前段时的兜底。
     paths: () => [],
     needsStop: false,
-    onAfter: () => {
+    onAfter: async () => {
       const st = getServiceStatus();
-      if (st.installed || st.loaded) uninstallService();
+      if (st.installed || st.loaded) await uninstallService();
       // checkEmpty 把遗留 root 安装计入「服务存在」，这里必须同样处理它——
       // 否则仅有 legacy daemon 的机器上 reset service 报「已重置」却原样保留，
       // KeepAlive 继续拉起内核抢端口
@@ -232,9 +234,9 @@ export async function cmdReset(args: string[]): Promise<void> {
   if ((uninstallsService || stopsService) && serviceActive) {
     try {
       if (uninstallsService) {
-        uninstallService();
+        await uninstallService();
       } else {
-        stopService();
+        await stopService();
       }
     } catch (e) {
       if (e instanceof CliError) throw e;
@@ -275,7 +277,7 @@ export async function cmdReset(args: string[]): Promise<void> {
         }
       }
     }
-    t.onAfter?.();
+    await t.onAfter?.();
   }
 
   ensureDirs();
