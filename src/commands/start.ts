@@ -2,7 +2,7 @@ import { colors } from '../colors.js';
 import { hasKernel } from '../config.js';
 import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
-import { getDomainSpec, getServiceStatus } from '../service.js';
+import { getServiceStatus } from '../service.js';
 import * as subscription from '../subscription.js';
 import type { PreparedConfig } from '../types.js';
 import { assertNoRemovedSshFlag, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
@@ -78,16 +78,6 @@ export async function cmdStart(args: string[]): Promise<void> {
 
   const modeLabel = targetMode === 'tun' ? 'TUN' : 'Mixed';
   console.log([colors.cyan(modeLabel), sub.name, subscription.formatProxySummary(configInfo)].join(' · '));
-
-  // 冷启动（未装载/被 disable）需要动 launchctl：用户级免密，系统级会弹一次密码。
-  // 已在跑则走热重载，两种域都免密——这是日常最高频的路径（切订阅、开关覆写）。
-  // 重查一次状态：前面的订阅更新耗时可能跨越数秒，期间服务状态可能已变
-  if (targetMode === 'mixed') {
-    const now = getServiceStatus();
-    if (now.domain && getDomainSpec(now.domain).needsSudo && !(now.running && !now.disabled)) {
-      console.log(colors.gray('系统级服务启动需要管理员权限'));
-    }
-  }
 
   try {
     const pid = await runtime.launchOrRestart(targetMode);

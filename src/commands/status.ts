@@ -2,12 +2,12 @@ import { colors } from '../colors.js';
 import { getConfigInfo, getKernelVersion } from '../config.js';
 import { isOverwriteEnabled, listOverwriteFile } from '../overwrite.js';
 import { getRunningState } from '../runtime.js';
-import { getDomainSpec, getServiceStatus, hasBothDomainsInstalled } from '../service.js';
+import { detectLegacySystemInstall, getServiceStatus } from '../service.js';
 import { getSubscriptionsWithCache } from '../settings.js';
 import { formatProxySummary, getActiveSubscription } from '../subscription.js';
 import { formatTimestamp, formatTraffic } from '../utils.js';
 
-/** 全程免 sudo：launchctl print / print-disabled 对两个域都可读，pgrep/ps 亦然。 */
+/** 全程免 sudo：launchctl print / print-disabled 均可读，pgrep/ps 亦然。 */
 export async function printStatus(): Promise<void> {
   const state = getRunningState();
   const service = getServiceStatus();
@@ -86,28 +86,30 @@ export async function printStatus(): Promise<void> {
 }
 
 function printServiceLines(service: ReturnType<typeof getServiceStatus>): void {
+  const legacy = detectLegacySystemInstall();
+
   if (!service.installed && !service.loaded) {
     console.log(`${colors.gray('服务: ')}${colors.yellow('未安装')} ${colors.gray('(mihomo install 安装后可用 Mixed 模式)')}`);
-    return;
-  }
-
-  const spec = getDomainSpec(service.domain ?? 'user');
-
-  // plist 被手动删除但任务仍装载：KeepAlive 会持续拉起内核。不能报「已安装」——
-  // 那与紧随其后的异常提示自相矛盾，用户无法判断到底装没装
-  if (!service.installed) {
-    console.log(`${colors.gray('服务: ')}${colors.yellow('异常')} ${colors.gray(`(${spec.label}：plist 不存在，但服务仍处装载状态)`)}`);
+  } else if (!service.installed) {
+    // plist 被手动删除但任务仍装载：KeepAlive 会持续拉起内核。不能报「已安装」——
+    // 那与紧随其后的异常提示自相矛盾，用户无法判断到底装没装
+    console.log(`${colors.gray('服务: ')}${colors.yellow('异常')} ${colors.gray('(plist 不存在，但服务仍处装载状态)')}`);
     console.log(colors.gray('  KeepAlive 会持续拉起内核，清理: mihomo uninstall'));
+    printAutoStart(service);
   } else {
-    console.log(`${colors.gray('服务: ')}${colors.green('已安装')} ${colors.gray(`(${spec.label})`)}`);
+    console.log(`${colors.gray('服务: ')}${colors.green('已安装')}`);
+    printAutoStart(service);
   }
 
-  // 自启位独立于 plist 与运行状态：stop 之后重启不会自动回来，这一行让用户能确认
+  // 旧版本（v4 及以前）的 root LaunchDaemon 会与用户级服务抢端口，且用户态动不了它
+  if (legacy) {
+    console.log(colors.yellow('  异常: 检测到旧版本的系统级服务（root LaunchDaemon）'));
+    console.log(colors.gray('  它会抢占同一组端口，清理: mihomo uninstall（需一次管理员密码）'));
+  }
+}
+
+/** 自启位独立于 plist 与运行状态：stop 之后重新登录不会自动回来，这一行让用户能确认 */
+function printAutoStart(service: ReturnType<typeof getServiceStatus>): void {
   const autoStart = service.disabled ? colors.yellow('已关闭') : colors.green('已开启');
   console.log(`${colors.gray('自启: ')}${autoStart}`);
-
-  if (hasBothDomainsInstalled()) {
-    console.log(colors.yellow('  异常: 用户级与系统级同时装有服务，会抢占同一组端口'));
-    console.log(colors.gray('  清理: mihomo uninstall（重复执行直至清空）'));
-  }
 }

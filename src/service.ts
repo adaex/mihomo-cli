@@ -9,25 +9,29 @@ import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
 import { getMihomoPids, isProcessRoot, MAIN_INSTANCE_PATTERN } from './process-probe.js';
 import { readSettings } from './settings.js';
 import { runSudoScript } from './sudo.js';
-import type { ServiceDomain, ServiceStatus } from './types.js';
+import type { ServiceStatus } from './types.js';
 import { formatLocalTimestamp, shellQuote } from './utils.js';
 
 /**
  * launchd 服务层：Mixed 模式的唯一运行方式。
  *
- * 两个安装域，命令语义完全一致，只有执行方式与权限不同：
- *   user   → ~/Library/LaunchAgents，`gui/<uid>` 域，**全程免 sudo**（默认）
- *   system → /Library/LaunchDaemons，`system` 域，以 root 运行，每次操作需密码（`--system` 回退）
+ * 装在用户域：`~/Library/LaunchAgents` + `gui/<uid>`，**全程免 sudo**——
+ * install/start/stop/uninstall 一次密码都不用输。
  *
- * 为什么默认 user 域：system 域的 bootstrap/bootout/enable/disable 一律需要 root，
- * 那样 start/stop 每次都要输密码。Apple DTS 明确「豁免本地网络隐私的条件是**以 root 运行**，
- * 不是身为 daemon」——user 域 agent 因此不豁免，但那只意味着走正常的提示-授权流程
- * （首次访问局域网弹框，允许后永久生效），并非被静默拦死。经局域网跳板的节点若真被拦，
- * 用 `install --system` 回退到 root 域。
+ * 为什么不用 root LaunchDaemon（v3.0–v4.x 的做法）：system 域的
+ * bootstrap/bootout/enable/disable 一律需要 root，那样每次启停都要输密码。
+ * 旧实现选 root 是为了绕开 macOS 本地网络隐私对局域网设备访问的限制，
+ * 但 Apple DTS 明确「豁免条件是**以 root 运行**，不是身为 daemon」——
+ * 用户域 agent 不豁免，可那只意味着走正常的弹框授权流程，并非被静默拦死。
+ * 且 loopback（`127.0.0.1`，如自建 `ssh -D` 的 SOCKS 出口）根本不属于「本地网络」，
+ * 完全不触发该机制。权衡后不再提供 root 安装。
+ *
+ * 仍会**识别**遗留的系统级安装（老用户 v4 装的）：它带 KeepAlive 会持续拉起内核抢端口，
+ * 不认它的话就是个用户无从卸载的幽灵。识别后引导 `uninstall` 清理，见 detectLegacySystemInstall。
  */
 
-/** 校验 MIHOMO_CLI_DAEMON_LABEL：非法 label 经 path.join 折叠 `..` 后会让系统级安装的
- * `sudo install -o root` 与 `sudo rm -f` 落到 /Library/LaunchDaemons 之外的任意路径
+/** 校验 MIHOMO_CLI_DAEMON_LABEL：非法 label 经 path.join 折叠 `..` 后会让清理遗留系统级安装的
+ * `sudo rm -f` 落到 /Library/LaunchDaemons 之外的任意路径
  * （`../../etc/sudoers.d/evil` → `/etc/sudoers.d/evil.plist`）——提权原语。
  * constants 已把非法值回退为默认标签，此处在真正执行写/删前拒绝并告知用户，
  * 避免「设了变量却静默作用到生产 plist」的隐蔽行为。 */
@@ -35,7 +39,7 @@ function assertServiceLabelSafe(): void {
   if (RAW_SERVICE_LABEL_INPUT !== undefined && !isValidServiceLabel(RAW_SERVICE_LABEL_INPUT)) {
     throw new CliError(`MIHOMO_CLI_DAEMON_LABEL 无效: "${RAW_SERVICE_LABEL_INPUT}"`, {
       label: '配置错误',
-      hint: ['只允许字母、数字、点、下划线、短横线，且不能含 ".."。', '该值会成为 launchd plist 的文件名；系统级安装时它还是 root 写入/删除的目标路径。'],
+      hint: ['只允许字母、数字、点、下划线、短横线，且不能含 ".."。', '该值会成为 launchd plist 的文件名，并参与清理遗留安装时的 root 删除路径。'],
     });
   }
 }
@@ -49,59 +53,32 @@ const LOG_ROTATE_MAX_BYTES = 10 * 1024 * 1024;
 /** launchctl 查询超时：只读探测卡住时按「查不到」处理 */
 const LAUNCHCTL_TIMEOUT_MS = 5000;
 
-// === 域 ===
+// === 服务目标 ===
 
-export interface DomainSpec {
-  domain: ServiceDomain;
-  /** plist 落地路径 */
-  plistPath: string;
-  /** launchctl 服务目标：gui/<uid>/<label> 或 system/<label> */
-  target: string;
-  /** bootstrap 的域参数：gui/<uid> 或 system */
-  bootstrapDomain: string;
-  /** 该域的写操作是否需要 root */
-  needsSudo: boolean;
-  /** 展示名 */
-  label: string;
+/** launchctl 服务目标：`gui/<uid>/<label>` */
+function serviceTarget(): string {
+  return `${bootstrapDomain()}/${SERVICE_LABEL}`;
 }
 
-export function getDomainSpec(domain: ServiceDomain): DomainSpec {
-  if (domain === 'system') {
-    return {
-      domain,
-      plistPath: PATHS.systemDaemonPlist,
-      target: `system/${SERVICE_LABEL}`,
-      bootstrapDomain: 'system',
-      needsSudo: true,
-      label: '系统级',
-    };
-  }
-  const uid = process.getuid?.() ?? 0;
-  return {
-    domain,
-    plistPath: PATHS.userAgentPlist,
-    target: `gui/${uid}/${SERVICE_LABEL}`,
-    bootstrapDomain: `gui/${uid}`,
-    needsSudo: false,
-    label: '用户级',
-  };
+/** bootstrap/print-disabled 的域参数：`gui/<uid>` */
+function bootstrapDomain(): string {
+  return `gui/${process.getuid?.() ?? 0}`;
+}
+
+/** 服务是否已安装（plist 文件存在） */
+export function isServiceInstalled(): boolean {
+  return fs.existsSync(PATHS.userAgentPlist);
 }
 
 /**
- * 已安装在哪个域。两边都装了时**以 system 优先**——root 那个会抢占端口，
- * 且用户态的 launchctl 操作根本动不了它，把它当成「当前服务」才能让 stop/uninstall 生效。
+ * 是否存在遗留的**系统级**安装（v3.0–v4.x 的 `daemon on` 装的 root LaunchDaemon）。
+ *
+ * 必须识别：它带 KeepAlive，会持续把内核拉起并抢占端口，而用户态的 launchctl
+ * 根本动不了它。不认的话对用户就是个「代理停不掉、CLI 说没装」的幽灵。
+ * 只识别不自动清理——删 root 文件要提权，交由 uninstall 在用户明确要求时做。
  */
-export function detectInstalledDomain(): ServiceDomain | null {
-  const system = fs.existsSync(PATHS.systemDaemonPlist);
-  const user = fs.existsSync(PATHS.userAgentPlist);
-  if (system) return 'system';
-  if (user) return 'user';
-  return null;
-}
-
-/** 两个域是否都装了（异常状态，命令层需告警：root 实例会抢端口且用户态操作动不了它） */
-export function hasBothDomainsInstalled(): boolean {
-  return fs.existsSync(PATHS.systemDaemonPlist) && fs.existsSync(PATHS.userAgentPlist);
+export function detectLegacySystemInstall(): boolean {
+  return fs.existsSync(PATHS.systemDaemonPlist);
 }
 
 // === 状态解析（纯函数，单测锁定） ===
@@ -150,9 +127,8 @@ function runLaunchctl(args: string[]): { status: number | null; stdout: string }
 }
 
 /**
- * 查询服务状态。全程免 sudo：`launchctl print` 与 `print-disabled` 对两个域都是可读的
- * （实测非 root 用户可读 system 域，3ms），故高频只读命令绝不弹密码。
- * 未装载时 `launchctl print` 退出码为 113。
+ * 查询服务状态。全程免 sudo：`launchctl print` 与 `print-disabled` 均可读（实测 3ms），
+ * 故高频只读命令绝不弹密码。未装载时 `launchctl print` 退出码为 113。
  *
  * **plist 不存在时也必须查 launchctl**，不能直接返回「未安装」就完事：用户手动
  * `rm` 掉 plist 后任务仍处 bootstrapped 状态，KeepAlive 会继续把内核拉起。
@@ -160,32 +136,19 @@ function runLaunchctl(args: string[]): { status: number | null; stdout: string }
  * 用户陷入「代理停不掉且 CLI 说没装」的死胡同（实测可复现，CODE_REVIEW #6 同款）。
  */
 export function getServiceStatus(): ServiceStatus {
-  const installedDomain = detectInstalledDomain();
+  const installed = isServiceInstalled();
+  const print = runLaunchctl(['print', serviceTarget()]);
+  const loaded = print.status === 0;
 
-  // plist 在哪个域就查哪个；都不在则两个域都探一次，捞出「plist 已删但仍装载」的孤儿任务
-  const candidates: ServiceDomain[] = installedDomain ? [installedDomain] : ['user', 'system'];
-
-  for (const domain of candidates) {
-    const spec = getDomainSpec(domain);
-    const print = runLaunchctl(['print', spec.target]);
-    const loaded = print.status === 0;
-    if (!loaded && !installedDomain) continue; // 该域既没 plist 也没装载，看下一个
-
-    const { state, pid } = loaded ? parseServicePrint(print.stdout) : { state: null, pid: null };
-    const disabledOut = runLaunchctl(['print-disabled', spec.bootstrapDomain]);
-    const disabled = disabledOut.status === 0 ? parseDisabledList(disabledOut.stdout, SERVICE_LABEL) : false;
-
-    return {
-      domain,
-      installed: installedDomain !== null,
-      loaded,
-      running: state === 'running',
-      pid,
-      disabled,
-    };
+  if (!installed && !loaded) {
+    return { installed: false, loaded: false, running: false, pid: null, disabled: false };
   }
 
-  return { domain: null, installed: false, loaded: false, running: false, pid: null, disabled: false };
+  const { state, pid } = loaded ? parseServicePrint(print.stdout) : { state: null, pid: null };
+  const disabledOut = runLaunchctl(['print-disabled', bootstrapDomain()]);
+  const disabled = disabledOut.status === 0 ? parseDisabledList(disabledOut.stdout, SERVICE_LABEL) : false;
+
+  return { installed, loaded, running: state === 'running', pid, disabled };
 }
 
 // === plist ===
@@ -203,9 +166,8 @@ function escapeXml(s: string): string {
  * 只看到一个没有上下文的 "mihomo"。其余参数与 startTun 的命令行保持同构，
  * 两者都被 MAIN_INSTANCE_PATTERN 覆盖。
  *
- * KeepAlive: 崩溃/被杀后由 launchd 拉起；RunAtLoad: 登录（user 域）/开机（system 域）自启。
- * **不设 UserName**：user 域在 gui 域下默认就是当前用户，system 域必须是 root，
- * 两种情况写了都只会引入用户名依赖或破坏 root 身份。
+ * KeepAlive: 崩溃/被杀后由 launchd 拉起；RunAtLoad: 登录后自启。
+ * **不设 UserName**：gui 域下默认就是当前用户，写了只会引入用户名依赖。
  * 日志复用 mihomo.log，与 logs 命令无缝衔接。
  */
 export function buildPlist(): string {
@@ -276,15 +238,11 @@ export function ensureServiceSymlink(): void {
  * （一次密码完成全部 root 步骤，与 TUN 启动共用 runSudoScript 范式）。
  *
  * `steps` 里的每项是完整的 shell 命令行，调用方负责 shellQuote。
- * user 域下逐条经 /bin/bash -c 执行，与 system 域的脚本语义一致（含 `|| true` 等）。
+ * 拼成一个脚本经 /bin/bash -c 跑（而非逐条 spawn），以保留 `|| true`、while 循环等语义。
+ * **全程无 sudo**——用户域的 launchctl 操作不需要 root。
  */
-function runLaunchctlSteps(spec: DomainSpec, steps: string[], opts: { action: string; file: string; codeMessages?: Record<number, string> }): void {
+function runLaunchctlSteps(steps: string[], opts: { action: string; codeMessages?: Record<number, string> }): void {
   const script = ['#!/bin/bash', ...steps, 'exit 0', ''].join('\n');
-
-  if (spec.needsSudo) {
-    runSudoScript(script, opts);
-    return;
-  }
 
   const result = spawnSync('/bin/bash', ['-c', script], { stdio: 'inherit', timeout: 60_000 });
   if (result.error) throw result.error;
@@ -349,8 +307,8 @@ function killResidualKernels(): void {
  * 故这是预防性防御而非已复现问题的修复。成本是不发生时零开销（首轮 print 即退出），
  * 留着比赌它不发生划算。
  */
-function waitUnloadedSteps(spec: DomainSpec): string[] {
-  const target = shellQuote(spec.target);
+function waitUnloadedSteps(): string[] {
+  const target = shellQuote(serviceTarget());
   return ['n=0', 'while [ $n -lt 25 ]; do', `  launchctl print ${target} >/dev/null 2>&1 || break`, '  sleep 0.2', '  n=$((n+1))', 'done'];
 }
 
@@ -362,19 +320,18 @@ function waitUnloadedSteps(spec: DomainSpec): string[] {
  *
  * 前置只要求内核存在（plist 指向它）；**不要求 config.yaml**，因为装完不启动。
  */
-export function installService(domain: ServiceDomain, wasRunning: boolean): void {
+export function installService(wasRunning: boolean): void {
   assertServiceLabelSafe();
   ensureDirs();
   ensureServiceSymlink();
 
-  const spec = getDomainSpec(domain);
   const stagePath = path.join(DIRS.runtime, 'service.plist.stage');
   atomicWriteFileSync(stagePath, buildPlist(), { mode: 0o600 });
 
-  const target = shellQuote(spec.target);
-  const dest = shellQuote(spec.plistPath);
+  const target = shellQuote(serviceTarget());
+  const dest = shellQuote(PATHS.userAgentPlist);
   const stage = shellQuote(stagePath);
-  const destDir = shellQuote(path.dirname(spec.plistPath));
+  const destDir = shellQuote(path.dirname(PATHS.userAgentPlist));
 
   // plutil -lint 先行：坏 plist 绝不进系统目录（bootstrap 失败后还得手工清理）。
   //
@@ -389,22 +346,21 @@ export function installService(domain: ServiceDomain, wasRunning: boolean): void
   const steps = [
     `plutil -lint ${stage} >/dev/null || exit 2`,
     `launchctl bootout ${target} 2>/dev/null || true`,
-    ...waitUnloadedSteps(spec),
+    ...waitUnloadedSteps(),
     // ~/Library/LaunchAgents 在全新系统上可能不存在；只在缺失时创建，避免改动已有目录权限
     `[ -d ${destDir} ] || mkdir -p ${destDir}`,
-    spec.needsSudo ? `install -m 644 -o root -g wheel ${stage} ${dest} || exit 3` : `install -m 644 ${stage} ${dest} || exit 3`,
+    `install -m 644 ${stage} ${dest} || exit 3`,
     ...(wasRunning
-      ? [`launchctl enable ${target} || exit 5`, `launchctl bootstrap ${spec.bootstrapDomain} ${dest} || exit 4`]
+      ? [`launchctl enable ${target} || exit 5`, `launchctl bootstrap ${bootstrapDomain()} ${dest} || exit 4`]
       : [`launchctl disable ${target} 2>/dev/null || true`]),
   ];
 
   try {
-    runLaunchctlSteps(spec, steps, {
+    runLaunchctlSteps(steps, {
       action: '安装服务',
-      file: 'service-install.sh',
       codeMessages: {
         2: 'plist 语法校验失败（plutil -lint）',
-        3: `安装 plist 到 ${path.dirname(spec.plistPath)} 失败`,
+        3: `安装 plist 到 ${path.dirname(PATHS.userAgentPlist)} 失败`,
         4: '装载服务失败（launchctl bootstrap）',
         5: '启用服务失败（launchctl enable）',
       },
@@ -428,34 +384,31 @@ export function installService(domain: ServiceDomain, wasRunning: boolean): void
  *
  * 先 `bootout` 清旧使重复调用幂等（改过 plist 后 start 一下即按新配置重载，无需 kickstart）。
  */
-export function startService(domain: ServiceDomain): void {
+export function startService(): void {
   assertServiceLabelSafe();
   ensureServiceSymlink();
 
-  const spec = getDomainSpec(domain);
-  if (!fs.existsSync(spec.plistPath)) {
+  if (!isServiceInstalled()) {
     throw new CliError('服务未安装', { hint: '安装服务: mihomo install' });
   }
   if (!fs.existsSync(PATHS.configFile)) {
     throw new CliError('未找到运行时配置', { hint: '请先添加订阅: mihomo sub add <url>' });
   }
 
-  // tun 残留是 root 属主，用户态 launchctl 起来的服务会与它抢端口；有才清，无则不弹密码
+  // tun 残留是 root 属主，会与服务抢端口；有才清（这是唯一可能弹密码的地方），无则免密
   cleanupRootResidue();
 
-  const target = shellQuote(spec.target);
-  const dest = shellQuote(spec.plistPath);
+  const target = shellQuote(serviceTarget());
+  const dest = shellQuote(PATHS.userAgentPlist);
   runLaunchctlSteps(
-    spec,
     [
       `launchctl bootout ${target} 2>/dev/null || true`,
-      ...waitUnloadedSteps(spec),
+      ...waitUnloadedSteps(),
       `launchctl enable ${target} || exit 2`,
-      `launchctl bootstrap ${spec.bootstrapDomain} ${dest} || exit 3`,
+      `launchctl bootstrap ${bootstrapDomain()} ${dest} || exit 3`,
     ],
     {
       action: '启动服务',
-      file: 'service-start.sh',
       codeMessages: { 2: '启用服务失败（launchctl enable）', 3: '装载服务失败（launchctl bootstrap）' },
     },
   );
@@ -470,16 +423,12 @@ export function startService(domain: ServiceDomain): void {
  * 即便 plist 不存在也照常执行：用户手动删掉 plist 后任务仍处 bootstrapped 状态，
  * KeepAlive 会继续拉起内核，此时只有 bootout 能救。
  */
-export function stopService(domain: ServiceDomain | null): void {
+export function stopService(): void {
   assertServiceLabelSafe();
 
-  // 未安装时用当前域推断的目标做一次 bootout/disable，清理「plist 已删但任务仍装载」的残留
-  const spec = getDomainSpec(domain ?? 'user');
-  const target = shellQuote(spec.target);
-
-  runLaunchctlSteps(spec, [`launchctl bootout ${target} 2>/dev/null || true`, `launchctl disable ${target} 2>/dev/null || true`, ...waitUnloadedSteps(spec)], {
+  const target = shellQuote(serviceTarget());
+  runLaunchctlSteps([`launchctl bootout ${target} 2>/dev/null || true`, `launchctl disable ${target} 2>/dev/null || true`, ...waitUnloadedSteps()], {
     action: '停止服务',
-    file: 'service-stop.sh',
   });
 
   // bootout 通常已终止托管内核；tun 起的 root 内核与手动残留在此收口
@@ -487,28 +436,21 @@ export function stopService(domain: ServiceDomain | null): void {
 }
 
 /**
- * 卸载服务：停止 + 删除 plist + 归还 root 属主的日志/数据（系统级安装遗留）。
+ * 卸载服务：停止 + 删除 plist。
  *
  * **不清 disable 位**：launchctl 没有「清除记录」的动词——`enable` 同样会往
  * /var/db/com.apple.xpc.launchd/ 写一条 `=> enabled`（实测可见），并不比 `disable` 干净。
  * 既然两者都留痕，就选语义更安全的那个：plist 若被别的途径放回也不会自动启动。
  * 而 startService 恒无条件 `enable`，残留位不影响任何正常路径。
  */
-export function uninstallService(domain: ServiceDomain): void {
+export function uninstallService(): void {
   assertServiceLabelSafe();
 
-  const spec = getDomainSpec(domain);
-  const target = shellQuote(spec.target);
-  const dest = shellQuote(spec.plistPath);
-
-  const steps = [`launchctl bootout ${target} 2>/dev/null || true`, `launchctl disable ${target} 2>/dev/null || true`, `rm -f ${dest}`];
-  if (spec.needsSudo) {
-    // 系统级服务以 root 写日志/数据；不归还属主的话，之后用户级安装会因 EACCES 起不来
-    steps.push(`chown "$SUDO_UID:$SUDO_GID" ${shellQuote(PATHS.logFile)} 2>/dev/null || true`);
-    steps.push(`chown -R "$SUDO_UID:$SUDO_GID" ${shellQuote(DIRS.data)} 2>/dev/null || true`);
-  }
-
-  runLaunchctlSteps(spec, steps, { action: '卸载服务', file: 'service-uninstall.sh' });
+  const target = shellQuote(serviceTarget());
+  runLaunchctlSteps(
+    [`launchctl bootout ${target} 2>/dev/null || true`, `launchctl disable ${target} 2>/dev/null || true`, `rm -f ${shellQuote(PATHS.userAgentPlist)}`],
+    { action: '卸载服务' },
+  );
 
   killResidualKernels();
 
@@ -518,6 +460,30 @@ export function uninstallService(domain: ServiceDomain): void {
   } catch {
     /* ignore：不存在或已被 reset kernel 带走 */
   }
+}
+
+/**
+ * 清理遗留的系统级安装（v3.0–v4.x 的 `daemon on` 装的 root LaunchDaemon）。
+ *
+ * 需要一次密码：plist 是 root:wheel 拥有的，且 `launchctl bootout system/...` 需 root。
+ * 顺带把 root 属主的日志/数据归还当前用户——不归还的话，之后的用户级服务会因
+ * EACCES 写不了日志而起不来。
+ */
+export function cleanupLegacySystemInstall(): void {
+  assertServiceLabelSafe();
+
+  const script = [
+    '#!/bin/bash',
+    `launchctl bootout ${shellQuote(`system/${SERVICE_LABEL}`)} 2>/dev/null || true`,
+    `rm -f ${shellQuote(PATHS.systemDaemonPlist)}`,
+    `chown "$SUDO_UID:$SUDO_GID" ${shellQuote(PATHS.logFile)} 2>/dev/null || true`,
+    `chown -R "$SUDO_UID:$SUDO_GID" ${shellQuote(DIRS.data)} 2>/dev/null || true`,
+    `rm -f ${shellQuote(PATHS.pidFile)}`,
+    'exit 0',
+    '',
+  ].join('\n');
+
+  runSudoScript(script, { action: '清理遗留的系统级服务', file: 'legacy-cleanup.sh' });
 }
 
 // === 热重载与重启 ===
@@ -580,32 +546,29 @@ async function tryHotReload(): Promise<boolean> {
  * 日志超阈值时跳过热重载、强制 kickstart 顺便轮转：运行中不能 rename 轮转——
  * launchd 的 StandardOutPath fd 指向旧 inode，rename 后日志会继续写进归档文件。
  * 只能 copy-truncate（fd 为 O_APPEND，truncate 后从 0 续写不丢句柄）。
- * 系统级安装的日志还是 root 属主，用户态无法 truncate，故该步与 launchctl 同域执行。
  */
-export async function restartService(domain: ServiceDomain): Promise<void> {
-  const spec = getDomainSpec(domain);
-  if (!fs.existsSync(spec.plistPath)) {
+export async function restartService(): Promise<void> {
+  if (!isServiceInstalled()) {
     throw new CliError('服务未安装，无法重启', { hint: '安装服务: mihomo install' });
   }
 
   if (!logOversized() && (await tryHotReload())) return;
 
-  const target = shellQuote(spec.target);
-  const dest = shellQuote(spec.plistPath);
+  const target = shellQuote(serviceTarget());
+  const dest = shellQuote(PATHS.userAgentPlist);
   const logFile = shellQuote(PATHS.logFile);
   const archiveFile = shellQuote(path.join(DIRS.logs, `mihomo.${formatLocalTimestamp()}.log`));
 
   runLaunchctlSteps(
-    spec,
     [
       `if [ -f ${logFile} ] && [ "$(stat -f%z ${logFile} 2>/dev/null || echo 0)" -gt ${LOG_ROTATE_MAX_BYTES} ]; then`,
       `  cp ${logFile} ${archiveFile} 2>/dev/null && : > ${logFile}`,
       'fi',
       `if launchctl kickstart -k ${target} 2>/dev/null; then exit 0; fi`,
       `launchctl enable ${target} 2>/dev/null || true`,
-      `launchctl bootstrap ${spec.bootstrapDomain} ${dest} || exit 3`,
+      `launchctl bootstrap ${bootstrapDomain()} ${dest} || exit 3`,
     ],
-    { action: '重启服务', file: 'service-restart.sh', codeMessages: { 3: '重启服务失败（launchctl bootstrap）' } },
+    { action: '重启服务', codeMessages: { 3: '重启服务失败（launchctl bootstrap）' } },
   );
 
   // 顺手清理过期归档：归档可能为 root 属主，但 logs/ 目录归用户所有，unlink 只看目录权限

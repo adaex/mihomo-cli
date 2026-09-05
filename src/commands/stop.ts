@@ -2,7 +2,7 @@ import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { getMihomoPids } from '../process-probe.js';
 import { stop } from '../process-stop.js';
-import { getDomainSpec, getServiceStatus, stopService } from '../service.js';
+import { getServiceStatus, stopService } from '../service.js';
 import type { StopResult } from '../types.js';
 import { assertNoRemovedSshFlag } from '../utils.js';
 
@@ -42,13 +42,7 @@ export async function cmdStop(args: string[]): Promise<void> {
     return;
   }
 
-  const domain = status.domain ?? 'user';
-  const spec = getDomainSpec(domain);
-  if (spec.needsSudo) {
-    console.log(colors.gray('停止系统级服务需要管理员权限'));
-  }
-
-  stopService(domain);
+  stopService();
 
   const remaining = getMihomoPids();
   if (remaining.length > 0) {
@@ -58,5 +52,5 @@ export async function cmdStop(args: string[]): Promise<void> {
     });
   }
 
-  console.log(`${colors.green('已停止')}${colors.gray('（已关闭开机自启，mihomo start 可重新启动）')}`);
+  console.log(`${colors.green('已停止')}${colors.gray('（已关闭登录自启，mihomo start 可重新启动）')}`);
 }

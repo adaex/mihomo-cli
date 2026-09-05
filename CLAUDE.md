@@ -35,8 +35,8 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/process-stop.ts`      | 内核停止/清理：stop、cleanupAll、clearPid |
 | `src/log-files.ts`         | 日志轮转/清理/列表/路径 |
 | `src/open.ts`              | openUrl/openLogFile/viewLogWithTail |
-| `src/sudo.ts`              | runSudoScript：TUN 与系统级服务共用的 sudo 脚本范式 |
-| `src/service.ts`           | launchd 服务：双域(用户级 LaunchAgent / 系统级 LaunchDaemon)、install/start/stop/uninstall、热重载、状态查询、符号链 |
+| `src/sudo.ts`              | runSudoScript：TUN 与清理遗留 root 服务共用的 sudo 脚本范式 |
+| `src/service.ts`           | launchd 服务（用户级 LaunchAgent，全程免密）：install/start/stop/uninstall、热重载、状态查询、符号链、遗留 root 安装的识别与清理 |
 | `src/runtime.ts`           | 运行时门面：收敛 service(Mixed)/tun 双轨（模式、状态、启停） |
 | `src/lifecycle.ts`         | 退出清理注册表（信号/异常退出前清理 detached 子进程） |
 | `src/kernel.ts`            | GitHub Releases 检查、下载        |
@@ -60,7 +60,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `commands/subscription.ts`    | subscription (add/update/use/remove，裸命令即列表) |
 | `commands/overwrite.ts`       | overwrite (on/off)             |
 | `commands/directory.ts`       | directory (open)               |
-| `commands/service.ts`         | install (--system), uninstall  |
+| `commands/service.ts`         | install, uninstall             |
 | `commands/reset.ts`           | reset                          |
 | `commands/update.ts`          | update                         |
 
@@ -293,7 +293,13 @@ plist 的 `ProgramArguments[0]` 指向它，只为让「登录项与扩展」显
   旧结论描述的是无人登录、没人能点弹框的场景
 - 代价对比：system 域的 `bootstrap`/`bootout`/`enable`/`disable` 一律需 root → 每次启停输密码；
   user 域全程免密，代价是局域网节点首次需点一次授权，且换内核后可能需重新授权
-- `--system` 保留为回退路径，两域命令语义完全一致，`DomainSpec` 收敛差异
+- **只装 user 域，不提供 `--system` 回退**：曾实现过双域（`DomainSpec` 抽象 + sudo 双路径，约
+  60 行），后按「用不上就删」原则移除——**loopback 不算本地网络**，`127.0.0.1` 的 SOCKS 出口
+  （v4.0.0 移除内置 ssh 后推荐的做法）根本不触发该机制，root 安装是在防一个不存在的问题。
+  真有局域网节点被静默拦死再说，别为假想场景预留分支
+- **但「识别」遗留 root 安装的能力必须留**（`detectLegacySystemInstall`）：老用户 v4 装的
+  root LaunchDaemon 带 KeepAlive，不认它就是个会抢端口、用户无从卸载的幽灵。
+  `install` 前自动清理（一次密码），`status` 检出并告警
 
 **label 值刻意不改名**（仍是 `com.mihomo-cli.daemon`，环境变量仍是 `MIHOMO_CLI_DAEMON_LABEL`）：
 它是 plist 文件名与 launchd 的注册键，改值等于要求所有老用户做一次带幽灵进程风险的迁移

@@ -6,7 +6,7 @@ import { isOverwriteFilename } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
 import { cleanupAll, PROCESS_WAIT_ATTEMPTS, PROCESS_WAIT_INTERVAL } from '../process-stop.js';
-import { detectInstalledDomain, getServiceStatus, stopService, uninstallService } from '../service.js';
+import { detectLegacySystemInstall, getServiceStatus, isServiceInstalled, stopService, uninstallService } from '../service.js';
 import { invalidateSettingsCache, writeSettings } from '../settings.js';
 import type { ResetTarget } from '../types.js';
 import { confirmOrThrow } from './shared.js';
@@ -87,16 +87,16 @@ export const RESET_TARGETS: ResetTarget[] = [
     id: 'service',
     aliases: ['service', 'daemon'],
     label: '服务',
-    // 卸载由确认后的 uninstallsService 段统一处理（系统级需 sudo，受取消保护）；
-    // 此处 paths 返回空（plist 不在数据目录里，且不应提前删破坏卸载），
+    // 卸载由确认后的 uninstallsService 段统一处理；此处 paths 返回空
+    // （plist 不在数据目录里，且不应提前删破坏卸载），
     // onAfter 因幂等守卫成为 no-op，仅作单独 reset 未走前段时的兜底。
     paths: () => [],
     needsStop: false,
     onAfter: () => {
-      const domain = detectInstalledDomain();
-      if (domain) uninstallService(domain);
+      const st = getServiceStatus();
+      if (st.installed || st.loaded) uninstallService();
     },
-    checkEmpty: () => !detectInstalledDomain() && !getServiceStatus().loaded,
+    checkEmpty: () => !isServiceInstalled() && !getServiceStatus().loaded && !detectLegacySystemInstall(),
     emptyMsg: '服务未安装，无需删除',
   },
 ];
@@ -178,7 +178,7 @@ export async function cmdReset(args: string[]): Promise<void> {
 
   const needsStop = targets.some(t => t.needsStop);
   const warnRunning = targets.some(t => t.warnIfRunning);
-  // 「停止」与「卸载」必须分开——此前二者混为一谈（一律 disableDaemon）。
+  // 「停止」与「卸载」必须分开——v4 及以前二者混为一谈（一律卸载保活）。
   //   needsStop（subs/data/runtime）→ 只 **stop**：删了 config.yaml 而服务还 enabled 的话，
   //     下次登录 launchd 会用不存在的 -f 拉起内核，KeepAlive 每几秒崩溃重启一次刷爆日志。
   //     stop 恒置 disable 位，正好堵住这个组合。但不该顺手把用户的安装卸掉。
@@ -199,9 +199,9 @@ export async function cmdReset(args: string[]): Promise<void> {
     console.log(colors.yellow(`警告: mihomo 正在运行 (PID ${pids.join(', ')})，删除内核后将无法重新启动`));
   }
   if (uninstallsService && serviceActive) {
-    console.log(colors.yellow('将卸载 launchd 服务（移除开机自启，Mixed 模式需重新 install 才能使用）'));
+    console.log(colors.yellow('将卸载 launchd 服务（移除登录自启，Mixed 模式需重新 install 才能使用）'));
   } else if (stopsService && serviceActive) {
-    console.log(colors.yellow('将停止服务并关闭开机自启（安装保留，mihomo start 可重新启动）'));
+    console.log(colors.yellow('将停止服务并关闭登录自启（安装保留，mihomo start 可重新启动）'));
   }
 
   console.log(`将删除: ${targets.map(t => t.label).join('、')}`);
@@ -224,11 +224,10 @@ export async function cmdReset(args: string[]): Promise<void> {
   // 则中止重置，避免部分删除后环境不一致。
   if ((uninstallsService || stopsService) && serviceActive) {
     try {
-      const domain = serviceStatus.domain ?? 'user';
       if (uninstallsService) {
-        uninstallService(domain);
+        uninstallService();
       } else {
-        stopService(domain);
+        stopService();
       }
     } catch (e) {
       if (e instanceof CliError) throw e;

@@ -21,13 +21,15 @@
 
   推翻 v3.0.0 那条「必须用 root LaunchDaemon」的结论，依据是 Apple DTS 的原话：「Programs running as **root** are automatically granted local network access」——豁免条件是 root，不是「身为 daemon」。用户级 LaunchAgent 不豁免，但那只意味着走**正常的弹框授权流程**（首次连局域网节点时点一次「允许」，永久生效），并非被静默拦死。原先记录的「静默拦成 no route to host」是**无人登录、没人能点弹框**的服务器场景。
 
-  **升级须知**：老用户升级后仍是系统级安装（label 值未变，`detectInstalledDomain()` 能直接接管，不会产生幽灵进程）。想换成免密的用户级：
+  **loopback 不算本地网络**：`127.0.0.1` 的 SOCKS 出口（如自建 `ssh -D`，v4.0.0 移除内置 ssh 后推荐的做法）完全不触发该机制。只有节点直接指向 `192.168.x.x` / `10.x.x.x` / `*.local` 时才会弹框。
+
+  **升级须知**：老用户升级后，旧的 root LaunchDaemon 仍在。`mihomo install` 会检测到它并自动清理（需一次管理员密码，因为要删 root 拥有的文件），随后装上免密的用户级服务：
 
   ```bash
-  mihomo uninstall && mihomo install
+  mihomo install && mihomo start
   ```
 
-  若你的节点里有局域网跳板且始终不弹授权框，用 `mihomo install --system` 回退到 root 服务（局域网天然豁免，代价是启停需密码）。详见 README「本地网络授权」。
+  `status` 也会检出遗留安装并告警——不认它的话，它带的 KeepAlive 会持续拉起内核抢占端口，而用户态命令动不了它。
 
 - **移除 `up` / `down` 别名**。命令名统一为 `install`/`start`/`stop`/`uninstall`。执行 `mihomo up`、`mihomo down`、`mihomo daemon` 会得到明确的迁移提示而非 did-you-mean 猜测（同 `--no-ssh` 的先例）。
 
@@ -39,8 +41,8 @@
 
 ### 新增
 
-- `mihomo install [--system]` / `mihomo uninstall`
-- `status` 增加「服务」「自启」两行，并检出两类异常：plist 被手动删除但任务仍装载（KeepAlive 会持续拉起内核）、用户级与系统级同时安装（抢占同一组端口）
+- `mihomo install` / `mihomo uninstall`；`install` 会自动清理旧版本遗留的 root LaunchDaemon
+- `status` 增加「服务」「自启」两行，并检出两类异常：plist 被手动删除但任务仍装载（KeepAlive 会持续拉起内核）、存在旧版本遗留的 root LaunchDaemon（抢占同一组端口）
 - 服务以符号链 `kernel/mihomo-cli-service` 启动，「系统设置 → 通用 → 登录项与扩展」中显示为有意义的名字，而非一个没有上下文的 `mihomo`
 
 ### 修复

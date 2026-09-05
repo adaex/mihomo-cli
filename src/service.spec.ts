@@ -179,11 +179,11 @@ describe('buildPlist', () => {
     assert.ok(first[1].endsWith('/mihomo-cli-service'), `首项应是符号链，实际: ${first[1]}`);
   });
 
-  it('不设 UserName：user 域默认即当前用户，system 域必须是 root，写了都只会坏事', () => {
+  it('不设 UserName：gui 域下默认即当前用户，写了只会引入用户名依赖', () => {
     assert.ok(!buildPlist().includes('<key>UserName</key>'));
   });
 
-  it('含 RunAtLoad 与 KeepAlive（登录/开机自启 + 崩溃拉起）', () => {
+  it('含 RunAtLoad 与 KeepAlive（登录自启 + 崩溃拉起）', () => {
     const xml = buildPlist();
     assert.ok(xml.includes('<key>RunAtLoad</key>'));
     assert.ok(xml.includes('<key>KeepAlive</key>'));
@@ -206,8 +206,8 @@ describe('buildPlist', () => {
 });
 
 describe('isValidServiceLabel：全仓唯一挡住 root 任意路径写的校验', () => {
-  // 该值经 path.join 拼成 plist 路径后，是系统级安装时 `sudo install -o root` 的写入目标
-  // 与 `sudo rm -f` 的删除目标。`..` 被 path.join 折叠即可越出 /Library/LaunchDaemons
+  // 该值经 path.join 拼成 plist 路径后，也是清理遗留 root 安装时 `sudo rm -f` 的删除目标。
+  // `..` 被 path.join 折叠即可越出 /Library/LaunchDaemons，以 root 删除任意路径
   it('拒绝含 .. 的值（路径穿越 → 以 root 写任意路径）', () => {
     assert.equal(isValidServiceLabel('../../etc/sudoers.d/evil'), false);
     assert.equal(isValidServiceLabel('a..b'), false);

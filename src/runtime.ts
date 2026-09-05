@@ -1,8 +1,8 @@
 import { getConfigInfo } from './config.js';
 import { getStatus } from './process-probe.js';
 import { startTun } from './process-start.js';
-import { detectInstalledDomain, getServiceStatus, restartService, SERVICE_BOOT_WAIT_MS, startService } from './service.js';
-import type { ProcessInfo, ServiceDomain } from './types.js';
+import { getServiceStatus, isServiceInstalled, restartService, SERVICE_BOOT_WAIT_MS, startService } from './service.js';
+import type { ProcessInfo } from './types.js';
 import { sleep } from './utils.js';
 
 /**
@@ -23,7 +23,7 @@ export type RuntimeMode = 'mixed' | 'tun';
  * 否则沿用运行时配置的 tun 字段——避免订阅/覆写残留 tun 字段时被误判。
  */
 export function getRuntimeMode(): RuntimeMode {
-  if (detectInstalledDomain()) return 'mixed';
+  if (isServiceInstalled()) return 'mixed';
   return getConfigInfo()?.tun ? 'tun' : 'mixed';
 }
 
@@ -32,8 +32,6 @@ export interface RunningState {
   pid: number | null;
   /** 谁在跑：服务托管、TUN 临时进程，或都没有 */
   kind: 'service' | 'tun' | null;
-  /** 服务的安装域（未安装为 null），供 status 展示「用户级/系统级」 */
-  domain: ServiceDomain | null;
   /**
    * TUN 进程的内存信息（复用 getStatus 内部已查的结果，免命令层再发一次 ps）；
    * 服务模式为 null——launchd 托管进程不查内存，且 status 本就不展示
@@ -50,15 +48,15 @@ export interface RunningState {
 export function getRunningState(): RunningState {
   const service = getServiceStatus();
   if (service.running) {
-    return { running: true, pid: service.pid, kind: 'service', domain: service.domain, processInfo: null };
+    return { running: true, pid: service.pid, kind: 'service', processInfo: null };
   }
 
   const status = getStatus();
   if (status.running) {
-    return { running: true, pid: status.pid, kind: 'tun', domain: service.domain, processInfo: status.processInfo };
+    return { running: true, pid: status.pid, kind: 'tun', processInfo: status.processInfo };
   }
 
-  return { running: false, pid: null, kind: null, domain: service.domain, processInfo: null };
+  return { running: false, pid: null, kind: null, processInfo: null };
 }
 
 /**
@@ -82,14 +80,13 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
   }
 
   const status = getServiceStatus();
-  if (!status.domain) return null; // 命令层已在此前拦截「未安装」，此处仅作类型收敛
 
   // running && !disabled 才走热重载：`stop` 后被手动 bootstrap 的服务处于「在跑但 disabled」，
   // 只看 running 会走热重载、不清 disable 位，用户以为开了自启其实没有
   if (status.running && !status.disabled) {
-    await restartService(status.domain);
+    await restartService();
   } else {
-    startService(status.domain);
+    startService();
   }
 
   await sleep(SERVICE_BOOT_WAIT_MS);

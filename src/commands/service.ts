@@ -5,17 +5,7 @@ import { hasKernel } from '../config.js';
 import { CliError } from '../errors.js';
 import { PATHS } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
-import {
-  detectInstalledDomain,
-  getDomainSpec,
-  getServiceStatus,
-  hasBothDomainsInstalled,
-  installService,
-  SERVICE_BINARY_NAME,
-  uninstallService,
-} from '../service.js';
-import type { ServiceDomain } from '../types.js';
-import { hasFlag } from '../utils.js';
+import { cleanupLegacySystemInstall, detectLegacySystemInstall, getServiceStatus, installService, SERVICE_BINARY_NAME, uninstallService } from '../service.js';
 
 /**
  * 服务的安装与卸载。启停在 start.ts / stop.ts。
@@ -24,43 +14,51 @@ import { hasFlag } from '../utils.js';
  * 是两个可独立推理的状态，用户重启后服务是否回来只取决于 start/stop 置的 enable 位。
  */
 
-export async function cmdInstall(args: string[]): Promise<void> {
-  const useSystem = hasFlag(args, '--system');
-  const targetDomain: ServiceDomain = useSystem ? 'system' : 'user';
+/**
+ * 遗留的系统级安装（v3.0–v4.x 的 `daemon on`）会与用户级服务抢端口，
+ * 且带 KeepAlive 会持续拉起内核。安装前必须先清掉，否则两个实例互相打架。
+ */
+async function handleLegacyInstall(): Promise<void> {
+  if (!detectLegacySystemInstall()) return;
 
+  console.log(colors.yellow('检测到旧版本安装的系统级服务（root LaunchDaemon）'));
+  console.log(colors.gray('  它会与新的用户级服务抢占同一组端口，需先清理'));
+  console.log(colors.gray('  清理需要一次管理员密码（删除 root 拥有的文件）'));
+  console.log('');
+
+  try {
+    cleanupLegacySystemInstall();
+  } catch (e) {
+    if (e instanceof CliError) throw e;
+    throw new CliError((e as Error).message, {
+      label: '清理遗留服务失败',
+      hint: ['也可手动清理:', `  sudo launchctl bootout system/$(basename ${PATHS.systemDaemonPlist} .plist)`, `  sudo rm -f ${PATHS.systemDaemonPlist}`],
+    });
+  }
+
+  console.log(`${colors.green('已清理遗留的系统级服务')}`);
+  console.log('');
+}
+
+export async function cmdInstall(_args: string[]): Promise<void> {
   if (!hasKernel()) {
     throw new CliError('未找到内核', { hint: '下载内核: mihomo kernel' });
   }
 
-  // 已装在另一个域：两个实例会抢同一组端口，且用户态操作动不了 root 那个。
-  // 不自动替用户卸载——那是一次隐式的破坏性操作（系统级卸载还要密码）
-  const existing = detectInstalledDomain();
-  if (existing && existing !== targetDomain) {
-    const from = getDomainSpec(existing);
-    const to = getDomainSpec(targetDomain);
-    throw new CliError(`服务已安装为${from.label}，无法直接改装为${to.label}`, {
-      hint: ['两者会抢占同一组端口，需先卸载再安装：', '  mihomo uninstall', `  mihomo install${useSystem ? ' --system' : ''}`],
-    });
-  }
+  await handleLegacyInstall();
 
   // 重装保持原运行状态：不这么做的话，「代理开着时更新内核后重装」会静默把代理关掉
-  const before = getServiceStatus();
-  const wasRunning = before.running;
+  const wasRunning = getServiceStatus().running;
 
-  const spec = getDomainSpec(targetDomain);
-  if (spec.needsSudo) {
-    console.log(colors.gray('系统级安装需要管理员权限（以 root 运行，局域网访问天然豁免）'));
-  }
+  installService(wasRunning);
 
-  installService(targetDomain, wasRunning);
-
-  console.log(`${colors.green('已安装服务')} · ${spec.label}`);
-  console.log(colors.gray(`  plist: ${spec.plistPath}`));
+  console.log(`${colors.green('已安装服务')}`);
+  console.log(colors.gray(`  plist: ${PATHS.userAgentPlist}`));
   console.log(colors.gray(`  登录项与扩展中显示为: ${SERVICE_BINARY_NAME}`));
   console.log('');
 
   if (wasRunning) {
-    console.log(`${colors.green('已按原状态重新启动')}`);
+    console.log(colors.green('已按原状态重新启动'));
   } else {
     console.log('启动: mihomo start');
     // 装完就提示没订阅，好过用户执行 start 才撞墙
@@ -73,41 +71,38 @@ export async function cmdInstall(args: string[]): Promise<void> {
 
 export async function cmdUninstall(_args: string[]): Promise<void> {
   const status = getServiceStatus();
+  const legacy = detectLegacySystemInstall();
   const residue = getMihomoPids();
 
-  // 幂等判据必须是三者皆空，不能只看 plist：用户手动删掉 plist 后任务仍处 bootstrapped
-  // 状态，KeepAlive 会继续把内核拉起——只看文件会直接返回、永不执行 bootout，
-  // 用户陷入「永远停不掉且 CLI 无路可走」的死胡同
-  if (!status.installed && !status.loaded && residue.length === 0) {
+  // 幂等判据必须涵盖全部残留形态，不能只看 plist：用户手动删掉 plist 后任务仍处
+  // bootstrapped 状态，KeepAlive 会继续把内核拉起——只看文件会直接返回、永不执行
+  // bootout，用户陷入「永远停不掉且 CLI 无路可走」的死胡同
+  if (!status.installed && !status.loaded && !legacy && residue.length === 0) {
     console.log('服务未安装');
     return;
   }
-
-  const domain = status.domain ?? 'user';
-  const spec = getDomainSpec(domain);
 
   if (!status.installed && status.loaded) {
     console.log(colors.yellow('未找到 plist，但服务仍处装载状态（plist 可能被手动删除）'));
     console.log('将执行 launchctl bootout 卸载残留任务');
   }
-  if (spec.needsSudo) {
-    console.log(colors.gray('卸载系统级服务需要管理员权限'));
+
+  if (status.installed || status.loaded) {
+    uninstallService();
+    console.log(colors.green('已卸载服务'));
   }
 
-  uninstallService(domain);
-
-  console.log(`${colors.green('已卸载服务')} · ${spec.label}`);
+  if (legacy) {
+    console.log(colors.gray('检测到旧版本的系统级服务，清理需要一次管理员密码'));
+    cleanupLegacySystemInstall();
+    console.log(colors.green('已清理遗留的系统级服务'));
+  }
 
   const remaining = getMihomoPids();
   if (remaining.length > 0) {
     console.log('');
     console.log(colors.yellow(`仍有内核进程残留 (PID ${remaining.join(', ')})`));
     console.log('手动清理: sudo pkill -9 mihomo');
-  }
-
-  if (hasBothDomainsInstalled()) {
-    console.log('');
-    console.log(colors.yellow('检测到另一个域仍有安装，再执行一次 mihomo uninstall 可清理'));
   }
 
   console.log(colors.gray('重新安装: mihomo install'));

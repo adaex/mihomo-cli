@@ -45,14 +45,14 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdInstall,
     group: 'control',
-    usage: ['install [--system]              安装服务（Mixed 模式的前置；--system 装为 root 服务）'],
+    usage: ['install                         安装服务（Mixed 模式的前置，只需一次）'],
   },
   {
     name: 'start',
     aliases: [],
     handler: cmdStart,
     group: 'control',
-    usage: ['start [tun|mixed] [-s] [-u ms]  启动代理并开机自启 (默认 mixed)'],
+    usage: ['start [tun|mixed] [-s] [-u ms]  启动代理并开启登录自启 (默认 mixed)'],
   },
   {
     name: 'tun',
@@ -67,7 +67,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdStop,
     group: 'control',
-    usage: ['stop                            停止代理并关闭开机自启'],
+    usage: ['stop                            停止代理并关闭登录自启'],
   },
   {
     name: 'uninstall',

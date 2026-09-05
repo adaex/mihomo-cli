@@ -142,12 +142,7 @@ export interface StaleState {
 
 // === Service (launchd 服务) ===
 
-/** 服务安装域：user = ~/Library/LaunchAgents（免 sudo）；system = /Library/LaunchDaemons（需 root） */
-export type ServiceDomain = 'user' | 'system';
-
 export interface ServiceStatus {
-  /** 已安装在哪个域；null = 未安装 */
-  domain: ServiceDomain | null;
   /** plist 文件是否存在 */
   installed: boolean;
   /** launchctl print 能查到（已 bootstrap 进域） */
@@ -156,7 +151,7 @@ export interface ServiceStatus {
   running: boolean;
   /** 服务进程 PID（未运行为 null） */
   pid: number | null;
-  /** 开机/登录自启是否被禁用（launchctl disable 位，独立于 plist 文件存在与否） */
+  /** 登录自启是否被禁用（launchctl disable 位，独立于 plist 文件存在与否） */
   disabled: boolean;
 }
 
