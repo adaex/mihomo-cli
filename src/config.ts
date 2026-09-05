@@ -51,7 +51,7 @@ export function dumpYaml(obj: unknown): string {
   return yaml.dump(obj, { indent: 2, lineWidth: -1 });
 }
 
-function collectOverwriteProxyNames(overwriteFiles: { config: Record<string, unknown> }[]): string[] {
+function collectOverwriteProxyNames(overwriteFiles: { config: Record<string, unknown> }[], baseProxyNames: Set<string>): string[] {
   const names: string[] = [];
   for (const file of overwriteFiles) {
     for (const [key, value] of Object.entries(file.config)) {
@@ -62,7 +62,13 @@ function collectOverwriteProxyNames(overwriteFiles: { config: Record<string, unk
           if (proxy && typeof proxy === 'object' && 'name' in proxy) {
             const name = (proxy as { name: unknown }).name;
             // 过滤空/非字符串 name：否则 exclude-filter 正则会出现空分支（a||b），匹配所有节点，清空 include-all 分组
-            if (typeof name === 'string' && name.length > 0) names.push(name);
+            if (typeof name !== 'string' || name.length === 0) continue;
+            // ~proxies 就地 patch 订阅已有节点时**不注入新节点**——节点本就在池子里、
+            // include-all 本就含它，照收进 exclude-filter 反而把它从所有自动分组剔除
+            // （机场订阅主流写法是 include-all，patch 节点字段是 ~ 的正当用法，此前静默改变分流）。
+            // 故 ~ 分支只收「订阅里没有的名字」（真正的新增）
+            if (key === '~proxies' && baseProxyNames.has(name)) continue;
+            names.push(name);
           }
         }
       }
@@ -72,8 +78,12 @@ function collectOverwriteProxyNames(overwriteFiles: { config: Record<string, unk
 }
 
 /** 导出供单测：注入节点需从 include-all 分组排除，且排除模式必须整名锚定（见函数内注释） */
-export function excludeOverwriteProxiesFromIncludeAll(config: Record<string, unknown>, overwriteFiles: { config: Record<string, unknown> }[]): void {
-  const injectedNames = collectOverwriteProxyNames(overwriteFiles);
+export function excludeOverwriteProxiesFromIncludeAll(
+  config: Record<string, unknown>,
+  overwriteFiles: { config: Record<string, unknown> }[],
+  baseProxyNames: Set<string> = new Set(),
+): void {
+  const injectedNames = collectOverwriteProxyNames(overwriteFiles, baseProxyNames);
   if (injectedNames.length === 0) return;
 
   const groups = config['proxy-groups'] as Array<Record<string, unknown>> | undefined;
@@ -324,7 +334,12 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   const withOverwrites = applyOverwrite(subscriptionConfig, overwriteFiles);
 
   if (overwriteFiles.length > 0) {
-    excludeOverwriteProxiesFromIncludeAll(withOverwrites, overwriteFiles);
+    // 订阅原有节点名单：~proxies patch 已有节点不该被排除出 include-all（见 collectOverwriteProxyNames）
+    const baseProxies = Array.isArray(subscriptionConfig.proxies) ? (subscriptionConfig.proxies as unknown[]) : [];
+    const baseProxyNames = new Set(
+      baseProxies.filter(p => p && typeof p === 'object' && typeof (p as { name?: unknown }).name === 'string').map(p => (p as { name: string }).name),
+    );
+    excludeOverwriteProxiesFromIncludeAll(withOverwrites, overwriteFiles, baseProxyNames);
   }
 
   const systemConfig: Record<string, unknown> = {};
@@ -352,7 +367,16 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
 
   if (mode === 'tun') {
     systemConfig.tun = TUN_CONFIG.tun;
-    const subDns = (withOverwrites.dns || {}) as Record<string, unknown>;
+    // dns 非映射（如 `dns: true`）会在下面的 `'enable' in subDns` 抛裸 TypeError，
+    // 转成可读的配置错误（与 assertConfigShape 同一目的）
+    const dnsRaw = withOverwrites.dns;
+    if (dnsRaw !== undefined && (typeof dnsRaw !== 'object' || dnsRaw === null || Array.isArray(dnsRaw))) {
+      throw new CliError(`dns 配置必须是映射，当前是${Array.isArray(dnsRaw) ? '数组' : `标量（${typeof dnsRaw}）`}`, {
+        label: '配置错误',
+        hint: ['dns 是订阅/覆写里的对象配置块（enable、nameserver 等），不支持标量或数组。'],
+      });
+    }
+    const subDns = (dnsRaw || {}) as Record<string, unknown>;
     const dns: Record<string, unknown> = {};
     if (!('enable' in subDns)) dns.enable = true;
     if (!('enhanced-mode' in subDns)) dns['enhanced-mode'] = 'fake-ip';

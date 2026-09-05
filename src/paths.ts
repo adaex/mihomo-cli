@@ -111,16 +111,39 @@ const LOCK_RETRY_MS = 20;
  *
  * `fn` 必须是同步的：持锁期间插入 await 会把锁按住整个异步等待，
  * 慢速网络下会让另一个进程等到强夺陈旧锁，等于没锁。
+ *
+ * **释放前必须校验锁还是自己的**：被强夺者的 `finally` 若无条件 rm，删掉的是
+ * **新持有者**的锁——第三方随即直接进门，与持锁者并发（三进程实测：A 持锁 12s
+ * 被强夺 → B 持新锁 → A 释放时误删 → C 进门，B/C 并发 4.6s），发生的正是锁要防的
+ * 静默丢数据且双方都拿到成功回执。故锁文件写入 `pid+hrtime` token，内容一致才删。
  */
 export function withFileLock<T>(filePath: string, fn: () => T): T {
   const lockPath = `${filePath}.lock`;
   const deadline = Date.now() + LOCK_STALE_MS;
+  const token = `${process.pid}-${process.hrtime.bigint()}`;
   let fd: number | null = null;
 
   while (fd === null) {
     try {
       fd = fs.openSync(lockPath, 'wx');
+      fs.writeSync(fd, token);
     } catch (e) {
+      if (fd !== null) {
+        // 创建成功但写 token 失败（如磁盘满）：关掉并删除这个空锁再抛，
+        // 别留下一个无人认领、只能等 10s 强夺的锁
+        try {
+          fs.closeSync(fd);
+        } catch {
+          /* ignore */
+        }
+        try {
+          fs.rmSync(lockPath, { force: true });
+        } catch {
+          /* ignore */
+        }
+        fd = null;
+        throw e;
+      }
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
       // 锁被占：陈旧则强夺，否则短睡重试
       let stale = false;
@@ -158,10 +181,14 @@ export function withFileLock<T>(filePath: string, fn: () => T): T {
     } catch {
       /* ignore */
     }
+    // 释放前比对锁文件内容：仍是自己的 token 才删。锁被强夺后这里读到的是
+    // 新持有者的 token（或其尚未写完的空内容），都不该动它
     try {
-      fs.rmSync(lockPath, { force: true });
+      if (fs.readFileSync(lockPath, 'utf8') === token) {
+        fs.rmSync(lockPath, { force: true });
+      }
     } catch {
-      /* ignore */
+      /* ignore：锁文件已不在（正常）或读取失败 */
     }
   }
 }

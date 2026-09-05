@@ -2,10 +2,11 @@ import { colors } from '../colors.js';
 import { hasKernel } from '../config.js';
 import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
-import { disableServiceAutoStart, getServiceStatus } from '../service.js';
+import { detectLegacySystemInstall, disableServiceAutoStart, getServiceStatus } from '../service.js';
 import * as subscription from '../subscription.js';
 import type { PreparedConfig } from '../types.js';
 import { assertNoRemovedSshFlag, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
+import { cleanupLegacyInstallOrThrow } from './shared.js';
 import { printStatus } from './status.js';
 
 /**
@@ -37,6 +38,16 @@ export async function cmdStart(args: string[]): Promise<void> {
   const serviceBefore = getServiceStatus();
 
   if (targetMode === 'tun') {
+    // 遗留 root daemon 与 TUN 抢同一组端口：KeepAlive 会反复拉起旧内核，
+    // 不清理的话 TUN 内核与它互抢，两边都不稳（停止侧的 cmdStop 同样先清它）
+    if (detectLegacySystemInstall()) {
+      console.log(colors.yellow('检测到旧版本安装的系统级服务（root LaunchDaemon），启动 TUN 前需清理'));
+      console.log(colors.gray('  清理需要一次管理员密码（删除 root 拥有的文件）'));
+      cleanupLegacyInstallOrThrow();
+      console.log(colors.green('已清理遗留的系统级服务'));
+      console.log('');
+    }
+
     // 判据是 loaded 而非 installed：`mh stop` 之后服务虽仍装着但不会被拉起，
     // 此时起 TUN 是正常用法。只看 installed 会把它一并拦掉，与「stop 后可用 tun」矛盾
     if (serviceBefore.loaded) {

@@ -64,6 +64,18 @@ describe('withFileLock', () => {
     assert.equal(fs.existsSync(lockPath), false);
   });
 
+  it('锁被强夺后，原持有者的释放不得误删新持有者的锁', () => {
+    // 三进程竞态的中间一步（A 持锁 12s 被 B 强夺、A 的 finally 误删 B 的锁 → C 直接进门）。
+    // 在 fn 内模拟强夺：删除当前锁，让「新持有者」写入自己的 token。
+    // 旧实现无条件 rmSync 会把 B 的锁删掉；新实现只认自己的 token，B 的锁必须原样保留
+    withFileLock(target, () => {
+      fs.rmSync(lockPath);
+      fs.writeFileSync(lockPath, '999-123456789');
+    });
+    assert.equal(fs.readFileSync(lockPath, 'utf8'), '999-123456789', '新持有者的锁被误删，第三方将直接进入临界区');
+    fs.rmSync(lockPath);
+  });
+
   it('新鲜锁拦住并发获取，持锁者放锁后才轮到（真实互斥）', () => {
     // 用真实的第二个持锁者验证互斥，而不是只检查锁文件属性。
     // 主进程先拿锁，在锁内记录时刻；子进程尝试拿同一把锁并记录拿到的时刻。

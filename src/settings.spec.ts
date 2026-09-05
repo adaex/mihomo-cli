@@ -116,3 +116,55 @@ describe('saveSubscriptionCache 跨进程并发', () => {
     }
   });
 });
+
+describe('updateSettings 跨进程并发', () => {
+  it('多进程同时改订阅列表不丢条目（settings.json 的读-改-写持锁）', async () => {
+    // CODE_REVIEW 曾声称此场景有测试、实际缺失（只有 cache.json 版）。
+    // settings.json 的丢失形态：后写者整块覆盖先写者刚写入的 subscriptions，
+    // 双方都拿到成功回执——与 cache.json 同一族，防线同为 withFileLock
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-settings-race-'));
+    const settingsPath = path.resolve('src/settings.ts');
+    const WORKERS = ['A', 'B', 'C', 'D'];
+    const PER_WORKER = 15;
+
+    try {
+      const codes = await Promise.all(
+        WORKERS.map(
+          who =>
+            new Promise<number | null>(resolve => {
+              const child = spawn(
+                process.execPath,
+                [
+                  '--import',
+                  'tsx',
+                  '-e',
+                  `import { updateSettings } from ${JSON.stringify(settingsPath)};
+                   for (let i = 0; i < ${PER_WORKER}; i++) {
+                     const name = ${JSON.stringify(who)} + '-' + i;
+                     updateSettings(s => ({ subscriptions: [...(s.subscriptions ?? []), { name, url: 'https://example.com/' + name }] }));
+                   }`,
+                ],
+                { stdio: 'ignore', env: { ...process.env, MIHOMO_CLI_DIR: tmpDir } },
+              );
+              child.on('close', code => resolve(code));
+              child.on('error', () => resolve(-1));
+            }),
+        ),
+      );
+      for (const code of codes) {
+        assert.equal(code, 0, '写入子进程应正常退出');
+      }
+
+      const settingsFile = path.join(tmpDir, 'settings.json');
+      const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8')) as { subscriptions?: { name: string }[] };
+      const names = (settings.subscriptions ?? []).map(s => s.name);
+      const expected = WORKERS.length * PER_WORKER;
+      assert.equal(names.length, expected, `期望 ${expected} 条，实际 ${names.length} 条（并发写丢失）`);
+      for (const who of WORKERS) {
+        assert.equal(names.filter(n => n.startsWith(`${who}-`)).length, PER_WORKER, `worker ${who} 的条目应完整保留`);
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});

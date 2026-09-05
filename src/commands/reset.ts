@@ -9,7 +9,7 @@ import { cleanupAll, PROCESS_WAIT_ATTEMPTS, PROCESS_WAIT_INTERVAL } from '../pro
 import { detectLegacySystemInstall, getServiceStatus, isServiceInstalled, stopService, uninstallService } from '../service.js';
 import { invalidateSettingsCache, writeSettings } from '../settings.js';
 import type { ResetTarget } from '../types.js';
-import { confirmOrThrow } from './shared.js';
+import { cleanupLegacyInstallOrThrow, confirmOrThrow } from './shared.js';
 
 /**
  * 重置目标注册表。**顺序即执行顺序**（`resolveResetTargets` 会按本数组排序），
@@ -95,6 +95,10 @@ export const RESET_TARGETS: ResetTarget[] = [
     onAfter: () => {
       const st = getServiceStatus();
       if (st.installed || st.loaded) uninstallService();
+      // checkEmpty 把遗留 root 安装计入「服务存在」，这里必须同样处理它——
+      // 否则仅有 legacy daemon 的机器上 reset service 报「已重置」却原样保留，
+      // KeepAlive 继续拉起内核抢端口
+      if (detectLegacySystemInstall()) cleanupLegacyInstallOrThrow();
     },
     checkEmpty: () => !isServiceInstalled() && !getServiceStatus().loaded && !detectLegacySystemInstall(),
     emptyMsg: '服务未安装，无需删除',
@@ -202,6 +206,9 @@ export async function cmdReset(args: string[]): Promise<void> {
     console.log(colors.yellow('将卸载 launchd 服务（移除登录自启，Mixed 模式需重新 install 才能使用）'));
   } else if (stopsService && serviceActive) {
     console.log(colors.yellow('将停止服务并关闭登录自启（安装保留，mihomo start 可重新启动）'));
+  }
+  if (uninstallsService && detectLegacySystemInstall()) {
+    console.log(colors.yellow('将清理旧版本安装的系统级服务（root LaunchDaemon，需要一次管理员密码）'));
   }
 
   console.log(`将删除: ${targets.map(t => t.label).join('、')}`);

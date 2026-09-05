@@ -2,9 +2,10 @@ import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { getMihomoPids } from '../process-probe.js';
 import { stop } from '../process-stop.js';
-import { getServiceStatus, stopService } from '../service.js';
+import { detectLegacySystemInstall, getServiceStatus, stopService } from '../service.js';
 import type { StopResult } from '../types.js';
 import { assertNoRemovedSshFlag } from '../utils.js';
+import { cleanupLegacyInstallOrThrow } from './shared.js';
 
 /** 检查停止结果：若有进程未终止则报错并退出。 */
 export function handleStopResult(result: StopResult): void {
@@ -21,6 +22,17 @@ export function handleStopResult(result: StopResult): void {
  */
 export async function cmdStop(args: string[]): Promise<void> {
   assertNoRemovedSshFlag(args);
+
+  // 遗留 root daemon 带 KeepAlive：不清理它，下面杀掉的内核约 10s 后就被拉回，
+  // 「已停止」即成谎报（与 v4.2.2 修的 gui/0 缺陷同一签名，幽灵换成 legacy daemon）。
+  // detectLegacySystemInstall 只查 plist 文件，不要求任务在跑，幂等清理无副作用
+  if (detectLegacySystemInstall()) {
+    console.log(colors.yellow('检测到旧版本安装的系统级服务（root LaunchDaemon），停止前需清理'));
+    console.log(colors.gray('  清理需要一次管理员密码（删除 root 拥有的文件）'));
+    cleanupLegacyInstallOrThrow();
+    console.log(colors.green('已清理遗留的系统级服务'));
+    console.log('');
+  }
 
   const status = getServiceStatus();
   const pids = getMihomoPids();

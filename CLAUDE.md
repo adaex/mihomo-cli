@@ -172,6 +172,14 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 新增「执行某操作并报告结果」的代码时，先问一句：**报告成功的依据，是不是只有「调用没报错」？** 如果是，就需要一次独立的事后确认。
 
+### 防线只铺在主路径，是最常见的漏网形态
+
+v4.2.3 扫描修掉的七处同族缺陷，共同模式不是「没写防线」，而是**防线只铺在一条路径上**：给 `start` 建了 `waitServiceHealthy`，`install` 的重装恢复路径仍以「bootstrap 没报错」打印「已按原状态重新启动」；服务路径观察满 1.2s 窗口，TUN 路径仍是 0.4s 单次检查——且 `kill -0` 对**僵尸进程**（bash 未收割的已死子进程）也返回成功，实测 10 次中 5 次误报存活，判活必须以 `ps -o stat=` 的状态列为准；`waitUnloadedSteps` 轮询 25 次后**静默放行**（只有等待、没有判定），且把 launchctl 112/125 查询失败也当「已卸载」；`launchctl disable` 整体 `|| true`，而它是 TUN 防线第一层的唯一执行点；`withFileLock` 被强夺者的 finally 无条件 rm——删掉的是**新持有者**的锁（三进程实测复现），释放前必须比对锁文件内容。
+
+**给一条路径补「事后确认」时，grep 同类断言的全部调用点**——同类路径（install/tun/stop/uninstall）几乎必然共享同一缺口。测试同理：`kernel.ts` 的变体选择曾在每台 Intel Mac 上静默装错微架构构建（`-v1` 后缀按名称排序挤在标准版之前、能通过全部旧判据），靠的是「精确匹配标准版形态」而非逐个黑名单变体。
+
+
+
 ### pgrep/pkill 的 pattern 必须是 POSIX ERE，不是 JS 正则
 
 `MAIN_INSTANCE_PATTERN` 交给 `pgrep -f` / `pkill -f`，它们用 `regcomp(REG_EXTENDED)` 编译——**ERE 没有非捕获组**，`(?:a|b)` 里 `(` 后紧跟 `?` 被判为「重复操作符缺少操作数」，实测报 `Cannot compile regular expression ... (repetition-operator operand invalid)` 并以**退出码 2** 结束。
@@ -239,6 +247,7 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 - `writeSettings` 只安全用于单键/整值替换
 - mutator 必须同步，且不得再调 `updateSettings`/`writeSettings`——**锁不可重入**，会死等到强夺陈旧锁
 - 锁超过 10s 视为持锁进程已崩溃并强夺：宁可退回竞态，也不能让一次崩溃永久锁死 CLI
+- **释放前必须校验锁还是自己的**：被强夺者的 finally 若无条件 rm，删掉的是新持有者的锁——第三方随即直接进门，与持锁者并发（三进程实测：B/C 并发 4.6s），发生的正是锁要防的静默丢数据且双方都拿到成功回执。锁文件写入 `pid+hrtime` token，内容一致才删（`paths.spec.ts` 锁定）
 
 **`cache.json` 同理，别只想着 settings**（v3.12.1 修）：`saveSubscriptionCache` 曾以「全程同步、读写之间无 await」自证安全，但那只在单进程内成立。跨进程下它就是裸读-改-写——实测 4 进程各写 30 条丢 7 条。丢的是 `updated_at` → `needsAutoUpdate` 恒 true → 该订阅每次 `start` 都重新下载，且流量/到期展示一并消失。写入路径（`saveSubscriptionCache` / `deleteSubscriptionCache`）一律持 `withFileLock`，回归测试在 `settings.spec.ts`（必须用 `spawn` 并行起子进程，`spawnSync` 逐个跑完根本测不出并发）。
 
@@ -258,6 +267,7 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 - GitHub API **恒直连**（v3.10.0 移除 `--mirror-all`），镜像只作用于产物下载。API 若走镜像，`browser_download_url` 就完全由镜像说了算，而 `withMirror` 对非 github URL 原样放行 —— `assertTrustedAssetUrl` 因此是纵深防御的第二道，不可省
 - curl 必须带 `--proto '=https' --proto-redir '=https'`：`-L` 默认跟随任意协议重定向，实测会降级到明文 http 并落盘。产物随后 `chmod 755` 并在 TUN/daemon 下**以 root 运行**
 - tar 守卫要同时查**路径**（`-tzf`，条目名干净）与**类型**（`-tvzf` 首字符，拒 `l`/`h`）：symlink 成员的条目名完全合法，能过路径检查却让 `chmod 755` 沿链接作用到任意文件。遍历用 `lstatSync` 不用 `statSync`
+- **资产选择必须精确匹配标准版形态**（`mihomo-<platform>-<arch>-vX.Y.Z` 收尾），不能黑名单枚举变体：上游有 `-compatible`/`-go`/`-v1`/`-v2`/`-v3`（GOAMD64 微架构）等多种后缀变体，全都以版本号结尾；按名称排序 `-`(0x2D) < `.`(0x2E) 使 `mihomo-darwin-amd64-v1-v1.19.30.gz` 排在标准版之前被 `find()` 优先命中——每台 Intel Mac 每次更新都静默装上性能最低档的 baseline 构建，下载/大小校验/自检全过（`kernel.spec.ts` 用真实资产名锁定）
 
 ### 覆写语义
 
@@ -265,7 +275,7 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 `exclude-filter` 在 mihomo 侧是无锚点正则搜索，注入节点的排除模式必须 `^(?:...)$` 整名锚定，否则会连带排除名字包含它的订阅节点。
 
-`match` 的订阅名匹配大小写不敏感，与 `findSubscriptionFuzzy` 口径一致。
+`match` 的订阅名匹配大小写不敏感，与 `findSubscriptionFuzzy` 口径一致。`match` 块**加载侧同样 fail-closed**：块存在但键名打错/值滤空/为空对象时抛 `CliError`，不能 warn 后静默全局生效——运行侧 `matchesScope` 缺 scope 字段时不应用，加载侧降级成「无 match」会让文件作用域反而扩大到所有订阅。`~proxies` 就地 patch 已有节点时**不**注入 exclude-filter（节点本就在池子里，再排除等于把它踢出所有 include-all 分组）；只收「订阅里没有的名字」，判定依据是 buildConfig 传入的订阅原节点集合。
 
 ---
 

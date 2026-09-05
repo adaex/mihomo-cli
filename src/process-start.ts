@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 
 import { CliError } from './errors.js';
-import { rotateAndCleanupLogs } from './log-files.js';
+import { readLogTail, rotateAndCleanupLogs } from './log-files.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
-import { checkStaleState, getPid, MAIN_INSTANCE_PATTERN } from './process-probe.js';
+import { checkStaleState, getPid, isRunning, MAIN_INSTANCE_PATTERN } from './process-probe.js';
 import { runSudoScript } from './sudo.js';
 import type { StartResult } from './types.js';
 import { shellQuote } from './utils.js';
@@ -58,13 +58,30 @@ function buildTunLaunchScript(): string {
     'NEW_PID=$!\n' +
     'echo ${NEW_PID} > "${PID_FILE}"\n' +
     '\n' +
-    '# 验证\n' +
-    'for i in 1 2 3 4 5; do\n' +
-    '  sleep 0.4\n' +
-    '  if kill -0 ${NEW_PID} 2>/dev/null; then\n' +
-    '    exit 0\n' +
-    '  fi\n' +
+    '# 进程判定：活着 = ps 能查到且状态非 Z。不能只用 kill -0——它对僵尸\n' +
+    '#（bash 尚未收割的已死子进程）同样返回成功，实测 150ms 退出的桩进程 10 次中\n' +
+    '# 5 次被误报存活；查不到（已被收割/不存在）同样算死。\n' +
+    'is_alive() {\n' +
+    '  local stat\n' +
+    '  stat=$(ps -p "$1" -o stat= 2>/dev/null) || return 1\n' +
+    '  case "${stat}" in\n' +
+    "    Z*|'') return 1 ;;\n" +
+    '    *) return 0 ;;\n' +
+    '  esac\n' +
+    '}\n' +
+    '\n' +
+    '# 验证：观察满一个窗口（12 × 0.1s ≈ 1.2s，与服务路径 SERVICE_OBSERVE_MS 对齐）。\n' +
+    '# 不能「一看到活着就收口」——内核常在 spawn 后数百 ms 才退出（实测 180ms 与 540ms\n' +
+    '# 两种），此前的 0.4s 单次检查必漏；期间死亡立即走失败路径。\n' +
+    'i=0\n' +
+    'while [ $i -lt 12 ]; do\n' +
+    '  sleep 0.1\n' +
+    '  is_alive ${NEW_PID} || break\n' +
+    '  i=$((i+1))\n' +
     'done\n' +
+    'if is_alive ${NEW_PID}; then\n' +
+    '  exit 0\n' +
+    'fi\n' +
     '\n' +
     '# 失败，显示日志（退出码 2：避开 sudo 的 1=鉴权失败/取消，供调用方区分）\n' +
     'rm -f "${PID_FILE}" 2>/dev/null || true\n' +
@@ -119,9 +136,15 @@ export async function startTun(): Promise<StartResult> {
 
   await new Promise(resolve => setTimeout(resolve, TUN_MODE_POST_WAIT_MS));
 
+  // 复核存活而非只读 pid 文件：脚本观察窗（1.2s）结束后内核仍可能退出（端口冲突等
+  // 晚期失败），pid 文件还在而进程已死——只读文件会把这报成启动成功。
+  // isRunning 同时校验命令行，防 pid 被无关进程复用
   const finalPid = getPid();
-  if (!finalPid) {
-    throw new CliError('TUN 启动失败');
+  if (!finalPid || !isRunning()) {
+    const tail = readLogTail();
+    throw new CliError('TUN 启动失败（内核未能保持运行）', {
+      hint: [...(tail.length > 0 ? ['--- 日志尾部 ---', ...tail, ''] : [`日志: ${PATHS.logFile}`]), '', '完整日志: mihomo logs 0'],
+    });
   }
 
   return { success: true, pid: finalPid, mode: 'tun' };

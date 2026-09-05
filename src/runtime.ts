@@ -106,8 +106,12 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
  * 崩溃循环下必须报错而非报成功：KeepAlive 会每隔约 10s 重新拉起坏内核，日志被刷爆，
  * 而用户拿到的是「已启动 (PID xxx)」。日志尾部直接附在错误里——那是用户唯一的线索
  * （TUN 的启动脚本本就 `tail -25`，服务路径此前什么都不给）。
+ *
+ * 导出供 cmdInstall 的重装恢复路径共用：那里同样 bootstrap 后就打印
+ * 「已按原状态重新启动」，缺这道确认就是 v4.2.0 修过的「bootstrap 返回 0 ≠ 内核活着」
+ * 的漏网分支。
  */
-async function assertServiceHealthy(): Promise<number | null> {
+export async function assertServiceHealthy(label = '启动失败'): Promise<number | null> {
   const health = await waitServiceHealthy();
   if (health.healthy) return health.pid;
 
@@ -115,7 +119,7 @@ async function assertServiceHealthy(): Promise<number | null> {
   const reason = health.crashed ? `内核启动后立即退出（退出码 ${health.exitCode}）` : '内核未能进入运行状态';
 
   throw new CliError(reason, {
-    label: '启动失败',
+    label,
     hint: [
       ...(health.crashed ? ['launchd 会每隔约 10 秒反复拉起它，请先修正配置或执行 mihomo stop。'] : []),
       ...(tail.length > 0 ? ['', '--- 日志尾部 ---', ...tail] : ['', `日志: ${PATHS.logFile}`]),

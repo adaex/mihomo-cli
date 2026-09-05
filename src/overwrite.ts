@@ -175,34 +175,60 @@ export function isOverwriteFilename(filename: string): boolean {
   return filename === 'overwrite.yaml' || /^overwrite\..+\.ya?ml$/.test(filename);
 }
 
-/** match 块支持的匹配键（作用域限定），未知键会被拒绝并告警。 */
+/** match 块支持的匹配键（作用域限定）。 */
 const MATCH_KEYS = new Set(['subscription', 'url-domain']);
 
 /**
- * 校验并规整 match 块。仅接受对象；剔除未知键（告警）；每个键值收敛为 string[]。
- * 返回 null 表示无作用域限定（全局生效）。
+ * 校验并规整 match 块。仅接受对象；每个键值收敛为 string[]。
+ * 返回 undefined 表示无 match 块（全局生效，向后兼容的默认形态）。
+ *
+ * **fail closed**：match 块存在（哪怕写错）而解析不出任何有效条件时抛错，
+ * 不能静默降级成「全局生效」——用户写了 match 显然想限定作用域，键名打错
+ * （`subscripton:`）或值全被滤空（`subscription: []`）后文件反而应用到**所有**订阅，
+ * 是比「报错挡住启动」严重得多的静默失效。运行时侧的 matchesScope 同为 fail-closed
+ * （scope 缺字段则不应用），此处把加载侧补齐。
  */
-function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch | undefined {
+export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch | undefined {
   if (raw == null) return undefined;
   if (typeof raw !== 'object' || Array.isArray(raw)) {
-    console.warn(`警告: 覆写文件 "${fileName}" 的 match 必须是对象，已忽略作用域限定`);
-    return undefined;
+    throw new CliError(`覆写文件 "${fileName}" 的 match 必须是对象（subscription / url-domain）`, { label: '覆写配置错误' });
   }
 
   const result: OverwriteMatch = {};
-  let hasValid = false;
+  const problems: string[] = [];
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
     if (!MATCH_KEYS.has(key)) {
-      console.warn(`警告: 覆写文件 "${fileName}" 的 match 含未知键 "${key}"，已忽略`);
+      problems.push(`未知键 "${key}"`);
       continue;
     }
     const arr = (Array.isArray(value) ? value : [value]).filter(v => typeof v === 'string' && v.length > 0) as string[];
-    if (arr.length === 0) continue;
+    if (arr.length === 0) {
+      problems.push(`键 "${key}" 的值为空或无有效字符串`);
+      continue;
+    }
     (result as Record<string, string[]>)[key] = arr;
-    hasValid = true;
   }
 
-  return hasValid ? result : undefined;
+  if (problems.length > 0) {
+    throw new CliError(`覆写文件 "${fileName}" 的 match 存在无效条件: ${problems.join('、')}`, {
+      label: '覆写配置错误',
+      hint: [
+        'match 写错时该文件不会限定作用域、而是对所有订阅生效，故直接报错而非忽略。',
+        `可用键: ${[...MATCH_KEYS].join(', ')}`,
+        '示例: match: {subscription: work} 或 match: {url-domain: [corp.com, github.com]}',
+      ],
+    });
+  }
+
+  if (Object.keys(result).length === 0) {
+    // 空 match 块：matchesScope 对空条件恒真（= 全局生效），同样必须挡下
+    throw new CliError(`覆写文件 "${fileName}" 的 match 为空（没有任何条件）`, {
+      label: '覆写配置错误',
+      hint: [`可用键: ${[...MATCH_KEYS].join(', ')}`, '示例: match: {subscription: work}'],
+    });
+  }
+
+  return result;
 }
 
 /** 一行摘要 match 作用域，供 `ow list` 展示；无限定返回 undefined。 */
@@ -293,6 +319,10 @@ export function loadOverwriteFile(): OverwriteFileEntry[] {
         console.warn(`警告: 覆写文件 "${file}" 顶层必须是对象，已跳过`);
       }
     } catch (e) {
+      // normalizeMatch 抛的 CliError 必须上抛到 main().catch 统一渲染：
+      // 吞成 warn + 跳过文件虽然也是 fail-closed，但用户只看到一行「解析失败」，
+      // 看不见哪个键错了、该怎么改
+      if (e instanceof CliError) throw e;
       console.warn(`警告: 覆写文件 "${file}" 解析失败: ${(e as Error).message}`);
     }
   }

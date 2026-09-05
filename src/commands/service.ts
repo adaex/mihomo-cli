@@ -5,7 +5,9 @@ import { hasKernel } from '../config.js';
 import { CliError } from '../errors.js';
 import { PATHS } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
-import { cleanupLegacySystemInstall, detectLegacySystemInstall, getServiceStatus, installService, SERVICE_BINARY_NAME, uninstallService } from '../service.js';
+import * as runtime from '../runtime.js';
+import { detectLegacySystemInstall, getServiceStatus, installService, SERVICE_BINARY_NAME, uninstallService } from '../service.js';
+import { cleanupLegacyInstallOrThrow } from './shared.js';
 
 /**
  * 服务的安装与卸载。启停在 start.ts / stop.ts。
@@ -26,15 +28,7 @@ async function handleLegacyInstall(): Promise<void> {
   console.log(colors.gray('  清理需要一次管理员密码（删除 root 拥有的文件）'));
   console.log('');
 
-  try {
-    cleanupLegacySystemInstall();
-  } catch (e) {
-    if (e instanceof CliError) throw e;
-    throw new CliError((e as Error).message, {
-      label: '清理遗留服务失败',
-      hint: ['也可手动清理:', `  sudo launchctl bootout system/$(basename ${PATHS.systemDaemonPlist} .plist)`, `  sudo rm -f ${PATHS.systemDaemonPlist}`],
-    });
-  }
+  cleanupLegacyInstallOrThrow();
 
   console.log(`${colors.green('已清理遗留的系统级服务')}`);
   console.log('');
@@ -58,6 +52,17 @@ export async function cmdInstall(_args: string[]): Promise<void> {
   console.log('');
 
   if (wasRunning) {
+    // bootstrap 返回 0 ≠ 内核活着（v4.2.0 实测的崩溃循环形态）：
+    // 重装恢复运行与 start 走同一套健康确认，缺了它就是「已按原状态重新启动」的静默谎报
+    try {
+      await runtime.assertServiceHealthy('恢复运行失败');
+    } catch (e) {
+      if (!(e instanceof CliError)) throw e;
+      throw new CliError(e.message, {
+        label: e.label,
+        hint: [...e.hint, '', '服务已安装成功，仅恢复运行失败；修正配置后可执行 mihomo start 重试。'],
+      });
+    }
     console.log(colors.green('已按原状态重新启动'));
   } else {
     console.log('启动: mihomo start');
@@ -94,7 +99,7 @@ export async function cmdUninstall(_args: string[]): Promise<void> {
 
   if (legacy) {
     console.log(colors.gray('检测到旧版本的系统级服务，清理需要一次管理员密码'));
-    cleanupLegacySystemInstall();
+    cleanupLegacyInstallOrThrow();
     console.log(colors.green('已清理遗留的系统级服务'));
   }
 

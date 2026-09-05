@@ -247,6 +247,27 @@ describe('excludeOverwriteProxiesFromIncludeAll（排除模式整名锚定）', 
     assert.deepEqual(excludedBy(pattern, ['过期流量', 'HK', 'HK-01']), ['过期流量', 'HK']);
   });
 
+  it('~proxies patch 订阅已有节点时不把它排除出 include-all（节点本就在池子里）', () => {
+    // 回归：~ 的正当用法是就地 patch 已有节点字段，不注入新节点——照收进
+    // exclude-filter 会把该节点从所有 include-all 分组剔除，分流静默改变
+    const config = {
+      proxies: [{ name: 'HK-01', port: 443 }, { name: 'HK-02' }],
+      'proxy-groups': [{ name: 'AUTO', type: 'url-test', 'include-all': true }],
+    };
+    excludeOverwriteProxiesFromIncludeAll(config, [{ config: { '~proxies': [{ name: 'HK-01', port: 8443 }] } }], new Set(['HK-01', 'HK-02']));
+    assert.equal((config['proxy-groups'][0] as Record<string, unknown>)['exclude-filter'], undefined, 'patch 已有节点不应产生 exclude-filter');
+  });
+
+  it('~proxies 新增订阅里没有的节点时仍被排除（真注入才排除）', () => {
+    const config = {
+      proxies: [{ name: 'HK-01' }],
+      'proxy-groups': [{ name: 'AUTO', type: 'url-test', 'include-all': true }],
+    };
+    excludeOverwriteProxiesFromIncludeAll(config, [{ config: { '~proxies': [{ name: 'Self-Node' }] } }], new Set(['HK-01']));
+    const pattern = (config['proxy-groups'][0] as Record<string, unknown>)['exclude-filter'] as string;
+    assert.deepEqual(excludedBy(pattern, ['HK-01', 'Self-Node']), ['Self-Node']);
+  });
+
   it('正则元字符按字面量转义', () => {
     const config = { 'proxy-groups': [{ name: 'AUTO', 'include-all': true }] };
     excludeOverwriteProxiesFromIncludeAll(config, [{ config: { 'proxies+': [{ name: 'A.B+C' }] } }]);

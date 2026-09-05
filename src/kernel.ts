@@ -7,6 +7,7 @@ import { clearKernelVersionCache, getKernelVersion } from './config.js';
 import { createHttpClient } from './http.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
 import type { GitHubAsset, GitHubRelease, KernelUpdateInfo } from './types.js';
+import { escapeRegExp } from './utils.js';
 
 const GITHUB_REPO = 'MetaCubeX/mihomo';
 const KERNEL_HTTP_TIMEOUT = 120_000;
@@ -59,7 +60,7 @@ function getArch(): string {
   return arch;
 }
 
-function findMatchingAsset(assets: GitHubAsset[], platform: string, arch: string): GitHubAsset | null {
+export function findMatchingAsset(assets: GitHubAsset[], platform: string, arch: string): GitHubAsset | null {
   const prefix = `mihomo-${platform}-${arch}`;
   const matchingAssets = assets.filter(
     a => (a.name.startsWith(prefix) && a.name.endsWith('.gz')) || (a.name.startsWith(`${prefix}-`) && a.name.endsWith('.gz')),
@@ -68,15 +69,14 @@ function findMatchingAsset(assets: GitHubAsset[], platform: string, arch: string
   if (matchingAssets.length === 0) return null;
   if (matchingAssets.length === 1) return matchingAssets[0];
 
-  // 标准版尾缀为版本号（mihomo-darwin-arm64-v1.x.y.gz）；-compatible/-go 变体也满足尾缀形态，
-  // 需显式排除——否则字母序靠前的 compatible 版会被优先选中（Intel Mac 上性能低于标准版）。
+  // 标准版是精确形态 `mihomo-<platform>-<arch>-vX.Y.Z`（版本号收尾，无任何后缀变体）。
+  // 之前只黑名单排除 -go/-compatible，漏了 GOAMD64 微架构变体 -v1/-v2/-v3——它们同样
+  // 以版本号结尾、能通过旧判据，而按名称排序 `-`(0x2D) < `.`(0x2E) 使
+  // `mihomo-darwin-amd64-v1-v1.19.30.gz` 排在标准版之前被 find 优先选中——
+  // Intel Mac 上每次更新都静默装上性能最低档的 baseline 构建，下载/大小校验/自检全过。
+  // 精确匹配形态可一并排除一切后缀变体，无需逐个枚举。
   // 无标准版时回退 matchingAssets[0]，仍能装上可用内核。
-  const standardAsset = matchingAssets.find(a => {
-    const nameWithoutGz = a.name.slice(0, -3);
-    const parts = nameWithoutGz.split('-');
-    const lastPart = parts[parts.length - 1];
-    return /^v?\d+\.\d+\.\d+/.test(lastPart) && !nameWithoutGz.includes('-go') && !nameWithoutGz.includes('-compatible');
-  });
+  const standardAsset = matchingAssets.find(a => new RegExp(`^${escapeRegExp(prefix)}-v?\\d+\\.\\d+\\.\\d+$`).test(a.name.slice(0, -3)));
 
   return standardAsset || matchingAssets[0];
 }

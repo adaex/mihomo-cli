@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { CliError } from './errors.js';
-import { deepMergeWithOverrides, filterOverwriteFilesByScope, parseOverrideKey } from './overwrite.js';
+import { deepMergeWithOverrides, filterOverwriteFilesByScope, normalizeMatch, parseOverrideKey } from './overwrite.js';
 import type { OverwriteFileEntry, OverwriteMatch } from './types.js';
 
 describe('parseOverrideKey', () => {
@@ -246,5 +246,49 @@ describe('matchesScope 订阅名大小写不敏感', () => {
   it('数组形式逐项大小写不敏感', () => {
     const files = [file({ subscription: ['Work', 'home'] })];
     assert.equal(filterOverwriteFilesByScope(files, { subName: 'HOME' }).length, 1);
+  });
+});
+
+describe('normalizeMatch（match 块 fail-closed）', () => {
+  const assertConfigError = (fn: () => unknown) => {
+    assert.throws(fn, (e: unknown) => {
+      assert.ok(e instanceof CliError, `应为 CliError，实际 ${(e as Error).constructor.name}`);
+      assert.equal((e as CliError).label, '覆写配置错误');
+      return true;
+    });
+  };
+
+  it('无 match 块返回 undefined（全局生效，向后兼容）', () => {
+    assert.equal(normalizeMatch(undefined, 'overwrite.yaml'), undefined);
+    assert.equal(normalizeMatch(null, 'overwrite.yaml'), undefined);
+  });
+
+  it('正常 match 块解析为条件', () => {
+    const match = normalizeMatch({ subscription: 'work', 'url-domain': ['corp.com', 'github.com'] }, 'overwrite.yaml');
+    assert.deepEqual(match, { subscription: ['work'], 'url-domain': ['corp.com', 'github.com'] });
+  });
+
+  it('键名打错（subscripton）抛错而非静默全局生效', () => {
+    // 回归：旧实现 warn + 忽略未知键 → 返回 undefined → 该文件对所有订阅生效。
+    // 用户写了 match 显然想限定作用域，fail-open 是比报错严重得多的静默失效
+    assertConfigError(() => normalizeMatch({ subscripton: 'work' }, 'overwrite.yaml'));
+  });
+
+  it('多条件里部分键打错同样抛错（否则 AND 条件被弱化、作用域放宽）', () => {
+    assertConfigError(() => normalizeMatch({ subscription: 'work', 'url-domian': 'corp.com' }, 'overwrite.yaml'));
+  });
+
+  it('值滤空（空数组/非字符串）抛错', () => {
+    assertConfigError(() => normalizeMatch({ subscription: [] }, 'overwrite.yaml'));
+    assertConfigError(() => normalizeMatch({ subscription: 123 }, 'overwrite.yaml'));
+  });
+
+  it('match 为数组/标量抛错', () => {
+    assertConfigError(() => normalizeMatch(['subscription'], 'overwrite.yaml'));
+    assertConfigError(() => normalizeMatch('work', 'overwrite.yaml'));
+  });
+
+  it('空 match 块抛错（写了 match 即显式要求限定作用域）', () => {
+    assertConfigError(() => normalizeMatch({}, 'overwrite.yaml'));
   });
 });

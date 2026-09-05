@@ -1,7 +1,7 @@
 # 代码审查：风险与教训
 
-> 当前基线：v4.2.2
-> 上次全面审查：2026-09-05
+> 当前基线：v4.2.3
+> 上次全面审查：2026-09-05（本轮：4 个维度并行扫描全部 src，修复 9 项高中优先级缺陷，见「已验证健壮」各 v4.2.3 条目与 git log）
 
 **这份文档只记录两类内容**：本轮发现的未处理项，以及**验证过、下轮不必重查**的结论。
 
@@ -22,6 +22,25 @@
 
 v4.2.1/v4.2.2 已补上三处**不需要 sudo 也能测**的：`process-probe.spec.ts`（真实 pgrep 编译 pattern）、`service-exitcode.spec.ts`（真实 launchctl 的 113/112/125 语义）、`commands/root-guard.spec.ts`（子进程跑真实入口 + 覆盖 `getuid` 模拟 root）。共同思路是**让真实的系统工具当裁判**，而非把猜到的行为写死进断言。
 
+v4.2.3 又补四处：`kernel.spec.ts`（真实 release 资产名的变体选择）、`paths.spec.ts`（锁被强夺后释放不误删）、`overwrite.spec.ts`（match 块 fail-closed）、`settings.spec.ts`（settings.json 4 进程并发写不丢条目——此前 CODE_REVIEW 声称有此测试、实际不存在，已补齐使声称成真）。
+
+### TUN 模式尊重 `dns.enable: false` 却保留 dns-hijack（v4.2.3 发现，未修）
+
+订阅/覆写显式 `dns.enable: false`（mixed 场景合法）+ `mihomo tun`：生成 `dns: {enable: false, ...}` 同时保留 `tun.dns-hijack: [any:53, tcp://any:53]`，还向已关闭的 dns 块补注 fake-ip 字段（实测，生成端矛盾确定；内核侧确切行为未验证）。修复方向是语义决策：TUN 模式把 `dns.enable` 视为锁定项强制 true，或显式拒绝这个组合——待定。
+
+### 服务操作无跨进程串行化（v4.2.3 发现，未修）
+
+settings.json 有 `withFileLock`，launchd 服务操作（bootout/enable/bootstrap/disable）没有。慢速 `mihomo start`（订阅自动更新占最长约 10s）期间另一终端 `mihomo stop`：stop 报「已停止」，start 随后的无条件 `enable` 把自启位又打开 + bootstrap，终态与用户最后一条命令相反。方向：服务操作共持一把锁，或 start 在动手前重查一次 `getServiceStatus()` 收窄窗口。
+
+### 低优先级未处理（v4.2.3 扫描发现，影响面小）
+
+- `start`/`logs`/`ow`/`sub` 不校验未知 flag：拼错（`logs -F`）被静默跳过，仅 `kernel`/`reset` 有白名单校验
+- `update` 当前版本领先 registry latest 时（预发/源码安装）会静默降级；nvm 多 prefix 下复核对象与 PATH 上实际运行的 `mihomo` 可能不一致
+- `getLatestRelease` 页内全是预发布时 fallback `releases[0]` 会把 alpha 当稳定版返回（今日不可达：上游同时只挂一条 alpha）
+- 信号死亡的内核对 `isCrashed`/`status` 不可见：launchd 写 `last terminating signal = Killed: 9` 而非 `last exit code`（实测确认），解析器读不到——错误提示会指向相反方向
+- `sub add` 切换默认订阅后运行中实例零提示（`sub use`/`sub update` 分别走 restartToApply/printRestartHint，口径不一）
+- TUN dns 为非映射值时已转 `CliError`（v4.2.3 顺手修），但 `assertConfigShape` 仍不校验 dns 形态（mixed 路径无此守卫）
+
 仍缺的是「真的起一个服务再停掉」这类端到端流程。方向是「用一次性 label 装一个假内核（shell 脚本桩），跑真实 launchctl」——本轮验证 KeepAlive 重启行为时的临时脚本证明这条路可行且快（单轮约 20 秒，全程用户域免 root），但要解决「测试失败时确保 bootout + 删 plist」的清理保证。
 
 ### 观察窗之后才崩溃的内核判不出来
@@ -35,7 +54,8 @@ v4.2.1/v4.2.2 已补上三处**不需要 sudo 也能测**的：`process-probe.sp
 避免下轮重复排查。每条都实际验证过，不是静态推测。
 
 **并发与数据完整性**
-- `settings.json` / `cache.json` 的读-改-写全部持 `withFileLock`；6 并发 `sub add` 不丢条目，4 进程各写 30 条缓存不丢条目（`settings.spec.ts` 用真实子进程验证）
+- `settings.json` / `cache.json` 的读-改-写全部持 `withFileLock`；4 进程 × 15 条的 `updateSettings` 并发与 `saveSubscriptionCache` 并发均不丢条目（`settings.spec.ts` 用真实 spawn 子进程验证，必须 spawn 并行起、spawnSync 逐个跑完测不出并发）
+- **锁释放校验所有权**（v4.2.3 修）：锁文件写 `pid+hrtime` token，释放前内容一致才删。此前被强夺者的 finally 无条件 rm，删掉的是**新持有者**的锁——三进程实测 B/C 并发 4.6s，正是锁要防的静默丢数据。`paths.spec.ts` 锁定
 - 陈旧锁（>10s）会被强夺，一次崩溃不会永久锁死 CLI；实测 0.045s 完成不卡死
 - 原子写：临时名带 pid + 进程内自增序号，同进程并发写同一目标不互相踩踏
 
@@ -43,6 +63,8 @@ v4.2.1/v4.2.2 已补上三处**不需要 sudo 也能测**的：`process-probe.sp
 - 无原型污染（`__proto__` 只作自有属性）；别名炸弹不放大——解析共享引用，`dumpYaml` 保留锚点，9^7 叶子的归档输出仅 826 字节
 - `assertConfigShape` 把 YAML 笔误（列表写成映射、留空行产生 null 元素、`rules` 漏 `-`）转成 `CliError`，不再抛裸 `TypeError` + 堆栈
 - 覆写加载顺序确定（显式 sort，`LC_ALL=C` 下一致）
+- **match 块加载侧 fail-closed**（v4.2.3 修）：键名打错/值滤空/空对象抛 `CliError`，不再 warn 后静默全局生效——运行侧 `matchesScope` 本就 fail-closed，加载侧降级成「无 match」会让作用域反而扩大到所有订阅（`overwrite.spec.ts` 锁定）
+- **`~proxies` patch 已有节点不再误剔除**（v4.2.3 修）：exclude-filter 只收「订阅里没有的名字」，patch 已有节点（本就在池子里）不再把它踢出 include-all 分组（`config.spec.ts` 锁定）
 
 **进程与状态**
 - PID 复用：`isRunning` 与 `cleanupAll` 都走命令行匹配，不裸信 pid 文件
@@ -53,9 +75,14 @@ v4.2.1/v4.2.2 已补上三处**不需要 sudo 也能测**的：`process-probe.sp
 - **root 守卫**：`sudo mihomo` 被入口拒绝。以 root 运行时域拼成 `gui/0`（不存在），所有服务操作静默跳过却报成功，随后 KeepAlive 拉回内核（`commands/root-guard.spec.ts` 端到端锁住，含「守卫先于 ensureDirs」）
 - **TUN 与服务共用 config.yaml**：`mihomo tun` 启动前关掉服务自启，`startService` 拒绝 TUN 配置。否则 TUN 未停就关机时，重启后 LaunchAgent 会以普通用户身份拿 TUN 配置反复拉起注定失败的内核
 - `launchctl print` 解析锚定行首单 tab，`service.spec.ts` 用倒序 fixture 锁死（不依赖 launchd 的字段顺序）
+- **停止/卸载有装载级判定**（v4.2.3 修）：`waitUnloadedSteps` 不再「只等待不判定」——轮询用尽仍装载即报错（exit 7），112/125 查询失败也不当「已卸载」（exit 6）；`launchctl disable` 不再 `|| true`，执行后经 `print-disabled` 复核位真生效（TUN 防线第一层的唯一执行点）；uninstall 补上等待 + `rm` 失败可见
+- **TUN 启动观察满 1.2s 窗口**（v4.2.3 修）：此前 0.4s 单次 `kill -0` 首次存活即收口，且 `kill -0` 对僵尸进程（bash 未收割的已死子进程）也返回成功——判活以 `ps -o stat=` 状态列为准（Z 开头或查不到都算死）；CLI 收口用 `isRunning()` 复核而非纯读 pid 文件
+- **install 重装恢复运行走健康确认**（v4.2.3 修）：`wasRunning` 分支 bootstrap 后复用 `assertServiceHealthy`，不再以「bootstrap 没报错」打印「已按原状态重新启动」（v4.2.0 给 start 修的同族缺陷，防线此前只铺了主路径）
+- **stop/tun/reset 覆盖遗留 root daemon**（v4.2.3 修）：`detectLegacySystemInstall` 此前只被 install/uninstall/status/reset(checkEmpty) 使用，stop 与 start(tun) 不查——legacy daemon 的 KeepAlive 会把刚杀掉的内核约 10s 拉回，「已停止」成谎报；`reset service` 的 onAfter 也不处理 legacy，报「已重置」原样保留。现在五处统一经 `cleanupLegacyInstallOrThrow()`（含 sudo 取消的 CliError 包装）
 
 **内核下载**
 - 来源钉死（host 白名单 + 强制 https + 校验在加镜像前缀之前）、curl 全链路强制 https、下载后比对 `asset.size`、自检 `-v`
+- **资产选择精确匹配标准版形态**（v4.2.3 修）：`mihomo-<platform>-<arch>-vX.Y.Z` 收尾。此前只黑名单 `-go`/`-compatible`，漏了 `-v1/-v2/-v3` GOAMD64 微架构变体——它们同样以版本号结尾，且名称排序 `-`<`.` 使 `-v1` 变体排在标准版前被优先选中，Intel Mac 每次更新都静默装上 baseline 构建（`kernel.spec.ts` 用 v1.19.30 真实资产名锁定）
 - tar 双守卫（路径穿越 + 条目类型），攻击归档实测被挡下且正常归档不误拒
 - 上游确无 checksums（127 个资产实测），故无法做哈希校验——别再提议加
 
@@ -84,7 +111,7 @@ macOS 硬依赖，无其他平台后端：
 
 ## 工程
 
-- 单测 178（`npm test`，经 tsx 跑 `*.spec.ts`）
+- 单测 195（`npm test`，经 tsx 跑 `*.spec.ts`）
 - CI 在 `macos-latest` 上跑 typecheck/check/test/build。因 `os: ["darwin"]`，ubuntu runner 上 `npm ci` 会平台不匹配失败
 - `prepublishOnly: npm run build`：`dist/` 被 gitignore，漏跑 build 即发布陈旧产物
 - **`npm run check` 在 worktree 里是空转**：`biome.json` 的 `files.includes` 排除 `**/.claude`，而 worktree 建在 `.claude/worktrees/` 下，于是「Checked 0 files」直接通过。worktree 中改完要显式跑 `npx biome check src/`
