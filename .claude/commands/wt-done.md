@@ -7,7 +7,7 @@ description: worktree 改动合并进 main 并就地收尾清理
 ## 步骤
 
 1. 确认 worktree 内所有改动已提交（`git status` 干净）
-2. 退出 worktree：`ExitWorktree`（保留分支）
+2. 退出 worktree：`ExitWorktree`（保留分支）。若当前会话本就不在 worktree 内（如前一会话中断、由新会话接手收尾），该步是 no-op，直接在主仓合并
 3. 合并到 `main`：先试 `git merge --ff-only`；若 `main` 期间有了新提交，用 cherry-pick 或 rebase，**不要 `--no-ff` 制造无谓的合并提交**
 4. cherry-pick 会生成新哈希，`git log main..<分支>` 仍显示「未合入」——用 `git diff <分支> main --stat` 比对树内容判断是否真的合入，不是看 `git log`
 5. 确认无遗漏后：`git worktree remove` + `git branch -D`
