@@ -117,6 +117,8 @@ v4.7.3 的信号死亡实测就是按「一次性 label + 只用 bootstrap/booto
 
 ## 平台假设
 
+**复现实测结论前先确认当前机器装没装**：服务层（launchd 装载、disable 位、信号死亡文案、内核实际运行）的实测必须在真装了 mihomo-cli 的机器上做。开发机可能只用于写代码、不装内核——`kernel/` 是空目录属**正常状态，不是待办**，别当成缺陷去"修"。本文标注「实测」的 launchd 条目，验证环境并不总是当前这台；在没装内核的机器上跑不通不等于文档记载不实，换机器再验。
+
 macOS 硬依赖，无其他平台后端：
 
 - **launchd 整套**：`~/Library/LaunchAgents`、plist XML（`RunAtLoad`/`KeepAlive`）、`launchctl bootout/bootstrap/kickstart/enable/disable/print`
