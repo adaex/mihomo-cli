@@ -285,6 +285,8 @@ mihomo start     # 恢复服务
 
 TUN 用完后 `mihomo start` 会按 Mixed 重建配置并恢复自启。
 
+**TUN 下 DNS 恒为开启**。若订阅或覆写里写了 `dns.enable: false`，TUN 模式会强制改回 `true` 并提示一行「自动修复」——TUN 会劫持 53 端口流量（`dns-hijack`），内置 DNS 关着就没有任何组件接管，网络直接不可用。只锁 `enable` 这一个键，`nameserver`、`enhanced-mode` 等仍按你的配置走。Mixed 模式不受影响，那里关 DNS 是合法配置。
+
 ### 不要用 sudo 运行
 
 `sudo mihomo …` 会被直接拒绝。服务是用户级 LaunchAgent（域 `gui/<uid>`），以 root 运行时域变成 `gui/0` —— 一个不存在的域，所有服务操作都会静默跳过却报成功。TUN 需要的 root 权限由 CLI 内部按需申请，无需在外层加 `sudo`。
@@ -538,7 +540,7 @@ mihomo logs 0        # 看完整原因
 mihomo stop          # 止住 launchd 的反复重试
 ```
 
-若 `status` 显示「不在运行」但带「内核上次异常退出」的提示，说明内核正在崩溃循环中被反复拉起，同样按上面两步处理。
+若 `status` 显示「不在运行」但带「内核上次异常退出」的提示，说明内核正在崩溃循环中被反复拉起，同样按上面两步处理。提示会区分两种死法：`退出码 N`（内核自己退的，多为配置问题）与 `被信号终止（Killed: 9）`（被外部杀掉，常见于系统内存不足时被 OOM killer 干掉）。
 
 ### 进程无法停止
 
