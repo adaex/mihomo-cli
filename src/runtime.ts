@@ -4,7 +4,7 @@ import { readLogTail } from './log-files.js';
 import { PATHS } from './paths.js';
 import { getStatus } from './process-probe.js';
 import { startTun } from './process-start.js';
-import { getServiceStatus, isServiceInstalled, restartService, startService, waitServiceHealthy } from './service.js';
+import { describeExitCause, getServiceStatus, isServiceInstalled, restartService, startService, waitServiceHealthy } from './service.js';
 import type { ProcessInfo, ServiceStatus } from './types.js';
 
 /**
@@ -113,13 +113,18 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
  * 导出供 cmdInstall 的重装恢复路径共用：那里同样 bootstrap 后就打印
  * 「已按原状态重新启动」，缺这道确认就是 v4.2.0 修过的「bootstrap 返回 0 ≠ 内核活着」
  * 的漏网分支。
+ *
+ * 死因文案走 `describeExitCause`（service.ts 的唯一判据），**不能自己拼
+ * `退出码 ${exitCode}`**：信号死亡时 launchd 不写 last exit code，exitCode 为 null，
+ * 被 OOM killer / `kill -9` 杀掉的内核会显示成「退出码 null」。
  */
 export async function assertServiceHealthy(label = '启动失败'): Promise<number | null> {
   const health = await waitServiceHealthy();
   if (health.healthy) return health.pid;
 
   const tail = readLogTail();
-  const reason = health.crashed ? `内核启动后立即退出（退出码 ${health.exitCode}）` : '内核未能进入运行状态';
+  const cause = describeExitCause(health.exitCode, health.terminatingSignal);
+  const reason = health.crashed ? `内核启动后立即退出（${cause ?? '死因未记录'}）` : '内核未能进入运行状态';
 
   throw new CliError(reason, {
     label,

@@ -1,7 +1,7 @@
 # 代码审查：风险与教训
 
 > 当前基线：v4.7.3
-> 上次全面审查：2026-09-05（v4.6.0：3 个维度并行扫描全部 src + 独立交叉验证，修复 30 项）
+> 上次全面审查：2026-09-06（独立复审，聚焦「文档未覆盖」的缺口，修复 3 项 + 1 项可读性）
 
 **这份文档只记录两类内容**：本轮发现的未处理项，以及**验证过、下轮不必重查**的结论。
 
@@ -59,6 +59,7 @@ v4.7.3 的信号死亡实测就是按「一次性 label + 只用 bootstrap/booto
 避免下轮重复排查。每条都实际验证过，不是静态推测。
 
 **并发与数据完整性**
+- **锁文件不能放在会被整体删除的目录里**（v4.7.4 修）：`service.lock` 原在 `runtime/` 下，而 `stop()` 的 `clearRuntime()` 与 `reset runtime` 都 `rmrf(DIRS.runtime)`——第三方进程删目录时把别人正持着的锁一起带走，下一个进程立刻 `openSync(...,'wx')` 成功，**两个进程同时进临界区**（实测复现）。`withFileLock` 的 token 所有权校验挡不住：它防的是「被强夺者误删新持有者的锁」，而这里持锁方毫不知情。可达路径正是本文反复强调的那个——慢速 start（订阅更新约 10s）持锁期间另一终端 stop。现锁移到 `USER_DATA_DIR` 根下，`paths.spec.ts` 用「不在任何 rmrf 目录下」的不变量断言锁定（不是断言具体路径，那样会在目录调整时误报）
 - 锁的并发正确性：4 进程 × 15 条的 `updateSettings` 并发与 `saveSubscriptionCache` 并发均不丢条目（`settings.spec.ts` 用真实 spawn 子进程验证，必须 spawn 并行起、spawnSync 逐个跑完测不出并发）——规则见 CLAUDE.md「settings.json / cache.json 的读-改-写必须持锁」
 - **锁释放校验所有权**（v4.2.3 修）：锁文件写 `pid+hrtime` token，释放前内容一致才删。此前被强夺者的 finally 无条件 rm，删掉的是**新持有者**的锁——三进程实测 B/C 并发 4.6s，正是锁要防的静默丢数据。`paths.spec.ts` 锁定
 - 陈旧锁（>10s）会被强夺，一次崩溃不会永久锁死 CLI；实测 0.045s 完成不卡死
@@ -81,7 +82,7 @@ v4.7.3 的信号死亡实测就是按「一次性 label + 只用 bootstrap/booto
 - **root 守卫**端到端锁住（`commands/root-guard.spec.ts`，含「守卫先于 ensureDirs」）：以 root 运行时域拼成 `gui/0`（不存在），服务操作静默跳过却报成功、KeepAlive 再把内核拉回——规则见 CLAUDE.md「平台与 root 守卫」
 - **TUN 与服务共用 config.yaml** 的两层防御均已实现（`mihomo tun` 启动前关自启、`startService` 拒绝 TUN 配置）——机理与规则见 CLAUDE.md「TUN 与服务共用 config.yaml」
 - `launchctl print` 解析锚定行首单 tab，`service.spec.ts` 倒序 fixture 锁死（不依赖字段顺序）——规则见 CLAUDE.md「launchd 服务层」
-- **信号死亡可见**（v4.7.3 修）：launchd 对被信号杀死的进程只写 `last terminating signal = Killed: 9`，`last exit code` **整行消失**（实测 macOS 26.6，两字段互斥且不跨 bootstrap 残留）。此前解析器只读退出码，OOM killer / `kill -9` 干掉的内核对 `isCrashed` 与 `status` 完全不可见——用户看到「不在运行」却无任何异常提示，而 KeepAlive 正反复拉起。现 `parseServicePrint` 解析该字段，崩溃判据两者取一；status/doctor 的三处重复判断收口成 `describeAbnormalExit`（此前补一条判据要同步改三处，正是「防线只铺一条路径」的形状）
+- **信号死亡可见**（v4.7.3 修，v4.7.4 补全第三个消费者）：launchd 对被信号杀死的进程只写 `last terminating signal = Killed: 9`，`last exit code` **整行消失**（实测 macOS 26.6，两字段互斥且不跨 bootstrap 残留；v4.7.4 用一次性 label 再次复现确认）。此前解析器只读退出码，OOM killer / `kill -9` 干掉的内核对 `isCrashed` 与 `status` 完全不可见。v4.7.3 修了 status/doctor 两处，**却漏了 `runtime.assertServiceHealthy`**——那里仍拼 `退出码 ${exitCode}`，信号死亡时 exitCode 为 null，`start`/`install` 期间被 OOM 杀掉的内核显示成「退出码 null」（实测文案已比对）。判据现收口成 `describeExitCause(exitCode, signal)` 一份，三个消费者（`isCrashed` 判有无、`describeAbnormalExit` 供 status/doctor、`assertServiceHealthy` 供 start/install）共用，`service.spec.ts` 直接对判据本身断言并锁住「不能退化成只看退出码」。**教训**：把实测事实锚在注释里挡不住漏铺——注释锚在事实发生处，防线要铺在所有消费处，两者不重合时只有「判据收成一个函数」才真的有效
 - **杀进程路径有真实测试**（v4.7.3 新增，见「决策豁免」节）：`process-stop.spec.ts` 真起桩进程、真 `pkill`，覆盖 `cleanupAll` 单杀/批量分支与 `isRunning` 的 PID 复用防线
 - **停止/卸载有装载级判定**（v4.2.3 修）：`waitUntilUnloaded` 不再「只等待不判定」——轮询用尽仍装载即抛错，112/125 查询失败也不当「已卸载」；`launchctl disable` 执行后经 `print-disabled` 复核位真生效（TUN 防线第一层的唯一执行点）；uninstall 补上等待 + `rm` 失败可见。v4.2.4 起服务层去 bash 化：用户域 launchctl 全部直接 spawn（不再拼脚本 + 退出码协议），`waitUntilUnloaded` 改为 async 轮询（让出事件循环），happy path 由 `service-exitcode.spec.ts` 只读验证
 - **TUN 启动观察满 1.2s 窗口**（v4.2.3 修）：此前 0.4s 单次 `kill -0` 首次存活即收口，且 `kill -0` 对僵尸进程（bash 未收割的已死子进程）也返回成功——判活以 `ps -o stat=` 状态列为准（Z 开头或查不到都算死）；CLI 收口用 `isRunning()` 复核而非纯读 pid 文件
@@ -124,5 +125,5 @@ macOS 硬依赖，无其他平台后端：
 
 ## 工程
 
-- 单测 283（`npm test`，经 tsx 跑 `*.spec.ts`）
+- 单测 290（`npm test`，经 tsx 跑 `*.spec.ts`）
 - `prepublishOnly: npm run build`：`dist/` 被 gitignore，漏跑 build 即发布陈旧产物

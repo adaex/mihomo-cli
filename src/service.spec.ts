@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { isValidServiceLabel } from './constants.js';
-import { buildPlist, describeAbnormalExit, parseDisabledList, parseServicePrint } from './service.js';
+import { buildPlist, describeAbnormalExit, describeExitCause, parseDisabledList, parseServicePrint } from './service.js';
 import type { ServiceStatus } from './types.js';
 
 /**
@@ -242,6 +242,41 @@ describe('describeAbnormalExit', () => {
 
   it('从未退出过不算异常', () => {
     assert.equal(describeAbnormalExit(status({})), null);
+  });
+});
+
+/**
+ * `describeExitCause` 是异常退出判据的唯一一份，三个消费者共用：
+ * isCrashed（判有无）、describeAbnormalExit（status/doctor 文案）、
+ * runtime.assertServiceHealthy（start/install 的启动失败文案）。
+ *
+ * 直接对着它断言而非各消费者：v4.7.3 补信号判据时 status/doctor 收口了，
+ * 却漏了 assertServiceHealthy——那里仍拼 `退出码 ${exitCode}`，而信号死亡时
+ * launchd 不写 last exit code（exitCode 为 null），用户在 start 期间被 OOM killer
+ * 杀掉的内核只看到「退出码 null」。判据收成一处后，这类漏铺才不会再发生。
+ */
+describe('describeExitCause：异常退出判据的唯一一份', () => {
+  it('信号死亡时给出信号，而不是「退出码 null」', () => {
+    // exitCode 恒为 null 是实测事实（两字段互斥），故这正是 start 路径此前的入参
+    assert.equal(describeExitCause(null, 'Killed: 9'), '被信号终止（Killed: 9）');
+  });
+
+  it('信号优先于退出码（两者理论上不会同时出现，出现则信号更具体）', () => {
+    assert.equal(describeExitCause(1, 'Killed: 9'), '被信号终止（Killed: 9）');
+  });
+
+  it('非 0 退出码给出退出码', () => {
+    assert.equal(describeExitCause(3, null), '退出码 3');
+  });
+
+  it('退出码 0 与「无记录」都不算异常', () => {
+    assert.equal(describeExitCause(0, null), null);
+    assert.equal(describeExitCause(null, null), null);
+  });
+
+  it('两个判据缺一不可：只看退出码会让信号死亡完全不可见', () => {
+    // 锁住「不能退化成只看 exitCode」——退化后这一条会返回 null
+    assert.notEqual(describeExitCause(null, 'Terminated: 15'), null);
   });
 });
 

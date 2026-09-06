@@ -296,29 +296,34 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
 }
 
 /**
- * 「起来过又挂了」：当前不在跑，且本次启动记录了非 0 退出码**或**致命信号。
+ * 死因的人类可读描述，正常退出（或没有记录）时返回 null。
  *
- * 两个判据缺一不可——launchd 对信号死亡只写 `last terminating signal`，
- * `last exit code` 整行消失（实测）。只看退出码的话，被 OOM killer 或
- * `kill -9` 干掉的内核判不出崩溃，start 报成功、status 无异常提示（v4.7.3 补）。
+ * **异常退出判据的唯一一份**。两个字段缺一不可——launchd 对信号死亡只写
+ * `last terminating signal`，`last exit code` 整行消失（实测，见 parseServicePrint）。
+ * 只看退出码的话，被 OOM killer 或 `kill -9` 干掉的内核判不出崩溃。
+ *
+ * 判据必须收口在这里，别在调用点散写 `lastExitCode !== 0`：v4.7.3 补信号判据时
+ * status/doctor 收口成了 describeAbnormalExit，却漏了 `runtime.assertServiceHealthy`
+ * ——那里仍拼 `退出码 ${exitCode}`，信号死亡时 exitCode 为 null，用户在 start 期间
+ * 被 OOM 杀掉的内核只看到「退出码 null」。三个消费者（isCrashed 判有无、
+ * describeAbnormalExit 供 status/doctor、assertServiceHealthy 供 start/install）
+ * 现在共用同一份判据，补条件只需改这里。
  */
-function isCrashed(status: ServiceStatus): boolean {
-  if (status.running) return false;
-  if (status.lastTerminatingSignal !== null) return true;
-  return status.lastExitCode !== null && status.lastExitCode !== 0;
+export function describeExitCause(exitCode: number | null, terminatingSignal: string | null): string | null {
+  if (terminatingSignal !== null) return `被信号终止（${terminatingSignal}）`;
+  if (exitCode !== null && exitCode !== 0) return `退出码 ${exitCode}`;
+  return null;
 }
 
-/**
- * 「上次异常退出」的人类可读描述，无异常时返回 null。
- *
- * 供 status / doctor 共用：三处此前各自写 `lastExitCode !== null && !== 0`，
- * 补信号判据时必须同步改三处，正是 CLAUDE.md 说的「防线只铺一条路径」的形状。
- * 收口成一个函数后，判据只有一份。
- */
+/** 「起来过又挂了」：当前不在跑，且本次启动记录了异常死因（非 0 退出码或致命信号）。 */
+function isCrashed(status: ServiceStatus): boolean {
+  if (status.running) return false;
+  return describeExitCause(status.lastExitCode, status.lastTerminatingSignal) !== null;
+}
+
+/** 「上次异常退出」的人类可读描述，无异常时返回 null。供 status / doctor 共用。 */
 export function describeAbnormalExit(status: ServiceStatus): string | null {
-  if (status.lastTerminatingSignal !== null) return `被信号终止（${status.lastTerminatingSignal}）`;
-  if (status.lastExitCode !== null && status.lastExitCode !== 0) return `退出码 ${status.lastExitCode}`;
-  return null;
+  return describeExitCause(status.lastExitCode, status.lastTerminatingSignal);
 }
 
 // === plist ===
@@ -549,7 +554,7 @@ export async function installService(wasRunning: boolean): Promise<void> {
     // label 不是「加载后不启动」，而是硬失败 `Bootstrap failed: 5: Input/output error`**
     // （本机实测）。而 `stop` 恒置 disable 位，所以「stop 之后重装」是必经路径，
     // 少了 enable 这里就 100% 失败。
-    await bootoutService();
+    bootoutService();
     await waitUntilUnloaded();
 
     // ~/Library/LaunchAgents 在全新系统上可能不存在；recursive 对已存在目录是 no-op，不改权限
@@ -629,7 +634,7 @@ export async function startService(): Promise<void> {
   cleanupRootResidue();
 
   // 先 bootout 清旧使重复调用幂等（改过 plist 后 start 一下即按新配置重载，无需 kickstart）
-  await bootoutService();
+  bootoutService();
   await waitUntilUnloaded();
 
   // 轮转日志。**必须卡在这个窗口**：旧进程已退出、新进程尚未 bootstrap，此时无人持有
@@ -699,7 +704,8 @@ export async function stopService(): Promise<void> {
 
   // 跨进程锁：与 startService 的 enable/bootstrap 串行化，
   // 防止慢速 start（订阅更新 ~10s）期间 stop 的 bootout/disable 被 start 随后的 enable 覆盖
-  await withFileLock(PATHS.serviceLock, () => {
+  // 不加 await：withFileLock 是同步的，且要求 fn 同步（持锁期间让出事件循环等于没锁）
+  withFileLock(PATHS.serviceLock, () => {
     bootoutService();
     disableServiceAutoStart();
   });
@@ -721,8 +727,8 @@ export async function stopService(): Promise<void> {
 export async function uninstallService(): Promise<void> {
   assertServiceLabelSafe();
 
-  // 跨进程锁：与 startService 的 enable/bootstrap 串行化
-  await withFileLock(PATHS.serviceLock, () => {
+  // 跨进程锁：与 startService 的 enable/bootstrap 串行化（withFileLock 同步，见 stopService）
+  withFileLock(PATHS.serviceLock, () => {
     bootoutService();
     disableServiceAutoStart();
   });

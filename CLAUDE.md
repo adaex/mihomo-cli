@@ -201,7 +201,7 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 - `enable` 必须在 `bootstrap` 之前；`stop` 恒置 disable 位，「stop 之后 start」是必经路径
 - disable 位持久化在 plist 之外，launchctl 没有「清除记录」的动词；uninstall 不清位是刻意的
 - 退出码分级：只有 `113` 是「未装载」，`112`/`125` 是查询失败（`assertLaunchctlQueryOk` 收口，`service-exitcode.spec.ts` 锁住）
-- **信号死亡走另一个字段**：被 `kill -9`/OOM killer 干掉时 launchd 只写 `last terminating signal = Killed: 9`，`last exit code` **整行消失**（两字段互斥，不跨 bootstrap 残留）。崩溃判据必须两者取一，只看退出码会让这类死法完全不可见。status/doctor 的「上次异常退出」判断收口在 `describeAbnormalExit`——**别再在命令层散写 `lastExitCode !== 0`**，那样补判据要同步改三处
+- **信号死亡走另一个字段**：被 `kill -9`/OOM killer 干掉时 launchd 只写 `last terminating signal = Killed: 9`，`last exit code` **整行消失**（两字段互斥，不跨 bootstrap 残留）。崩溃判据必须两者取一，只看退出码会让这类死法完全不可见。**判据只有一份：`describeExitCause(exitCode, signal)`**，三个消费者共用（`isCrashed` 判有无、`describeAbnormalExit` 供 status/doctor、`assertServiceHealthy` 供 start/install 的失败文案）——**别在任何地方散写 `lastExitCode !== 0`，也别自己拼 `退出码 ${exitCode}`**（信号死亡时它是 null，会显示成「退出码 null」；v4.7.3 收口时正是漏了 `assertServiceHealthy` 这个消费者，v4.7.4 才补上）
 - 运行中无法 rename 轮转日志（fd 指向旧 inode），只有「旧进程已退出、新进程未起」的窗口或 copy-truncate 两条路
 - `launchctl print` 输出顶层字段单 tab、嵌套双 tab，解析必须锚定 `^\t`（`service.spec.ts` 倒序 fixture 锁死）
 - 进程命令行记录的是启动时的路径（符号链名），`MAIN_INSTANCE_PATTERN` 必须二选一分支
@@ -239,6 +239,7 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 - mutator 必须同步，且不得再调 `updateSettings`/`writeSettings`——**锁不可重入**，会死等到强夺陈旧锁
 - 锁超过 10s 视为持锁进程已崩溃并强夺：宁可退回竞态，也不能让一次崩溃永久锁死 CLI
 - **释放前必须校验锁还是自己的**：锁文件写入 `pid+hrtime` token，内容一致才删（被强夺者的 finally 无条件 rm，删掉的是新持有者的锁）
+- **锁文件不能放在会被整体 `rmrf` 的目录里**（`runtime/`、`logs/`、`data/`、`subscriptions/`、`kernel/`）：`stop()` 的 `clearRuntime()` 与各 `reset` target 会连目录带锁一起删，持锁方毫不知情，下一个进程立刻拿到锁 → 两个进程同时进临界区。token 所有权校验对此无效（它防误删，不防「锁被连目录删」）。锁一律放 `USER_DATA_DIR` 根下，`paths.spec.ts` 有不变量断言
 
 **`cache.json` 同理**：`saveSubscriptionCache` / `deleteSubscriptionCache` 一律持 `withFileLock`。并发回归测试必须用 `spawn` 并行起子进程，`spawnSync` 逐个跑完根本测不出并发。实测细节见 `settings.ts`/`paths.ts` 注释与 `settings.spec.ts`。
 
@@ -267,7 +268,9 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 仓根 `quickstart.sh`（curl|sh 一键入口，不经 npm/CLI，给不想装 Node 的用户）用 shell 重新实现了一套：镜像选择、GitHub API 取资产、标准版形态精确匹配、来源 host 白名单、curl 全链路强制 https、tar 双守卫、订阅内容校验。它与 `kernel.ts` 的信任规则**必须保持一致**——改任一侧的下载/校验逻辑，都要同步检查另一侧（历史上两次对齐——安全水位、资产选择形态——都是漂移被人肉发现后补的，没有机制兜底）。
 
-已知分歧（刻意，别当 bug 修）：脚本默认镜像硬编码 v6 子域（无 `getDefaultMirror` 的 IPv6 探测）、无标准版资产时回退第一个匹配项（CLI 不回退）、支持 linux、不经 launchd 直接前台跑、`--no-mirror`/`--direct` 作为脚本参数保留。
+已知分歧（刻意，别当 bug 修）：脚本默认镜像硬编码 v6 子域（无 `getDefaultMirror` 的 IPv6 探测）、支持 linux、不经 launchd 直接前台跑、`--no-mirror`/`--direct` 作为脚本参数保留。
+
+**「无标准版资产时回退第一个匹配项」两侧行为一致**，不是分歧（`kernel.ts` 的 `standardAsset || matchingAssets[0]` 与脚本的 `head -1` 回退，各有单测/注释锁定）。此处曾误记为「CLI 不回退」——而这段文字的用途正是两侧对齐的对照表，写反会误导下次对齐，故特此标注。真正不回退的是 `pickLatestRelease`（全预发布时抛错，别与资产选择混为一谈）。
 
 ### 配置的系统锁定项
 

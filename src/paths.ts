@@ -39,8 +39,17 @@ export const PATHS = {
   configFile: path.join(DIRS.runtime, 'config.yaml'),
   logFile: path.join(DIRS.logs, 'mihomo.log'),
   pidFile: path.join(DIRS.runtime, 'pid'),
-  /** 服务操作跨进程锁：start/stop/install/uninstall 的 enable/bootstrap/bootout/disable 串行化 */
-  serviceLock: path.join(DIRS.runtime, 'service.lock'),
+  /**
+   * 服务操作跨进程锁：start/stop/install/uninstall 的 enable/bootstrap/bootout/disable 串行化。
+   *
+   * **必须放在 USER_DATA_DIR 根下，不能放 runtime/**：`stop()` 的 clearRuntime() 与
+   * `reset runtime` 都会 `rmrf(DIRS.runtime)`，把别的进程正持着的锁文件一起删掉——
+   * 于是第三个进程立刻 `openSync(..., 'wx')` 成功，两个进程同时进临界区（实测复现）。
+   * withFileLock 的 token 所有权校验挡不住这种情形：它防的是「被强夺者误删新持有者的锁」，
+   * 而这里锁是被第三方连目录一起删的，持锁方毫不知情。
+   * 可达路径正是文档反复强调的那个：慢速 start（订阅更新约 10s）持锁期间另一终端 stop。
+   */
+  serviceLock: path.join(USER_DATA_DIR, 'service.lock'),
   configStage1Subscription: path.join(DIRS.runtime, '1.subscription.yaml'),
   configStage2Overwrite: path.join(DIRS.runtime, '2.overwrite.yaml'),
   configStage3System: path.join(DIRS.runtime, '3.system.yaml'),

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { withFileLock } from './paths.js';
+import { DIRS, PATHS, withFileLock } from './paths.js';
 
 let tmpDir: string;
 let target: string;
@@ -115,5 +115,56 @@ describe('withFileLock', () => {
     assert.equal(fs.existsSync(marker), true, '放锁后子进程应能拿到锁');
     const childAcquiredAt = Number(fs.readFileSync(marker, 'utf8'));
     assert.ok(childAcquiredAt >= releasedAt, '子进程必须在主进程放锁之后才拿到锁');
+  });
+});
+
+describe('锁文件的存放位置', () => {
+  // 判据是「锁不在会被整体删除的目录里」，不是「锁在某个具体路径」——
+  // 后者会在目录结构调整时误报，前者才是真正要守的不变量。
+  const wipedDirs: [string, string][] = [
+    ['runtime', DIRS.runtime],
+    ['logs', DIRS.logs],
+    ['data', DIRS.data],
+    ['subscriptions', DIRS.subscriptions],
+    ['kernel', DIRS.kernel],
+  ];
+
+  it('service.lock 不在任何会被 rmrf 的目录下', () => {
+    // stop() 的 clearRuntime() 与 reset 的各 target 都会整体 rmrf 这些目录。
+    // 锁文件躺在里面的话，第三方进程删目录会连别人正持着的锁一起删掉，
+    // 下一个进程立刻拿到锁 → 两个进程同时进临界区（withFileLock 的 token
+    // 所有权校验挡不住：它防的是误删，不是「锁被连目录一起删」）。
+    for (const [name, dir] of wipedDirs) {
+      assert.ok(!PATHS.serviceLock.startsWith(`${dir}${path.sep}`), `serviceLock 不能放在 ${name}/ 下（${dir}）：该目录会被整体删除，锁会连带消失导致互斥失效`);
+    }
+  });
+
+  it('锁文件被第三方连目录删掉后互斥即失效（上面那条断言守的就是这个）', () => {
+    // 复现机制本身，锁死「为什么位置很重要」。用独立的临时目录模拟被删的 runtime/。
+    const wiped = path.join(tmpDir, 'runtime');
+    fs.mkdirSync(wiped, { recursive: true });
+    const lockInWiped = path.join(wiped, 'service.lock');
+    const lockFile = `${lockInWiped}.lock`;
+
+    // A 持锁
+    const fdA = fs.openSync(lockFile, 'wx');
+    fs.writeSync(fdA, 'A-token');
+
+    // B 执行 clearRuntime()：rmrf 整个目录，A 的锁一起没了
+    fs.rmSync(wiped, { recursive: true, force: true });
+    fs.mkdirSync(wiped, { recursive: true });
+
+    // C 立刻就能拿到锁——A 仍在临界区内
+    let cGotLock = false;
+    try {
+      const fdC = fs.openSync(lockFile, 'wx');
+      cGotLock = true;
+      fs.closeSync(fdC);
+    } catch {
+      /* 拿不到才是安全的 */
+    }
+    fs.closeSync(fdA);
+
+    assert.equal(cGotLock, true, '本用例是在记录缺陷机制：锁文件被连目录删掉后，第三方必然能立刻进入临界区');
   });
 });
