@@ -374,7 +374,7 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 
 ```
 ~/.mihomo-cli/
-├── settings.json         # 用户设置（订阅列表、端口覆盖、镜像偏好等）
+├── settings.json         # 用户设置（订阅列表、当前订阅、覆写开关、端口覆盖等）
 ├── overwrite.yaml        # 覆写配置（主文件，可选）
 ├── overwrite.*.yaml      # 覆写配置（扩展文件，如 overwrite.dns.yaml）
 ├── subscriptions/
