@@ -402,10 +402,11 @@ plist 的 `ProgramArguments` 与 TUN 启动脚本指向**同一个** `runtime/co
 
 ### worktree 纪律
 
-本仓改动默认在 `.claude/worktrees/` 下的 git worktree 里做（见用户级规则）。**合并进 `main` 之后就地收尾，不用等人催**——完整步骤用 `/wt-done` 执行。日常两条易踩的坑：
+本仓改动默认在 `.claude/worktrees/` 下的 git worktree 里做（见用户级规则）。**合并进 `main` 之后就地收尾，不用等人催**——完整步骤用 `/wt-done` 执行。日常三条易踩的坑：
 
 - worktree 隔离会话里，带 heredoc / `&&` 组合的复杂 git 命令会被 harness 拒绝（无法验证操作是否留在 worktree 内）：提交信息先写临时文件再 `git commit -F`，多步操作拆成单条命令执行
 - worktree 默认从 `origin/main` 切出（baseRef=fresh）：本地 main 有未推送的提交时，新 worktree 是落后的，开工前先 `git merge --ff-only main` 同步
+- **进 worktree 后编辑文件前先重新 Read**：进 worktree 之前读的是**主目录**那份，Edit 的 `old_string` 会因两份文件的细微差异（行尾、上一轮未同步的改动）匹配失败，甚至改错文件。`grep`/`ls` 等相对路径命令在 worktree 里天然指向 worktree，唯独「进 worktree 前读过的文件内容」是陈旧的
 
 合并时若 worktree 与 `main` 改了同一处文档，**保留双方的实测结论**——它们通常是各自独立验证出来的，丢掉任何一条都是白跑一次验证。
 

@@ -13,6 +13,17 @@ argument-hint: [版本号]
 - [ ] `CHANGELOG.md` 顶部已添加新版本记录
 - [ ] 若本轮改了 `CODE_REVIEW.md` 涉及的代码，同步更新该文档（基线、单测数、未处理项）
 
+命令列表那条不用肉眼比对 README，直接把注册表打出来：
+
+```bash
+npx tsx -e "
+import { COMMANDS } from './src/commands/registry.ts';
+for (const c of COMMANDS) console.log([c.name, ...c.aliases].join(', ').padEnd(46), c.usage.length ? '(有 usage)' : '(无 usage)', c.hidden ? '[hidden]' : '');
+"
+```
+
+`[hidden]` 的是墓碑命令与过渡别名（`daemon`/`up`/`down`/`log`），本就不该在 README 里；「无 usage」的是纯别名（`tun`、`use`），由主命令的用法行覆盖。本轮没动注册表就跳过这条，别每次都重头核一遍。
+
 ## 步骤
 
 1. 更新 `package.json` 中的 `version`
@@ -36,3 +47,24 @@ curl -s -o /dev/null -w "%{http_code}\n" https://registry.npmjs.org/mihomo-cli/X
 ```
 
 200 即已落地。重跑 `npm publish` 得到 `403 You cannot publish over the previously published versions` 同样是已落地的证据。
+
+## 产物自检：别把「publish 没报错」当成「发出去的东西能用」
+
+`prepublishOnly: npm run build` 只保证 build **跑过**，不保证 tarball 里的东西对——`dist/` 被 gitignore，版本号来自 `package.json`，`files` 字段决定装进去什么，这几处任一出错，`npm publish` 都照样成功。这正是本仓「报告成功前必须独立确认」那条纪律的发布版本。
+
+**build 之后、publish 之前**，至少验证产物自身报的版本号：
+
+```bash
+node dist/index.js version    # 必须是本次要发的版本，不是看 package.json
+```
+
+若本轮改动有用户可见的行为变化，值得在 publish 之后从 registry 把产物拉回来实跑一遍（CDN 落地后）——这是唯一能覆盖「打包漏文件」的检查：
+
+```bash
+cd /tmp && mkdir vp && cd vp
+npm pack mihomo-cli@X.Y.Z && tar -xzf mihomo-cli-X.Y.Z.tgz
+MIHOMO_CLI_DIR=/tmp/vp/data node package/dist/index.js version
+# 再挑本轮修的行为跑一两条，用 MIHOMO_CLI_DIR 隔离，别碰 ~/.mihomo-cli
+```
+
+v4.7.5 就是这样验的：三处修复各在发布产物上复现了一遍（带序号归档能列出、`reset --full` 后 settings.json 不重建、持锁瞬间锁文件落在数据目录根下）。**注意锁文件正常释放后即删，静态 `ls` 看不到**，要在持锁期间高频扫描才能观察到落点。用完删掉 `/tmp/vp`。

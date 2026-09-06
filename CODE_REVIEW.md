@@ -136,4 +136,5 @@ macOS 硬依赖，无其他平台后端：
 ## 工程
 
 - 单测 310（`npm test`，经 tsx 跑 `*.spec.ts`）
-- `prepublishOnly: npm run build`：`dist/` 被 gitignore，漏跑 build 即发布陈旧产物
+- `prepublishOnly: npm run build`：`dist/` 被 gitignore，漏跑 build 即发布陈旧产物。**它只保证 build 跑过，不保证 tarball 里的东西对**——版本号、`files` 字段任一出错 `npm publish` 都照样成功，故 publish 前至少 `node dist/index.js version` 自检一次（流程见 `/release` 的「产物自检」）
+- v4.7.5 起发布后会从 registry 拉回产物实跑本轮修的行为。验证锁位置时注意：**锁文件正常释放后即删，静态 `ls` 看不到**，要在持锁期间高频扫描才能观察到落点
