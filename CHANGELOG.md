@@ -1,5 +1,32 @@
 # Changelog
 
+## [4.7.5] - 2026-09-06
+
+第二轮独立复审，聚焦**同族缺口**：三处缺陷有共同模式——防线或测试断言只铺了一条路径，同族的另一条躺在盲区里。另清理三处过度设计。单测 310（+20）。
+
+### 修复
+
+- **`cache.json` 的锁位于会被 `rmrf` 的目录，跨进程互斥可被打破**（v4.7.4 的同族漏网）：上一版把 `service.lock` 移出 `runtime/`，但根因不在锁的位置——`withFileLock` 旧签名收**被保护的数据文件**、内部拼 `${filePath}.lock`，于是锁的位置被数据文件的位置**绑死**。`cache.json` 住在 `subscriptions/` 里，锁也就在那儿，`reset subs`（含裸 `reset`、`reset --full`）的 `rmrf(DIRS.subscriptions)` 照样把别人正持着的锁连目录带走 → 第三个进程立刻 `openSync(..., 'wx')` 成功，两进程同时进临界区（已实测复现）。可达路径：慢速 `sub update` 并行下载、逐条回写缓存期间，另一终端跑 `reset`。签名改为收**锁文件本身**，三把锁（`settingsLock`/`subscriptionCacheLock`/`serviceLock`）成为 `PATHS` 里的显式常量、一律在 `USER_DATA_DIR` 根下。**教训**：v4.7.4 的断言只点名 `PATHS.serviceLock`，所以这个缺口测试测不出来——防线铺在一条路径上，测试也只守那一条，同族缺陷必然漏网
+- **带序号的归档日志永远不出现在 `logs` 列表里**：`cleanupOldLogs` 与 `listLogs` 各写一份正则，只有前者认序号后缀 `mihomo.<时间戳>.N.log`——那些归档会被按时清理（不堆积）却列不出来，`logs <编号>` 永远访问不到（已实测：造两个同秒归档，带序号那个不出现）。而序号后缀恰恰产生于「同一秒内二次轮转」，也就是 **start 失败后立即重试**这个最需要翻日志的场景。判据收口成 `isArchiveLogFilename` 一份，清理与列表共用
+- **`reset` 重建刚删掉的 `settings.json`，并把覆写静默关掉**：`overwrites` 的 `onAfter` 调 `writeSettings({overwrite_enabled: false})`，却排在 `settings` **之后**——`reset --full` 报「已重置: 设置」而磁盘上留着 `{"overwrite_enabled": false}`（已实测复现）。伤害不止于谎报：全新数据目录的覆写默认是**启用**，于是用户重置后重新放一份 `overwrite.yaml`，覆写静默不生效，且完全看不出与上次 reset 有关。`reset.spec.ts` 此前只点名断言了 `subs`（同族的另一个写 settings 的目标），`overwrites` 因此漏网——又是同一个模式
+
+### 变更
+
+- **删掉 `parseYamlOrJson` 的 JSON 回退分支**（更名 `parseConfigContent`）：YAML 1.2 是 JSON 超集，实测标准 JSON、tab 缩进 JSON、长整数全部由 YAML 解析器正常收下。唯一能走到 `JSON.parse` 的输入是**重复键 JSON**（YAML 明确报错，`JSON.parse` 静默取最后一个值）——那条回退把「坏数据」变成了「静默接受」，方向正好相反。现只走 YAML，并把解析器的行列号带进错误消息（`订阅内容格式错误，无法解析: duplicated mapping key (1:9)`）
+- **三份镜像清单收成一份**：`AVAILABLE_MIRRORS`（展示，手写域名）、`MIRROR_ALIASES`（解析，手写地址）、`getDefaultMirror` 里硬编码的裸域，增删镜像要改三处且无机制兜底——漏改展示清单只是文案过期，漏改别名表则是**别名直接不认**。现全部从 `MIRROR_HOST` + `MIRROR_ALIASES` 派生（派生结果与改动前逐项一致，对外行为不变）
+- **`openUrl` 改为无返回值**：`open` 是 detached spawn，失败（ENOENT、目标不存在）全发生在函数返回**之后**，只能被 `child.on('error')` 吞掉——故它**恒返回 true**，四个调用点的 `if (!success) 请手动打开…` 全是死代码，反而让人误以为失败真能被检出。调用方改为一律无条件打印地址/路径（`dir open` 顺带把路径也打出来了，此前只有标签）。要真检出失败得换 `spawnSync` + 解析退出码，为一个非阻塞的顺手操作引入同步等待不划算——**这是刻意选择不检出**
+
+### 安全
+
+- **`quickstart.sh` 补齐 `asset.size` 比对与 `--max-filesize`**：这两道 CLI 侧早就有的防线在脚本里缺着，是**第三次**被人肉发现的平行实现漂移（前两次是安全水位、资产选择形态）。已用真实下载验证：16.8MB 内核 size 精确匹配、上限不误伤正常路径；反向压到 1MB 时 curl 拦下且文件不落盘。脚本侧的 size 依赖 jq（取不到即留空跳过比对，不阻断下载），属能力差异而非水位差异
+
+### 测试
+
+- **锁位置断言泛化**：从点名 `PATHS.serviceLock` 改为按 `xxxLock` 命名约定枚举 `PATHS` 的**全部**锁，新增锁只要照此命名就自动进回归测试；另加一条「枚举到的锁数量 ≥ 3」的断言，防命名约定被破坏后上面那条空转成永真。再加一条真跑 `rmrf(DIRS.subscriptions)` 验证缓存锁幸存的用例
+- **reset 顺序约束按清单遍历**：受约束目标登记进 `WRITES_SETTINGS_ON_AFTER` 具名常量，测试遍历它而非点名单个目标。另加两条**端到端**断言（真跑 `reset --full` 后查磁盘上的 `settings.json` 与 `isOverwriteEnabled()`），它们**不依赖清单的正确性**——清单漏登记时顺序断言会空过，端到端断言仍会失败
+- 新增 `log-files.spec.ts`（归档名判据 5 例，含带序号、路径成分混入等）、`parseConfigContent` 用例（7 例，锁住「JSON 输入仍能解析」防有人把回退加回来）、镜像清单派生关系用例（4 例）
+- 三处缺陷的新断言均**反向验证过**：在修复前的实现上会失败（reset 那三条是拿上一版的 `reset.ts` 跑，全部报错）
+
 ## [4.7.4] - 2026-09-06
 
 独立复审一轮，聚焦「上轮文档未覆盖」的缺口。两处并发/可见性缺陷均已实测复现后修复。单测 290（+7）。
