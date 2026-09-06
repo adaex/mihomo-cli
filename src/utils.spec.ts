@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { AVAILABLE_MIRRORS, MIRROR_ALIASES, MIRROR_BARE, MIRROR_HOST } from './constants.js';
 import { CliError } from './errors.js';
 import {
   assertNoRemovedSshFlag,
@@ -129,8 +130,41 @@ describe('parseMirrorArg：--mirror-all 已移除（v3.10.0）', () => {
 });
 
 describe('getDefaultMirror', () => {
-  it('按本机 IPv6 情况返回 v6 或裸域', () => {
-    assert.ok(['https://v6.gh-proxy.org/', 'https://gh-proxy.org/'].includes(getDefaultMirror()));
+  it('按本机 IPv6 情况返回 v6 子域或裸域', () => {
+    assert.ok([MIRROR_ALIASES.v6, MIRROR_BARE].includes(getDefaultMirror()));
+  });
+
+  it('返回值恒在展示清单内（默认镜像不能是清单里没有的地址）', () => {
+    // 三处镜像清单曾各自维护（展示清单手写域名、别名表手写地址、getDefaultMirror
+    // 硬编码裸域），增删镜像要改三处且无兜底。现在都从 MIRROR_HOST/MIRROR_ALIASES 派生，
+    // 这条断言锁住派生关系：默认镜像必须是用户在帮助里看得到的那几个之一
+    assert.ok(
+      AVAILABLE_MIRRORS.includes(new URL(getDefaultMirror()).hostname),
+      `默认镜像 ${getDefaultMirror()} 不在展示清单 ${AVAILABLE_MIRRORS.join(', ')} 内`,
+    );
+  });
+});
+
+describe('镜像清单的派生关系（单一真相源）', () => {
+  it('每个短别名都能在展示清单里找到对应主机名', () => {
+    for (const [alias, url] of Object.entries(MIRROR_ALIASES)) {
+      assert.ok(AVAILABLE_MIRRORS.includes(new URL(url).hostname), `别名 ${alias} → ${url} 的主机名不在展示清单内（清单与别名表漂移）`);
+    }
+  });
+
+  it('展示清单含裸域，且全部指向同一个镜像主机', () => {
+    assert.ok(AVAILABLE_MIRRORS.includes(MIRROR_HOST), '裸域必须在展示清单内');
+    for (const host of AVAILABLE_MIRRORS) {
+      assert.ok(host === MIRROR_HOST || host.endsWith(`.${MIRROR_HOST}`), `${host} 不是 ${MIRROR_HOST} 的裸域或子域`);
+    }
+  });
+
+  it('别名解析出的地址一律 https（镜像中转的内核随后以 root 运行）', () => {
+    for (const [alias, url] of Object.entries(MIRROR_ALIASES)) {
+      assert.equal(new URL(url).protocol, 'https:', `别名 ${alias} 必须是 https`);
+      assert.ok(url.endsWith('/'), `别名 ${alias} 的地址需以 / 结尾（供 withMirror 直接拼前缀）`);
+    }
+    assert.equal(new URL(MIRROR_BARE).protocol, 'https:');
   });
 });
 

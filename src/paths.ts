@@ -40,15 +40,23 @@ export const PATHS = {
   logFile: path.join(DIRS.logs, 'mihomo.log'),
   pidFile: path.join(DIRS.runtime, 'pid'),
   /**
-   * 服务操作跨进程锁：start/stop/install/uninstall 的 enable/bootstrap/bootout/disable 串行化。
+   * 跨进程锁文件。**全部以 `Lock` 结尾命名并放在 USER_DATA_DIR 根下**——这两点都是不变量，
+   * `paths.spec.ts` 按命名约定枚举它们并断言位置，故新增锁只要照此命名就自动进回归测试。
    *
-   * **必须放在 USER_DATA_DIR 根下，不能放 runtime/**：`stop()` 的 clearRuntime() 与
-   * `reset runtime` 都会 `rmrf(DIRS.runtime)`，把别的进程正持着的锁文件一起删掉——
-   * 于是第三个进程立刻 `openSync(..., 'wx')` 成功，两个进程同时进临界区（实测复现）。
-   * withFileLock 的 token 所有权校验挡不住这种情形：它防的是「被强夺者误删新持有者的锁」，
-   * 而这里锁是被第三方连目录一起删的，持锁方毫不知情。
-   * 可达路径正是文档反复强调的那个：慢速 start（订阅更新约 10s）持锁期间另一终端 stop。
+   * **锁绝不能放在会被整体删除的目录里**（`runtime/`、`logs/`、`data/`、`subscriptions/`、
+   * `kernel/`）：`stop()` 的 clearRuntime() 与各 `reset` target 都会 `rmrf` 这些目录，
+   * 把别的进程正持着的锁文件一起删掉——于是第三个进程立刻 `openSync(..., 'wx')` 成功，
+   * 两个进程同时进临界区（实测复现）。withFileLock 的 token 所有权校验挡不住这种情形：
+   * 它防的是「被强夺者误删新持有者的锁」，而这里锁是被第三方连目录一起删的，持锁方毫不知情。
+   *
+   * 各锁的可达竞态路径：
+   * - serviceLock：慢速 start（订阅更新约 10s）持锁期间另一终端 stop
+   * - subscriptionCacheLock：慢速 `sub update`（并行下载、逐条回写缓存）期间另一终端 `reset`
+   *   ——v4.7.4 把 serviceLock 移出 runtime/ 时漏了这条同族路径，锁文件当时还在
+   *   `subscriptions/cache.json.lock`，随 `rmrf(DIRS.subscriptions)` 一起消失
    */
+  settingsLock: path.join(USER_DATA_DIR, 'settings.lock'),
+  subscriptionCacheLock: path.join(USER_DATA_DIR, 'subscription-cache.lock'),
   serviceLock: path.join(USER_DATA_DIR, 'service.lock'),
   configStage1Subscription: path.join(DIRS.runtime, '1.subscription.yaml'),
   configStage2Overwrite: path.join(DIRS.runtime, '2.overwrite.yaml'),
@@ -108,7 +116,13 @@ const LOCK_STALE_MS = 10_000;
 const LOCK_RETRY_MS = 20;
 
 /**
- * 跨进程互斥执行 `fn`（同一 `filePath` 一把锁）。
+ * 跨进程互斥执行 `fn`（同一 `lockPath` 一把锁）。
+ *
+ * **参数是锁文件本身的路径，不是被保护的数据文件**：早先传数据文件、内部拼
+ * `${filePath}.lock`，于是锁必然与数据同目录——而 `cache.json` 住在
+ * `subscriptions/` 里，`reset subs` 的 `rmrf` 会把别人正持着的锁一起删掉
+ * （见 PATHS 里锁常量的注释）。改为显式传锁路径后，锁的位置由 PATHS 集中决定，
+ * 不再被数据文件的位置绑死。
  *
  * 为什么必须有：`settings.json` 的读-改-写此前无任何跨进程保护，两个 CLI 进程
  * （慢速 `sub add` 跨网络下载期间用户在另一个终端操作，是日常场景）会各自读到旧
@@ -128,8 +142,7 @@ const LOCK_RETRY_MS = 20;
  * 被强夺 → B 持新锁 → A 释放时误删 → C 进门，B/C 并发 4.6s），发生的正是锁要防的
  * 静默丢数据且双方都拿到成功回执。故锁文件写入 `pid+hrtime` token，内容一致才删。
  */
-export function withFileLock<T>(filePath: string, fn: () => T): T {
-  const lockPath = `${filePath}.lock`;
+export function withFileLock<T>(lockPath: string, fn: () => T): T {
   const deadline = Date.now() + LOCK_STALE_MS;
   const token = `${process.pid}-${process.hrtime.bigint()}`;
   let fd: number | null = null;

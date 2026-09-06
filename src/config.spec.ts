@@ -1,8 +1,49 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { excludeOverwriteProxiesFromIncludeAll, getRuleTarget, validateConfig } from './config.js';
+import { excludeOverwriteProxiesFromIncludeAll, getRuleTarget, parseConfigContent, validateConfig } from './config.js';
 import { CliError } from './errors.js';
+
+describe('parseConfigContent：订阅内容解析（YAML 覆盖 JSON，无独立 JSON 回退）', () => {
+  // YAML 1.2 是 JSON 超集，故删掉了此前那条 JSON.parse 回退分支。
+  // 这组用例锁住「删掉之后 JSON 输入照样能解析」，防有人以为需要把回退加回来。
+  it('标准 JSON 由 YAML 解析器正常收下', () => {
+    const r = parseConfigContent('{"proxies":[{"name":"a"}],"mixed-port":7890}');
+    assert.deepEqual(r.proxies, [{ name: 'a' }]);
+    assert.equal(r['mixed-port'], 7890);
+  });
+
+  it('tab 缩进的 JSON 同样解析（YAML 的缩进限制只针对块结构，流式映射不受影响）', () => {
+    const r = parseConfigContent('{\n\t"a": 1\n}');
+    assert.equal(r.a, 1);
+  });
+
+  it('常规 YAML 正常解析', () => {
+    const r = parseConfigContent('proxies:\n  - name: hk\nrules:\n  - MATCH,DIRECT\n');
+    assert.deepEqual(r.rules, ['MATCH,DIRECT']);
+  });
+
+  it('重复键报错，不静默取最后一个值', () => {
+    // 这是唯一走得到旧 JSON 回退分支的输入：JSON.parse 静默取 2，把坏数据变成「接受」。
+    // 订阅里出现重复键意味着上游生成有问题，取哪个值都是猜，必须让用户看见
+    assert.throws(() => parseConfigContent('{"a":1,"a":2}', '订阅内容'), /订阅内容格式错误/);
+  });
+
+  it('顶层为列表/标量时报错并说明期望形态', () => {
+    assert.throws(() => parseConfigContent('- a\n- b', '订阅内容'), /不是有效的配置对象.*列表/s);
+    assert.throws(() => parseConfigContent('just a string', '订阅内容'), /不是有效的配置对象/);
+    assert.throws(() => parseConfigContent('42', '订阅内容'), /不是有效的配置对象/);
+  });
+
+  it('空内容与纯空白报「为空」', () => {
+    assert.throws(() => parseConfigContent('', '订阅内容'), /订阅内容为空/);
+    assert.throws(() => parseConfigContent('   \n\t ', '订阅内容'), /订阅内容为空/);
+  });
+
+  it('YAML 语法错误带出解析器的定位信息（排查笔误的主要线索）', () => {
+    assert.throws(() => parseConfigContent('proxies:\n  - name: a\n   bad-indent: 1\n', '订阅内容'), /订阅内容格式错误，无法解析: .+/);
+  });
+});
 
 describe('getRuleTarget', () => {
   it('取末段为目标', () => {

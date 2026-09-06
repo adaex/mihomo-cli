@@ -12,6 +12,25 @@ import { formatLocalTimestamp } from './utils.js';
 
 const DEFAULT_LOG_RETENTION_DAYS = 7;
 
+/**
+ * 归档日志文件名的**唯一判据**：`mihomo.<yyyy-MM-dd_HH-mm-ss>[.<序号>].log`。
+ *
+ * 序号后缀由同秒二次轮转产生（`rotateLog` 与 `restartService` 的 copy-truncate 都会加），
+ * 而「start 失败后立即重试」正是它最常出现的场景——也正是用户最需要翻日志的时候。
+ *
+ * 此前 cleanupOldLogs 与 listLogs 各写一份正则，只有前者认序号后缀：于是 `.N.log`
+ * 会被按时清理（不堆积），却永远不出现在 `logs` 列表里 → `logs <编号>` 拿不到它，
+ * 用户只能自己进目录翻。判据收成一份，两边不可能再漂移。
+ *
+ * 捕获组 1 是时间戳（listLogs 不用，但保留以便按时间解析）。
+ */
+const ARCHIVE_LOG_RE = /^mihomo\.(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})(?:\.\d+)?\.log$/;
+
+/** 是否为归档日志文件名（清理与列表共用同一判据） */
+export function isArchiveLogFilename(filename: string): boolean {
+  return ARCHIVE_LOG_RE.test(filename);
+}
+
 export function rotateAndCleanupLogs(): void {
   rotateLog();
   cleanupOldLogs(DEFAULT_LOG_RETENTION_DAYS);
@@ -59,6 +78,26 @@ export function readLogTail(maxLines = 15): string[] {
   }
 }
 
+/**
+ * 分配一个尚未占用的归档路径：`mihomo.<时间戳>.log`，已存在则追加序号。
+ *
+ * 同一秒内两次轮转（start 失败后立即重试、tun 紧接 start）会互相覆盖归档——
+ * POSIX rename 与 copyFileSync 都静默覆盖已存在文件。加序号后缀避免丢日志。
+ *
+ * 导出供 service.ts 的 copy-truncate 轮转复用（运行中不能 rename，见 restartService）：
+ * 此前两处各写一份同样的 while 循环，命名规则漂移就会让归档被静默覆盖或列不出来。
+ */
+export function allocateArchivePath(): string {
+  const timestamp = formatLocalTimestamp();
+  let archivePath = path.join(DIRS.logs, `mihomo.${timestamp}.log`);
+  let seq = 1;
+  while (fs.existsSync(archivePath)) {
+    archivePath = path.join(DIRS.logs, `mihomo.${timestamp}.${seq}.log`);
+    seq++;
+  }
+  return archivePath;
+}
+
 function rotateLog(): string | null {
   const logFile = PATHS.logFile;
   if (!fs.existsSync(logFile)) return null;
@@ -66,19 +105,7 @@ function rotateLog(): string | null {
   const stat = fs.statSync(logFile);
   if (stat.size === 0) return null;
 
-  const timestamp = formatLocalTimestamp();
-  let rotatedName = `mihomo.${timestamp}.log`;
-  let rotatedPath = path.join(DIRS.logs, rotatedName);
-
-  // 同一秒内两次轮转（start 失败后立即重试、tun 紧接 start）会互相覆盖归档，
-  // POSIX rename 静默覆盖已存在文件。加序号后缀避免丢日志
-  let seq = 1;
-  while (fs.existsSync(rotatedPath)) {
-    rotatedName = `mihomo.${timestamp}.${seq}.log`;
-    rotatedPath = path.join(DIRS.logs, rotatedName);
-    seq++;
-  }
-
+  const rotatedPath = allocateArchivePath();
   fs.renameSync(logFile, rotatedPath);
   return rotatedPath;
 }
@@ -95,7 +122,7 @@ export function cleanupOldLogs(maxAgeDays = DEFAULT_LOG_RETENTION_DAYS): { delet
   let errors = 0;
 
   for (const file of files) {
-    if (!file.match(/^mihomo\.\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(\.\d+)?\.log$/)) continue;
+    if (!isArchiveLogFilename(file)) continue;
 
     try {
       const filePath = path.join(logsDir, file);
@@ -131,8 +158,7 @@ export function listLogs(): LogList {
 
   const files = fs.readdirSync(logsDir);
   for (const file of files) {
-    const match = file.match(/^mihomo\.(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})\.log$/);
-    if (!match) continue;
+    if (!isArchiveLogFilename(file)) continue;
 
     try {
       const filePath = path.join(logsDir, file);

@@ -44,8 +44,7 @@ export function cmdUI(args: string[]): void {
     );
   }
 
-  const success = openUrl(url);
-  if (!success) {
-    console.log('请手动访问上面的地址');
-  }
+  // 地址已在上面打印：openUrl 是 detached spawn，检不出失败（见 open.ts），
+  // 浏览器没弹出时用户可自行复制上面那行
+  openUrl(url);
 }

@@ -22,25 +22,36 @@ export function loadYamlSafe(content: string): unknown {
   return yaml.load(content, SAFE_YAML_LOAD_OPTIONS);
 }
 
-export function parseYamlOrJson(content: string, errorMsg?: string): Record<string, unknown> {
+/**
+ * 解析配置内容（订阅 YAML 或 JSON）为顶层映射。
+ *
+ * **只走 YAML 解析器，没有独立的 JSON 分支**：YAML 1.2 是 JSON 的超集，标准 JSON
+ * （含 tab 缩进、长整数、嵌套数组）实测全部由 `loadYamlSafe` 正常解析。
+ * 此前额外挂了个 `JSON.parse` 回退，实际唯一能走到那里的输入是**重复键 JSON**
+ * （`{"a":1,"a":2}` —— YAML 明确报错，JSON.parse 静默取最后一个值）：
+ * 那条回退把「坏数据」变成了「静默接受」，方向正好是错的。订阅里出现重复键
+ * 意味着上游生成有问题，取哪个值都是猜，必须报错让用户看见。
+ *
+ * 只接受对象：标量/数组不是合法配置（`proxies` 等段都挂在顶层映射下）。
+ */
+export function parseConfigContent(content: string, errorMsg?: string): Record<string, unknown> {
+  const label = errorMsg || '内容';
   if (!content?.trim()) {
-    throw new Error(`${errorMsg || '内容'}为空`);
+    throw new Error(`${label}为空`);
   }
+
+  let result: unknown;
   try {
-    const result = loadYamlSafe(content);
-    if (result != null && typeof result === 'object' && !Array.isArray(result)) return result as Record<string, unknown>;
-  } catch {
-    // fall through to JSON
-  }
-  try {
-    const result = JSON.parse(content) as unknown;
-    // 与 YAML 路径同构：只接受对象，标量/数组不是合法配置
-    if (result != null && typeof result === 'object' && !Array.isArray(result)) return result as Record<string, unknown>;
-    throw new Error(`${errorMsg || '内容'}不是有效的配置对象`);
+    result = loadYamlSafe(content);
   } catch (e) {
-    if (e instanceof Error && e.message.includes('不是有效的配置对象')) throw e;
-    throw new Error(`${errorMsg || '内容'}格式错误，无法解析为 YAML 或 JSON`);
+    // YAML 的报错含行列号，对定位笔误很有用，原样带出（首行即可，堆栈无意义）
+    throw new Error(`${label}格式错误，无法解析: ${(e as Error).message.split('\n')[0]}`);
   }
+
+  if (result == null || typeof result !== 'object' || Array.isArray(result)) {
+    throw new Error(`${label}不是有效的配置对象（顶层需为映射，当前是${Array.isArray(result) ? '列表' : typeof result}）`);
+  }
+  return result as Record<string, unknown>;
 }
 
 /**
@@ -344,7 +355,7 @@ export function validateConfig(config: Record<string, unknown>): string[] {
 }
 
 export function buildConfig(subRawContent: string, mode: string, scope?: OverwriteScope): BuildConfigResult {
-  const subscriptionConfig = parseYamlOrJson(subRawContent, '订阅内容');
+  const subscriptionConfig = parseConfigContent(subRawContent, '订阅内容');
 
   if (!subscriptionConfig) {
     throw new Error('订阅内容为空');

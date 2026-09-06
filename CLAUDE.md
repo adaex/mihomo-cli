@@ -35,7 +35,7 @@ This file provides guidance to Claude Code when working with this repository.
 | `src/proxy-probe.ts`       | 代理连通性探测（curl 经本机混合端口访问 gstatic generate_204） |
 | `src/process-start.ts`     | TUN 内核启动（sudo 脚本）。Mixed 无用户态路径，由 service.ts 托管 |
 | `src/process-stop.ts`      | 内核停止/清理：stop、cleanupAll、clearPid |
-| `src/log-files.ts`         | 日志轮转/清理/列表/路径、readLogTail（启动失败时附给用户的线索） |
+| `src/log-files.ts`         | 日志轮转/清理/列表/路径、归档名判据与路径分配（清理与列表共用）、readLogTail（启动失败时附给用户的线索） |
 | `src/open.ts`              | openUrl/openLogFile/viewLogWithTail |
 | `src/spinner.ts`           | withSpinner：长操作的等待反馈（TTY 转圈动画，非 TTY 降级为一行） |
 | `src/sudo.ts`              | runSudoScript：TUN 与清理遗留 root 服务共用的 sudo 脚本范式 |
@@ -239,7 +239,9 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 - mutator 必须同步，且不得再调 `updateSettings`/`writeSettings`——**锁不可重入**，会死等到强夺陈旧锁
 - 锁超过 10s 视为持锁进程已崩溃并强夺：宁可退回竞态，也不能让一次崩溃永久锁死 CLI
 - **释放前必须校验锁还是自己的**：锁文件写入 `pid+hrtime` token，内容一致才删（被强夺者的 finally 无条件 rm，删掉的是新持有者的锁）
-- **锁文件不能放在会被整体 `rmrf` 的目录里**（`runtime/`、`logs/`、`data/`、`subscriptions/`、`kernel/`）：`stop()` 的 `clearRuntime()` 与各 `reset` target 会连目录带锁一起删，持锁方毫不知情，下一个进程立刻拿到锁 → 两个进程同时进临界区。token 所有权校验对此无效（它防误删，不防「锁被连目录删」）。锁一律放 `USER_DATA_DIR` 根下，`paths.spec.ts` 有不变量断言
+- **锁文件不能放在会被整体 `rmrf` 的目录里**（`runtime/`、`logs/`、`data/`、`subscriptions/`、`kernel/`）：`stop()` 的 `clearRuntime()` 与各 `reset` target 会连目录带锁一起删，持锁方毫不知情，下一个进程立刻拿到锁 → 两个进程同时进临界区。token 所有权校验对此无效（它防误删，不防「锁被连目录删」）
+- **`withFileLock(lockPath, fn)` 的参数是锁文件本身，不是被保护的数据文件**：旧签名收数据文件、内部拼 `${filePath}.lock`，锁的位置就被数据文件的位置绑死——`cache.json` 住在 `subscriptions/` 里，锁于是也在那儿，`reset subs` 一删就没了（v4.7.4 只把 `service.lock` 移出 `runtime/`，这条同族路径漏了一版）。现在三把锁（`settingsLock`/`subscriptionCacheLock`/`serviceLock`）都是 `PATHS` 里的显式常量，一律在 `USER_DATA_DIR` 根下
+- **新增锁按 `xxxLock` 命名**：`paths.spec.ts` 按该后缀枚举 `PATHS` 做位置断言，照此命名就自动进回归测试（另有一条断言守着「枚举到的锁数量 ≥ 3」，防命名约定被破坏后断言空转成永真）
 
 **`cache.json` 同理**：`saveSubscriptionCache` / `deleteSubscriptionCache` 一律持 `withFileLock`。并发回归测试必须用 `spawn` 并行起子进程，`spawnSync` 逐个跑完根本测不出并发。实测细节见 `settings.ts`/`paths.ts` 注释与 `settings.spec.ts`。
 
@@ -266,9 +268,9 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 
 ### quickstart.sh 是内核下载的平行实现
 
-仓根 `quickstart.sh`（curl|sh 一键入口，不经 npm/CLI，给不想装 Node 的用户）用 shell 重新实现了一套：镜像选择、GitHub API 取资产、标准版形态精确匹配、来源 host 白名单、curl 全链路强制 https、tar 双守卫、订阅内容校验。它与 `kernel.ts` 的信任规则**必须保持一致**——改任一侧的下载/校验逻辑，都要同步检查另一侧（历史上两次对齐——安全水位、资产选择形态——都是漂移被人肉发现后补的，没有机制兜底）。
+仓根 `quickstart.sh`（curl|sh 一键入口，不经 npm/CLI，给不想装 Node 的用户）用 shell 重新实现了一套：镜像选择、GitHub API 取资产、标准版形态精确匹配、来源 host 白名单、curl 全链路强制 https、`--max-filesize` 上限、下载后比对 `asset.size`、tar 双守卫、订阅内容校验。它与 `kernel.ts` 的信任规则**必须保持一致**——改任一侧的下载/校验逻辑，都要同步检查另一侧（历史上三次对齐——安全水位、资产选择形态、`asset.size` 比对与 `--max-filesize`——都是漂移被人肉发现后补的，没有机制兜底）。
 
-已知分歧（刻意，别当 bug 修）：脚本默认镜像硬编码 v6 子域（无 `getDefaultMirror` 的 IPv6 探测）、支持 linux、不经 launchd 直接前台跑、`--no-mirror`/`--direct` 作为脚本参数保留。
+已知分歧（刻意，别当 bug 修）：脚本默认镜像硬编码 v6 子域（无 `getDefaultMirror` 的 IPv6 探测）、支持 linux、不经 launchd 直接前台跑、`--no-mirror`/`--direct` 作为脚本参数保留。`asset.size` 比对在脚本里**需要 jq**（无 jq 时 size 取不到即留空跳过比对，不阻断下载）——CLI 侧无此依赖，属能力差异而非水位差异。
 
 **「无标准版资产时回退第一个匹配项」两侧行为一致**，不是分歧（`kernel.ts` 的 `standardAsset || matchingAssets[0]` 与脚本的 `head -1` 回退，各有单测/注释锁定）。此处曾误记为「CLI 不回退」——而这段文字的用途正是两侧对齐的对照表，写反会误导下次对齐，故特此标注。真正不回退的是 `pickLatestRelease`（全预发布时抛错，别与资产选择混为一谈）。
 
@@ -299,6 +301,20 @@ dns 形态校验（必须是映射）经 `assertDnsShape` 收口，TUN 与 mixed
 ### 交互确认与退出码
 
 破坏性操作（`reset`、`sub remove` 模糊匹配）在非 TTY 下**必须抛 `CliError` 退出 1**，不能打印"已取消"后 `return`——退出 0 会让脚本把"什么都没做"误判成执行成功。`confirmPrompt`（`commands/shared.ts`）自带 `!process.stdin.isTTY` 守卫返回 false，调用方需自行区分这两种语义。
+
+### reset 目标顺序：写 settings 的 onAfter 必须排在 settings 之前
+
+`RESET_TARGETS` 的数组顺序即执行顺序。带 `onAfter` 写 `writeSettings` 的目标若排在 `settings` 之后，会把刚删掉的 settings.json **重建出来**，「已重置: 设置」变成谎报。
+
+受此约束的目标登记在 `WRITES_SETTINGS_ON_AFTER`（`subs` 与 `overwrites`），`reset.spec.ts` 按清单遍历断言，**不点名单个目标**——此前只断言了 `subs`，同族的 `overwrites` 带着一模一样的缺陷躺在测试盲区里。
+
+`overwrites` 排错位的后果比「文件被重建」更实际：重建内容是 `{"overwrite_enabled": false}`，而全新数据目录的默认是**启用**。于是 `reset --full` 后用户重新放一份 `overwrite.yaml`，覆写静默不生效且看不出与上次 reset 有关。故除清单断言外，另有两条**端到端**断言（真跑 `reset --full` 后查磁盘状态与 `isOverwriteEnabled()`），它们不依赖清单的正确性——清单漏登记时顺序断言会空过，端到端断言仍失败。
+
+### 归档日志的文件名判据只有一份
+
+`log-files.ts` 的 `ARCHIVE_LOG_RE` / `isArchiveLogFilename` 是清理与列表共用的唯一判据。此前 `cleanupOldLogs` 与 `listLogs` 各写一份正则，只有前者认序号后缀 `mihomo.<ts>.N.log`：那些归档会被按时清理（不堆积）却**永远不出现在 `logs` 列表里**，`logs <编号>` 拿不到它。而序号后缀恰恰产生于「同一秒内二次轮转」——也就是 start 失败后立即重试这个最需要翻日志的场景。
+
+归档路径的分配同样收成一份：`allocateArchivePath()`，`rotateLog`（rename）与 `restartService`（运行中只能 copy-truncate）共用，避免命名规则漂移导致归档被静默覆盖或列不出来。
 
 ---
 
@@ -332,11 +348,14 @@ dns 形态校验（必须是映射）经 `assertDnsShape` 收口，TUN 与 mixed
 
 ```
 settings.json           # 用户设置
+settings.lock           # 跨进程锁（三把锁都在根下，见「settings.json / cache.json 的读-改-写必须持锁」）
+subscription-cache.lock
+service.lock
 overwrite.yaml          # 覆写配置（主文件，可选）
 overwrite.*.yaml        # 覆写配置（扩展文件，如 overwrite.dns.yaml）
 subscriptions/          # 订阅配置和缓存
 kernel/                 # 内核二进制
-logs/                   # 当前日志 + 归档日志
+logs/                   # 当前日志 + 归档日志（mihomo.<时间戳>[.<序号>].log）
 data/                   # mihomo 运行数据
 runtime/                # pid, config.yaml, 分阶段调试文件(1.subscription/2.overwrite/3.system)
 ```

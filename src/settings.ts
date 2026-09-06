@@ -67,7 +67,7 @@ export function isValidSettingsContent(content: string): boolean {
  */
 export function writeSettings(settings: Partial<Settings>): Settings {
   ensureDirs();
-  return withFileLock(PATHS.settingsFile, () => writeSettingsUnlocked(settings));
+  return withFileLock(PATHS.settingsLock, () => writeSettingsUnlocked(settings));
 }
 
 /** `writeSettings` 的锁内实现。锁不可重入，故持锁路径（updateSettings）只能调它。 */
@@ -97,7 +97,7 @@ function writeSettingsUnlocked(settings: Partial<Settings>): Settings {
  */
 export function updateSettings(mutate: (current: Settings) => Partial<Settings>): Settings {
   ensureDirs();
-  return withFileLock(PATHS.settingsFile, () => {
+  return withFileLock(PATHS.settingsLock, () => {
     settingsCache = null;
     const current = readSettings();
     return writeSettingsUnlocked(mutate(current));
@@ -251,10 +251,14 @@ function writeSubscriptionCache(cache: SubscriptionCache): void {
  *
  * 丢的是 `updated_at` → `needsAutoUpdate` 恒 true → 该订阅每次 `start` 都重新下载，
  * 且流量/到期展示一并消失。故与 settings.json 同构，把整个读-改-写圈进锁里。
+ *
+ * 锁文件用 `PATHS.subscriptionCacheLock`（USER_DATA_DIR 根下），**不能放在
+ * `subscriptions/` 里**：`reset subs` 会 `rmrf` 整个目录，把别人正持着的锁一起带走
+ * （见 paths.ts 锁常量的注释）。
  */
 export function saveSubscriptionCache(subName: string, data: Partial<SubscriptionCacheEntry>): void {
   ensureDirs();
-  withFileLock(PATHS.subscriptionsCacheFile, () => {
+  withFileLock(PATHS.subscriptionCacheLock, () => {
     const cache = readSubscriptionCache();
     // 损坏的条目可能是字符串/数字（cache.json 被手改），展开会产生字符键垃圾
     const old = cache[subName];
@@ -266,7 +270,7 @@ export function saveSubscriptionCache(subName: string, data: Partial<Subscriptio
 /** 删除单个订阅的缓存条目。同 saveSubscriptionCache 持锁：并发下裸读-改-写会覆盖对方的条目。 */
 function deleteSubscriptionCache(subName: string): void {
   ensureDirs();
-  withFileLock(PATHS.subscriptionsCacheFile, () => {
+  withFileLock(PATHS.subscriptionCacheLock, () => {
     const cache = readSubscriptionCache();
     if (!cache[subName]) return;
     delete cache[subName];

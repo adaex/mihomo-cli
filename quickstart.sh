@@ -196,15 +196,48 @@ download_kernel() {
     mirrored_url="$(with_mirror "$download_url")"
     temp_path="$DIR_KERNEL/$asset_name"
 
+    # API 声明的资产字节数，用于下载后比对完整性（无 checksum 时唯一的完整性信号）。
+    # 取不到（无 jq / 字段缺失）则留空，跳过比对——不能因此拒绝下载。
+    # 与 kernel.ts 的 asset.size 校验对齐（该处此前只有 CLI 有，脚本漂移了一版）。
+    expected_size=""
+    if command -v jq >/dev/null 2>&1; then
+        expected_size="$(printf '%s' "$releases_json" | jq -r --arg name "$asset_name" '
+            [.[] | select(.prerelease==false and (.tag_name | test("alpha|beta|prerelease";"i") | not))][0].assets[]
+            | select(.name == $name) | .size
+        ' 2>/dev/null | head -1)" || true
+        case "$expected_size" in
+            ''|*[!0-9]*) expected_size="" ;;
+        esac
+    fi
+
     info "Downloading: $asset_name"
     if [ -n "$MIRROR" ]; then
         info "Mirror: $MIRROR"
     fi
 
     # --proto '=https' / --proto-redir '=https'：-L 默认跟随任意协议重定向，
-    # 会降级到明文 http 并落盘。产物随后以 root 运行，全链路强制 https
-    curl -L --proto '=https' --proto-redir '=https' --progress-bar --connect-timeout 30 --max-time 300 \
+    # 会降级到明文 http 并落盘。产物随后以 root 运行，全链路强制 https。
+    # --max-filesize 防止被喂超大文件撑爆磁盘（同 kernel.ts 的 maxBytes）：
+    # 已知资产大小时给 2 倍余量，未知时用固定上限
+    if [ -n "$expected_size" ]; then
+        max_filesize=$((expected_size * 2 + 1048576))
+    else
+        max_filesize=536870912
+    fi
+    curl -L --proto '=https' --proto-redir '=https' --max-filesize "$max_filesize" \
+        --progress-bar --connect-timeout 30 --max-time 300 \
         -o "$temp_path" "$mirrored_url" || die "Kernel download failed"
+
+    # 比对 API 声明的资产大小：不匹配说明下载被截断（网络中断留下半个文件）或内容被替换。
+    # 强度有限（攻击者可填充到同样字节数），但能挡住截断与不等长的偷换。
+    # release 资产不可变，字节数不该有任何偏差，故要求精确相等。
+    if [ -n "$expected_size" ]; then
+        actual_size="$(wc -c < "$temp_path" | tr -d ' ')"
+        if [ "$actual_size" != "$expected_size" ]; then
+            rm -f "$temp_path"
+            die "Downloaded size mismatch (expected ${expected_size} bytes, got ${actual_size}): download truncated or content replaced. Retry, or try another mirror/--direct."
+        fi
+    fi
 
     info "Extracting..."
     case "$asset_name" in

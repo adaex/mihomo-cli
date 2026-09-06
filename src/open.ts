@@ -3,28 +3,32 @@ import { spawn } from 'node:child_process';
 import { setSilentSigint } from './lifecycle.js';
 
 /**
- * 打开 URL 或文件（macOS `open`）。ui/dir/log 三处共用的薄封装，
- * 此前错放在 process.ts（进程管理模块）里。
+ * 打开 URL 或文件（macOS `open`）。ui/dir/log 三处共用的薄封装。
+ *
+ * **无返回值**：`open` 是 detached spawn，失败（ENOENT、目标不存在、用户无默认程序）
+ * 全部发生在本函数返回之后，只能被 `child.on('error')` 收到并吞掉——此前它返回
+ * `boolean` 并恒为 `true`，四个调用点的 `if (!success) 请手动打开…` 全是死代码，
+ * 反而让人误以为失败真能被检出。
+ *
+ * 真要检出失败得改用 `spawnSync` 并解析退出码，但那会为一个「非阻塞的顺手操作」
+ * 引入同步等待；macOS 上 `open` 本就存在（平台守卫已保证），故选择不检出。
+ * 调用方一律**无条件打印地址/路径**，用户即便没弹出窗口也能自己点开。
  */
-export function openUrl(url: string): boolean {
+export function openUrl(url: string): void {
   try {
     // `--` 终止选项解析：url 可能来自订阅响应头 web_page_url（服务器可控），以 `-` 开头会被 open 当选项
     const child = spawn('open', ['--', url], { stdio: 'ignore', detached: true });
     child.unref();
     child.on('error', () => {});
-    return true;
   } catch {
-    return false;
+    /* spawn 同步阶段的异常（参数非法等）：地址已由调用方打印，用户可自行打开 */
   }
 }
 
 export function openLogFile(logPath: string, label?: string): void {
   const displayLabel = label || logPath;
   console.log(`用系统默认程序打开: ${displayLabel}`);
-  const success = openUrl(logPath);
-  if (!success) {
-    console.log(`请手动打开: ${logPath}`);
-  }
+  openUrl(logPath);
 }
 
 export function viewLogWithTail(logPath: string, options?: { follow?: boolean; lines?: number }): void {

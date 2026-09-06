@@ -1,6 +1,6 @@
 import os from 'node:os';
 
-import { MIRROR_ALIASES } from './constants.js';
+import { MIRROR_ALIASES, MIRROR_BARE } from './constants.js';
 import { CliError } from './errors.js';
 import { START_RESTART_FLAGS, VALUE_FLAGS } from './flags.js';
 import type { MirrorArg, SubscriptionUrgency } from './types.js';
@@ -363,7 +363,7 @@ function hasGlobalIpv6(): boolean {
 
 /** 裸 --mirror 的默认镜像：有全局 IPv6 走 v6 子域，否则走裸域 */
 export function getDefaultMirror(): string {
-  return hasGlobalIpv6() ? MIRROR_ALIASES.v6 : 'https://gh-proxy.org/';
+  return hasGlobalIpv6() ? MIRROR_ALIASES.v6 : MIRROR_BARE;
 }
 
 function normalizeMirrorUrl(val: string): string | null {

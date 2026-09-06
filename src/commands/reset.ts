@@ -12,9 +12,16 @@ import type { ResetTarget } from '../types.js';
 import { confirmOrThrow } from './shared.js';
 
 /**
- * 重置目标注册表。**顺序即执行顺序**（`resolveResetTargets` 会按本数组排序），
- * 带 `onAfter: writeSettings` 的目标必须排在 `settings` 之前，否则会把刚删掉的
- * settings.json 重建成 `{}`——`subs` 受此约束，有单测锁定。
+ * 重置目标注册表。**顺序即执行顺序**（`resolveResetTargets` 会按本数组排序）。
+ *
+ * **不变量：凡 `onAfter` 里写 settings 的目标，都必须排在 `settings` 之前**，否则会把刚
+ * 删掉的 settings.json 重建出来——`reset --full` 报「已重置: 设置」而文件仍在。
+ * 受此约束的是 `subs` 与 `overwrites` 两个（都调 `writeSettings`），
+ * `reset.spec.ts` 按 `WRITES_SETTINGS_ON_AFTER` 清单统一断言，不逐个点名。
+ *
+ * `overwrites` 排后面的后果比「文件被重建」更实际：重建出的内容是
+ * `{"overwrite_enabled": false}`，而全新数据目录的默认是**启用**。于是用户
+ * `reset --full` 后重新放一份 overwrite.yaml，覆写静默不生效，且看不出与上次 reset 有关。
  */
 export const RESET_TARGETS: ResetTarget[] = [
   {
@@ -52,6 +59,25 @@ export const RESET_TARGETS: ResetTarget[] = [
     needsStop: true,
   },
   {
+    id: 'overwrites',
+    aliases: ['overwrite', 'overwrites', 'ow'],
+    label: '覆写',
+    paths: () => {
+      const dir = USER_DATA_DIR;
+      if (!fs.existsSync(dir)) return [];
+      return fs
+        .readdirSync(dir)
+        .filter(isOverwriteFilename)
+        .map(f => `${dir}/${f}`);
+    },
+    needsStop: false,
+    onAfter: () => {
+      // 删了覆写文件却留着 enabled=true，ow/status 会显示「已启用 (无文件)」——
+      // 「重置覆写」语义上应把开关也归位
+      writeSettings({ overwrite_enabled: false });
+    },
+  },
+  {
     id: 'settings',
     aliases: ['setting', 'settings', 'config'],
     label: '设置',
@@ -71,25 +97,6 @@ export const RESET_TARGETS: ResetTarget[] = [
     checkEmpty: () => !hasKernel(),
     emptyMsg: '内核未安装，无需删除',
     warnIfRunning: true,
-  },
-  {
-    id: 'overwrites',
-    aliases: ['overwrite', 'overwrites', 'ow'],
-    label: '覆写',
-    paths: () => {
-      const dir = USER_DATA_DIR;
-      if (!fs.existsSync(dir)) return [];
-      return fs
-        .readdirSync(dir)
-        .filter(isOverwriteFilename)
-        .map(f => `${dir}/${f}`);
-    },
-    needsStop: false,
-    onAfter: () => {
-      // 删了覆写文件却留着 enabled=true，ow/status 会显示「已启用 (无文件)」——
-      // 「重置覆写」语义上应把开关也归位
-      writeSettings({ overwrite_enabled: false });
-    },
   },
   {
     id: 'service',
@@ -119,6 +126,17 @@ export const RESET_TARGETS: ResetTarget[] = [
  * 静默把用户的服务安装/设置一并删掉，且不报错。reset.spec.ts 对着它断言。
  */
 export const RESET_PRESERVED_ON_BARE = ['settings', 'kernel', 'overwrites', 'service'] as const;
+
+/**
+ * `onAfter` 里会写 settings.json 的目标：它们必须排在 `settings` 之前，
+ * 否则会把刚删掉的 settings.json 重建出来（见 RESET_TARGETS 的头注释）。
+ *
+ * **必须是具名清单**：此前测试只点名断言了 `subs`，于是同族的 `overwrites`
+ * 带着一模一样的缺陷躺在盲区里——它排在 settings 之后，`reset --full` 会重建出
+ * `{"overwrite_enabled": false}`，把覆写静默关掉。新增写 settings 的 onAfter 时
+ * 补进本清单，`reset.spec.ts` 会自动校验其顺序。
+ */
+export const WRITES_SETTINGS_ON_AFTER = ['subs', 'overwrites'] as const;
 
 function resolveResetTargets(names: string[]): { matched: ResetTarget[]; unmatched: string[] } {
   const matched: ResetTarget[] = [];

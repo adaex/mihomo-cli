@@ -7,16 +7,35 @@ const pkg = require('../package.json');
 export const VERSION: string = pkg.version;
 export const PKG_NAME: string = pkg.name;
 
-/** 可用镜像（裸 --mirror 的默认选择见 utils.ts 的 getDefaultMirror：有 IPv6 走 v6，否则裸域） */
-export const AVAILABLE_MIRRORS = ['gh-proxy.org', 'v4.gh-proxy.org', 'v6.gh-proxy.org', 'cdn.gh-proxy.org', 'axisnow.gh-proxy.org'];
+/**
+ * 镜像的**单一真相源**：短别名 → 完整地址。`--mirror <别名>` 经 `MIRROR_ALIASES` 展开，
+ * 帮助文案里的「可用镜像」由 `AVAILABLE_MIRRORS` 从本表派生。
+ *
+ * 此前是三份各自维护的清单（`AVAILABLE_MIRRORS` 手写域名、`MIRROR_ALIASES` 手写别名、
+ * `getDefaultMirror` 里硬编码裸域），增删镜像要改三处且无机制兜底：漏改
+ * `AVAILABLE_MIRRORS` 只是帮助文案过期，漏改 `MIRROR_ALIASES` 则是别名直接不认。
+ *
+ * `bare` 是不带子域的裸域，供无 IPv6 时的默认选择（见 utils.ts 的 getDefaultMirror）；
+ * 它不作为短别名（用户写 `--mirror gh-proxy.org` 走裸主机名补 https 的通路即可）。
+ */
+export const MIRROR_HOST = 'gh-proxy.org';
 
 /** --mirror <短别名> 映射：cdn/v4/v6/axisnow → 完整镜像地址 */
 export const MIRROR_ALIASES: Record<string, string> = {
-  v4: 'https://v4.gh-proxy.org/',
-  v6: 'https://v6.gh-proxy.org/',
-  cdn: 'https://cdn.gh-proxy.org/',
-  axisnow: 'https://axisnow.gh-proxy.org/',
+  v4: `https://v4.${MIRROR_HOST}/`,
+  v6: `https://v6.${MIRROR_HOST}/`,
+  cdn: `https://cdn.${MIRROR_HOST}/`,
+  axisnow: `https://axisnow.${MIRROR_HOST}/`,
 };
+
+/** 裸域镜像（无子域）：无全局 IPv6 时的默认选择 */
+export const MIRROR_BARE = `https://${MIRROR_HOST}/`;
+
+/**
+ * 可用镜像的展示清单（帮助/错误提示用），从 MIRROR_ALIASES 派生。
+ * 裸域排最前，与 getDefaultMirror 的回退顺序一致。
+ */
+export const AVAILABLE_MIRRORS: string[] = [MIRROR_HOST, ...Object.values(MIRROR_ALIASES).map(url => new URL(url).hostname)];
 
 export const UI_URLS: Record<string, string> = {
   zash: 'https://board.zash.run.place',

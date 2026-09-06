@@ -8,12 +8,11 @@ import { dispatchSubcommand, type SubCommand } from './shared.js';
 function openDirectory(args: string[]): void {
   const target = args[2];
 
+  // 路径无条件打印：openUrl 是 detached spawn，检不出失败（见 open.ts），
+  // 打出来用户即便没弹出 Finder 也能自己点开
   if (!target || target === 'root') {
-    console.log('正在打开: 根目录');
-    const success = openUrl(USER_DATA_DIR);
-    if (!success) {
-      console.log(`请手动打开: ${USER_DATA_DIR}`);
-    }
+    console.log(`正在打开: 根目录 (${USER_DATA_DIR})`);
+    openUrl(USER_DATA_DIR);
     return;
   }
 
@@ -21,11 +20,8 @@ function openDirectory(args: string[]): void {
   const targetInfo = Object.hasOwn(DIRECTORY_TARGETS, key) ? DIRECTORY_TARGETS[key] : undefined;
   if (targetInfo) {
     const targetPath = targetInfo.path || USER_DATA_DIR;
-    console.log(`正在打开: ${targetInfo.label}`);
-    const success = openUrl(targetPath);
-    if (!success) {
-      console.log(`请手动打开: ${targetPath}`);
-    }
+    console.log(`正在打开: ${targetInfo.label} (${targetPath})`);
+    openUrl(targetPath);
     return;
   }
 

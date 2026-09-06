@@ -4,13 +4,13 @@ import path from 'node:path';
 import { getConfigInfo } from './config.js';
 import { isValidServiceLabel, RAW_SERVICE_LABEL_INPUT, SERVICE_BINARY_NAME, SERVICE_LABEL } from './constants.js';
 import { CliError } from './errors.js';
-import { cleanupOldLogs, rotateAndCleanupLogs } from './log-files.js';
+import { allocateArchivePath, cleanupOldLogs, rotateAndCleanupLogs } from './log-files.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './paths.js';
 import { getMihomoPids, isPidFileOwnedByRoot, isProcessRoot, MAIN_INSTANCE_PATTERN } from './process-probe.js';
 import { getPorts, readSettings } from './settings.js';
 import { runSudoScript } from './sudo.js';
 import type { ServiceStatus } from './types.js';
-import { formatLocalTimestamp, shellQuote, sleep } from './utils.js';
+import { shellQuote, sleep } from './utils.js';
 
 /**
  * launchd 服务层：Mixed 模式的唯一运行方式。
@@ -899,14 +899,9 @@ export async function restartService(): Promise<{ hotReloaded: boolean }> {
   // launchd 的 StandardOutPath fd 指向旧 inode，rename 后日志会继续写进归档文件。
   // 只能 copy-truncate（fd 为 O_APPEND，truncate 后从 0 续写不丢句柄）。
   if (logOversized()) {
-    // 同一秒内两次轮转会互相覆盖归档（copyFileSync 静默覆盖），加序号后缀
-    const timestamp = formatLocalTimestamp();
-    let archiveFile = path.join(DIRS.logs, `mihomo.${timestamp}.log`);
-    let seq = 1;
-    while (fs.existsSync(archiveFile)) {
-      archiveFile = path.join(DIRS.logs, `mihomo.${timestamp}.${seq}.log`);
-      seq++;
-    }
+    // 归档路径经 allocateArchivePath（log-files.ts 的单一命名规则）：同一秒内两次轮转
+    // 会互相覆盖归档（copyFileSync 静默覆盖），它负责追加序号后缀
+    const archiveFile = allocateArchivePath();
     try {
       fs.copyFileSync(PATHS.logFile, archiveFile);
       fs.writeFileSync(PATHS.logFile, '');

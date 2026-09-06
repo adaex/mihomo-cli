@@ -1,5 +1,5 @@
 import { colors } from './colors.js';
-import { buildConfig, parseYamlOrJson, writeDebugConfig, writeMihomoConfig } from './config.js';
+import { buildConfig, parseConfigContent, writeDebugConfig, writeMihomoConfig } from './config.js';
 import { DEFAULT_AUTO_UPDATE_TIMEOUT, DEFAULT_UPDATE_INTERVAL_HOURS } from './constants.js';
 import { CliError, TimeoutError, withTimeout } from './errors.js';
 import { createHttpClient } from './http.js';
@@ -265,7 +265,7 @@ export async function downloadSubscription(url: string, subName = 'default', sig
     throw new Error('订阅内容为空');
   }
 
-  const parsed = parseYamlOrJson(content, '订阅内容') as Record<string, unknown>;
+  const parsed = parseConfigContent(content, '订阅内容') as Record<string, unknown>;
   if (!parsed) throw new Error('订阅内容为空');
 
   assertLooksLikeSubscription(parsed, maskUrl(url));

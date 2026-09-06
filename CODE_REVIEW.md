@@ -1,7 +1,7 @@
 # 代码审查：风险与教训
 
-> 当前基线：v4.7.4
-> 上次全面审查：2026-09-06（独立复审，聚焦「文档未覆盖」的缺口，修复 3 项 + 1 项可读性）
+> 当前基线：v4.7.5
+> 上次全面审查：2026-09-06（第二轮独立复审，聚焦「文档未覆盖」与「防线只铺一条路径」的同族缺口，修复 3 项缺陷 + 3 项过度设计）
 
 **这份文档只记录两类内容**：本轮发现的未处理项，以及**验证过、下轮不必重查**的结论。
 
@@ -59,7 +59,9 @@ v4.7.3 的信号死亡实测就是按「一次性 label + 只用 bootstrap/booto
 避免下轮重复排查。每条都实际验证过，不是静态推测。
 
 **并发与数据完整性**
-- **锁文件不能放在会被整体删除的目录里**（v4.7.4 修）：`service.lock` 原在 `runtime/` 下，而 `stop()` 的 `clearRuntime()` 与 `reset runtime` 都 `rmrf(DIRS.runtime)`——第三方进程删目录时把别人正持着的锁一起带走，下一个进程立刻 `openSync(...,'wx')` 成功，**两个进程同时进临界区**（实测复现）。`withFileLock` 的 token 所有权校验挡不住：它防的是「被强夺者误删新持有者的锁」，而这里持锁方毫不知情。可达路径正是本文反复强调的那个——慢速 start（订阅更新约 10s）持锁期间另一终端 stop。现锁移到 `USER_DATA_DIR` 根下，`paths.spec.ts` 用「不在任何 rmrf 目录下」的不变量断言锁定（不是断言具体路径，那样会在目录调整时误报）
+- **锁文件不能放在会被整体删除的目录里**（v4.7.4 修 serviceLock，v4.7.5 补齐其余两把）：`service.lock` 原在 `runtime/` 下，而 `stop()` 的 `clearRuntime()` 与 `reset runtime` 都 `rmrf(DIRS.runtime)`——第三方进程删目录时把别人正持着的锁一起带走，下一个进程立刻 `openSync(...,'wx')` 成功，**两个进程同时进临界区**（实测复现）。`withFileLock` 的 token 所有权校验挡不住：它防的是「被强夺者误删新持有者的锁」，而这里持锁方毫不知情。
+  - **v4.7.5 修的同族漏网**：v4.7.4 只移了 `service.lock`，而 `cache.json` 的锁仍在 `subscriptions/cache.json.lock`——`withFileLock` 旧签名收**数据文件**、内部拼 `${filePath}.lock`，锁的位置被数据文件的位置绑死，`reset subs` 的 `rmrf(DIRS.subscriptions)` 照样能把它连目录带走（可达路径：慢速 `sub update` 并行下载逐条回写缓存期间，另一终端 `reset`）。签名已改为收**锁文件本身**，三把锁（`settingsLock`/`subscriptionCacheLock`/`serviceLock`）都是 `PATHS` 里的显式常量、一律在 `USER_DATA_DIR` 根下。
+  - **测试断言同步泛化**：`paths.spec.ts` 此前只点名 `PATHS.serviceLock`，所以这个缺口测试测不出来（正是本仓「防线只铺一条路径」的又一例）。现按 `xxxLock` 命名约定枚举 `PATHS` 全部锁，另加一条「枚举数量 ≥ 3」的断言防命名约定被破坏后断言空转成永真，再加一条真跑 `rmrf(DIRS.subscriptions)` 验证缓存锁幸存的回归用例。反向验证过：锁放回旧位置时两条断言都失败。
 - 锁的并发正确性：4 进程 × 15 条的 `updateSettings` 并发与 `saveSubscriptionCache` 并发均不丢条目（`settings.spec.ts` 用真实 spawn 子进程验证，必须 spawn 并行起、spawnSync 逐个跑完测不出并发）——规则见 CLAUDE.md「settings.json / cache.json 的读-改-写必须持锁」
 - **锁释放校验所有权**（v4.2.3 修）：锁文件写 `pid+hrtime` token，释放前内容一致才删。此前被强夺者的 finally 无条件 rm，删掉的是**新持有者**的锁——三进程实测 B/C 并发 4.6s，正是锁要防的静默丢数据。`paths.spec.ts` 锁定
 - 陈旧锁（>10s）会被强夺，一次崩溃不会永久锁死 CLI；实测 0.045s 完成不卡死
@@ -91,6 +93,7 @@ v4.7.3 的信号死亡实测就是按「一次性 label + 只用 bootstrap/booto
 
 **内核下载**
 - 来源钉死、curl 全链路强制 https、下载后比对 `asset.size`、自检 `-v` 均已实现——规则见 CLAUDE.md「内核下载的来源信任」
+- **`quickstart.sh` 补齐 `asset.size` 比对与 `--max-filesize`**（v4.7.5）：这两道 CLI 侧早有的防线在脚本里缺着，是第三次被人肉发现的平行实现漂移（前两次是安全水位、资产选择形态）。脚本侧的 size 依赖 jq（取不到即留空跳过比对，不阻断下载），属能力差异而非水位差异。用真实 GitHub API 响应验证过提取与 `max-filesize` 计算，以及资产名不匹配时安全留空
 - **多通道下载**（v4.7.0）：四通道（gh/本机代理/镜像/直连）均过端到端实测（隔离目录各下载一次真实内核），`resolveDownloadChannel` 优先级矩阵有单测——规则见 CLAUDE.md「内核下载的来源信任」
 - **资产选择精确匹配标准版形态**（`kernel.spec.ts` 用 v1.19.30 真实资产名锁定）：v4.2.3 前漏了 `-v1/-v2/-v3` GOAMD64 变体，Intel Mac 每次更新静默装上 baseline 构建——规则见 CLAUDE.md「内核下载的来源信任」
 - **全预发布时不回退**（v4.7.3 修）：`pickLatestRelease` 此前 fallback `releases[0]`，页内全是 alpha 时会把 alpha 当稳定版装上。今日不可达（上游同时只挂一条 alpha），属防御性——内核以 root 跑（TUN）或长期常驻，静默降级到未发布版本不可接受，现直接抛错
@@ -102,6 +105,13 @@ v4.7.3 的信号死亡实测就是按「一次性 label + 只用 bootstrap/booto
 - 非 TTY 退出码：`reset` 与 `sub remove` 模糊匹配都正确抛 `CliError` 退 1——规则见 CLAUDE.md「交互确认与退出码」
 - 已移除的选项/命令（`--no-ssh`、`--mirror-all`、`daemon`/`up`/`down`）均显式报错并给迁移指引——规则见 CLAUDE.md「命令行选项」与「服务模型的既定决策」
 - HTTP 超时覆盖响应体读取（abort 中断流）；错误体限量 64KB 读取
+- **`reset` 不再重建刚删掉的 settings.json**（v4.7.5 修）：`overwrites` 的 `onAfter` 调 `writeSettings`，却排在 `settings` **之后**——`reset --full` 报「已重置: 设置」而磁盘上留着 `{"overwrite_enabled": false}`（实测复现）。伤害不止于谎报：全新数据目录的覆写默认是**启用**，于是用户重置后重新放 `overwrite.yaml`，覆写静默不生效且毫无线索。此前 `reset.spec.ts` 只点名断言了 `subs`（同族的另一个写 settings 的目标），`overwrites` 因此躺在盲区——现按 `WRITES_SETTINGS_ON_AFTER` 清单遍历断言，另加两条**端到端**断言（真跑 `reset --full` 查磁盘状态与 `isOverwriteEnabled()`），后者不依赖清单正确性：清单漏登记时顺序断言空过，端到端断言仍会失败。反向验证过：在 main 的实现上三条断言全部失败
+- **归档日志的文件名判据收成一份**（v4.7.5 修）：`cleanupOldLogs` 与 `listLogs` 各写一份正则，只有前者认序号后缀 `mihomo.<ts>.N.log`——那些归档被按时清理却**永不出现在 `logs` 列表**，`logs <编号>` 取不到（实测：造两个同秒归档，带序号那个列不出来）。而序号后缀恰产生于「同秒二次轮转」，即 start 失败后立即重试这个最需要翻日志的场景。判据现为 `isArchiveLogFilename`，归档路径分配也收口成 `allocateArchivePath()`（`rotateLog` 的 rename 与 `restartService` 的 copy-truncate 共用）——规则见 CLAUDE.md「归档日志的文件名判据只有一份」
+
+**已删除的过度设计**（v4.7.5，别再加回来）
+- **`parseYamlOrJson` 的 JSON 回退分支**：YAML 1.2 是 JSON 超集，实测标准 JSON、tab 缩进 JSON、长整数全部由 `loadYamlSafe` 正常解析。唯一能走到 `JSON.parse` 的输入是**重复键 JSON**（YAML 报错，JSON.parse 静默取最后一个值）——那条回退把「坏数据」变成「静默接受」，方向正好相反。现更名 `parseConfigContent`、只走 YAML，并把解析器的行列号带进错误消息（实测 `duplicated mapping key (1:9)`）。`config.spec.ts` 锁住「JSON 输入仍能解析」，防有人以为需要把回退加回来
+- **三份镜像清单**：`AVAILABLE_MIRRORS`（展示，手写域名）、`MIRROR_ALIASES`（解析，手写地址）、`getDefaultMirror` 里硬编码的裸域，增删镜像要改三处且无兜底（漏改别名表是「别名直接不认」）。现全部从 `MIRROR_HOST` + `MIRROR_ALIASES` 派生，`utils.spec.ts` 有派生关系断言（别名主机名必在展示清单内、清单项必是同一主机的裸域或子域、地址一律 https 且以 `/` 结尾）
+- **`openUrl` 的 boolean 返回值**：`open` 是 detached spawn，失败全发生在函数返回之后（只能被 `child.on('error')` 吞掉），故它**恒返回 true**，四个调用点的 `if (!success) 请手动打开…` 全是死代码，还让人误以为失败能被检出。改为 `void` 返回，调用方一律无条件打印地址/路径（`dir open` 顺带把路径打出来了，此前只有标签）。要真检出失败得换 `spawnSync` + 解析退出码，为一个非阻塞的顺手操作引入同步等待不值得——**这是刻意选择不检出**
 
 ---
 
@@ -113,7 +123,7 @@ macOS 硬依赖，无其他平台后端：
 - **`kickstart -k` 阻塞等进程死亡**（v4.2.4 实测）：对不立即响应 SIGTERM 的进程可超过 5s——不能用查询类命令的 5s 超时，`restartService` 单独放宽到 60s（与旧 bash 脚本的整体超时一致）。`bootout` 对未装载目标返回 **3**（"No such process"），不是 113；`enable`/`disable` 对未装载 label 也返回 0 并写 disabled 表
 - **`KeepAlive.PathState` 不能用来实现 stop**（实测排除的设计方案）：删掉 flag 文件后进程照跑不误，`KeepAlive` 只决定「退出后是否重启」，不主动终止运行中的任务。这条排除了「flag 文件 + root daemon 免密」的方案
 - **手工抹掉 disable 记录的流程**（仅供开发期收尾，不能做进 CLI 自动清理）：disable 位持久化在 `/var/db/com.apple.xpc.launchd/disabled<uid>.plist`，launchctl 没有「清除记录」的动词，`enable` 同样写一条 `=> enabled`。要真正抹掉只能 `sudo plutil -remove` 删键——**keypath 里 `.` 是层级分隔符，label 必须转义成 `com\.foo\.bar`**。且 launchd 在内存里持有该表，改磁盘不触发重读，`print-disabled` 仍显示旧值，重启后才一致（既要提权又不立即生效，故只作手工收尾）
-- **`spawn('open', ...)`**：`open.ts` 单点收口。注意 `child.on('error', () => {})` 吞掉 ENOENT 后 `openUrl` **恒返回 true**，调用方的 `if (!success) 请手动打开…` 在非 macOS 上是死代码；Debian 的 `/usr/bin/open` 指向 `run-mailcap`，会把 URL 当 MIME 附件处理——属主动做错
+- **`spawn('open', ...)`**：`open.ts` 单点收口，返回 `void`——`child.on('error', () => {})` 吞掉 ENOENT，失败在函数返回后才发生，本就无从检出（v4.7.5 起不再假装能检出，见「已删除的过度设计」）。Debian 的 `/usr/bin/open` 指向 `run-mailcap`，会把 URL 当 MIME 附件处理——属主动做错
 - **BSD 专有语法**：`stat -f%z`（GNU 为 `-c%s`）、`ps -o command=`（必须带 `-ww`，见 `CLAUDE.md`）、`tail`
 - `sudo`、`pgrep`/`pkill`、生成的 `#!/bin/bash` 脚本
 
@@ -125,5 +135,5 @@ macOS 硬依赖，无其他平台后端：
 
 ## 工程
 
-- 单测 290（`npm test`，经 tsx 跑 `*.spec.ts`）
+- 单测 310（`npm test`，经 tsx 跑 `*.spec.ts`）
 - `prepublishOnly: npm run build`：`dist/` 被 gitignore，漏跑 build 即发布陈旧产物

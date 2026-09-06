@@ -377,7 +377,11 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 ```
 ~/.mihomo-cli/
 ├── settings.json         # 用户设置（订阅列表、当前订阅、覆写开关、端口覆盖等）
-├── service.lock          # 服务启停的跨进程锁（刻意放在根下：runtime/ 会被 stop 整体清除）
+├── settings.lock         # 设置读改写的跨进程锁
+├── subscription-cache.lock  # 订阅缓存读改写的跨进程锁
+├── service.lock          # 服务启停的跨进程锁
+│                         #   三把锁刻意都放根下：subscriptions/、runtime/ 等目录会被
+│                         #   stop / reset 整体清除，锁躺在里面会被连目录一起删掉
 ├── overwrite.yaml        # 覆写配置（主文件，可选）
 ├── overwrite.*.yaml      # 覆写配置（扩展文件，如 overwrite.dns.yaml）
 ├── subscriptions/
@@ -387,7 +391,7 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 │   └── mihomo            # mihomo 内核二进制
 ├── logs/
 │   ├── mihomo.log        # 当前日志
-│   └── mihomo.YYYY-MM-DD_HH-MM-SS.log  # 归档日志
+│   └── mihomo.YYYY-MM-DD_HH-MM-SS[.N].log  # 归档日志（同秒二次轮转加序号）
 ├── data/                 # mihomo 运行数据（GeoIP 等，由内核自行管理）
 └── runtime/              # 运行时临时文件（stop 自动清除）
     ├── pid               # 进程 PID
