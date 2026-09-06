@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+清掉 CODE_REVIEW 积压的全部未处理项（一条修复、一条决策豁免）。单测 283（+37）。
+
+### 修复
+
+- **TUN 模式下 `dns.enable: false` 生成自相矛盾的配置**：订阅/覆写显式关闭 DNS 时，生成的配置一边写 `dns: {enable: false}`、一边保留 `tun.dns-hijack: [any:53, tcp://any:53]`，还往已关闭的 dns 块里补注 fake-ip 字段。TUN 劫持 53 端口而内置 DNS 关着，没有任何组件接管，网络直接不可用。现把 `dns.enable` 视为 TUN 下的系统锁定项（与 `external-controller`/`mixed-port` 同一性质）强制为 `true` 并给出告警。不选「拒绝启动」是因为该值常由机场下发、用户改不了，硬拒绝等于逼用户先学会写覆写文件才能用 TUN；**只锁 `enable` 一个键**，`nameserver`/`enhanced-mode` 等仍尊重用户配置
+- **信号死亡的内核对 `status`/`doctor` 完全不可见**：被 OOM killer 或 `kill -9` 干掉时，launchd 只写 `last terminating signal = Killed: 9`，`last exit code` 整行消失（实测 macOS 26.6，两字段互斥）——而解析器只读退出码，于是用户看到「不在运行」却没有任何异常提示，实际 KeepAlive 正每隔约 10s 反复拉起。现 `parseServicePrint` 解析该字段，崩溃判据两者取一。顺带把 status/doctor 里三处重复的「上次异常退出」判断收口成 `describeAbnormalExit`——此前补一条判据要同步改三处
+- **`dns` 形态校验只有 TUN 一条路径有**：mixed 下 `dns: true` 一类订阅笔误照样抛裸 `TypeError` + 堆栈，被当成程序 bug。校验下沉为 `assertDnsShape`，两条路径共用
+- **全是预发布版时 `pickLatestRelease` 回退首个 release**：会把 alpha 当稳定版装上。今日不可达（上游同时只挂一条 alpha），但内核以 root 身份跑（TUN）或长期常驻，静默降级到未发布版本不可接受，现直接抛错
+
+### 测试
+
+- **新增 `process-stop.spec.ts`（12 例）**：真起桩进程、真 `pkill`，覆盖 `cleanupAll` 的单杀/批量（>3）分支、符号链与真实二进制两种命令行形态、`stop` 的 notRunning 语义、`isRunning` 的 PID 复用防线。无侵入——`MIHOMO_CLI_DIR` 指向 tmpdir 后 `MAIN_INSTANCE_PATTERN` 内嵌的绝对路径使其物理上不可能匹配到用户真在跑的内核，**该前提本身有一条用例断言着**（pattern 若改成不含绝对路径，测试当场失败而非静默扩大杀伤范围）
+- 新增 `config-dns.spec.ts`（15 例）锁定 TUN dns 锁定语义与两条路径的形态校验；`service.spec.ts` 补信号死亡的真实 launchctl 输出 fixture 与 `describeAbnormalExit`
+
+### 变更
+
+- **`CODE_REVIEW.md` 未处理项清空至一条**（剩「观察窗之后才崩溃的内核判不出来」，属有意边界）。sudo 路径与 launchd 端到端测试**升格为显式决策豁免**并写明理由：前者要么配免密 sudoers、要么改系统路由表、要么留 root 残留；后者一旦覆盖 `enable`/`disable` 就会在系统 disabled 表留下 launchctl 无法清除的永久记录。下轮审查不要当作覆盖率缺口重新捡起
+
 ## [4.7.2] - 2026-09-06
 
 文档修正，无功能变更。单测 246。

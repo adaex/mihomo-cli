@@ -148,7 +148,9 @@ npm run format         # 格式化代码
 npm test               # node:test 单测（*.spec.ts，零新增依赖，经 tsx）
 ```
 
-测试仅覆盖高危纯函数（覆写合并/配置校验/URL 遮蔽/参数校验等），非全量。文件命名 `*.spec.ts`（勿用 `*.test.ts`）。
+测试以高危纯函数为主（覆写合并/配置校验/URL 遮蔽/参数校验等），非全量。文件命名 `*.spec.ts`（勿用 `*.test.ts`）。
+
+**副作用路径的判据是「侵入性」，不是「难不难测」**：能在隔离环境里跑真实系统工具的就测（`process-stop.spec.ts` 用 `MIHOMO_CLI_DIR` 指向 tmpdir，`MAIN_INSTANCE_PATTERN` 内嵌绝对路径，物理上不可能误杀用户真在跑的内核）；需要 sudo（改路由表、留 root 残留）或在系统 disabled 表留永久记录的不测——理由见 `CODE_REVIEW.md`「决策豁免」，别当覆盖率缺口重新捡起来。新增此类测试时，**隔离前提本身要有一条断言**，否则哪天前提被破坏，测试会静默扩大杀伤范围而非失败。
 
 **在 worktree 里 `npm run check` 是空转**：`biome.json` 的 `files.includes` 排除 `**/.claude`，而 worktree 建在 `.claude/worktrees/` 下，于是它「Checked 0 files」直接通过。worktree 中改完要显式跑 `npx biome check src/`（修复加 `--write`），否则格式问题会一路漏到提交。
 
@@ -199,6 +201,7 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 - `enable` 必须在 `bootstrap` 之前；`stop` 恒置 disable 位，「stop 之后 start」是必经路径
 - disable 位持久化在 plist 之外，launchctl 没有「清除记录」的动词；uninstall 不清位是刻意的
 - 退出码分级：只有 `113` 是「未装载」，`112`/`125` 是查询失败（`assertLaunchctlQueryOk` 收口，`service-exitcode.spec.ts` 锁住）
+- **信号死亡走另一个字段**：被 `kill -9`/OOM killer 干掉时 launchd 只写 `last terminating signal = Killed: 9`，`last exit code` **整行消失**（两字段互斥，不跨 bootstrap 残留）。崩溃判据必须两者取一，只看退出码会让这类死法完全不可见。status/doctor 的「上次异常退出」判断收口在 `describeAbnormalExit`——**别再在命令层散写 `lastExitCode !== 0`**，那样补判据要同步改三处
 - 运行中无法 rename 轮转日志（fd 指向旧 inode），只有「旧进程已退出、新进程未起」的窗口或 copy-truncate 两条路
 - `launchctl print` 输出顶层字段单 tab、嵌套双 tab，解析必须锚定 `^\t`（`service.spec.ts` 倒序 fixture 锁死）
 - 进程命令行记录的是启动时的路径（符号链名），`MAIN_INSTANCE_PATTERN` 必须二选一分支
@@ -265,6 +268,14 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 仓根 `quickstart.sh`（curl|sh 一键入口，不经 npm/CLI，给不想装 Node 的用户）用 shell 重新实现了一套：镜像选择、GitHub API 取资产、标准版形态精确匹配、来源 host 白名单、curl 全链路强制 https、tar 双守卫、订阅内容校验。它与 `kernel.ts` 的信任规则**必须保持一致**——改任一侧的下载/校验逻辑，都要同步检查另一侧（历史上两次对齐——安全水位、资产选择形态——都是漂移被人肉发现后补的，没有机制兜底）。
 
 已知分歧（刻意，别当 bug 修）：脚本默认镜像硬编码 v6 子域（无 `getDefaultMirror` 的 IPv6 探测）、无标准版资产时回退第一个匹配项（CLI 不回退）、支持 linux、不经 launchd 直接前台跑、`--no-mirror`/`--direct` 作为脚本参数保留。
+
+### 配置的系统锁定项
+
+`external-controller` / `mixed-port` / `secret` / `external-ui*` 是订阅说了不算的字段（`config.ts` 里 `delete` 后由 `systemConfig` 写入），**TUN 模式下 `dns.enable` 同属此列**：TUN 的 `auto-route` + `strict-route` 把 53 端口流量导进 utun、`dns-hijack` 拦下来，内置 DNS 关着就无组件接管，网络直接不可用。
+
+强制 `true` 并加 warning，不拒绝启动——`dns.enable: false` 在 mixed 下完全合法、常由机场下发且用户改不了，硬拒绝等于逼用户先学会写覆写文件才能用 TUN。**只锁 `enable` 一个键**，`nameserver`/`enhanced-mode` 等仍是用户的正当自定义。锁定项覆盖用户显式配置时一律进 `lockedWarnings`（与 `validateConfig` 的 warnings 合并返回），静默改写用户配置不可接受。
+
+dns 形态校验（必须是映射）经 `assertDnsShape` 收口，TUN 与 mixed 两条路径共用——只给一条路径加守卫，另一条照样抛裸 TypeError。
 
 ### 覆写语义
 

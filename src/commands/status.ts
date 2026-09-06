@@ -4,7 +4,7 @@ import { VERSION } from '../constants.js';
 import { isOverwriteEnabled, listOverwriteFile } from '../overwrite.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
-import { detectLegacySystemInstall, getServiceStatus } from '../service.js';
+import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
 import { getSubscriptionsWithCache } from '../settings.js';
 import { formatProxySummary, getActiveSubscription, isSubscriptionStale, resolveUpdateInterval } from '../subscription.js';
 import type { ProxyProbeResult, StatusJson, SubscriptionUrgency } from '../types.js';
@@ -88,6 +88,7 @@ function buildStatusJson(args: {
       running: args.service.running,
       disabled: args.service.disabled,
       lastExitCode: args.service.lastExitCode,
+      lastTerminatingSignal: args.service.lastTerminatingSignal,
       legacySystemInstall: args.legacy,
     },
   };
@@ -165,10 +166,13 @@ export async function printStatus(args: string[] = []): Promise<void> {
   if (running && probe && !probe.ok) {
     console.log(colors.yellow(`  异常: ${connectivityHint(urgency)}`));
   }
-  // 装着、自启开着、却没在跑且上次非 0 退出 —— 内核在被 KeepAlive 反复拉起。
-  // 不提示的话这与「用户自己 stop 掉了」显示完全一样，用户无从判断为何代理不通
-  if (!running && service.installed && !service.disabled && service.lastExitCode !== null && service.lastExitCode !== 0) {
-    console.log(colors.yellow(`  异常: 内核上次异常退出（退出码 ${service.lastExitCode}），launchd 正在反复拉起`));
+  // 装着、自启开着、却没在跑且上次异常退出 —— 内核在被 KeepAlive 反复拉起。
+  // 不提示的话这与「用户自己 stop 掉了」显示完全一样，用户无从判断为何代理不通。
+  // 判据经 describeAbnormalExit 收口：信号死亡（kill -9/OOM）不写 last exit code，
+  // 只看退出码会让这类崩溃完全无提示
+  const abnormalExit = describeAbnormalExit(service);
+  if (!running && service.installed && !service.disabled && abnormalExit) {
+    console.log(colors.yellow(`  异常: 内核上次异常退出（${abnormalExit}），launchd 正在反复拉起`));
     console.log(colors.gray('  查看原因: mihomo logs 0    停止重试: mihomo stop'));
   }
   const kernelVersion = getKernelVersion();

@@ -147,12 +147,32 @@ export function getRuleTarget(rule: string): string {
 }
 
 /**
+ * 校验 dns 段是映射。非映射（`dns: true`、`dns: [...]`）会让下游的
+ * `'enable' in subDns` / 展开运算符抛裸 TypeError 或静默产出垃圾配置。
+ *
+ * **两条路径共用**：TUN 分支在读 `dns.enable` 前先调（早于合并，报错指向订阅原值），
+ * mixed 路径由 `assertConfigShape` 兜底——此前只有 TUN 有守卫（v4.2.3 顺手修的），
+ * mixed 下同样的订阅笔误照样抛裸 TypeError。
+ */
+function assertDnsShape(dnsRaw: unknown): void {
+  if (dnsRaw === undefined || dnsRaw === null) return;
+  if (typeof dnsRaw !== 'object' || Array.isArray(dnsRaw)) {
+    throw new CliError(`dns 配置必须是映射，当前是${Array.isArray(dnsRaw) ? '数组' : `标量（${typeof dnsRaw}）`}`, {
+      label: '配置错误',
+      hint: ['dns 是订阅/覆写里的对象配置块（enable、nameserver 等），不支持标量或数组。'],
+    });
+  }
+}
+
+/**
  * 校验顶层配置段的形态，把 YAML 笔误转成可读的 CliError。
  * 不做则后续断言（`as ParsedProxy[]` 等）会在解引用时抛裸 TypeError，
  * 经 main().catch 当成程序 bug 打印堆栈——而这实际是用户配置问题
  * （典型：`rules: MATCH,DIRECT` 漏写 `-`；列表里留了空项产生 null 元素）。
  */
 function assertConfigShape(config: Record<string, unknown>): void {
+  assertDnsShape(config.dns);
+
   const listSections: { key: string; label: string; needsName: boolean }[] = [
     { key: 'proxies', label: '节点', needsName: true },
     { key: 'proxy-groups', label: '代理组', needsName: true },
@@ -351,6 +371,8 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   }
 
   const systemConfig: Record<string, unknown> = {};
+  // 系统锁定项覆盖用户显式配置时产生的告警，最终并入 validateConfig 的 warnings 一并返回
+  const lockedWarnings: string[] = [];
   for (const [key, value] of Object.entries(BASE_CONFIG)) {
     if (!(key in withOverwrites)) {
       systemConfig[key] = value;
@@ -377,22 +399,26 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
 
   if (mode === 'tun') {
     systemConfig.tun = TUN_CONFIG.tun;
-    // dns 非映射（如 `dns: true`）会在下面的 `'enable' in subDns` 抛裸 TypeError，
-    // 转成可读的配置错误（与 assertConfigShape 同一目的）
-    const dnsRaw = withOverwrites.dns;
-    if (dnsRaw !== undefined && (typeof dnsRaw !== 'object' || dnsRaw === null || Array.isArray(dnsRaw))) {
-      throw new CliError(`dns 配置必须是映射，当前是${Array.isArray(dnsRaw) ? '数组' : `标量（${typeof dnsRaw}）`}`, {
-        label: '配置错误',
-        hint: ['dns 是订阅/覆写里的对象配置块（enable、nameserver 等），不支持标量或数组。'],
-      });
-    }
-    const subDns = (dnsRaw || {}) as Record<string, unknown>;
+    assertDnsShape(withOverwrites.dns);
+    const subDns = (withOverwrites.dns || {}) as Record<string, unknown>;
     const dns: Record<string, unknown> = {};
-    if (!('enable' in subDns)) dns.enable = true;
+
+    // dns.enable 在 TUN 下是**系统锁定项**，与 external-controller/mixed-port 同一性质：
+    // auto-route + strict-route 把 53 端口流量导进 utun、dns-hijack 拦下来，内置 DNS 关着
+    // 就没有任何组件接管，是死配置。而 `dns.enable: false` 在 mixed 下完全合法且由机场下发、
+    // 用户改不了，硬拒绝等于逼用户先学会写覆写文件才能用 TUN——故强制打开并告警。
+    // 只锁 enable 一个键：nameserver 等仍是用户的正当自定义。
+    const dnsExplicitlyDisabled = 'enable' in subDns && subDns.enable !== true;
+    dns.enable = true;
+    // 此前这三项都用 `!('enable' in subDns)` 之流做条件，订阅显式关 dns 时
+    // 照样往「已关闭」的 dns 块里补 fake-ip 字段，生成端自相矛盾（CODE_REVIEW v4.2.3 记录）。
+    // 现在 enable 恒为 true，补默认值不再矛盾
     if (!('enhanced-mode' in subDns)) dns['enhanced-mode'] = 'fake-ip';
     if (!('fake-ip-range' in subDns)) dns['fake-ip-range'] = '198.18.0.1/16';
-    if (Object.keys(dns).length > 0) {
-      systemConfig.dns = dns;
+    systemConfig.dns = dns;
+
+    if (dnsExplicitlyDisabled) {
+      lockedWarnings.push('TUN 模式已强制开启 DNS（订阅/覆写中的 dns.enable 被忽略）：TUN 会劫持 53 端口流量，内置 DNS 关闭时无组件接管，网络将不可用');
     }
   } else {
     // Mixed 模式不保留订阅/覆写自带的 tun 字段，避免未要求 TUN 却被静默按 TUN 启动
@@ -418,7 +444,7 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
     };
   }
 
-  const warnings = validateConfig(merged);
+  const warnings = [...lockedWarnings, ...validateConfig(merged)];
 
   return { config: merged, subscriptionConfig, overwriteFiles, systemConfig, warnings };
 }

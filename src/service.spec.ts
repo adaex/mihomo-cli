@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { isValidServiceLabel } from './constants.js';
-import { buildPlist, parseDisabledList, parseServicePrint } from './service.js';
+import { buildPlist, describeAbnormalExit, parseDisabledList, parseServicePrint } from './service.js';
+import type { ServiceStatus } from './types.js';
 
 /**
  * launchctl print 的真实输出片段（本机 macOS 26.6 实测截取）。
@@ -157,6 +158,90 @@ describe('parseServicePrint：last exit code 区分数字与 (never exited)', ()
     // 让「当前 running」优先于「历史退出码」，否则健康服务会被误报成崩溃
     assert.equal(parseServicePrint(REAL_PRINT_RUNNING).lastExitCode, 255);
     assert.equal(parseServicePrint(REAL_PRINT_RUNNING).state, 'running');
+  });
+});
+
+/**
+ * 信号死亡的真实输出（本机实测 macOS 26.6，一次性 label 装桩服务后 kill）。
+ *
+ * **关键事实：两字段互斥**——被信号杀死时 `last exit code` 整行消失，只剩
+ * `last terminating signal`。故只解析退出码的话，OOM killer / `kill -9` 干掉的
+ * 内核对 isCrashed 与 status 完全不可见：用户看到「不在运行」却无任何异常提示，
+ * 而 KeepAlive 正在反复拉起它。实测两种信号形态如下，格式一致。
+ */
+const REAL_PRINT_KILLED = `	state = not running
+	exit timeout = 5
+	runs = 1
+	last terminating signal = Killed: 9
+		state = active
+`;
+
+const REAL_PRINT_TERMINATED = `	state = not running
+	exit timeout = 5
+	last terminating signal = Terminated: 15
+`;
+
+describe('parseServicePrint：last terminating signal（信号死亡）', () => {
+  it('kill -9 的真实输出被取到，且 lastExitCode 确实为 null（字段不存在）', () => {
+    const r = parseServicePrint(REAL_PRINT_KILLED);
+    assert.equal(r.lastTerminatingSignal, 'Killed: 9');
+    assert.equal(r.lastExitCode, null, 'launchd 在信号死亡时不写 last exit code');
+    assert.equal(r.state, 'not running');
+  });
+
+  it('SIGTERM 同格式', () => {
+    assert.equal(parseServicePrint(REAL_PRINT_TERMINATED).lastTerminatingSignal, 'Terminated: 15');
+  });
+
+  it('正常退出的输出里该字段为 null（两字段互斥，实测不跨 bootstrap 残留）', () => {
+    const out = '\tstate = not running\n\truns = 1\n\tlast exit code = 3\n';
+    const r = parseServicePrint(out);
+    assert.equal(r.lastTerminatingSignal, null);
+    assert.equal(r.lastExitCode, 3);
+  });
+
+  it('健康运行的服务两字段都不报异常', () => {
+    const r = parseServicePrint(REAL_PRINT_RUNNING);
+    assert.equal(r.lastTerminatingSignal, null);
+  });
+
+  it('嵌套块里的同名字段不被误取（锚定行首单 tab）', () => {
+    const out = '\tstate = running\n\tservice = {\n\t\tlast terminating signal = Killed: 9\n\t}\n';
+    assert.equal(parseServicePrint(out).lastTerminatingSignal, null);
+  });
+});
+
+/**
+ * 崩溃描述收口成 describeAbnormalExit：status / doctor 三处此前各写一遍
+ * `lastExitCode !== null && !== 0`，补信号判据时必须同步改三处——正是
+ * CLAUDE.md 说的「防线只铺一条路径」的形状。
+ */
+describe('describeAbnormalExit', () => {
+  const status = (over: Partial<ServiceStatus>): ServiceStatus => ({
+    installed: true,
+    loaded: true,
+    running: false,
+    pid: null,
+    disabled: false,
+    lastExitCode: null,
+    lastTerminatingSignal: null,
+    ...over,
+  });
+
+  it('信号死亡给出信号描述（此前完全不可见）', () => {
+    assert.equal(describeAbnormalExit(status({ lastTerminatingSignal: 'Killed: 9' })), '被信号终止（Killed: 9）');
+  });
+
+  it('非 0 退出码给出退出码', () => {
+    assert.equal(describeAbnormalExit(status({ lastExitCode: 3 })), '退出码 3');
+  });
+
+  it('退出码 0 不算异常', () => {
+    assert.equal(describeAbnormalExit(status({ lastExitCode: 0 })), null);
+  });
+
+  it('从未退出过不算异常', () => {
+    assert.equal(describeAbnormalExit(status({})), null);
   });
 });
 

@@ -111,18 +111,32 @@ export function detectLegacySystemInstall(): boolean {
  *
  * `lastExitCode` 是判定「起来了又立刻挂掉」的唯一可靠信号，见 waitServiceHealthy。
  * 健康服务该字段是**字符串** `(never exited)` 而非数字（实测），故非数字一律归 null。
+ *
+ * **信号死亡走另一个字段**（实测 macOS 26.6，v4.7.3 补）：被 `kill -9` 时 launchd
+ * 写 `\tlast terminating signal = Killed: 9`，而 `last exit code` **整行消失**——
+ * 只解析退出码的话 OOM killer / 手工 kill 掉的内核对 isCrashed 与 status 完全不可见，
+ * 用户看到的是「不在运行」却无任何异常提示，排查方向被指反。
+ * 两字段互斥且不跨 bootstrap 残留（实测：重新 bootstrap 后正常退出只剩 last exit code）。
  */
-export function parseServicePrint(output: string): { state: string | null; pid: number | null; lastExitCode: number | null } {
+export function parseServicePrint(output: string): {
+  state: string | null;
+  pid: number | null;
+  lastExitCode: number | null;
+  lastTerminatingSignal: string | null;
+} {
   const stateMatch = output.match(/^\tstate = (.+)$/m);
   const pidMatch = output.match(/^\tpid = (\d+)$/m);
   const pid = pidMatch ? Number.parseInt(pidMatch[1], 10) : null;
   // 只匹配纯数字：`(never exited)` 不是失败信号，必须与「退出码 0」区分开
   const exitMatch = output.match(/^\tlast exit code = (\d+)$/m);
   const lastExitCode = exitMatch ? Number.parseInt(exitMatch[1], 10) : null;
+  // 形如 `Killed: 9` / `Terminated: 15`（两种实测）。原样保留给用户看，比裸数字可读
+  const signalMatch = output.match(/^\tlast terminating signal = (.+)$/m);
   return {
     state: stateMatch ? stateMatch[1].trim() : null,
     pid: pid !== null && Number.isInteger(pid) && pid > 0 ? pid : null,
     lastExitCode: lastExitCode !== null && Number.isInteger(lastExitCode) ? lastExitCode : null,
+    lastTerminatingSignal: signalMatch ? signalMatch[1].trim() : null,
   };
 }
 
@@ -205,13 +219,15 @@ export function getServiceStatus(): ServiceStatus {
   const loaded = print.status === 0;
 
   if (!installed && !loaded) {
-    return { installed: false, loaded: false, running: false, pid: null, disabled: false, lastExitCode: null };
+    return { installed: false, loaded: false, running: false, pid: null, disabled: false, lastExitCode: null, lastTerminatingSignal: null };
   }
 
-  const { state, pid, lastExitCode } = loaded ? parseServicePrint(print.stdout) : { state: null, pid: null, lastExitCode: null };
+  const { state, pid, lastExitCode, lastTerminatingSignal } = loaded
+    ? parseServicePrint(print.stdout)
+    : { state: null, pid: null, lastExitCode: null, lastTerminatingSignal: null };
   const disabled = isServiceDisabledInLaunchd();
 
-  return { installed, loaded, running: state === 'running', pid, disabled, lastExitCode };
+  return { installed, loaded, running: state === 'running', pid, disabled, lastExitCode, lastTerminatingSignal };
 }
 
 /** 服务启动后的健康判定结果。`crashed` 为真时内核已被 launchd 反复拉起，不是可用状态。 */
@@ -220,6 +236,8 @@ export interface ServiceHealth {
   crashed: boolean;
   pid: number | null;
   exitCode: number | null;
+  /** 信号死亡时的信号描述（如 `Killed: 9`）；退出码死亡为 null。与 exitCode 互斥 */
+  terminatingSignal: string | null;
 }
 
 /**
@@ -252,15 +270,15 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
     last = getServiceStatus();
 
     if (isCrashed(last)) {
-      return { healthy: false, crashed: true, pid: null, exitCode: last.lastExitCode };
+      return { healthy: false, crashed: true, pid: null, exitCode: last.lastExitCode, terminatingSignal: last.lastTerminatingSignal };
     }
     if (!last.loaded) {
       // 已卸载（被外部 bootout，或 plist 装不进来），继续等无意义
-      return { healthy: false, crashed: false, pid: null, exitCode: last.lastExitCode };
+      return { healthy: false, crashed: false, pid: null, exitCode: last.lastExitCode, terminatingSignal: last.lastTerminatingSignal };
     }
   }
 
-  if (last.running) return { healthy: true, crashed: false, pid: last.pid, exitCode: null };
+  if (last.running) return { healthy: true, crashed: false, pid: last.pid, exitCode: null, terminatingSignal: null };
 
   // 第二阶段：窗口结束仍未 running（慢机器上内核起得慢，或正在 spawn 重试），再宽限一会儿
   while (Date.now() < graceDeadline) {
@@ -268,18 +286,39 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
     last = getServiceStatus();
 
     if (isCrashed(last)) {
-      return { healthy: false, crashed: true, pid: null, exitCode: last.lastExitCode };
+      return { healthy: false, crashed: true, pid: null, exitCode: last.lastExitCode, terminatingSignal: last.lastTerminatingSignal };
     }
     if (!last.loaded) break;
-    if (last.running) return { healthy: true, crashed: false, pid: last.pid, exitCode: null };
+    if (last.running) return { healthy: true, crashed: false, pid: last.pid, exitCode: null, terminatingSignal: null };
   }
 
-  return { healthy: false, crashed: false, pid: last.pid, exitCode: last.lastExitCode };
+  return { healthy: false, crashed: false, pid: last.pid, exitCode: last.lastExitCode, terminatingSignal: last.lastTerminatingSignal };
 }
 
-/** 「起来过又挂了」：当前不在跑，且本次启动记录了非 0 退出码。 */
+/**
+ * 「起来过又挂了」：当前不在跑，且本次启动记录了非 0 退出码**或**致命信号。
+ *
+ * 两个判据缺一不可——launchd 对信号死亡只写 `last terminating signal`，
+ * `last exit code` 整行消失（实测）。只看退出码的话，被 OOM killer 或
+ * `kill -9` 干掉的内核判不出崩溃，start 报成功、status 无异常提示（v4.7.3 补）。
+ */
 function isCrashed(status: ServiceStatus): boolean {
-  return !status.running && status.lastExitCode !== null && status.lastExitCode !== 0;
+  if (status.running) return false;
+  if (status.lastTerminatingSignal !== null) return true;
+  return status.lastExitCode !== null && status.lastExitCode !== 0;
+}
+
+/**
+ * 「上次异常退出」的人类可读描述，无异常时返回 null。
+ *
+ * 供 status / doctor 共用：三处此前各自写 `lastExitCode !== null && !== 0`，
+ * 补信号判据时必须同步改三处，正是 CLAUDE.md 说的「防线只铺一条路径」的形状。
+ * 收口成一个函数后，判据只有一份。
+ */
+export function describeAbnormalExit(status: ServiceStatus): string | null {
+  if (status.lastTerminatingSignal !== null) return `被信号终止（${status.lastTerminatingSignal}）`;
+  if (status.lastExitCode !== null && status.lastExitCode !== 0) return `退出码 ${status.lastExitCode}`;
+  return null;
 }
 
 // === plist ===

@@ -10,7 +10,7 @@ import { CliError } from '../errors.js';
 import { PATHS, USER_DATA_DIR } from '../paths.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
-import { detectLegacySystemInstall, getServiceStatus } from '../service.js';
+import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
 import { getPorts, getSubscriptionsWithCache, isValidSettingsContent, readSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription, isSubscriptionStale, prepareConfigForStart, resolveUpdateInterval } from '../subscription.js';
 import { formatRelativeTime } from '../utils.js';
@@ -111,16 +111,18 @@ async function collectChecks(): Promise<Check[]> {
   } else if (!service.installed) {
     push('服务', 'fail', 'plist 不存在但任务仍装载，KeepAlive 会持续拉起内核', 'mihomo uninstall');
   } else if (service.running) {
-    const exitNote = service.lastExitCode !== null && service.lastExitCode !== 0 ? `，上次异常退出（${service.lastExitCode}）` : '';
-    push('服务', 'ok', `运行中${service.disabled ? '（自启已关闭）' : ''}${exitNote}`);
-    if (service.lastExitCode !== null && service.lastExitCode !== 0) {
-      push('服务稳定性', 'warn', `内核上次异常退出（退出码 ${service.lastExitCode}）`, 'mihomo logs 0 查看原因');
+    const abnormalExit = describeAbnormalExit(service);
+    push('服务', 'ok', `运行中${service.disabled ? '（自启已关闭）' : ''}${abnormalExit ? `，上次异常退出（${abnormalExit}）` : ''}`);
+    if (abnormalExit) {
+      push('服务稳定性', 'warn', `内核上次异常退出（${abnormalExit}）`, 'mihomo logs 0 查看原因');
     }
   } else {
-    // installed && !running：装着、自启开着、却没在跑且上次非 0 退出 —— 内核在被
-    // KeepAlive 反复拉起。与「用户主动 stop」（disabled）区分开，前者是崩溃循环，必须醒目告警
-    if (!service.disabled && service.lastExitCode !== null && service.lastExitCode !== 0) {
-      push('服务', 'fail', `内核上次异常退出（退出码 ${service.lastExitCode}），launchd 正在反复拉起`, 'mihomo logs 0 查看原因，mihomo stop 停止重试');
+    // installed && !running：装着、自启开着、却没在跑且上次异常退出 —— 内核在被
+    // KeepAlive 反复拉起。与「用户主动 stop」（disabled）区分开，前者是崩溃循环，必须醒目告警。
+    // 判据经 describeAbnormalExit 收口，信号死亡（不写 last exit code）同样能检出
+    const abnormalExit = describeAbnormalExit(service);
+    if (!service.disabled && abnormalExit) {
+      push('服务', 'fail', `内核上次异常退出（${abnormalExit}），launchd 正在反复拉起`, 'mihomo logs 0 查看原因，mihomo stop 停止重试');
     } else {
       push('服务', 'ok', `已安装，未运行${service.disabled ? '（自启已关闭）' : ''}`);
     }

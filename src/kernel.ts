@@ -126,7 +126,15 @@ export function findMatchingAsset(assets: GitHubAsset[], platform: string, arch:
   return standardAsset || matchingAssets[0];
 }
 
-/** 从 release 列表挑最新稳定版：排除 prerelease 与 alpha/beta/prerelease 标记的 tag，无稳定版回退最新 */
+/**
+ * 从 release 列表挑最新稳定版：排除 prerelease 标记与 alpha/beta/prerelease 的 tag。
+ *
+ * **全是预发布时抛错，不回退 `releases[0]`**：回退等于把 alpha 当稳定版装上，
+ * 而内核会以 root 身份跑（TUN）或长期常驻（服务），静默降级到未发布版本不可接受。
+ * 今日不可达（上游同时只挂一条 alpha，稳定版恒在列表内），属防御性——
+ * 一旦上游改变发布节奏，失效方式是「用户毫不知情地装上 alpha」，没有任何线索。
+ * 需要 alpha 的用户可自行下载后放进 kernel 目录。
+ */
 export function pickLatestRelease(releases: GitHubRelease[]): GitHubRelease {
   if (!Array.isArray(releases) || releases.length === 0) {
     throw new Error('无法获取版本信息');
@@ -140,7 +148,11 @@ export function pickLatestRelease(releases: GitHubRelease[]): GitHubRelease {
       !r.tag_name.toLowerCase().includes('prerelease'),
   );
 
-  return stableReleases.length > 0 ? stableReleases[0] : releases[0];
+  if (stableReleases.length === 0) {
+    throw new Error(`未找到稳定版内核（获取到的 ${releases.length} 条 release 全部是预发布版）`);
+  }
+
+  return stableReleases[0];
 }
 
 /**

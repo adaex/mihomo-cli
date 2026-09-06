@@ -167,6 +167,14 @@ export interface ServiceStatus {
    * launchd 在健康服务上把该字段写成字符串 `(never exited)`，故解析后为 null。
    */
   lastExitCode: number | null;
+  /**
+   * 托管进程上次收到的致命信号，形如 `Killed: 9` / `Terminated: 15`；非信号死亡为 null。
+   *
+   * **与 lastExitCode 互斥**（实测 macOS 26.6）：被信号杀死时 launchd 只写这个字段，
+   * `last exit code` 整行消失。少了它，OOM killer 或手工 kill 掉的内核对崩溃判据
+   * 完全不可见——status 显示「不在运行」却无任何异常提示。
+   */
+  lastTerminatingSignal: string | null;
 }
 
 // === Kernel ===
@@ -306,6 +314,7 @@ export interface StatusJson {
     running: boolean;
     disabled: boolean;
     lastExitCode: number | null;
+    lastTerminatingSignal: string | null;
     legacySystemInstall: boolean;
   };
 }

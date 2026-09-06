@@ -160,8 +160,11 @@ describe('pickLatestRelease', () => {
     assert.equal(picked.tag_name, 'v1.19.30');
   });
 
-  it('全是预发布时回退列表首个', () => {
-    const picked = pickLatestRelease([rel('v2.0.0-beta.1'), rel('v1.19.0-alpha')]);
-    assert.equal(picked.tag_name, 'v2.0.0-beta.1');
+  it('全是预发布时抛错，不回退首个（回退等于静默把 alpha 当稳定版装上）', () => {
+    assert.throws(() => pickLatestRelease([rel('v2.0.0-beta.1'), rel('v1.19.0-alpha')]), /未找到稳定版内核/);
+  });
+
+  it('prerelease 字段为真但 tag 名干净时同样不当稳定版', () => {
+    assert.throws(() => pickLatestRelease([rel('v2.0.0', true)]), /未找到稳定版内核/);
   });
 });
