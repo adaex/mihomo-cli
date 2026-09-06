@@ -1,5 +1,26 @@
 # Changelog
 
+## [4.7.4] - 2026-09-06
+
+独立复审一轮，聚焦「上轮文档未覆盖」的缺口。两处并发/可见性缺陷均已实测复现后修复。单测 290（+7）。
+
+### 修复
+
+- **`start`/`install` 报「退出码 null」，信号死亡的死因在启动路径上不可见**：v4.7.3 补信号判据时把 status/doctor 的重复判断收口成 `describeAbnormalExit`，**却漏了 `runtime.assertServiceHealthy` 这第三个消费者**——它仍自己拼 `退出码 ${exitCode}`，而信号死亡时 launchd 不写 `last exit code`（整行消失，本轮用一次性 label + 桩内核再次实测确认），于是 `start` 期间被 OOM killer 杀掉的内核只显示「内核启动后立即退出（退出码 null）」，`ServiceHealth.terminatingSignal` 一路传过来却无人读。判据现收口成 `describeExitCause(exitCode, signal)` **一份**，三个消费者共用（`isCrashed` 判有无、`describeAbnormalExit` 供 status/doctor、`assertServiceHealthy` 供 start/install），修复后文案为「被信号终止（Killed: 9）」。**教训**：把实测事实锚在注释里挡不住漏铺——注释锚在事实发生处，防线要铺在所有消费处，两者不重合时只有「判据收成一个函数」才真的有效
+- **`service.lock` 放在会被整体删除的 `runtime/` 下，跨进程互斥可被打破**：`stop()` 的 `clearRuntime()` 与 `reset runtime` 都会 `rmrf(DIRS.runtime)`，把**别的进程正持着的锁文件**一起删掉——第三个进程随即 `openSync(..., 'wx')` 成功，两个进程同时进入临界区（已实测复现）。`withFileLock` 的 token 所有权校验对此无效：它防的是「被强夺者误删新持有者的锁」，而这里锁是被第三方连目录一起删的，持锁方毫不知情。可达路径正是文档反复强调的那个——慢速 `start`（订阅更新约 10s）持锁期间另一终端 `stop`，后果是自启位终态与用户最后一条命令相反。锁现移到 `USER_DATA_DIR` 根下
+
+### 测试
+
+- 新增 `describeExitCause` 判据本身的用例（5 例），含「不能退化成只看退出码」的锁定断言——直接对判据断言而非各消费者，避免再出现「收口了却漏一个消费者」
+- 新增锁存放位置的用例（2 例）：断言的是**不变量**「`service.lock` 不在任何会被 `rmrf` 的目录下」而非具体路径（后者会在目录结构调整时误报），另一例记录缺陷机制本身。已验证该测试对旧位置确实失败
+
+### 变更
+
+- **`CLAUDE.md` 修正一处写反的记载**：「内核下载的来源信任」的 quickstart.sh 对照表里写「无标准版资产时回退第一个匹配项（CLI 不回退）」，但 `kernel.ts` 是 `standardAsset || matchingAssets[0]`，且 `kernel.spec.ts` 有单测锁定回退行为——两侧其实一致，是文档写反了。这段文字的用途正是两侧对齐的对照表，写反会误导下次对齐。顺带指明真正不回退的是 `pickLatestRelease`（全预发布时抛错）
+- **`CLAUDE.md` 新增两条纪律**：锁文件不能放在会被 `rmrf` 的目录里（附受影响目录清单）；异常退出判据只有 `describeExitCause` 一份，别散写 `lastExitCode !== 0` 也别自己拼退出码文案
+- 去掉 4 处对同步函数（`bootoutService` / `withFileLock`）的 `await`——`withFileLock` 明确要求 `fn` 同步（持锁期间让出事件循环等于没锁），`await` 会暗示可传 async mutator
+- README 同步两处：`start` 失败报错会写明死因（与 `status` 同口径）；数据目录树补上 `service.lock` 并注明为何放在根下
+
 ## [4.7.3] - 2026-09-06
 
 清掉 CODE_REVIEW 积压的全部未处理项（一条修复、一条决策豁免）。单测 283（+37）。

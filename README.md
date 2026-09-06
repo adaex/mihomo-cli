@@ -377,6 +377,7 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 ```
 ~/.mihomo-cli/
 ├── settings.json         # 用户设置（订阅列表、当前订阅、覆写开关、端口覆盖等）
+├── service.lock          # 服务启停的跨进程锁（刻意放在根下：runtime/ 会被 stop 整体清除）
 ├── overwrite.yaml        # 覆写配置（主文件，可选）
 ├── overwrite.*.yaml      # 覆写配置（扩展文件，如 overwrite.dns.yaml）
 ├── subscriptions/
@@ -533,7 +534,7 @@ mihomo doctor
 
 ### 启动失败
 
-`mihomo start` 会确认内核真的跑起来了才报「已启动」——内核因配置问题启动后立即退出时，命令会报错并直接附上日志尾部，退出码非 0。常见原因是端口被占用或订阅里有内核不接受的字段。
+`mihomo start` 会确认内核真的跑起来了才报「已启动」——内核因配置问题启动后立即退出时，命令会报错并直接附上日志尾部，退出码非 0。常见原因是端口被占用或订阅里有内核不接受的字段。报错会写明死因，与下面 `status` 的提示同口径（`退出码 N` 或 `被信号终止（Killed: 9）`）。
 
 ```bash
 mihomo logs 0        # 看完整原因
