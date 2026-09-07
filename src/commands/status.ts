@@ -1,7 +1,7 @@
 import { colors } from '../colors.js';
 import { getConfigInfo, getKernelVersion, hasKernel } from '../config.js';
 import { VERSION } from '../constants.js';
-import { isOverwriteEnabled, listOverwriteFile } from '../overwrite.js';
+import { listOverwriteFile } from '../overwrite.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
@@ -63,8 +63,6 @@ function buildStatusJson(args: {
         ? { tun: true, ...(args.info.mixedPort ? { mixed: args.info.mixedPort } : {}) }
         : {
             ...(args.info.mixedPort ? { mixed: args.info.mixedPort } : {}),
-            ...(args.info.httpPort ? { http: args.info.httpPort } : {}),
-            ...(args.info.socksPort ? { socks: args.info.socksPort } : {}),
           }
       : {},
     subscription: args.activeSub
@@ -104,8 +102,7 @@ export async function printStatus(args: string[] = []): Promise<void> {
   const service = getServiceStatus();
   const state = getRunningState(service);
   const info = getConfigInfo();
-  const overwriteEnabled = isOverwriteEnabled();
-  const overwriteFiles = listOverwriteFile().files;
+  const { enabled: overwriteEnabled, files: overwriteFiles } = listOverwriteFile();
   const activeSub = getActiveSubscription();
   const cached = activeSub ? getSubscriptionsWithCache().find(s => s.name === activeSub.name) : undefined;
   const legacy = detectLegacySystemInstall();
@@ -195,10 +192,7 @@ export async function printStatus(args: string[] = []): Promise<void> {
     } else if (info.mixedPort) {
       console.log(`${colors.gray('端口: ')}${info.mixedPort}`);
     } else {
-      const ports: string[] = [];
-      if (info.httpPort) ports.push(`HTTP:${info.httpPort}`);
-      if (info.socksPort) ports.push(`SOCKS:${info.socksPort}`);
-      console.log(`${colors.gray('端口: ')}${ports.length > 0 ? ports.join(', ') : '未知'}`);
+      console.log(`${colors.gray('端口: ')}未知`);
     }
   }
 

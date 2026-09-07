@@ -1,11 +1,11 @@
 import { spawnSync } from 'node:child_process';
-
 import { colors } from '../colors.js';
 import { UI_URLS } from '../constants.js';
 import { CliError } from '../errors.js';
 import { openUrl } from '../open.js';
 import { getRunningState } from '../runtime.js';
 import { getPorts, readSettings } from '../settings.js';
+import { assertKnownFlags } from '../utils.js';
 
 /** 复制到剪贴板（macOS pbcopy）；失败返回 false，调用方回退到手动提示 */
 function copyToClipboard(text: string): boolean {
@@ -17,6 +17,7 @@ function copyToClipboard(text: string): boolean {
 }
 
 export function cmdUI(args: string[]): void {
+  assertKnownFlags(args.slice(1), [], 'ui');
   const uiName = args[1] || 'zash';
 
   if (!Object.hasOwn(UI_URLS, uiName)) {

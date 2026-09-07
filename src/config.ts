@@ -1,14 +1,16 @@
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
+import { promisify } from 'node:util';
 
 import * as yaml from 'js-yaml';
 import { BASE_CONFIG, TUN_CONFIG } from './constants.js';
 import { CliError } from './errors.js';
-import { applyOverwrite, filterOverwriteFilesByScope, isOverwriteEnabled, loadOverwriteFile } from './overwrite.js';
-import { atomicWriteFileSync, ensureDirs, PATHS } from './paths.js';
+import { applyOverwrite, filterOverwriteFilesByScope, loadOverwriteFile } from './overwrite.js';
+import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
 import { getPorts, readSettings } from './settings.js';
-import type { BuildConfigResult, ConfigInfo, OverwriteScope, ParsedProxy, ParsedProxyGroup } from './types.js';
-import { escapeRegExp } from './utils.js';
+import type { BuildConfigResult, ConfigInfo, OverwriteScope } from './types.js';
+import { sanitizeTerminal } from './utils.js';
 
 /**
  * 安全 YAML 解析选项:限制别名展开次数,防御远程订阅/覆写里的 YAML 别名炸弹(alias bomb)DoS。
@@ -66,97 +68,6 @@ export function dumpYaml(obj: unknown): string {
   return yaml.dump(obj, { indent: 2, lineWidth: -1 });
 }
 
-function collectOverwriteProxyNames(overwriteFiles: { config: Record<string, unknown> }[], baseProxyNames: Set<string>): string[] {
-  const names: string[] = [];
-  for (const file of overwriteFiles) {
-    for (const [key, value] of Object.entries(file.config)) {
-      // +proxies/proxies+（前置/追加）与 ~proxies（按 name 就地合并，同名不存在时也会追加新节点）
-      // 都会向节点列表注入新节点，需一并从 include-all 分组排除，避免被重复纳入
-      if ((key === '+proxies' || key === 'proxies+' || key === '~proxies') && Array.isArray(value)) {
-        for (const proxy of value) {
-          if (proxy && typeof proxy === 'object' && 'name' in proxy) {
-            const name = (proxy as { name: unknown }).name;
-            // 过滤空/非字符串 name：否则 exclude-filter 正则会出现空分支（a||b），匹配所有节点，清空 include-all 分组
-            if (typeof name !== 'string' || name.length === 0) continue;
-            // ~proxies 就地 patch 订阅已有节点时**不注入新节点**——节点本就在池子里、
-            // include-all 本就含它，照收进 exclude-filter 反而把它从所有自动分组剔除
-            // （机场订阅主流写法是 include-all，patch 节点字段是 ~ 的正当用法，此前静默改变分流）。
-            // 故 ~ 分支只收「订阅里没有的名字」（真正的新增）
-            if (key === '~proxies' && baseProxyNames.has(name)) continue;
-            names.push(name);
-          }
-        }
-      }
-    }
-  }
-  return names;
-}
-
-/** 导出供单测：注入节点需从 include-all 分组排除，且排除模式必须整名锚定（见函数内注释） */
-export function excludeOverwriteProxiesFromIncludeAll(
-  config: Record<string, unknown>,
-  overwriteFiles: { config: Record<string, unknown> }[],
-  baseProxyNames: Set<string> = new Set(),
-): void {
-  const injectedNames = collectOverwriteProxyNames(overwriteFiles, baseProxyNames);
-  if (injectedNames.length === 0) return;
-
-  const groups = config['proxy-groups'] as Array<Record<string, unknown>> | undefined;
-  if (!groups) return;
-
-  // 锚定为整名精确匹配：mihomo 的 exclude-filter 是无锚点正则搜索（Go regexp.MatchString），
-  // 裸拼接会把「名字包含注入名」的订阅节点一起排除——注入名为 HK 时 HK-01/HK-02 也被踢出 include-all
-  // 分组。本函数只为排除「自己注入的那个节点」，故用 ^(?:...)$ 收窄为整名相等。
-  // 与订阅自带 exclude-filter 拼接安全：| 优先级最低，^(?:...)$ 自成独立分支，不影响原有语义。
-  const excludePattern = `^(?:${injectedNames.map(n => escapeRegExp(n)).join('|')})$`;
-
-  for (const group of groups) {
-    if (!group['include-all'] && !group['include-all-proxies']) continue;
-    const existing = group['exclude-filter'] as string | undefined;
-    if (existing) {
-      group['exclude-filter'] = `${existing}|${excludePattern}`;
-    } else {
-      group['exclude-filter'] = excludePattern;
-    }
-  }
-}
-
-const BUILTIN_PROXY_NAMES = new Set(['DIRECT', 'REJECT', 'REJECT-DROP', 'PASS', 'COMPATIBLE']);
-
-function deduplicateByName<T extends { name: string }>(items: T[]): { result: T[]; names: Set<string>; duplicates: string[] } {
-  const names = new Set<string>();
-  const duplicates: string[] = [];
-  const result = items.filter(item => {
-    if (names.has(item.name)) {
-      duplicates.push(item.name);
-      return false;
-    }
-    names.add(item.name);
-    return true;
-  });
-  return { result, names, duplicates };
-}
-
-/**
- * 无「目标为代理/分组名」语义的规则类型：末段不是 proxy/group 引用，不参与目标存在性校验。
- * - SUB-RULE: `SUB-RULE,(表达式),<sub-rule名>` 末段引用 sub-rules 顶层键，非代理
- */
-const NON_TARGET_RULE_TYPES = new Set(['SUB-RULE']);
-
-/**
- * 取规则的目标（代理/分组名）。末段为 `no-resolve` 修饰后缀时取倒数第二段
- * （如 `IP-CIDR,1.1.1.1/32,DIRECT,no-resolve` 的目标是 DIRECT，不是 no-resolve）。
- */
-export function getRuleTarget(rule: string): string {
-  const parts = rule.split(',');
-  if (parts.length < 2) return '';
-  const last = parts[parts.length - 1].trim();
-  if (last.toLowerCase() === 'no-resolve' && parts.length >= 3) {
-    return parts[parts.length - 2].trim();
-  }
-  return last;
-}
-
 /**
  * 校验 dns 段是映射。非映射（`dns: true`、`dns: [...]`）会让下游的
  * `'enable' in subDns` / 展开运算符抛裸 TypeError 或静默产出垃圾配置。
@@ -177,11 +88,10 @@ function assertDnsShape(dnsRaw: unknown): void {
 
 /**
  * 校验顶层配置段的形态，把 YAML 笔误转成可读的 CliError。
- * 不做则后续断言（`as ParsedProxy[]` 等）会在解引用时抛裸 TypeError，
- * 经 main().catch 当成程序 bug 打印堆栈——而这实际是用户配置问题
+ * 避免后续读取字段时抛 TypeError，被 main().catch 当成程序 bug 打印堆栈
  * （典型：`rules: MATCH,DIRECT` 漏写 `-`；列表里留了空项产生 null 元素）。
  */
-function assertConfigShape(config: Record<string, unknown>): void {
+export function assertConfigShape(config: Record<string, unknown>): void {
   assertDnsShape(config.dns);
 
   const listSections: { key: string; label: string; needsName: boolean }[] = [
@@ -237,152 +147,16 @@ function assertConfigShape(config: Record<string, unknown>): void {
   }
 }
 
-export function validateConfig(config: Record<string, unknown>): string[] {
-  assertConfigShape(config);
-  const warnings: string[] = [];
-
-  const proxies = (config.proxies || []) as ParsedProxy[];
-  const groups = (config['proxy-groups'] || []) as ParsedProxyGroup[];
-  const rules = (config.rules || []) as string[];
-
-  const proxyDedup = deduplicateByName(proxies);
-  config.proxies = proxyDedup.result;
-  if (proxyDedup.duplicates.length > 0) {
-    const preview = proxyDedup.duplicates
-      .slice(0, 3)
-      .map(n => `"${n}"`)
-      .join(', ');
-    warnings.push(`移除了 ${proxyDedup.duplicates.length} 个重名节点: ${preview}${proxyDedup.duplicates.length > 3 ? ' ...' : ''}`);
-  }
-
-  const groupDedup = deduplicateByName(groups);
-  config['proxy-groups'] = groupDedup.result;
-  if (groupDedup.duplicates.length > 0) {
-    warnings.push(`移除了 ${groupDedup.duplicates.length} 个重名分组: ${groupDedup.duplicates.map(n => `"${n}"`).join(', ')}`);
-  }
-
-  const validNames = new Set([...BUILTIN_PROXY_NAMES, ...proxyDedup.names, ...groupDedup.names]);
-
-  // proxy 与 proxy-group 同名：validNames 是合并 Set，冲突在其中不可见，两者都被留下，
-  // 而 mihomo 启动时会因重复名直接报错。这里只告警不自动删——删哪个都可能不是用户想要的
-  for (const name of groupDedup.names) {
-    if (proxyDedup.names.has(name)) {
-      warnings.push(`名称冲突: "${name}" 同时是节点和分组名，mihomo 会拒绝加载（请重命名其一）`);
-    }
-  }
-
-  // proxy-providers 里声明的 provider 名，用于校验分组的 use 引用
-  const providerNames = new Set<string>(
-    config['proxy-providers'] && typeof config['proxy-providers'] === 'object' && !Array.isArray(config['proxy-providers'])
-      ? Object.keys(config['proxy-providers'] as Record<string, unknown>)
-      : [],
-  );
-
-  const activeGroups = groupDedup.result;
-  const removedGroups = new Set<string>();
-  let changed = true;
-
-  while (changed) {
-    changed = false;
-    for (const group of activeGroups) {
-      if (removedGroups.has(group.name)) continue;
-
-      // proxies 写成标量（漏了列表缩进）时此前被整体跳过，非法结构原样落盘。
-      // 转成单元素列表继续走后续校验，并告警提示用户改正
-      if (group.proxies !== undefined && !Array.isArray(group.proxies)) {
-        if (typeof group.proxies === 'string') {
-          warnings.push(`proxy-group "${group.name}": proxies 应为列表，已按单元素处理（"${group.proxies}"）`);
-          group.proxies = [group.proxies];
-        } else {
-          warnings.push(`proxy-group "${group.name}": proxies 不是列表，已忽略该字段`);
-          group.proxies = [];
-        }
-      }
-      if (!Array.isArray(group.proxies)) continue;
-
-      // use 引用不存在的 provider：此前从不校验，且 use 计入 hasOtherSource 使该组免于删除，
-      // 于是生成的配置引用了不存在的 provider，mihomo 报错
-      if (Array.isArray(group.use)) {
-        const ghosts = group.use.filter(u => typeof u === 'string' && !providerNames.has(u));
-        if (ghosts.length > 0) {
-          group.use = group.use.filter(u => providerNames.has(u as string));
-          warnings.push(`proxy-group "${group.name}": 移除了不存在的 provider 引用 ${ghosts.map(n => `"${n}"`).join(', ')}`);
-        }
-      }
-
-      const invalid = group.proxies.filter(name => !validNames.has(name));
-      if (invalid.length > 0) {
-        group.proxies = group.proxies.filter(name => validNames.has(name));
-        warnings.push(`proxy-group "${group.name}": 移除了不存在的引用 ${invalid.map(n => `"${n}"`).join(', ')}`);
-      }
-
-      // include-all* 只在确有节点可纳入时才算有效来源：proxies 全空 + 节点池为空时，
-      // 该组实际没有任何出口，留着会让 MATCH,<组名> 指向一个空组（表现为完全不通）
-      const hasUse = Array.isArray(group.use) ? group.use.length > 0 : Boolean(group.use);
-      const includesAll = Boolean(group['include-all'] || group['include-all-proxies']);
-      const includeAllUsable = includesAll && proxyDedup.result.length > 0;
-      const hasOtherSource = hasUse || includeAllUsable;
-      if (group.proxies.length === 0 && !hasOtherSource) {
-        removedGroups.add(group.name);
-        validNames.delete(group.name);
-        warnings.push(`proxy-group "${group.name}": 已移除（无可用节点）`);
-        changed = true;
-      }
-    }
-  }
-
-  if (removedGroups.size > 0) {
-    config['proxy-groups'] = activeGroups.filter(g => !removedGroups.has(g.name));
-  }
-
-  if (rules.length > 0) {
-    const removedRules: string[] = [];
-    config.rules = rules.filter(rule => {
-      // SUB-RULE 等类型末段非代理/分组引用，跳过目标存在性校验，避免误删
-      const ruleType = rule.split(',')[0]?.trim().toUpperCase();
-      if (NON_TARGET_RULE_TYPES.has(ruleType)) return true;
-      const target = getRuleTarget(rule);
-      if (!target || validNames.has(target)) return true;
-      removedRules.push(rule);
-      return false;
-    });
-    if (removedRules.length > 0) {
-      warnings.push(`移除了 ${removedRules.length} 条引用不存在目标的规则`);
-    }
-  }
-
-  return warnings;
-}
-
 export function buildConfig(subRawContent: string, mode: string, scope?: OverwriteScope): BuildConfigResult {
   const subscriptionConfig = parseConfigContent(subRawContent, '订阅内容');
 
-  if (!subscriptionConfig) {
-    throw new Error('订阅内容为空');
-  }
-
-  const overwriteEnabled = isOverwriteEnabled();
-  const allFiles = overwriteEnabled ? loadOverwriteFile() : [];
-  // 作用域过滤统一在此做一次，后续 applyOverwrite / excludeOverwrite / 返回值全部沿用这份已过滤列表
+  const settings = readSettings();
+  const allFiles = settings.overwrite_enabled !== false ? loadOverwriteFile() : [];
   const overwriteFiles = filterOverwriteFilesByScope(allFiles, scope);
-  // 深拷贝后再传给 applyOverwrite：它只做浅拷贝（{...base}），proxy-groups 等嵌套对象
-  // 仍与原对象共享引用，excludeOverwriteProxiesFromIncludeAll / validateConfig 会原地改它们，
-  // 污染 subscriptionConfig 导致 debug stage1（本应是「原始订阅」）失真
-  const working = structuredClone(subscriptionConfig);
-  const withOverwrites = applyOverwrite(working, overwriteFiles);
-
-  if (overwriteFiles.length > 0) {
-    // 订阅原有节点名单：~proxies patch 已有节点不该被排除出 include-all（见 collectOverwriteProxyNames）
-    // 从原始 subscriptionConfig 读，不用 working（它可能已被覆写改了 proxies）
-    const baseProxies = Array.isArray(subscriptionConfig.proxies) ? (subscriptionConfig.proxies as unknown[]) : [];
-    const baseProxyNames = new Set(
-      baseProxies.filter(p => p && typeof p === 'object' && typeof (p as { name?: unknown }).name === 'string').map(p => (p as { name: string }).name),
-    );
-    excludeOverwriteProxiesFromIncludeAll(withOverwrites, overwriteFiles, baseProxyNames);
-  }
+  const withOverwrites = applyOverwrite(subscriptionConfig, overwriteFiles);
 
   const systemConfig: Record<string, unknown> = {};
-  // 系统锁定项覆盖用户显式配置时产生的告警，最终并入 validateConfig 的 warnings 一并返回
+  // 系统约束覆盖显式设置时告警，节点与分流规则保持用户给出的内容
   const lockedWarnings: string[] = [];
   for (const [key, value] of Object.entries(BASE_CONFIG)) {
     if (!(key in withOverwrites)) {
@@ -393,7 +167,7 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   // 系统锁定项：controller/端口固定是 UI 与热重载的统一依赖地址；secret 仅取自用户设置。
   // 端口经 settings.ports（getPorts）解析——默认 7890/9090，可在 settings.json 覆盖（与其他代理工具共存的逃生口）。
   // allow-lan 不锁定——订阅/覆写显式提供时按其值（见入站需求），未提供时由上面的 BASE_CONFIG 循环兜底为 false。
-  const ports = getPorts();
+  const ports = getPorts(settings);
   systemConfig['external-controller'] = `127.0.0.1:${ports.controller}`;
   systemConfig['mixed-port'] = ports.mixed;
   delete withOverwrites['mixed-port'];
@@ -403,7 +177,7 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   delete withOverwrites['external-ui-name'];
   delete withOverwrites['external-ui-url'];
   delete withOverwrites.secret;
-  const controllerSecret = readSettings().controller_secret;
+  const controllerSecret = settings.controller_secret;
   if (controllerSecret) {
     systemConfig.secret = controllerSecret;
   }
@@ -421,9 +195,7 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
     // 只锁 enable 一个键：nameserver 等仍是用户的正当自定义。
     const dnsExplicitlyDisabled = 'enable' in subDns && subDns.enable !== true;
     dns.enable = true;
-    // 此前这三项都用 `!('enable' in subDns)` 之流做条件，订阅显式关 dns 时
-    // 照样往「已关闭」的 dns 块里补 fake-ip 字段，生成端自相矛盾（CODE_REVIEW v4.2.3 记录）。
-    // 现在 enable 恒为 true，补默认值不再矛盾
+    // 补齐缺省值，保留用户显式设置的 DNS 模式与地址范围
     if (!('enhanced-mode' in subDns)) dns['enhanced-mode'] = 'fake-ip';
     if (!('fake-ip-range' in subDns)) dns['fake-ip-range'] = '198.18.0.1/16';
     systemConfig.dns = dns;
@@ -455,9 +227,8 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
     };
   }
 
-  const warnings = [...lockedWarnings, ...validateConfig(merged)];
-
-  return { config: merged, subscriptionConfig, overwriteFiles, systemConfig, warnings };
+  assertConfigShape(merged);
+  return { config: merged, warnings: lockedWarnings };
 }
 
 export function writeMihomoConfig(configObj: Record<string, unknown>): void {
@@ -466,19 +237,34 @@ export function writeMihomoConfig(configObj: Record<string, unknown>): void {
   atomicWriteFileSync(PATHS.configFile, content, { mode: 0o600 });
 }
 
-export function writeDebugConfig(buildResult: BuildConfigResult): void {
+/**
+ * 由内核检查节点、分组引用与规则语义，不在 CLI 中维护另一份配置修复器
+ * 临时配置只用于 -t，成功后调用方才替换运行时配置；成功或失败都会清理临时文件
+ */
+export async function validateConfigWithKernel(config: Record<string, unknown>): Promise<void> {
+  if (!hasKernel()) throw new CliError('未找到内核', { hint: '下载内核: mihomo kernel' });
   ensureDirs();
-
-  fs.writeFileSync(PATHS.configStage1Subscription, dumpYaml(buildResult.subscriptionConfig), { mode: 0o600 });
-
-  const overwriteMerged: Record<string, unknown> = {};
-  for (const f of buildResult.overwriteFiles) {
-    Object.assign(overwriteMerged, f.config);
+  const stageDir = fs.mkdtempSync(path.join(DIRS.runtime, 'check-'));
+  const stageFile = path.join(stageDir, 'config.yaml');
+  try {
+    fs.writeFileSync(stageFile, dumpYaml(config), { mode: 0o600 });
+    try {
+      await promisify(execFile)(PATHS.mihomoBinary, ['-t', '-d', DIRS.data, '-f', stageFile], {
+        encoding: 'utf8',
+        timeout: 30_000,
+        maxBuffer: 1024 * 1024,
+      });
+    } catch (e) {
+      const error = e as Error & { stdout?: string; stderr?: string; killed?: boolean };
+      const detail = sanitizeTerminal(`${error.stdout || ''}\n${error.stderr || ''}`).trim();
+      throw new CliError(error.killed ? '内核配置校验超时' : '内核拒绝加载配置', {
+        label: '配置错误',
+        hint: [detail || error.message, '', '请修正订阅或覆写；当前运行时配置未改动。'],
+      });
+    }
+  } finally {
+    fs.rmSync(stageDir, { recursive: true, force: true });
   }
-  const overwriteContent = buildResult.overwriteFiles.length > 0 ? dumpYaml(overwriteMerged) : '# overwrite 已禁用或无覆写文件\n';
-  fs.writeFileSync(PATHS.configStage2Overwrite, overwriteContent, { mode: 0o600 });
-
-  fs.writeFileSync(PATHS.configStage3System, dumpYaml(buildResult.systemConfig), { mode: 0o600 });
 }
 
 export function hasConfig(): boolean {
@@ -501,8 +287,6 @@ export function getConfigInfo(): ConfigInfo | null {
       proxies: proxies ? proxies.length : 0,
       proxyGroups: proxyGroups ? proxyGroups.length : 0,
       mixedPort: (cfg['mixed-port'] as number) || null,
-      httpPort: (cfg.port as number) || null,
-      socksPort: (cfg['socks-port'] as number) || null,
       tun: tun ? !!tun.enable : false,
     };
   } catch {

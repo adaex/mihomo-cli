@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-
 import { colors } from '../colors.js';
 import { hasKernel } from '../config.js';
 import { CliError } from '../errors.js';
@@ -7,6 +6,7 @@ import { PATHS } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
 import * as runtime from '../runtime.js';
 import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, getServiceStatus, installService, SERVICE_BINARY_NAME, uninstallService } from '../service.js';
+import { assertKnownFlags } from '../utils.js';
 
 /**
  * 服务的安装与卸载。启停在 start.ts / stop.ts。
@@ -33,7 +33,8 @@ async function handleLegacyInstall(): Promise<void> {
   console.log('');
 }
 
-export async function cmdInstall(_args: string[]): Promise<void> {
+export async function cmdInstall(args: string[]): Promise<void> {
+  assertKnownFlags(args.slice(1), [], 'install');
   if (!hasKernel()) {
     throw new CliError('未找到内核', { hint: '下载内核: mihomo kernel' });
   }
@@ -83,7 +84,8 @@ export async function cmdInstall(_args: string[]): Promise<void> {
   console.log('');
 }
 
-export async function cmdUninstall(_args: string[]): Promise<void> {
+export async function cmdUninstall(args: string[]): Promise<void> {
+  assertKnownFlags(args.slice(1), [], 'uninstall');
   const status = getServiceStatus();
   const legacy = detectLegacySystemInstall();
   const residue = getMihomoPids();

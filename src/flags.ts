@@ -30,7 +30,7 @@ const FLAGS: FlagSpec[] = [
   { forms: ['-n', '--lines'], takesValue: true },
   // 注意：`--mirror`（kernel）是可选值选项——`--mirror`、`--mirror=url`、`--mirror url`
   // 三种形式都合法，只走 parseMirrorArg。故意不在此登记：登记了 getNonFlagArg 反而会
-  // 把它的值吞掉。它的移除/校验由 parseMirrorArg 自己负责。
+  // 把它的值吞掉。它的解析与校验由 parseMirrorArg 自己负责。
 ];
 
 /** 带值选项集合：`getNonFlagArg` 借此跳过选项的值，不把它误当位置参数 */

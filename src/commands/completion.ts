@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
-import { suggestSimilar } from '../utils.js';
+import { assertKnownFlags, suggestSimilar } from '../utils.js';
 import { SUBCOMMANDS as DIRECTORY_SUBCOMMANDS } from './directory.js';
 import { SUBCOMMANDS as OVERWRITE_SUBCOMMANDS } from './overwrite.js';
 import type { Command } from './registry.js';
@@ -26,11 +26,12 @@ interface CompletionWord {
   desc: string;
 }
 
-/** 命令词表：注册表中所有非 hidden 命令（含别名），desc 取首条用法行说明 */
+/** 命令词表：注册表中所有命令（含别名），desc 取首条用法行说明 */
 function commandWords(commands: Command[]): CompletionWord[] {
-  return commands
-    .filter(c => !c.hidden)
-    .flatMap(c => [{ word: c.name, desc: c.usage[0]?.description ?? '' }, ...c.aliases.map(a => ({ word: a, desc: c.usage[0]?.description ?? '' }))]);
+  return commands.flatMap(c => [
+    { word: c.name, desc: c.usage[0]?.description ?? '' },
+    ...c.aliases.map(a => ({ word: a, desc: c.usage[0]?.description ?? '' })),
+  ]);
 }
 
 /** 子命令词表：主名 + 别名展开，desc 取 SubCommand.description */
@@ -311,6 +312,7 @@ function installCompletion(shell: string | undefined, commands: Command[]): void
 
 /** completion 命令入口。词表由 registry 传入（避免 import 成环）。 */
 export function cmdCompletion(args: string[], commands: Command[]): void {
+  assertKnownFlags(args.slice(1), [], 'completion');
   if (args[1] === 'install') {
     installCompletion(args[2], commands);
     return;

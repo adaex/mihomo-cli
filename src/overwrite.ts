@@ -180,7 +180,7 @@ const MATCH_KEYS = new Set(['subscription', 'url-domain']);
 
 /**
  * 校验并规整 match 块。仅接受对象；每个键值收敛为 string[]。
- * 返回 undefined 表示无 match 块（全局生效，向后兼容的默认形态）。
+ * 返回 undefined 表示无 match 块（默认全局生效）。
  *
  * **fail closed**：match 块存在（哪怕写错）而解析不出任何有效条件时抛错，
  * 不能静默降级成「全局生效」——用户写了 match 显然想限定作用域，键名打错
@@ -251,7 +251,7 @@ function hostMatchesDomain(host: string, domain: string): boolean {
 
 /**
  * 判断单个覆写文件在给定作用域下是否应用。
- * - 无 match → 全局应用（向后兼容）。
+ * - 无 match → 默认全局应用。
  * - 有 match → 所列条件全部满足（AND）；条件值数组内为 OR。
  * - fail closed：scope 缺少评估该条件所需字段时，该文件不应用。
  */
@@ -330,18 +330,10 @@ export function loadOverwriteFile(): OverwriteFileEntry[] {
   return results;
 }
 
-export function applyOverwrite(baseConfig: Record<string, unknown>, preloadedFiles?: OverwriteFileEntry[]): Record<string, unknown> {
-  if (!isOverwriteEnabled()) return { ...baseConfig };
-
-  const overwriteFiles = preloadedFiles || loadOverwriteFile();
-  if (overwriteFiles.length === 0) return { ...baseConfig };
-
-  // 恒返回浅拷贝：buildConfig 随后会 delete 端口/tun 等锁定键，
-  // 直接返回 baseConfig 会污染订阅原始对象（debug stage1 也会随之失真）
+/** 应用已按开关与作用域筛选的覆写；不额外读取设置或改变节点池 */
+export function applyOverwrite(baseConfig: Record<string, unknown>, files: OverwriteFileEntry[]): Record<string, unknown> {
   let result = { ...baseConfig };
-  for (const file of overwriteFiles) {
-    result = deepMergeWithOverrides(result, file.config);
-  }
+  for (const file of files) result = deepMergeWithOverrides(result, file.config);
   return result;
 }
 

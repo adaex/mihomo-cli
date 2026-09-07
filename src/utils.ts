@@ -189,9 +189,9 @@ export function assertKnownFlags(args: string[] | undefined, known: readonly str
     if (knownSet.has(a)) continue;
     // --opt=value 形式：按等号前的部分匹配
     const eqIdx = a.indexOf('=');
-    if (eqIdx > 0 && knownSet.has(a.slice(0, eqIdx))) continue;
+    if (eqIdx > 0 && knownSet.has(a.slice(0, eqIdx)) && (VALUE_FLAGS.has(a.slice(0, eqIdx)) || a.slice(0, eqIdx) === '--mirror')) continue;
     // -n200 attached 短选项：按前缀匹配已知短选项
-    if (a.length > 2 && a.startsWith('-') && !a.startsWith('--') && knownSet.has(a.slice(0, 2))) continue;
+    if (a.length > 2 && a.startsWith('-') && !a.startsWith('--') && knownSet.has(a.slice(0, 2)) && VALUE_FLAGS.has(a.slice(0, 2))) continue;
     throw new CliError(`未知的选项: ${a}`, {
       label: '参数错误',
       hint: [`可用选项: ${known.join(', ')}`, '', `用法: mihomo ${command}`],
@@ -236,28 +236,6 @@ export function parseIntArg(args: string[] | undefined, short: string, long: str
     }
   }
   return defaultValue;
-}
-
-/**
- * 拒绝已移除的 `--no-ssh`（v4.0.0 删掉 ssh 隧道功能）。
- *
- * 不能静默忽略：脚本里 `mihomo stop --no-ssh` 的原意是「停代理但保留隧道」，
- * 静默通过会让它变成「停代理」而用户不知道语义已变——同 `--mirror-all` 的口径，
- * 已移除的选项要显式报错并说清替代做法。
- *
- * 住在 utils 而非 commands/shared：后者 import 了 cmdStart，start 反向 import 会成环
- * （shared.ts 头部的「依赖方向单向」不变量）。
- */
-export function assertNoRemovedSshFlag(args: string[] | undefined): void {
-  if (!args?.some(a => a === '--no-ssh' || a.startsWith('--no-ssh='))) return;
-  throw new CliError('--no-ssh 已移除（v4.0.0）', {
-    label: '参数错误',
-    hint: [
-      'ssh 隧道功能已整体移除，该选项不再有对应行为。',
-      '如仍需内网出口：自行运行 ssh -D 127.0.0.1:<端口> -N <主机>，',
-      '节点与分流规则写在 overwrite.yaml 里（写法见 CHANGELOG 的 4.0.0 升级须知）。',
-    ],
-  });
 }
 
 /**
@@ -411,27 +389,7 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
     return { mirror: null, isOverride: false };
   }
 
-  // 已移除的选项要显式报错，不能静默按直连继续：用户敲了 --mirror-all 却拿到直连行为，
-  // 正是「不报错但行为不对」的失效方式（同 reset 的 KNOWN_FLAGS 口径）
-  if (args.some(a => a === '--mirror-all' || a.startsWith('--mirror-all='))) {
-    throw new CliError('--mirror-all 已移除（v3.10.0）', {
-      label: '参数错误',
-      hint: [
-        '版本查询（GitHub API）绝不经过镜像，镜像只作用于内核产物下载。',
-        'API 若走镜像，下载地址就由镜像说了算，而内核随后以 root 运行。',
-        '',
-        '改用: mihomo kernel --mirror [镜像]',
-      ],
-    });
-  }
-
-  // 已移除的 --no-mirror/--direct（v4.7.0）：显式报错给迁移指引，不静默按直连继续
-  if (args.includes('--no-mirror') || args.includes('--direct')) {
-    throw new CliError('--no-mirror/--direct 已移除（v4.7.0）', {
-      label: '参数错误',
-      hint: ['强制直连改用: mihomo kernel --mirror direct', '不带选项时自动选择通道: gh > 本机代理 > 镜像 > 直连'],
-    });
-  }
+  assertKnownFlags(args.slice(1), ['--mirror'], 'kernel [--mirror [镜像]]');
 
   // 同时支持 `--mirror url` 与 `--mirror=url` 两种形式
   const mirrorEq = args.find(a => a.startsWith('--mirror='));

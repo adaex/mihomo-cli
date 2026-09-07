@@ -36,7 +36,7 @@ npm install -g mihomo-cli
 ### 方式二：源码安装
 
 ```bash
-git clone https://github.com/adaex/mihomo-cli.git
+git clone git@github.com:adaex/mihomo-cli.git
 cd mihomo-cli
 npm install
 npm run build
@@ -175,8 +175,6 @@ mihomo ui yacd     # YACD
 | `mihomo use <name>`    | `mihomo subscription use <name>` |
 | `mihomo restart`       | `mihomo start`（start 本身即重启） |
 
-> `up` / `down` 别名已于 v4.1.0 移除（命令名统一为 `install`/`start`/`stop`/`uninstall`）。执行它们会给出明确的迁移提示。
-
 ## Shell 补全
 
 ```bash
@@ -253,15 +251,12 @@ mihomo status          # 查看状态
 「系统设置 → 隐私与安全性 → 本地网络」查看和开关。
 
 **大多数人碰不到这个**：`127.0.0.1` / `::1` 属于 loopback，不出网卡，**不算本地网络**。
-自己起 `ssh -D 127.0.0.1:1080` 再把节点指过去（v4.0.0 移除内置 ssh 后推荐的做法）完全不受影响。
+自己运行 `ssh -D 127.0.0.1:1080` 并把节点指向它，不受本地网络授权影响
 只有节点直接指向 `192.168.x.x`、`10.x.x.x`、`*.local` 这类地址时才会触发。
 
-> **为什么不用 root 服务绕开**：早期版本（v3.0–v4.0）确实用 root LaunchDaemon 绕开了这个限制
-> （Apple 的规则是「以 root 运行的程序自动获得本地网络访问」——豁免条件是 root，而非「是不是 daemon」），
-> 代价是每次 `start`/`stop` 都要输管理员密码。权衡后选择免密：授权点一次，密码要输一辈子。
->
-> 从旧版本升级的用户若还留着 root 安装（`~/Library/LaunchDaemons` 下带 KeepAlive 的幽灵，会抢端口且停不掉），
-> `install`/`uninstall`/`stop`/`tun`/`reset` 检测到它都会引导清理——清理要删 root 属主的文件，需要输一次管理员密码。
+服务始终以当前用户运行，局域网节点按 macOS 的授权流程处理
+
+若 `/Library/LaunchDaemons` 仍有旧 root 服务，它可能持续自启并抢占端口；`install`/`uninstall`/`stop`/`tun` 和需要停机的 `reset` 会检测并清理，删除 root 文件时需要一次管理员密码
 
 若确实有局域网节点且始终不弹框、连不通，本地网络授权**没有便捷的重置手段**（它不在 TCC 数据库里，
 `tccutil reset LocalNetwork` 会直接失败），只能进恢复模式删 `/Library/Preferences/com.apple.networkextension.*.plist`，
@@ -285,7 +280,7 @@ mihomo start     # 恢复服务
 
 TUN 用完后 `mihomo start` 会按 Mixed 重建配置并恢复自启。
 
-**TUN 下 DNS 恒为开启**。若订阅或覆写里写了 `dns.enable: false`，TUN 模式会强制改回 `true` 并提示一行「自动修复」——TUN 会劫持 53 端口流量（`dns-hijack`），内置 DNS 关着就没有任何组件接管，网络直接不可用。只锁 `enable` 这一个键，`nameserver`、`enhanced-mode` 等仍按你的配置走。Mixed 模式不受影响，那里关 DNS 是合法配置。
+**TUN 下 DNS 恒为开启**。若订阅或覆写里写了 `dns.enable: false`，TUN 模式会强制改回 `true` 并显示「配置提示」——TUN 会劫持 53 端口流量（`dns-hijack`），内置 DNS 关着就没有任何组件接管，网络直接不可用。只锁 `enable` 这一个键，`nameserver`、`enhanced-mode` 等仍按你的配置走。Mixed 模式不受影响，那里关 DNS 是合法配置。
 
 ### 不要用 sudo 运行
 
@@ -312,7 +307,7 @@ mihomo logs 1       # 查看最新的归档
 镜像不持久化——每次按当前环境独立决策，换网络不会用到上次的镜像。
 
 版本查询（GitHub API）在代理开着时同样经本机代理；镜像**绝不**作用于 API——
-内核二进制随后会以 root 运行（TUN/保活），下载地址必须由 GitHub 官方 API 给出，不能让镜像自己指定。
+内核二进制在 TUN 模式下会以 root 运行，下载地址必须由 GitHub 官方 API 给出，不能让镜像自己指定。
 
 手动覆盖：
 
@@ -339,7 +334,7 @@ mihomo kernel --mirror direct  # 强制直连（绕过 gh/代理自动通道）
 ## 订阅自动更新
 
 - 默认更新间隔：12 小时（订阅服务端可通过 `profile-update-interval` 覆盖）
-- 触发时机：`start` 命令（`sub` 列表为纯只读，不再触发更新）
+- 触发时机：`start` 命令（`sub` 列表只读）
 - **服务常驻期间不会自动更新**：launchd 只负责拉起内核，不会跑 `start`。`status` 会在订阅超过更新间隔时黄标提醒（`已超过 N 小时间隔，建议 mihomo sub update`），此时手动跑 `mihomo sub update` 或 `mihomo start` 即可
 - 更新失败时继续使用本地缓存，不影响使用
 - 自动更新默认超时 10 秒，可通过 `-u <ms>` 调整；使用 `-s` 可完全跳过自动更新
@@ -368,7 +363,10 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 - **订阅内容校验**：下载到的内容必须含 `proxies` / `proxy-groups` / `proxy-providers` 之一才写盘。机场返回配额或错误 JSON（如 `{"error":"quota exceeded"}`）时报错并**保留磁盘上原有的可用配置**，不会被覆盖
 - **`sub add` 失败回滚**：下载失败时移除半成品订阅，且不改动当前活跃订阅
 - **`settings.json` 损坏恢复**：格式损坏（含合法 JSON 但非对象的情况）时自动备份为 `.bak` 并回退默认设置
-- **`reset` 停止确认**：需要停止进程的重置会先确认进程真的已终止，未能停止时中止重置而非留下孤儿进程跑在已删配置上
+- **运行配置校验**：启动或重载前，由已安装的 mihomo 内核执行 `-t` 校验；配置被拒绝时保留现有 `config.yaml`，不会自动删除错误节点、分组或规则
+- **`reset` 停止确认**：需要停止进程的重置会先确认进程已终止，失败则中止删除
+
+裸 `mihomo reset` 清订阅、日志和运行数据，保留内核、覆写文件、其他设置及服务安装；`--full` 额外删除这些内容并卸载服务。指定多个目标时顺序不影响结果，`reset overwrites` 恢复覆写默认开启状态
 
 ## 数据目录
 
@@ -380,8 +378,7 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 ├── settings.lock         # 设置读改写的跨进程锁
 ├── subscription-cache.lock  # 订阅缓存读改写的跨进程锁
 ├── service.lock          # 服务启停的跨进程锁
-│                         #   三把锁刻意都放根下：subscriptions/、runtime/ 等目录会被
-│                         #   stop / reset 整体清除，锁躺在里面会被连目录一起删掉
+├── service-stop-epoch    # 并发启停的停止计数
 ├── overwrite.yaml        # 覆写配置（主文件，可选）
 ├── overwrite.*.yaml      # 覆写配置（扩展文件，如 overwrite.dns.yaml）
 ├── subscriptions/
@@ -393,19 +390,18 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 │   ├── mihomo.log        # 当前日志
 │   └── mihomo.YYYY-MM-DD_HH-MM-SS[.N].log  # 归档日志（同秒二次轮转加序号）
 ├── data/                 # mihomo 运行数据（GeoIP 等，由内核自行管理）
-└── runtime/              # 运行时临时文件（stop 自动清除）
+└── runtime/              # 运行时配置与临时文件
     ├── pid               # 进程 PID
-    ├── config.yaml       # 运行时生成的配置
-    ├── 1.subscription.yaml   # 分阶段调试：订阅原始配置
-    ├── 2.overwrite.yaml      # 分阶段调试：应用覆写后
-    └── 3.system.yaml         # 分阶段调试：合并系统配置后
+    └── config.yaml       # 内核校验通过后的最终配置
 ```
 
 可通过环境变量 `MIHOMO_CLI_DIR` 自定义数据目录位置。
 
 ## 覆写配置
 
-覆写配置允许你在订阅配置基础上进行自定义修改，而不会影响订阅本身。
+覆写配置允许你在订阅配置基础上进行自定义修改，原始订阅文件保持独立
+
+节点与分流规则按显式配置合并，最终交给 mihomo 校验。新增节点会按内核的 `include-all` / `include-all-proxies` 语义进入分组；需要排除时，在相应分组显式配置 `exclude-filter`
 
 ### 使用方法
 
@@ -454,8 +450,8 @@ dns!:
   nameserver:
     - 223.5.5.5
 
-# 追加规则
-rules+:
+# 将规则放到订阅规则之前，避免被已有 MATCH 提前匹配
++rules:
   - 'DOMAIN-SUFFIX,example.com,DIRECT'
 ```
 
@@ -483,7 +479,7 @@ proxy-providers:
     type: http
     url: https://second-airport.example.com/api/v1/client/subscribe?token=xxx
     interval: 86400              # 节点池自动刷新间隔（秒）
-    path: ./second-airport.yaml  # 缓存文件（mihomo 管理，相对运行时配置目录）
+    path: ./second-airport.yaml  # 缓存文件（mihomo 管理，相对 data 目录）
     health-check:
       enable: true
       url: https://www.gstatic.com/generate_204
@@ -495,8 +491,8 @@ proxy-providers:
     type: select
     use: [second-airport]
 
-# 需要分流到它时加规则
-rules+:
+# 在订阅规则之前分流到该分组
++rules:
   - 'DOMAIN-SUFFIX,corp.example.com,SecondAirport'
 ```
 
@@ -504,7 +500,7 @@ provider 节点与订阅节点同池参与分组选择；节点延迟与手动�
 
 ### 用 ssh -D 做节点
 
-v4.0 之前的 ssh 隧道功能已移除（维护面大于价值）。等效做法：自己起一条 `ssh -D 127.0.0.1:1080 -N host`，再把它作为 socks5 节点写进覆写：
+先运行 `ssh -D 127.0.0.1:1080 -N host`，再把本地端口作为 socks5 节点写进覆写：
 
 ```yaml
 # ~/.mihomo-cli/overwrite.ssh.yaml
@@ -533,12 +529,14 @@ mihomo doctor
 ```
 
 逐项检查内核可执行性、数据目录可写、settings 有效性（含端口覆盖合法性）、订阅配置与新鲜度、服务状态、端口占用、
-配置可构建性、代理连通性、CLI 版本（落后时提示 `mihomo update`；npm registry 不可达则跳过），
+配置的内核原生校验、代理连通性、CLI 版本（落后时提示 `mihomo update`；npm registry 不可达则跳过），
 每项给出 ✓/!/✗ 与修复命令；存在异常项时退出码为 1，可接入脚本。
 
 ### 启动失败
 
-`mihomo start` 会确认内核真的跑起来了才报「已启动」——内核因配置问题启动后立即退出时，命令会报错并直接附上日志尾部，退出码非 0。常见原因是端口被占用或订阅里有内核不接受的字段。报错会写明死因，与下面 `status` 的提示同口径（`退出码 N` 或 `被信号终止（Killed: 9）`）。
+`mihomo start` 先用内核检查候选配置，错误会直接显示并保留现有运行配置。CLI 不再自动修复重名节点或失效引用，需要修改订阅或覆写后重试
+
+校验通过后仍需确认内核已运行：端口占用、系统权限等启动问题会报错并附日志尾部，退出码非 0。异常退出原因与 `status` 使用同一口径（`退出码 N` 或 `被信号终止（Killed: 9）`）
 
 ```bash
 mihomo logs 0        # 看完整原因
@@ -555,7 +553,7 @@ sudo pkill -9 mihomo
 
 ### TUN 模式无法启动
 
-1. 确保使用 sudo / 管理员权限
+1. 运行 `mihomo tun`，按提示提供管理员密码，无需在命令前加 sudo
 2. 检查是否有其他程序占用 53 端口
 3. 查看日志：`mihomo logs 0 -f`
 

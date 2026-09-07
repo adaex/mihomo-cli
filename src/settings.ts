@@ -5,48 +5,25 @@ import { CliError } from './errors.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './paths.js';
 import type { Settings, Subscription, SubscriptionCache, SubscriptionCacheEntry, SubscriptionWithCache } from './types.js';
 
-let settingsCache: Settings | null = null;
-
+/** 每次读取磁盘；同一操作需要一致视图时由调用方显式传递这份快照 */
 export function readSettings(): Settings {
-  if (settingsCache !== null) return settingsCache;
-  ensureDirs();
-  if (fs.existsSync(PATHS.settingsFile)) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(fs.readFileSync(PATHS.settingsFile, 'utf8'));
-    } catch {
-      return recoverCorruptedSettings();
-    }
-    // 合法 JSON 但不是对象（null / [] / 123 / "hi"）同样视为损坏：
-    // 此前直接赋给 settingsCache，null 会让 getSubscriptions() 抛裸 TypeError + 堆栈，
-    // 字符串会被 writeSettings 展开成 {"0":"h","1":"i",...}，且 settingsCache=null
-    // 使缓存判定恒失效、每次调用都重新读盘
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return recoverCorruptedSettings();
-    }
-    settingsCache = parsed as Settings;
-    return settingsCache;
+  if (!fs.existsSync(PATHS.settingsFile)) return {};
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(PATHS.settingsFile, 'utf8'));
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Settings;
+  } catch {
+    // 损坏内容留备份，便于人工恢复
   }
-  settingsCache = {};
-  return settingsCache;
-}
-
-/** 损坏的 settings.json 先备份（保留原始内容供人工恢复）再回退默认值。 */
-function recoverCorruptedSettings(): Settings {
   try {
     fs.copyFileSync(PATHS.settingsFile, `${PATHS.settingsFile}.bak`);
     console.warn(`警告: settings.json 格式损坏，已备份到 ${PATHS.settingsFile}.bak，使用默认设置`);
   } catch {
     console.warn('警告: settings.json 格式损坏，使用默认设置');
   }
-  settingsCache = {};
-  return settingsCache;
+  return {};
 }
 
-/**
- * 校验 settings 内容是否为合法 JSON 对象（纯函数，不触发恢复/备份/缓存）。
- * 供 doctor 等只读诊断复用，避免各处自己 JSON.parse 后对「损坏」的定义漂移。
- */
+/** 只读诊断使用，不触发备份 */
 export function isValidSettingsContent(content: string): boolean {
   try {
     const parsed: unknown = JSON.parse(content);
@@ -56,56 +33,28 @@ export function isValidSettingsContent(content: string): boolean {
   }
 }
 
-/**
- * 写入设置。**持跨进程锁 + 先丢缓存重读盘再合并**：`settingsCache` 是进程级的，
- * 而两个 CLI 进程会并发跑（慢速 `sub add` 跨整个网络下载期间，用户在另一个终端
- * 做别的操作是日常）。此前拿启动时的陈旧缓存做全量合并写回，会把对方刚落盘的
- * 改动整块抹掉，**且写入方收到的是成功回执**——实测 6 个并发 `sub add` 丢 3 条。
- *
- * 本函数只安全用于「单键/整值替换」。**数组类改动（subscriptions）必须走
- * `updateSettings`**：调用方若在锁外用陈旧数组算好再传进来，重读也无从恢复对方的条目。
- */
+/** 单键或整值替换；依赖现值的改动使用 updateSettings */
 export function writeSettings(settings: Partial<Settings>): Settings {
-  ensureDirs();
-  return withFileLock(PATHS.settingsLock, () => writeSettingsUnlocked(settings));
-}
-
-/** `writeSettings` 的锁内实现。锁不可重入，故持锁路径（updateSettings）只能调它。 */
-function writeSettingsUnlocked(settings: Partial<Settings>): Settings {
-  settingsCache = null;
-  const existing = readSettings();
-  const merged = { ...existing, ...settings } as Record<string, unknown>;
-  for (const key of Object.keys(settings)) {
-    if ((settings as Record<string, unknown>)[key] === undefined) delete merged[key];
-  }
-  atomicWriteFileSync(PATHS.settingsFile, JSON.stringify(merged, null, 2), { mode: 0o600 });
-  settingsCache = merged as Settings;
-  return settingsCache;
+  return updateSettings(() => settings);
 }
 
 /**
- * 读-改-写的唯一正确入口：**持跨进程锁**，丢缓存 → 读盘上最新 → 由 mutator 基于
- * 最新算出改动 → 写回 → 放锁。
- *
- * 数组类改动（subscriptions）必须用它而不是 `writeSettings`：
- * 后者虽也重读，但读与写之间仍有窗口，两个进程照样能交错（实测 6 个并发
- * `sub add` 仍丢 3 条）。只有把整个读-改-写圈进锁里才真正安全。
- *
- * mutator 必须同步、且不得再调用本函数或 `writeSettings`（锁不可重入，会死等到
- * 强夺陈旧锁）。mutator 内部读 `getSubscriptions()` 是安全的：
- * 缓存已在进锁后清掉，它读到的是盘上最新。
+ * 持锁读取最新值、计算补丁并原子写回。mutator 必须同步，不能再调用写设置函数：锁不可重入
+ * 不缓存读取结果并不能代替这把锁，否则并发的读改写仍会丢失对方的更新
  */
 export function updateSettings(mutate: (current: Settings) => Partial<Settings>): Settings {
   ensureDirs();
   return withFileLock(PATHS.settingsLock, () => {
-    settingsCache = null;
     const current = readSettings();
-    return writeSettingsUnlocked(mutate(current));
+    const patch = mutate(current);
+    if (Object.keys(patch).length === 0) return current;
+    const merged = { ...current, ...patch } as Record<string, unknown>;
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined) delete merged[key];
+    }
+    atomicWriteFileSync(PATHS.settingsFile, JSON.stringify(merged, null, 2), { mode: 0o600 });
+    return merged as Settings;
   });
-}
-
-export function invalidateSettingsCache(): void {
-  settingsCache = null;
 }
 
 /** 校验单个端口覆盖值：1-65535 的整数。返回 undefined 表示「未配置，用默认」。 */
@@ -125,8 +74,8 @@ function validatePort(value: unknown, key: string): number | undefined {
  * settings.ports 覆盖默认 7890/9090，非法值直接抛错而非静默回退——
  * 端口突降回默认会让 controller 调用与热重载连到错误地址，且用户毫无线索。
  */
-export function getPorts(): { mixed: number; controller: number } {
-  const ports = readSettings().ports;
+export function getPorts(settings: Settings = readSettings()): { mixed: number; controller: number } {
+  const ports = settings.ports;
   if (ports === undefined) return { mixed: DEFAULT_MIXED_PORT, controller: CONTROLLER_PORT };
   if (ports === null || typeof ports !== 'object' || Array.isArray(ports)) {
     throw new CliError('settings.json 的 ports 需为对象，如 { "mixed": 17890, "controller": 19090 }', { label: '配置错误' });
@@ -292,9 +241,9 @@ function isValidSubscription(s: unknown): s is Subscription {
  * 下游的展开运算符会把字符串按字符展开成垃圾列表且不报错，后续所有 s.name 都是 undefined。
  * 条目再经 isValidSubscription 滤掉残缺项。
  */
-export function getSubscriptions(): Subscription[] {
+export function getSubscriptions(settings: Settings = readSettings()): Subscription[] {
   // 收成 unknown 再过滤：直接 .filter(类型谓词) 匹配不上 filter 的 S extends T 重载
-  const list: unknown = readSettings().subscriptions;
+  const list: unknown = settings.subscriptions;
   if (!Array.isArray(list)) {
     if (list !== undefined) {
       console.warn('警告: settings.json 的 subscriptions 不是列表，已忽略（可用 mihomo sub add 重新添加）');
@@ -327,27 +276,16 @@ function validateSubscriptionName(name: string): void {
 
 export function addSubscription(url: string, name = 'default'): void {
   validateSubscriptionName(name);
-  // 经 updateSettings：列表必须基于盘上最新计算，否则并发的另一个 CLI 进程
-  // 刚添加的订阅会被本次的陈旧数组覆盖掉（对方却已打印「已添加」）
-  let duplicate = false;
   updateSettings(settings => {
-    // 经 getSubscriptions 而非直读：非数组的 subscriptions 会被字符串展开成垃圾列表
-    const subs = [...getSubscriptions()];
+    const subs = getSubscriptions(settings);
     if (subs.some(s => s.name === name)) {
-      duplicate = true;
-      return {};
+      throw new CliError(`订阅 "${name}" 已存在，请换个名称（mihomo sub add <url> <名称>），或先删除（mihomo sub remove ${name}）`);
     }
     subs.push({ name, url });
     const updates: Partial<Settings> = { subscriptions: subs };
-    if (!settings.active_subscription && subs.length === 1) {
-      updates.active_subscription = name;
-    }
+    if (!settings.active_subscription && subs.length === 1) updates.active_subscription = name;
     return updates;
   });
-  // 抛错移到 mutator 外：mutator 内抛会让 updateSettings 半途退出，语义不清
-  if (duplicate) {
-    throw new CliError(`订阅 "${name}" 已存在，请换个名称（mihomo sub add <url> <名称>），或先删除（mihomo sub remove ${name}）`);
-  }
 }
 
 export function removeSubscription(name: string): string | null {
@@ -355,7 +293,7 @@ export function removeSubscription(name: string): string | null {
   let found = false;
 
   updateSettings(settings => {
-    const subs = [...getSubscriptions()];
+    const subs = getSubscriptions(settings);
     const idx = subs.findIndex(s => s.name === name);
     if (idx < 0) return {};
     found = true;
@@ -387,13 +325,12 @@ export function removeSubscription(name: string): string | null {
 }
 
 export function setDefaultSubscription(name: string): boolean {
-  const settings = readSettings();
-  const subs = getSubscriptions();
-  const idx = subs.findIndex(s => s.name === name);
-  if (idx < 0) return false;
-  if (settings.active_subscription === name) return true;
-  writeSettings({ active_subscription: name });
-  return true;
+  let found = false;
+  updateSettings(settings => {
+    found = getSubscriptions(settings).some(s => s.name === name);
+    return found ? { active_subscription: name } : {};
+  });
+  return found;
 }
 
 // === Subscription raw config ===

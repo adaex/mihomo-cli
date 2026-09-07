@@ -13,7 +13,7 @@ import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
 import { getPorts, getSubscriptionsWithCache, isValidSettingsContent, readSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription, isSubscriptionStale, prepareConfigForStart, resolveUpdateInterval } from '../subscription.js';
-import { formatRelativeTime } from '../utils.js';
+import { assertKnownFlags, formatRelativeTime } from '../utils.js';
 import { getLatestNpmVersion } from './update.js';
 
 type CheckStatus = 'ok' | 'warn' | 'fail' | 'skip';
@@ -153,17 +153,17 @@ async function collectChecks(): Promise<Check[]> {
     push('端口', 'ok', `${mixedPort} 空闲`);
   }
 
-  // === 配置可构建 ===
-  if (active) {
+  // === 配置原生校验 ===
+  if (active && hasKernel()) {
     try {
       const mode = info?.tun ? 'tun' : 'mixed';
-      prepareConfigForStart(mode, active.name);
-      push('配置构建', 'ok', `当前订阅可正常构建（${mode}）`);
+      await prepareConfigForStart(mode, active.name);
+      push('配置构建', 'ok', `当前订阅通过内核校验（${mode}）`);
     } catch (e) {
       push('配置构建', 'fail', (e as Error).message.split('\n')[0], '修正订阅或覆写后 mihomo start');
     }
   } else {
-    push('配置构建', 'warn', '无订阅，跳过');
+    push('配置构建', 'skip', active ? '未安装内核，跳过校验' : '无订阅，跳过');
   }
 
   // === 连通性 ===
@@ -193,7 +193,8 @@ async function collectChecks(): Promise<Check[]> {
   return checks;
 }
 
-export async function cmdDoctor(): Promise<void> {
+export async function cmdDoctor(args: string[] = []): Promise<void> {
+  assertKnownFlags(args.slice(1), [], 'doctor');
   const checks = await collectChecks();
 
   console.log('');

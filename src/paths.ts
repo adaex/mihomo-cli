@@ -71,9 +71,6 @@ export const PATHS = {
    * 它不是锁，不该进 `paths.spec.ts` 那条锁位置断言的枚举。
    */
   serviceStopEpoch: path.join(USER_DATA_DIR, 'service-stop-epoch'),
-  configStage1Subscription: path.join(DIRS.runtime, '1.subscription.yaml'),
-  configStage2Overwrite: path.join(DIRS.runtime, '2.overwrite.yaml'),
-  configStage3System: path.join(DIRS.runtime, '3.system.yaml'),
   // 用户级 LaunchAgent（默认）：gui/<uid> 域，全程免 sudo。随 homedir 走
   userAgentPlist: path.join(os.homedir(), 'Library/LaunchAgents', `${SERVICE_LABEL}.plist`),
   // 旧版本（v3.0–v4.0 的 daemon on）装的系统级 LaunchDaemon：root:wheel 拥有。

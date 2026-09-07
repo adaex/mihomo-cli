@@ -1,5 +1,5 @@
 import { colors } from './colors.js';
-import { buildConfig, parseConfigContent, writeDebugConfig, writeMihomoConfig } from './config.js';
+import { buildConfig, parseConfigContent, validateConfigWithKernel, writeMihomoConfig } from './config.js';
 import { DEFAULT_AUTO_UPDATE_TIMEOUT, DEFAULT_UPDATE_INTERVAL_HOURS } from './constants.js';
 import { CliError, TimeoutError, withTimeout } from './errors.js';
 import { createHttpClient } from './http.js';
@@ -155,9 +155,9 @@ export function formatProxySummary(info: { proxies?: number; proxyGroups?: numbe
 }
 
 export function getActiveSubscription(): Subscription | null {
-  const subs = getSubscriptions();
-  if (subs.length === 0) return null;
   const settings = readSettings();
+  const subs = getSubscriptions(settings);
+  if (subs.length === 0) return null;
   const activeName = settings.active_subscription;
   if (activeName) {
     const found = subs.find(s => s.name === activeName);
@@ -265,8 +265,7 @@ export async function downloadSubscription(url: string, subName = 'default', sig
     throw new Error('订阅内容为空');
   }
 
-  const parsed = parseConfigContent(content, '订阅内容') as Record<string, unknown>;
-  if (!parsed) throw new Error('订阅内容为空');
+  const parsed = parseConfigContent(content, '订阅内容');
 
   assertLooksLikeSubscription(parsed, maskUrl(url));
 
@@ -288,15 +287,8 @@ export async function downloadSubscription(url: string, subName = 'default', sig
   };
 }
 
-/**
- * 构建并校验待启动的配置，**不写盘**。
- *
- * 与 commitPreparedConfig 分成两步，是为了让 start 能「先校验、再停机」：
- * 坏覆写或不合法订阅在这一步就抛错，此时运行中的内核还没被 stop() 带走，
- * 用户维持在可用状态。合成一步的话，stop() 已经 rmrf 掉 runtime/，
- * 构建失败就留下「已停机 + 无 config.yaml」的半死态，且无从回滚。
- */
-export function prepareConfigForStart(mode: string, subName = 'default'): PreparedConfig {
+/** 构建配置并交给内核校验；不替换现有 config.yaml，不停止正在运行的内核 */
+export async function prepareConfigForStart(mode: string, subName = 'default'): Promise<PreparedConfig> {
   const rawContent = readSubscriptionRawConfig(subName);
   if (!rawContent) {
     throw new CliError(`未找到订阅配置 "${subName}"，请先添加订阅`);
@@ -304,6 +296,7 @@ export function prepareConfigForStart(mode: string, subName = 'default'): Prepar
 
   const subUrl = getSubscriptions().find(s => s.name === subName)?.url;
   const buildResult = buildConfig(rawContent, mode, { subName, subUrl });
+  await validateConfigWithKernel(buildResult.config);
 
   const proxies = buildResult.config.proxies as unknown[] | undefined;
   const proxyGroups = buildResult.config['proxy-groups'] as unknown[] | undefined;
@@ -317,23 +310,18 @@ export function prepareConfigForStart(mode: string, subName = 'default'): Prepar
   };
 }
 
-/**
- * 把已校验的配置落盘。必须在 stop() 之后调用：stop() 的 clearRuntime()
- * 会 rmrf 整个 runtime/，先写就会被连同 pid 一起删掉。
- * 自动修复告警也放这里打印，避免校验失败时先刷一屏「已修复」再报错。
- */
+/** 校验成功后才原子替换配置；仅保留内核实际使用的配置文件 */
 export function commitPreparedConfig(prepared: PreparedConfig): ConfigSummary {
   const { buildResult } = prepared;
 
   if (buildResult.warnings.length > 0) {
     for (const warning of buildResult.warnings) {
-      console.log(`${colors.yellow('自动修复:')} ${warning}`);
+      console.log(`${colors.yellow('配置提示:')} ${warning}`);
     }
     console.log('');
   }
 
   writeMihomoConfig(buildResult.config);
-  writeDebugConfig(buildResult);
 
   return prepared.info;
 }

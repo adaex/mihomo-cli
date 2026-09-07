@@ -103,7 +103,7 @@ export async function cmdStart(args: string[]): Promise<void> {
   // 用户维持在可用状态。反过来（先动手后构建）失败就是「已停机 + 无 config.yaml」的半死态。
   let prepared: PreparedConfig;
   try {
-    prepared = subscription.prepareConfigForStart(targetMode, sub.name);
+    prepared = await subscription.prepareConfigForStart(targetMode, sub.name);
   } catch (e) {
     if (e instanceof CliError) throw e;
     throw new CliError((e as Error).message, { label: '配置错误' });

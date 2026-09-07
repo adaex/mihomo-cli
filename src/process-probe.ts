@@ -1,7 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 
-import { getKernelVersion, hasConfig, hasKernel } from './config.js';
 import { CliError } from './errors.js';
 import { PATHS } from './paths.js';
 import type { ProcessInfo, ProcessStatus, StaleState } from './types.js';
@@ -185,8 +184,5 @@ export function getStatus(): ProcessStatus {
     running,
     pid: running ? pid : null,
     processInfo: running && pid ? getProcessInfo(pid) : null,
-    hasConfig: hasConfig(),
-    hasKernel: hasKernel(),
-    kernelVersion: getKernelVersion(),
   };
 }

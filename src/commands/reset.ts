@@ -1,324 +1,155 @@
 import fs from 'node:fs';
 import { colors } from '../colors.js';
-import { clearKernelVersionCache, hasKernel } from '../config.js';
+import { clearKernelVersionCache } from '../config.js';
 import { CliError } from '../errors.js';
 import { isOverwriteFilename } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
-import { cleanupAll, PROCESS_WAIT_ATTEMPTS, PROCESS_WAIT_INTERVAL } from '../process-stop.js';
-import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, getServiceStatus, isServiceInstalled, stopService, uninstallService } from '../service.js';
-import { invalidateSettingsCache, writeSettings } from '../settings.js';
-import type { ResetTarget } from '../types.js';
+import { cleanupAll } from '../process-stop.js';
+import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, getServiceStatus, stopService, uninstallService } from '../service.js';
+import { updateSettings } from '../settings.js';
+import type { ResetTarget, Settings } from '../types.js';
+import { assertKnownFlags } from '../utils.js';
 import { confirmOrThrow } from './shared.js';
 
-/**
- * 重置目标注册表。**顺序即执行顺序**（`resolveResetTargets` 会按本数组排序）。
- *
- * **不变量：凡 `onAfter` 里写 settings 的目标，都必须排在 `settings` 之前**，否则会把刚
- * 删掉的 settings.json 重建出来——`reset --full` 报「已重置: 设置」而文件仍在。
- * 受此约束的是 `subs` 与 `overwrites` 两个（都调 `writeSettings`），
- * `reset.spec.ts` 按 `WRITES_SETTINGS_ON_AFTER` 清单统一断言，不逐个点名。
- *
- * `overwrites` 排后面的后果比「文件被重建」更实际：重建出的内容是
- * `{"overwrite_enabled": false}`，而全新数据目录的默认是**启用**。于是用户
- * `reset --full` 后重新放一份 overwrite.yaml，覆写静默不生效，且看不出与上次 reset 有关。
- */
+/** 目标表只描述数据；服务操作与设置更新由 cmdReset 分阶段处理 */
 export const RESET_TARGETS: ResetTarget[] = [
-  {
-    id: 'subs',
-    aliases: ['sub', 'subs', 'subscription', 'subscriptions'],
-    label: '订阅',
-    paths: () => [DIRS.subscriptions],
-    needsStop: true,
-    onAfter: () => {
-      // 同步清空 settings 里的订阅列表：只删缓存文件会留下"列表存在但无配置"的半重置状态
-      // （start 会报"未找到订阅配置"）。active_subscription 一并清除
-      writeSettings({ subscriptions: undefined, active_subscription: undefined });
-    },
-  },
-  {
-    id: 'logs',
-    aliases: ['log', 'logs'],
-    label: '日志',
-    paths: () => [DIRS.logs],
-    // 内核运行时持有日志 fd，删文件后内核继续写已删 inode，logs 0 会 tail 不存在的路径
-    needsStop: true,
-  },
-  {
-    id: 'data',
-    aliases: ['data'],
-    label: '运行数据',
-    paths: () => [DIRS.data],
-    needsStop: true,
-  },
-  {
-    id: 'runtime',
-    aliases: ['runtime'],
-    label: '运行时',
-    paths: () => [DIRS.runtime],
-    needsStop: true,
-  },
+  { id: 'subs', aliases: ['sub', 'subs', 'subscription', 'subscriptions'], label: '订阅', paths: () => [DIRS.subscriptions], needsStop: true },
+  { id: 'logs', aliases: ['log', 'logs'], label: '日志', paths: () => [DIRS.logs], needsStop: true },
+  { id: 'data', aliases: ['data'], label: '运行数据', paths: () => [DIRS.data], needsStop: true },
+  { id: 'runtime', aliases: ['runtime'], label: '运行时', paths: () => [DIRS.runtime], needsStop: true },
   {
     id: 'overwrites',
     aliases: ['overwrite', 'overwrites', 'ow'],
     label: '覆写',
-    paths: () => {
-      const dir = USER_DATA_DIR;
-      if (!fs.existsSync(dir)) return [];
-      return fs
-        .readdirSync(dir)
-        .filter(isOverwriteFilename)
-        .map(f => `${dir}/${f}`);
-    },
     needsStop: false,
-    onAfter: () => {
-      // 删了覆写文件却留着 enabled=true，ow/status 会显示「已启用 (无文件)」——
-      // 「重置覆写」语义上应把开关也归位
-      writeSettings({ overwrite_enabled: false });
-    },
+    preserveOnBare: true,
+    paths: () =>
+      fs.existsSync(USER_DATA_DIR)
+        ? fs
+            .readdirSync(USER_DATA_DIR)
+            .filter(isOverwriteFilename)
+            .map(f => `${USER_DATA_DIR}/${f}`)
+        : [],
   },
   {
     id: 'settings',
     aliases: ['setting', 'settings', 'config'],
     label: '设置',
-    // 同时删 .bak：readSettings 遇格式损坏会备份原文件（settings.ts），里面含
-    // controller_secret 与订阅 URL 的 token。只删主文件会让 "已重置: 设置" 名不副实，
-    // 凭据仍明文留在数据目录（cache.json.bak 在 subscriptions/ 内，随整目录删除，无需单列）
+    needsStop: false,
+    preserveOnBare: true,
+    // 损坏备份也包含订阅凭据，需要一起删除
     paths: () => [PATHS.settingsFile, `${PATHS.settingsFile}.bak`],
-    needsStop: false,
   },
-  {
-    id: 'kernel',
-    aliases: ['kernel', 'core'],
-    label: '内核',
-    paths: () => [DIRS.kernel],
-    needsStop: false,
-    onAfter: () => clearKernelVersionCache(),
-    checkEmpty: () => !hasKernel(),
-    emptyMsg: '内核未安装，无需删除',
-    warnIfRunning: true,
-  },
-  {
-    id: 'service',
-    aliases: ['service', 'daemon'],
-    label: '服务',
-    // 卸载由确认后的 uninstallsService 段统一处理；此处 paths 返回空
-    // （plist 不在数据目录里，且不应提前删破坏卸载），
-    // onAfter 因幂等守卫成为 no-op，仅作单独 reset 未走前段时的兜底。
-    paths: () => [],
-    needsStop: false,
-    onAfter: async () => {
-      const st = getServiceStatus();
-      if (st.installed || st.loaded) await uninstallService();
-      // checkEmpty 把遗留 root 安装计入「服务存在」，这里必须同样处理它——
-      // 否则仅有 legacy daemon 的机器上 reset service 报「已重置」却原样保留，
-      // KeepAlive 继续拉起内核抢端口
-      if (detectLegacySystemInstall()) cleanupLegacyInstallOrThrow();
-    },
-    checkEmpty: () => !isServiceInstalled() && !getServiceStatus().loaded && !detectLegacySystemInstall(),
-    emptyMsg: '服务未安装，无需删除',
-  },
+  { id: 'kernel', aliases: ['kernel', 'core'], label: '内核', paths: () => [DIRS.kernel], needsStop: true, preserveOnBare: true },
+  { id: 'service', aliases: ['service'], label: '服务', paths: () => [], needsStop: false, preserveOnBare: true },
 ];
 
-/**
- * 裸 `mihomo reset`（无参无 flag）保留的目标：用户的配置资产，不删。
- * **必须是具名常量**：此前是内联字符串数组，target id 改名时漏改会让裸 reset
- * 静默把用户的服务安装/设置一并删掉，且不报错。reset.spec.ts 对着它断言。
- */
-export const RESET_PRESERVED_ON_BARE = ['settings', 'kernel', 'overwrites', 'service'] as const;
-
-/**
- * `onAfter` 里会写 settings.json 的目标：它们必须排在 `settings` 之前，
- * 否则会把刚删掉的 settings.json 重建出来（见 RESET_TARGETS 的头注释）。
- *
- * **必须是具名清单**：此前测试只点名断言了 `subs`，于是同族的 `overwrites`
- * 带着一模一样的缺陷躺在盲区里——它排在 settings 之后，`reset --full` 会重建出
- * `{"overwrite_enabled": false}`，把覆写静默关掉。新增写 settings 的 onAfter 时
- * 补进本清单，`reset.spec.ts` 会自动校验其顺序。
- */
-export const WRITES_SETTINGS_ON_AFTER = ['subs', 'overwrites'] as const;
-
-function resolveResetTargets(names: string[]): { matched: ResetTarget[]; unmatched: string[] } {
-  const matched: ResetTarget[] = [];
-  const unmatched: string[] = [];
+function resolveResetTargets(names: string[]): ResetTarget[] {
+  const matched = new Set<ResetTarget>();
   for (const name of names) {
-    const t = RESET_TARGETS.find(t => t.aliases.includes(name.toLowerCase()));
-    if (t) {
-      if (!matched.find(m => m.id === t.id)) matched.push(t);
-    } else {
-      unmatched.push(name);
+    const target = RESET_TARGETS.find(t => t.aliases.includes(name.toLowerCase()));
+    if (!target) {
+      throw new CliError(`未知的重置目标: ${name}`, { hint: [`可用目标: ${RESET_TARGETS.map(t => t.id).join(', ')}`] });
     }
+    matched.add(target);
   }
-  // 按注册表顺序执行，与用户输入顺序无关：subs 的 onAfter 会 writeSettings 重建 settings.json，
-  // 若 settings 排在 subs 之前被删，文件会被重建成 {}，"已重置: 设置" 与实际不符
-  matched.sort((a, b) => RESET_TARGETS.indexOf(a) - RESET_TARGETS.indexOf(b));
-  return { matched, unmatched };
+  return [...matched];
 }
 
 export async function cmdReset(args: string[]): Promise<void> {
-  const flags = (args || []).filter(a => a.startsWith('-'));
-  const names = (args || []).slice(1).filter(a => !a.startsWith('-'));
-
-  // 已知标志白名单：未知标志一律报错退出（避免 --ful 拼错被静默忽略后走默认删除）。
-  // 注意：-f 不再是 --full 的别名——删全部只能显式 --full，免确认统一用 -y/--yes，
-  // 防止与常见 -f=force 直觉混淆导致误删设置/内核/覆写。
-  const KNOWN_FLAGS = new Set(['--full', '--yes', '-y']);
-  const unknownFlags = flags.filter(f => !KNOWN_FLAGS.has(f));
-  if (unknownFlags.length > 0) {
-    throw new CliError(`未知的选项: ${unknownFlags.join(', ')}`, { hint: ['', '可用选项: --full（删全部）, -y/--yes（跳过确认）'] });
-  }
-
-  const fullReset = flags.includes('--full');
-  const skipConfirm = flags.includes('--yes') || flags.includes('-y');
-
-  let targets: ResetTarget[];
-
-  if (fullReset) {
-    targets = RESET_TARGETS;
-  } else if (names.length > 0) {
-    const { matched, unmatched } = resolveResetTargets(names);
-    if (unmatched.length > 0) {
-      throw new CliError(`未知的重置目标: ${unmatched.join(', ')}`, {
-        hint: [
-          '',
-          `可用目标: ${RESET_TARGETS.map(t => t.aliases[0]).join(', ')}`,
-          '',
-          '示例:',
-          '  mihomo reset sub log      # 删除订阅和日志',
-          '  mihomo reset kernel       # 只删内核',
-          '  mihomo reset --full       # 删除全部',
-          '  mihomo reset              # 删除全部（保留设置、内核、覆写）',
-        ],
-      });
-    }
-    targets = matched;
-  } else {
-    // 留空 = 只删「可再生成的运行数据」，保留用户配置资产（设置/内核/覆写/服务）
-    targets = RESET_TARGETS.filter(t => !RESET_PRESERVED_ON_BARE.includes(t.id as (typeof RESET_PRESERVED_ON_BARE)[number]));
-  }
-
-  for (const t of targets) {
-    if (t.checkEmpty?.()) {
-      if (targets.length === 1) {
-        console.log(t.emptyMsg);
-        return;
-      }
-    }
-  }
-
+  assertKnownFlags(args, ['--full', '--yes', '-y'], 'reset [目标...] [--full] [-y]');
+  const names = args.slice(1).filter(a => !a.startsWith('-'));
+  const namedTargets = resolveResetTargets(names);
+  const targets = args.includes('--full') ? RESET_TARGETS : names.length > 0 ? namedTargets : RESET_TARGETS.filter(t => !t.preserveOnBare);
+  const ids = new Set(targets.map(t => t.id));
   const needsStop = targets.some(t => t.needsStop);
-  const warnRunning = targets.some(t => t.warnIfRunning);
-  // 「停止」与「卸载」必须分开——v4.0 及更早二者混为一谈（一律卸载保活）。
-  //   needsStop（subs/data/runtime）→ 只 **stop**：删了 config.yaml 而服务还 enabled 的话，
-  //     下次登录 launchd 会用不存在的 -f 拉起内核，KeepAlive 每几秒崩溃重启一次刷爆日志。
-  //     stop 恒置 disable 位，正好堵住这个组合。但不该顺手把用户的安装卸掉。
-  //   kernel → 同样只 stop + 警告（plist 会指向已删的二进制）
-  //   service target / --full → 才是真正的 uninstall
-  const kernelTargeted = targets.some(t => t.id === 'kernel');
-  const serviceTargeted = targets.some(t => t.id === 'service');
-  const uninstallsService = serviceTargeted;
-  const stopsService = needsStop || kernelTargeted;
+  const serviceTargeted = ids.has('service');
+  const service = getServiceStatus();
+  const serviceActive = service.installed || service.loaded;
+  const legacy = detectLegacySystemInstall();
 
-  const serviceStatus = getServiceStatus();
-  const serviceActive = serviceStatus.installed || serviceStatus.loaded;
-
-  const pids = needsStop || warnRunning ? getMihomoPids() : [];
-
-  // 确认前只做只读警告，不做任何破坏性操作（停止进程/卸载服务）——用户取消时环境须原样保留
-  if (warnRunning && pids.length > 0) {
-    console.log(colors.yellow(`警告: mihomo 正在运行 (PID ${pids.join(', ')})，删除内核后将无法重新启动`));
-  }
-  if (uninstallsService && serviceActive) {
-    console.log(colors.yellow('将卸载 launchd 服务（移除登录自启，Mixed 模式需重新 install 才能使用）'));
-  } else if (stopsService && serviceActive) {
-    console.log(colors.yellow('将停止服务并关闭登录自启（安装保留，mihomo start 可重新启动）'));
-  }
-  if (uninstallsService && detectLegacySystemInstall()) {
-    console.log(colors.yellow('将清理旧版本安装的系统级服务（root LaunchDaemon，需要一次管理员密码）'));
-  }
-
-  console.log(`将删除: ${targets.map(t => t.label).join('、')}`);
-
-  if (!skipConfirm) {
-    // 非交互环境无法应答：报错退出而非静默「已取消」，避免脚本误判重置已完成
-    if (
-      !(await confirmOrThrow('确认?', {
-        nonTtyMessage: '非交互环境无法确认',
-        hint: ['跳过确认请加 -y: mihomo reset ... -y'],
-      }))
-    ) {
-      console.log('已取消');
+  if (targets.length === 1) {
+    if (serviceTargeted && !serviceActive && !legacy) {
+      console.log('服务未安装，无需删除');
       return;
     }
   }
 
-  // 确认后再执行破坏性操作。服务在跑时必须先停（使 KeepAlive 失效），
-  // 否则后续 cleanupAll 裸杀会被立即拉起。系统级服务需 sudo：用户取消（密码错误/Ctrl-C）
-  // 则中止重置，避免部分删除后环境不一致。
-  if ((uninstallsService || stopsService) && serviceActive) {
-    try {
-      if (uninstallsService) {
-        await uninstallService();
-      } else {
-        await stopService();
-      }
-    } catch (e) {
-      if (e instanceof CliError) throw e;
-      throw new CliError((e as Error).message.split('\n')[0], { label: '服务操作已取消，重置中止' });
-    }
+  // 确认前只读取状态和展示计划，不停止进程或删除数据
+  if (ids.has('kernel') && getMihomoPids().length > 0) {
+    console.log(colors.yellow('将停止正在运行的内核，删除后需重新下载才能启动'));
+  }
+  if (serviceTargeted && serviceActive) {
+    console.log(colors.yellow('将卸载 launchd 服务（Mixed 模式需重新 install 才能使用）'));
+  } else if (needsStop && serviceActive) {
+    console.log(colors.yellow('将停止服务并关闭登录自启（安装保留，mihomo start 可重新启动）'));
+  }
+  if ((needsStop || serviceTargeted) && legacy) {
+    console.log(colors.yellow('将清理遗留的系统级服务（root LaunchDaemon，需要一次管理员密码）'));
+  }
+  console.log(`将删除: ${targets.map(t => t.label).join('、')}`);
+  if (
+    !args.includes('-y') &&
+    !args.includes('--yes') &&
+    !(await confirmOrThrow('确认?', {
+      nonTtyMessage: '非交互环境无法确认',
+      hint: ['跳过确认请加 -y: mihomo reset ... -y'],
+    }))
+  ) {
+    console.log('已取消');
+    return;
   }
 
-  if (needsStop && getMihomoPids().length > 0) {
-    console.log('停止进程...');
+  // 先停止/卸载托管服务，使 KeepAlive 失效，再清理游离内核
+  if ((needsStop || serviceTargeted) && legacy) cleanupLegacyInstallOrThrow();
+  if (serviceActive) {
+    if (serviceTargeted) await uninstallService();
+    else if (needsStop) await stopService();
+  }
+  if (needsStop) {
     const cleanup = await cleanupAll();
-    for (let i = 0; i < PROCESS_WAIT_ATTEMPTS; i++) {
-      if (getMihomoPids().length === 0) break;
-      await new Promise(r => setTimeout(r, PROCESS_WAIT_INTERVAL));
-    }
-    // 必须确认真的停了才继续删数据：cleanupAll 遇 root 实例（TUN）走 sudo pkill，
-    // 用户取消密码或 kill 失败时它只把 pid 记进 failed 并返回，此前被整个丢弃 →
-    // 残留的 root 代理进程会继续跑在已删除的配置上，且用户毫不知情
-    const remaining = getMihomoPids();
-    if (remaining.length > 0) {
-      throw new CliError(remaining.join(', '), {
+    if (cleanup.remaining.length > 0) {
+      throw new CliError(cleanup.remaining.join(', '), {
         label: '进程未能停止，重置中止',
-        hint: [
-          `未终止的进程: ${remaining.join(', ')}${cleanup.failed > 0 ? `（${cleanup.failed} 个终止失败）` : ''}`,
-          '请手动运行: sudo pkill -9 mihomo',
-          '否则残留进程会继续使用即将删除的配置。',
-        ],
+        hint: ['请手动运行: sudo pkill -9 mihomo'],
       });
     }
   }
 
-  const deleted: string[] = [];
-  for (const t of targets) {
-    let hadContent = false;
-    for (const p of t.paths()) {
-      if (fs.existsSync(p)) {
-        hadContent = true;
-        try {
-          rmrf(p);
-        } catch (e) {
-          console.warn(`  警告: 无法删除 ${p}: ${(e as Error).message}`);
-        }
+  const deleted = new Set<string>();
+  for (const target of targets) {
+    let hadContent = target.id === 'service' && (serviceActive || legacy);
+    for (const filePath of target.paths()) {
+      if (!fs.existsSync(filePath)) continue;
+      try {
+        rmrf(filePath);
+      } catch (e) {
+        throw new CliError(`无法删除 ${filePath}: ${(e as Error).message}`, { label: '重置失败' });
       }
+      hadContent = true;
     }
-    await t.onAfter?.();
-    // 多目标时空目标（如内核未安装）无任何删除，不应出现在成功文案里
-    if (hadContent || !t.checkEmpty) {
-      deleted.push(t.label);
-    }
+    if (hadContent) deleted.add(target.id);
   }
 
+  // 最后统一处理设置；删除整个设置时绝不再写回，与用户给出目标的顺序无关
+  if (!ids.has('settings') && (ids.has('subs') || ids.has('overwrites'))) {
+    updateSettings(settings => {
+      const patch: Partial<Settings> = {};
+      if (ids.has('subs') && (settings.subscriptions !== undefined || settings.active_subscription !== undefined)) {
+        patch.subscriptions = undefined;
+        patch.active_subscription = undefined;
+        deleted.add('subs');
+      }
+      if (ids.has('overwrites') && settings.overwrite_enabled !== undefined) {
+        patch.overwrite_enabled = undefined;
+        deleted.add('overwrites');
+      }
+      return patch;
+    });
+  }
+  if (ids.has('kernel')) clearKernelVersionCache();
   ensureDirs();
-  if (targets.some(t => t.id === 'settings')) {
-    invalidateSettingsCache();
-  }
-
-  if (deleted.length > 0) {
-    console.log(colors.green(`已重置: ${deleted.join('、')}`));
-  } else {
-    console.log('没有需要重置的内容');
-  }
+  const labels = targets.filter(t => deleted.has(t.id)).map(t => t.label);
+  console.log(labels.length > 0 ? colors.green(`已重置: ${labels.join('、')}`) : '没有需要重置的内容');
 }

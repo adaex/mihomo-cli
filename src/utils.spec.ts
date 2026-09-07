@@ -4,7 +4,7 @@ import { describe, it } from 'node:test';
 import { AVAILABLE_MIRRORS, MIRROR_ALIASES, MIRROR_BARE, MIRROR_HOST } from './constants.js';
 import { CliError } from './errors.js';
 import {
-  assertNoRemovedSshFlag,
+  assertKnownFlags,
   displayWidth,
   formatRelativeTime,
   getDefaultMirror,
@@ -82,12 +82,12 @@ describe('parseIntArg 范围与格式校验', () => {
   });
 });
 
-describe('parseMirrorArg：--mirror-all 已移除（v3.10.0）', () => {
+describe('parseMirrorArg', () => {
   it('显式报错，不静默按直连继续', () => {
     // 静默忽略会让用户以为 API 仍走镜像 —— 「不报错但行为不对」的失效方式
     assert.throws(
       () => parseMirrorArg(['kernel', '--mirror-all']),
-      (e: unknown) => e instanceof CliError && /已移除/.test((e as CliError).message),
+      (e: unknown) => e instanceof CliError && /未知的选项/.test((e as CliError).message),
     );
     assert.throws(
       () => parseMirrorArg(['kernel', '--mirror-all=hk.gh-proxy.org']),
@@ -113,7 +113,7 @@ describe('parseMirrorArg：--mirror-all 已移除（v3.10.0）', () => {
     assert.deepEqual(parseMirrorArg(['kernel', '--mirror', 'direct']), { mirror: null, isOverride: true });
   });
 
-  it('--no-mirror/--direct 已移除：显式报错给迁移指引，不静默按直连继续', () => {
+  it('未支持的选项走通用错误', () => {
     assert.throws(
       () => parseMirrorArg(['kernel', '--no-mirror']),
       (e: unknown) => e instanceof CliError,
@@ -209,22 +209,17 @@ describe('subscriptionUrgency', () => {
   });
 });
 
-describe('assertNoRemovedSshFlag：--no-ssh 已移除（v4.0.0）', () => {
-  it('显式报错，不静默忽略', () => {
-    // 静默通过会让 `stop --no-ssh`（原意「停代理但留隧道」）变成「停代理」而用户不知情
-    assert.throws(
-      () => assertNoRemovedSshFlag(['stop', '--no-ssh']),
-      (e: unknown) => e instanceof CliError,
-    );
-    assert.throws(
-      () => assertNoRemovedSshFlag(['start', '--no-ssh=true']),
-      (e: unknown) => e instanceof CliError,
-    );
+describe('选项白名单只接受当前支持的写法', () => {
+  it('无选项命令拒绝任意未知选项', () => {
+    assert.throws(() => assertKnownFlags(['stop', '--no-ssh'], [], 'stop'), CliError);
   });
-
-  it('不含该选项时放行', () => {
-    assert.doesNotThrow(() => assertNoRemovedSshFlag(['start', 'tun', '-s']));
-    assert.doesNotThrow(() => assertNoRemovedSshFlag(undefined));
+  it('布尔选项不能带值或附加尾缀', () => {
+    for (const arg of ['--full=false', '-yes', '-y1']) {
+      assert.throws(() => assertKnownFlags([arg], ['--full', '-y'], 'reset'), CliError);
+    }
+  });
+  it('带值选项接受等号与短选项紧贴值', () => {
+    assert.doesNotThrow(() => assertKnownFlags(['--lines=20', '-n20'], ['-n', '--lines'], 'logs'));
   });
 });
 

@@ -6,10 +6,10 @@ import { CliError } from './errors.js';
 
 describe('buildCompletionScript', () => {
   for (const shell of ['zsh', 'bash', 'fish'] as const) {
-    it(`${shell} 脚本包含注册表中全部非 hidden 命令`, () => {
+    it(`${shell} 脚本包含注册表中全部命令`, () => {
       const script = buildCompletionScript(shell, COMMANDS);
       assert.ok(script.length > 100);
-      for (const cmd of COMMANDS.filter(c => !c.hidden)) {
+      for (const cmd of COMMANDS) {
         assert.ok(script.includes(cmd.name), `${shell} 脚本缺少命令 ${cmd.name}`);
       }
     });
@@ -30,17 +30,6 @@ describe('buildCompletionScript', () => {
   it('bash 脚本注册全部别名', () => {
     const script = buildCompletionScript('bash', COMMANDS);
     assert.ok(script.includes('complete -F _mihomo_completions mihomo mhm mh mihomo-cli'));
-  });
-
-  it('hidden 命令（墓碑/隐藏别名）不出现在补全词表', () => {
-    for (const shell of ['zsh', 'bash', 'fish'] as const) {
-      const script = buildCompletionScript(shell, COMMANDS);
-      for (const cmd of COMMANDS.filter(c => c.hidden)) {
-        // 墓碑命令名不应作为补全词出现（出现在注释/字符串里不算，这里粗查整词边界）
-        const re = new RegExp(`['"]${cmd.name}['":]`);
-        assert.ok(!re.test(script), `${shell} 脚本不应包含 hidden 命令 ${cmd.name}`);
-      }
-    }
   });
 
   it('未知 shell 抛 CliError 并给 did-you-mean', () => {

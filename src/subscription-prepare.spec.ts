@@ -4,15 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-// paths.ts 在 import 期求值 MIHOMO_CLI_DIR，故必须先设环境变量再动态 import。
-// node --test 一个文件一个进程，不会污染其他 spec。
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-prepare-'));
 process.env.MIHOMO_CLI_DIR = tmpDir;
-
-const { PATHS } = await import('./paths.js');
+const { DIRS, PATHS, ensureDirs } = await import('./paths.js');
 const { prepareConfigForStart, commitPreparedConfig } = await import('./subscription.js');
 const { CliError } = await import('./errors.js');
-
 const SUB_YAML = `proxies:
   - {name: a, type: socks5, server: 127.0.0.1, port: 1080}
 proxy-groups:
@@ -22,53 +18,60 @@ rules:
 `;
 
 before(() => {
-  fs.mkdirSync(path.join(tmpDir, 'subscriptions'), { recursive: true });
-  fs.mkdirSync(path.join(tmpDir, 'runtime'), { recursive: true });
+  ensureDirs();
+  assert.ok(PATHS.mihomoBinary.startsWith(tmpDir), '测试必须使用临时内核，不能调用用户的运行内核');
+  // 仅模拟子进程接受/拒绝配置，验证 CLI 的执行协议和失败原子性；原生语义另以真实内核实测
+  fs.writeFileSync(
+    PATHS.mihomoBinary,
+    `#!/bin/sh
+[ "$1" = '-t' ] && [ "$2" = '-d' ] && [ "$4" = '-f' ] && [ -s "$5" ] || exit 7
+if [ -f "$0.reject" ]; then echo 'native rejected candidate' >&2; exit 1; fi
+`,
+    { mode: 0o755 },
+  );
+  fs.writeFileSync(path.join(DIRS.subscriptions, 'x.yaml'), SUB_YAML);
 });
+after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
-after(() => {
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
-
-/**
- * 锁住 start 的「先校验、后停机」：构建与写盘必须是两步。
- * 合成一步的话，stop()（会 rmrf runtime/）已经跑过，构建再失败就留下
- * 「已停机 + 无 config.yaml」的半死态，用户既没代理也没得回滚。
- */
-describe('prepareConfigForStart / commitPreparedConfig 分两步', () => {
-  it('prepareConfigForStart 只构建、不写盘', () => {
-    fs.writeFileSync(path.join(tmpDir, 'subscriptions', 'x.yaml'), SUB_YAML);
-    fs.rmSync(PATHS.configFile, { force: true });
-
-    const prepared = prepareConfigForStart('mixed', 'x');
-
-    assert.equal(fs.existsSync(PATHS.configFile), false, 'prepare 阶段不得写 config.yaml');
-    assert.equal(prepared.info.proxies, 1);
-    assert.equal(prepared.info.proxyGroups, 1);
+describe('配置经内核校验后再提交', () => {
+  it('prepare 不写运行配置，临时校验文件及时清理', async () => {
+    const prepared = await prepareConfigForStart('mixed', 'x');
+    assert.equal(fs.existsSync(PATHS.configFile), false);
+    assert.deepEqual(prepared.info, { proxies: 1, proxyGroups: 1 });
+    assert.deepEqual(fs.readdirSync(DIRS.runtime), []);
   });
 
-  it('commitPreparedConfig 才落盘', () => {
-    fs.writeFileSync(path.join(tmpDir, 'subscriptions', 'x.yaml'), SUB_YAML);
-    fs.rmSync(PATHS.configFile, { force: true });
-
-    const info = commitPreparedConfig(prepareConfigForStart('mixed', 'x'));
-
-    assert.ok(fs.existsSync(PATHS.configFile), 'commit 后应有 config.yaml');
+  it('commit 只写最终配置，不生成三份调试 YAML', async () => {
+    const info = commitPreparedConfig(await prepareConfigForStart('mixed', 'x'));
     assert.deepEqual(info, { proxies: 1, proxyGroups: 1 });
+    assert.deepEqual(fs.readdirSync(DIRS.runtime), ['config.yaml']);
   });
 
-  it('订阅损坏时 prepare 抛错且不碰已有的 config.yaml', () => {
-    // 这是本次拆分要防的场景：运行中的内核仍在用这份 config.yaml
-    commitPreparedConfig(prepareConfigForStart('mixed', 'x'));
-    const before = fs.readFileSync(PATHS.configFile, 'utf8');
-
-    fs.writeFileSync(path.join(tmpDir, 'subscriptions', 'x.yaml'), 'proxies:\n  - name: a\n   bad: [x\n');
-    assert.throws(() => prepareConfigForStart('mixed', 'x'));
-
-    assert.equal(fs.readFileSync(PATHS.configFile, 'utf8'), before, '构建失败不得改动运行中的配置');
+  it('内核拒绝配置时保留现有配置并清理临时文件', async () => {
+    const previous = fs.readFileSync(PATHS.configFile, 'utf8');
+    fs.writeFileSync(`${PATHS.mihomoBinary}.reject`, '');
+    try {
+      await assert.rejects(prepareConfigForStart('mixed', 'x'), e => e instanceof CliError && e.hint.join(' ').includes('native rejected candidate'));
+      assert.equal(fs.readFileSync(PATHS.configFile, 'utf8'), previous);
+      assert.deepEqual(fs.readdirSync(DIRS.runtime), ['config.yaml']);
+    } finally {
+      fs.rmSync(`${PATHS.mihomoBinary}.reject`);
+    }
   });
 
-  it('订阅不存在时抛 CliError', () => {
-    assert.throws(() => prepareConfigForStart('mixed', 'nope'), CliError);
+  it('并发校验使用各自的临时文件，结束后均清理', async () => {
+    await Promise.all([prepareConfigForStart('mixed', 'x'), prepareConfigForStart('mixed', 'x')]);
+    assert.deepEqual(fs.readdirSync(DIRS.runtime), ['config.yaml']);
+  });
+
+  it('YAML 损坏时不改已有配置', async () => {
+    const previous = fs.readFileSync(PATHS.configFile, 'utf8');
+    fs.writeFileSync(path.join(DIRS.subscriptions, 'x.yaml'), 'proxies: [bad\n');
+    await assert.rejects(prepareConfigForStart('mixed', 'x'));
+    assert.equal(fs.readFileSync(PATHS.configFile, 'utf8'), previous);
+  });
+
+  it('订阅不存在时抛 CliError', async () => {
+    await assert.rejects(prepareConfigForStart('mixed', 'nope'), CliError);
   });
 });

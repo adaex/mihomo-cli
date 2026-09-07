@@ -2,7 +2,7 @@ import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { openUrl } from '../open.js';
 import { DIRECTORY_TARGETS, USER_DATA_DIR } from '../paths.js';
-import { suggestSimilar } from '../utils.js';
+import { assertKnownFlags, suggestSimilar } from '../utils.js';
 import { dispatchSubcommand, type SubCommand } from './shared.js';
 
 function openDirectory(args: string[]): void {
@@ -56,6 +56,7 @@ function printDirectoryInfo(): void {
 export const SUBCOMMANDS: SubCommand[] = [{ name: 'open', description: '打开目录', handler: openDirectory }];
 
 export async function cmdDirectory(args: string[]): Promise<void> {
+  assertKnownFlags(args.slice(1), [], 'dir');
   // 无子命令 → 目录信息；未知子命令 → 报错（与 sub/ow 同构，避免 `dir opn` 静默当成 list）
   // 必须 await/返回 Promise：dispatchSubcommand 是 async，若用 void 丢弃，onUnknown 抛的
   // CliError 会变成未处理的 Promise 拒绝，绕过 main().catch 的统一渲染（丢 label/hint）

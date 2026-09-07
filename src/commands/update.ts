@@ -1,11 +1,11 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-
 import { compareVersions } from 'compare-versions';
 import { colors } from '../colors.js';
 import { PKG_NAME, VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
 import { withSpinner } from '../spinner.js';
+import { assertKnownFlags } from '../utils.js';
 
 const execFileAsync = promisify(execFile);
 /** npm view 查询最新版的超时：网络不佳时降级为直接安装，不让用户干等 */
@@ -25,7 +25,8 @@ export async function getLatestNpmVersion(timeoutMs: number = NPM_VIEW_TIMEOUT_M
   }
 }
 
-export async function cmdUpdate(): Promise<void> {
+export async function cmdUpdate(args: string[] = []): Promise<void> {
+  assertKnownFlags(args.slice(1), [], 'update');
   console.log(`当前版本: ${colors.cyan(VERSION)}`);
   console.log('');
   const latest = await withSpinner('查询 npm 最新版本', getLatestNpmVersion);

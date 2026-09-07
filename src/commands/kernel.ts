@@ -7,41 +7,7 @@ import { getPorts } from '../settings.js';
 import { withSpinner } from '../spinner.js';
 import { parseMirrorArg } from '../utils.js';
 
-/**
- * 拒绝未知选项（同 reset 的 KNOWN_FLAGS 口径）。
- * `--mirror` 敲错一个字母（`--miror`）此前会静默按直连下载：不报错但行为不对，
- * 而镜像正是这条命令最常用的选项，直连慢才是用它的理由。
- * `parseMirrorArg` 已为已移除的 `--mirror-all`、`--no-mirror`/`--direct` 单独抛错，
- * 此处补上其余拼写——已移除选项要放行到 parseMirrorArg，它的迁移指引比通用「未知选项」更有用。
- */
-function assertKnownKernelFlags(args: string[]): void {
-  const KNOWN_FLAGS = new Set(['--mirror']);
-  const unknown = args
-    .slice(1)
-    .filter(a => a.startsWith('-') && !KNOWN_FLAGS.has(a) && !a.startsWith('--mirror='))
-    // --mirror-all / --no-mirror / --direct 留给 parseMirrorArg：它们有解释「为何移除」的专门文案，
-    // 比通用的「未知选项」更有用，别让这里抢先吞掉
-    .filter(a => a !== '--mirror-all' && !a.startsWith('--mirror-all='))
-    .filter(a => a !== '--no-mirror' && a !== '--direct');
-  if (unknown.length > 0) {
-    throw new CliError(`未知的选项: ${unknown.join(', ')}`, {
-      label: '参数错误',
-      hint: [
-        '',
-        '可用选项:',
-        '  --mirror [镜像]   强制走镜像（默认按网络选 v6/裸域）',
-        '',
-        '不带选项时自动选择通道: gh > 本机代理 > 直连',
-        '',
-        `可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`,
-        '短别名: --mirror cdn | v4 | v6 | axisnow',
-      ],
-    });
-  }
-}
-
 export async function cmdKernel(args: string[]): Promise<void> {
-  assertKnownKernelFlags(args);
   const mirrorInfo = parseMirrorArg(args);
   const effectiveMirror = mirrorInfo.mirror;
 
@@ -119,7 +85,7 @@ export async function cmdKernel(args: string[]): Promise<void> {
         label: '下载失败',
         hint: [
           '',
-          '下载通道按优先级自动选择: gh（GitHub CLI）> 本机代理 > 镜像 > 直连',
+          '下载通道按优先级自动选择: gh（GitHub CLI）> 本机代理 > 直连',
           '手动指定: mihomo kernel --mirror [镜像]（强制镜像）/ mihomo kernel --mirror direct（强制直连）',
         ],
       });

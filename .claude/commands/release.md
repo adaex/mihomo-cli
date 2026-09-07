@@ -7,22 +7,22 @@ argument-hint: [版本号]
 
 ## 发布前检查清单
 
-- [ ] `npm run typecheck && npm test && npm run check` 全绿
+- [ ] `npm run typecheck`、`npm test`、`npm run check` 全绿；worktree 下显式 `npx biome check src/`，检查数量不能为 0
 - [ ] 所有新增功能已在 `README.md` 中说明
 - [ ] 命令列表与 `src/commands/registry.ts` 实际注册一致
 - [ ] `CHANGELOG.md` 顶部已添加新版本记录
-- [ ] 若本轮改了 `CODE_REVIEW.md` 涉及的代码，同步更新该文档（基线、单测数、未处理项）
+- [ ] 若本轮改了 `CODE_REVIEW.md` 涉及的代码，同步更新该文档（验证范围、结果与未处理项）
 
 命令列表那条不用肉眼比对 README，直接把注册表打出来：
 
 ```bash
 npx tsx -e "
 import { COMMANDS } from './src/commands/registry.ts';
-for (const c of COMMANDS) console.log([c.name, ...c.aliases].join(', ').padEnd(46), c.usage.length ? '(有 usage)' : '(无 usage)', c.hidden ? '[hidden]' : '');
+for (const c of COMMANDS) console.log([c.name, ...c.aliases].join(', ').padEnd(46), c.usage.length ? '(有 usage)' : '(无 usage)');
 "
 ```
 
-`[hidden]` 的是墓碑命令与过渡别名（`daemon`/`up`/`down`/`log`），本就不该在 README 里；「无 usage」的是纯别名（`tun`、`use`），由主命令的用法行覆盖。本轮没动注册表就跳过这条，别每次都重头核一遍。
+注册表只包含当前支持的命令与别名；「无 usage」的快捷命令（tun、use）由主命令的用法行覆盖。本轮未改注册表时可跳过这项
 
 ## 步骤
 
@@ -64,7 +64,9 @@ node dist/index.js version    # 必须是本次要发的版本，不是看 packa
 cd /tmp && mkdir vp && cd vp
 npm pack mihomo-cli@X.Y.Z && tar -xzf mihomo-cli-X.Y.Z.tgz
 MIHOMO_CLI_DIR=/tmp/vp/data node package/dist/index.js version
-# 再挑本轮修的行为跑一两条，用 MIHOMO_CLI_DIR 隔离，别碰 ~/.mihomo-cli
+# 再选本轮改动验证；涉及服务时还须隔离 MIHOMO_CLI_DAEMON_LABEL，避免触碰用户 LaunchAgent
 ```
 
-v4.7.5 就是这样验的：三处修复各在发布产物上复现了一遍（带序号归档能列出、`reset --full` 后 settings.json 不重建、持锁瞬间锁文件落在数据目录根下）。**注意锁文件正常释放后即删，静态 `ls` 看不到**，要在持锁期间高频扫描才能观察到落点。用完删掉 `/tmp/vp`。
+删除或更名导出、字段时，同步检查测试中的内嵌脚本和本文示例，类型检查无法覆盖这些字符串
+
+验证锁位置要在持锁期间观察，正常释放后锁文件会删除；完成后清理临时目录、进程与测试 plist

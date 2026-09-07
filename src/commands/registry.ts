@@ -5,7 +5,6 @@ import { printHelp, printVersion } from './help.js';
 import { cmdKernel } from './kernel.js';
 import { cmdLogs } from './log.js';
 import { cmdOverwrite } from './overwrite.js';
-import { removedCommand } from './removed.js';
 import { cmdReset } from './reset.js';
 import { cmdInstall, cmdUninstall } from './service.js';
 import { cmdStart } from './start.js';
@@ -45,13 +44,8 @@ export interface Command {
   rewrite?: (args: string[]) => string[];
   /** 帮助分组;meta(help/version)不在分组清单中展示 */
   group: CommandGroup;
-  /** 该命令在帮助中的用法行(单一真相源);空数组表示不单独列出(如纯别名 open/on/off) */
+  /** 该命令在帮助中的用法行(单一真相源);空数组表示不单独列出(如快捷命令 tun) */
   usage: UsageLine[];
-  /**
-   * 隐藏命令：不参与 shell 补全词表（墓碑命令、纯过渡别名）。
-   * 帮助是否展示由 usage 是否为空决定，与此标记正交。
-   */
-  hidden?: boolean;
 }
 
 /**
@@ -103,38 +97,6 @@ export const COMMANDS: Command[] = [
     group: 'control',
     usage: [{ signature: 'status [-j|--json] [--no-probe]', description: '查看状态' }],
   },
-  // === 已移除（墓碑：显式报错指引迁移，不在帮助中列出） ===
-  {
-    name: 'daemon',
-    aliases: [],
-    handler: removedCommand('daemon', 'v4.1.0', [
-      '保活已成为 Mixed 模式的唯一运行方式，改用服务命令族：',
-      '  mihomo daemon on   →  mihomo install（一次）+ mihomo start',
-      '  mihomo daemon off  →  mihomo stop（停止并关闭自启）',
-      '  mihomo daemon      →  mihomo status',
-      '',
-      '彻底移除服务: mihomo uninstall',
-    ]),
-    group: 'meta',
-    usage: [],
-    hidden: true,
-  },
-  {
-    name: 'up',
-    aliases: [],
-    handler: removedCommand('up', 'v4.1.0', ['请用: mihomo start']),
-    group: 'meta',
-    usage: [],
-    hidden: true,
-  },
-  {
-    name: 'down',
-    aliases: [],
-    handler: removedCommand('down', 'v4.1.0', ['请用: mihomo stop']),
-    group: 'meta',
-    usage: [],
-    hidden: true,
-  },
   // === 界面 ===
   {
     name: 'ui',
@@ -142,23 +104,6 @@ export const COMMANDS: Command[] = [
     handler: cmdUI,
     group: 'interface',
     usage: [{ signature: 'ui [zash|dash|yacd]', description: '打开 Web UI（默认 zash）' }],
-  },
-  {
-    // 已并入 `logs -f`；保留为隐藏别名过渡，不在帮助中列出（usage 留空），也不进补全词表
-    name: 'log',
-    aliases: [],
-    handler: cmdLogs,
-    // 隐藏别名：log = logs 0 -f。用户传了编号时尊重编号（log 1 = logs 1 -f），
-    // 而非恒为 0——此前编号被 '0' 顶掉，log 1 跟随的是当前日志而非归档 1
-    rewrite: args => {
-      const hasNum = args[1] !== undefined && /^\d+$/.test(args[1]);
-      const num = hasNum ? args[1] : '0';
-      const rest = hasNum ? args.slice(2) : args.slice(1);
-      return ['logs', num, '-f', ...rest];
-    },
-    group: 'interface',
-    usage: [],
-    hidden: true,
   },
   {
     name: 'logs',
@@ -217,7 +162,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdKernel,
     group: 'system',
-    usage: [{ signature: 'kernel [--mirror [镜像]]', description: '更新内核（自动选择通道：gh > 本机代理 > 镜像 > 直连）' }],
+    usage: [{ signature: 'kernel [--mirror [镜像]]', description: '更新内核（自动选择通道：gh > 本机代理 > 直连）' }],
   },
   {
     name: 'update',

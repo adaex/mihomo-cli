@@ -69,9 +69,6 @@ export interface UserInfo {
 
 export interface BuildConfigResult {
   config: Record<string, unknown>;
-  subscriptionConfig: Record<string, unknown>;
-  overwriteFiles: OverwriteFileEntry[];
-  systemConfig: Record<string, unknown>;
   warnings: string[];
 }
 
@@ -107,9 +104,6 @@ export interface ProcessStatus {
   running: boolean;
   pid: number | null;
   processInfo: ProcessInfo | null;
-  hasConfig: boolean;
-  hasKernel: boolean;
-  kernelVersion: string | null;
 }
 
 export interface ProcessInfo {
@@ -252,8 +246,6 @@ export interface ConfigInfo {
   proxies: number;
   proxyGroups: number;
   mixedPort: number | null;
-  httpPort: number | null;
-  socksPort: number | null;
   tun: boolean;
 }
 
@@ -292,7 +284,7 @@ export interface StatusJson {
   pid: number | null;
   kernel: string | null;
   kernelInstalled: boolean;
-  ports: { mixed?: number; http?: number; socks?: number; tun?: boolean };
+  ports: { mixed?: number; tun?: boolean };
   subscription: {
     name: string;
     proxies: number;
@@ -327,10 +319,7 @@ export interface ResetTarget {
   label: string;
   paths: () => string[];
   needsStop: boolean;
-  onAfter?: () => void | Promise<void>;
-  checkEmpty?: () => boolean;
-  emptyMsg?: string;
-  warnIfRunning?: boolean;
+  preserveOnBare?: boolean;
 }
 
 // === Directory ===
@@ -338,25 +327,6 @@ export interface ResetTarget {
 export interface DirectoryTarget {
   path: string | null;
   label: string;
-}
-
-// === Parsed Subscription ===
-
-export interface ParsedProxy {
-  name: string;
-  [k: string]: unknown;
-}
-
-export interface ParsedProxyGroup {
-  name: string;
-  proxies?: string[];
-  [k: string]: unknown;
-}
-
-export interface ParsedSubscription {
-  raw: Record<string, unknown>;
-  proxies: ParsedProxy[];
-  proxyGroups: ParsedProxyGroup[];
 }
 
 // === HTTP Client ===

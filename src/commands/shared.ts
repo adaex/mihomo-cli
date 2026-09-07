@@ -21,19 +21,18 @@ export interface SubCommand {
 
 /**
  * 子命令分发：按 args[1] 在表中匹配主名或别名，命中即调其 handler。
- * 未命中时：无 action → 走 fallback；action 非空且提供 onUnknown → 交其处理（通常抛 CliError），
- * 未提供 onUnknown → 未知 action 也回落 fallback（如 ow/dir 的"任意参数都显示列表"语义）。
+ * 无 action 时走 fallback；未知 action 必须交给 onUnknown 报错。
  */
 export async function dispatchSubcommand(
   args: string[],
   table: SubCommand[],
-  options: { fallback: (args: string[]) => void | Promise<void>; onUnknown?: (action: string) => void },
+  options: { fallback: (args: string[]) => void | Promise<void>; onUnknown: (action: string) => never },
 ): Promise<void> {
   const action = args[1];
   if (action) {
     const cmd = table.find(c => c.name === action || c.aliases?.includes(action));
     if (cmd) return cmd.handler(args);
-    if (options.onUnknown) return options.onUnknown(action);
+    return options.onUnknown(action);
   }
   return options.fallback(args);
 }

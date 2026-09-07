@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -178,9 +178,9 @@ describe('getPorts：端口逃生口（settings.ports）', () => {
     const script = [
       `import fs from 'node:fs';`,
       `import assert from 'node:assert/strict';`,
-      `import { getPorts, invalidateSettingsCache } from ${JSON.stringify(settingsPath)};`,
+      `import { getPorts } from ${JSON.stringify(settingsPath)};`,
       `const file = process.env.MIHOMO_CLI_DIR + '/settings.json';`,
-      `const write = o => { fs.writeFileSync(file, JSON.stringify(o)); invalidateSettingsCache(); };`,
+      `const write = o => { fs.writeFileSync(file, JSON.stringify(o)); };`,
       `write({});`,
       `assert.deepEqual(getPorts(), { mixed: 7890, controller: 9090 });`,
       `write({ ports: { mixed: 17890, controller: 19090 } });`,
@@ -208,6 +208,37 @@ describe('getPorts：端口逃生口（settings.ports）', () => {
         child.on('error', () => resolve(-1));
       });
       assert.equal(code, 0, 'getPorts 场景断言应全部通过（子进程退出码非 0）');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('设置读取与更新不依赖进程缓存', () => {
+  it('文件被替换后读取新值，失败的 mutator 不写盘', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-settings-fresh-'));
+    try {
+      const script = `
+        import assert from 'node:assert/strict';
+        import fs from 'node:fs';
+        import path from 'node:path';
+        import { readSettings, updateSettings, writeSettings } from ${JSON.stringify(path.resolve('src/settings.ts'))};
+        const file = path.join(process.env.MIHOMO_CLI_DIR, 'settings.json');
+        writeSettings({ active_subscription: 'before' });
+        assert.equal(readSettings().active_subscription, 'before');
+        fs.writeFileSync(file, JSON.stringify({ active_subscription: 'after', ports: { mixed: 17890 } }));
+        assert.equal(readSettings().active_subscription, 'after');
+        const previous = fs.readFileSync(file, 'utf8');
+        assert.throws(() => updateSettings(() => { throw new Error('cancel'); }));
+        assert.equal(fs.readFileSync(file, 'utf8'), previous);
+        writeSettings({ overwrite_enabled: false });
+        assert.deepEqual(readSettings(), { active_subscription: 'after', ports: { mixed: 17890 }, overwrite_enabled: false });
+      `;
+      const result = spawnSync(process.execPath, ['--import', 'tsx', '-e', script], {
+        encoding: 'utf8',
+        env: { ...process.env, MIHOMO_CLI_DIR: tmpDir },
+      });
+      assert.equal(result.status, 0, result.stderr);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

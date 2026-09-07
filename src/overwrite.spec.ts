@@ -258,7 +258,7 @@ describe('normalizeMatch（match 块 fail-closed）', () => {
     });
   };
 
-  it('无 match 块返回 undefined（全局生效，向后兼容）', () => {
+  it('无 match 块返回 undefined（默认全局生效）', () => {
     assert.equal(normalizeMatch(undefined, 'overwrite.yaml'), undefined);
     assert.equal(normalizeMatch(null, 'overwrite.yaml'), undefined);
   });

@@ -9,7 +9,7 @@ import { after, describe, it } from 'node:test';
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-dns-'));
 process.env.MIHOMO_CLI_DIR = tmpDir;
 
-const { buildConfig, validateConfig } = await import('./config.js');
+const { buildConfig, assertConfigShape } = await import('./config.js');
 const { CliError } = await import('./errors.js');
 
 after(() => {
@@ -136,9 +136,9 @@ describe('dns 形态校验（TUN 与 mixed 两条路径）', () => {
     });
   }
 
-  it('validateConfig 单独调用时也校验 dns（assertConfigShape 内）', () => {
+  it('assertConfigShape 单独调用时也校验 dns（assertConfigShape 内）', () => {
     assert.throws(
-      () => validateConfig({ dns: 'yes' }),
+      () => assertConfigShape({ dns: 'yes' }),
       (e: unknown) => e instanceof CliError && /dns 配置必须是映射/.test((e as Error).message),
     );
   });
