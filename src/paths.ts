@@ -58,6 +58,19 @@ export const PATHS = {
   settingsLock: path.join(USER_DATA_DIR, 'settings.lock'),
   subscriptionCacheLock: path.join(USER_DATA_DIR, 'subscription-cache.lock'),
   serviceLock: path.join(USER_DATA_DIR, 'service.lock'),
+  /**
+   * 「服务被要求停止」的单调计数（`service.ts` 的 `bumpStopEpoch`/`readStopEpoch`）。
+   *
+   * 为什么需要它：判断「本次 start 执行**期间**是否有人 stop 过」，launchd 自身给不出答案——
+   * disable 位只有当前值，没有写入时间，而它又是**持久**的（上次 stop 留下的与刚刚新置的
+   * 完全同形）。只比对 disable 位的前后快照，在「上次也 stop 过」时两边都是 true，
+   * 并发 stop 就此隐形（v4.7.6 的残留缺口）。计数值变了则一定有人 stop 过，与位的当前值无关。
+   *
+   * 与锁同放 USER_DATA_DIR 根下，理由相同：`runtime/` 等目录会被 `rmrf`，
+   * 文件消失即读作 0，会让「期间发生过 stop」丢失。命名**刻意不以 `Lock` 结尾**——
+   * 它不是锁，不该进 `paths.spec.ts` 那条锁位置断言的枚举。
+   */
+  serviceStopEpoch: path.join(USER_DATA_DIR, 'service-stop-epoch'),
   configStage1Subscription: path.join(DIRS.runtime, '1.subscription.yaml'),
   configStage2Overwrite: path.join(DIRS.runtime, '2.overwrite.yaml'),
   configStage3System: path.join(DIRS.runtime, '3.system.yaml'),

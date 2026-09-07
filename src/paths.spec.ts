@@ -157,6 +157,18 @@ describe('锁文件的存放位置', () => {
     }
   });
 
+  // 停止计数不是锁（命名刻意不带 Lock 后缀，否则会被上面的枚举当锁断言），
+  // 但**同样不能被 rmrf 带走**：文件消失即读作 0，于是「期间发生过 stop」这个事实丢失，
+  // 并发的 start 会把用户刚跑完的 stop 覆盖掉。故单独点名断言它的位置。
+  it('停止计数文件不在会被 rmrf 的目录下', () => {
+    for (const [dirName, dir] of wipedDirs) {
+      assert.ok(
+        !PATHS.serviceStopEpoch.startsWith(`${dir}${path.sep}`),
+        `serviceStopEpoch 不能放在 ${dirName}/ 下（${PATHS.serviceStopEpoch}）：被删后读作 0，并发 stop 的记录丢失`,
+      );
+    }
+  });
+
   it('锁文件被第三方连目录删掉后互斥即失效（上面那条断言守的就是这个）', () => {
     // 复现机制本身，锁死「为什么位置很重要」。用独立的临时目录模拟被删的 runtime/。
     const wiped = path.join(tmpDir, 'runtime');

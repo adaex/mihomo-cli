@@ -532,12 +532,17 @@ function killResidualKernels(): void {
  * 首装则显式 `disable`——install 只负责装，启动是 `start` 的事。
  *
  * 前置只要求内核存在（plist 指向它）；**不要求 config.yaml**，因为装完不启动。
+ *
+ * 返回 `restoreSkipped=true` 表示 `wasRunning` 的恢复运行被**并发的 stop** 取消
+ * （安装本身已成功）。调用方必须据此跳过健康确认——否则会对着一个本就不该启动的服务
+ * 报「恢复运行失败」，把用户的 stop 说成故障。
  */
-export async function installService(wasRunning: boolean): Promise<void> {
+export async function installService(wasRunning: boolean): Promise<{ restoreSkipped: boolean }> {
   assertServiceLabelSafe();
   ensureDirs();
   ensureServiceSymlink();
 
+  let restoreSkipped = false;
   const stagePath = path.join(DIRS.runtime, 'service.plist.stage');
   atomicWriteFileSync(stagePath, buildPlist(), { mode: 0o600 });
 
@@ -563,7 +568,15 @@ export async function installService(wasRunning: boolean): Promise<void> {
     fs.chmodSync(PATHS.userAgentPlist, 0o644);
 
     if (wasRunning) {
+      // 与 startService 同族：并发的 stop 若在重装期间跑完（重装含 bootout + 等待，
+      // 有真实窗口），这里的 enable+bootstrap 会把它的成果覆盖掉，终态与用户最后一条
+      // 命令相反。判据共用 shouldAbortStartOnDisable——**别在这里散写别的判据**
+      const stopEpochBefore = readStopEpoch();
       withFileLock(PATHS.serviceLock, () => {
+        if (shouldAbortStartOnDisable(stopEpochBefore, readStopEpoch())) {
+          restoreSkipped = true;
+          return;
+        }
         runLaunchctlOrThrow(['enable', serviceTarget()], '启用服务');
         runLaunchctlOrThrow(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist], '装载服务');
       });
@@ -585,35 +598,83 @@ export async function installService(wasRunning: boolean): Promise<void> {
     // `|| true` 地跑，失败时用户拿到「已安装」，而 RunAtLoad 会让它下次登录自启
     disableServiceAutoStart();
   }
+
+  return { restoreSkipped };
+}
+
+/**
+ * 「服务被要求停止」的单调计数。**只在持 `serviceLock` 时读写**（调用点都在锁内）。
+ *
+ * 存在的理由见 `PATHS.serviceStopEpoch` 的注释：launchd 的 disable 位是持久状态、
+ * 没有写入时间，「上次 stop 留下的」与「刚刚并发置的」完全同形，光比对位的前后快照
+ * 在「上次也 stop 过」时区分不出来。计数只增不减，值变了就一定有人 stop 过。
+ *
+ * 读失败一律返回 0（文件不存在是首次运行的正常形态；内容损坏时宁可退回
+ * 「按无并发处理」也不能让 start 抛错——start 是用户显式意图，不该被一个辅助计数挡住）。
+ *
+ * 导出仅供测试：并发用例要验的是**这一份**实现在跨进程下的行为，
+ * 测试里另抄一份等于在验副本，两边一漂移就测了个假的。
+ */
+export function readStopEpoch(): number {
+  try {
+    const n = Number.parseInt(fs.readFileSync(PATHS.serviceStopEpoch, 'utf8').trim(), 10);
+    return Number.isSafeInteger(n) && n >= 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * 递增停止计数。写失败**静默忽略**：它只用于并发判定，写不进去最坏是退回 v4.7.6 的行为
+ * （并发 stop 可能被 start 覆盖），而让 `stop` 因为一个辅助文件写不了就整体失败，
+ * 是拿主功能给辅助机制陪葬——stop 的真正职责（bootout + disable）已经完成了。
+ *
+ * **不自己取锁**，故在 `stopService`/`uninstallService` 的 `serviceLock` 临界区内调用是
+ * 安全的（`withFileLock` 不可重入，自己取锁会死等到强夺）。另两个调用点（install 首装、
+ * `cmdStart` 的 TUN 分支）在锁外，那里的读-改-写确实可能与他人交错而丢掉一次递增——
+ * 但判据只问「值变没变」，不问增量准不准，丢一次递增不影响正确性。
+ */
+function bumpStopEpoch(): void {
+  try {
+    ensureDirs();
+    atomicWriteFileSync(PATHS.serviceStopEpoch, String(readStopEpoch() + 1));
+  } catch {
+    /* ignore：见函数头注释 */
+  }
 }
 
 /**
  * 锁内是否应放弃启动。判据只有一份，`startService` 与回归测试共用——
  * **别在别处散写 `isServiceDisabledInLaunchd()` 就 return**，那正是 v4.7.5 的缺陷形态。
  *
- * disable 位有两种来源，语义完全相反，只看「当前是否 disabled」区分不出来：
+ * 判据是**停止计数是否变化**，不是 disable 位的值。位有两种来源、语义相反，而位本身
+ * 区分不出来（都是 `true`）：
  *
- * - **命令开始前就存在**（`disabledBefore`）：上次 `stop` 或 `tun` 留下的持久状态。
- *   该位持久化在 plist 之外、launchctl 没有清除动词，会一直躺在那儿直到被 `enable`。
- *   用户现在显式敲了 `start`，意图就是启动——必须 enable 后照常 bootstrap。
- * - **命令执行期间新出现**：另一终端在慢速 start（订阅自动更新约 10s）期间跑了 `stop`。
- *   用户最后一条命令是 stop，此时启动会让终态与之相反——跳过。
+ * - **上次 `stop`/`tun` 留下的持久位**：该位存在 plist 之外、launchctl 无清除动词，
+ *   会一直躺着直到被 `enable`。用户现在显式敲了 `start`，意图就是启动——照常 enable + bootstrap
+ * - **本次执行期间另一终端跑了 `stop`**：用户最后一条命令是 stop，启动会让终态与之相反——跳过
  *
- * v4.7.5 把前者误判成后者：`stop`/`tun` 之后的每一次 `start` 都静默不 enable、不 bootstrap，
- * 内核永不被 launchd 拉起，而 `assertServiceHealthy` 报的是「内核未能进入运行状态」并
- * 指向一个从未被创建的日志文件——用户完全无从关联到上次的 stop，只能手动 `launchctl enable`。
+ * 两版的教训各记一次，别再退回任何一边：
+ *
+ * - **v4.7.5**：判据是「当前是否 disabled」。把第一种误判成第二种，于是 `stop`/`tun` 之后的
+ *   **每一次** `start` 都静默不 enable、不 bootstrap，内核永不被拉起，报错却是「内核未能进入
+ *   运行状态」+ 一个从未被创建的日志路径。用户只能手动 `launchctl enable` 才能恢复
+ * - **v4.7.6**：判据是「disable 位的前后快照比对」。修好了上面那条，但**「上次也 stop 过」时
+ *   两边快照都是 true**，并发 stop 就此隐形——恰恰是防线本来要防的场景，在最常见的前置状态下失效
+ *
+ * 现在用计数：它由 CLI 自己在每次 disable 时递增，与位的当前值完全解耦。
  */
-export function shouldAbortStartOnDisable(disabledBefore: boolean, disabledNow: boolean): boolean {
-  return !disabledBefore && disabledNow;
+export function shouldAbortStartOnDisable(stopEpochBefore: number, stopEpochNow: number): boolean {
+  return stopEpochNow !== stopEpochBefore;
 }
 
 /**
  * 启动服务并开启自启。返回 `started=false` 表示被**并发的 stop** 取消（见
  * `shouldAbortStartOnDisable`）——调用方必须把它当失败处理，不能继续报「已启动」。
  *
- * @param disabledBefore 命令开始时（订阅更新等慢速阶段**之前**）的 disable 位快照。
- *   取自 `cmdStart` 开头的 `getServiceStatus()`；**不能在本函数内部现取**——那时慢速阶段
- *   已经过去，并发的 stop 与上次 stop 留下的持久位就分不出来了。
+ * @param stopEpochBefore 命令开始时（订阅更新等慢速阶段**之前**）的停止计数快照，
+ *   取自 `cmdStart` 开头的 `readStopEpochForStart()`。**不能在本函数内部现取**——
+ *   那时慢速阶段已经过去，期间发生的 stop 就被算进「基线」了。
  *
  * 顺序关键：`enable` 必须在 `bootstrap` **之前**——本机实测，bootstrap 一个 disabled 的
  * label 直接硬失败 `Bootstrap failed: 5: Input/output error`（不是「加载了但不启动」）。
@@ -625,8 +686,14 @@ export function shouldAbortStartOnDisable(disabledBefore: boolean, disabledNow: 
  * 拆成两次 launchctl 调用（bootout / bootstrap），中间插入日志轮转：轮转的 rename
  * 只在「旧进程已退出、新进程未起」这个窗口里有效，见下方注释。两次调用都在用户域，
  * 全程免密，拆开不额外弹密码。
+ *
+ * **bootout 刻意留在锁外**：`withFileLock` 要求 `fn` 同步（持锁期间 await 会把锁按住
+ * 整个异步等待，慢速下让另一进程等到强夺陈旧锁，等于没锁），而 bootout 后必须
+ * `waitUntilUnloaded`（最多 5s）。放在锁外是安全的——并发 stop 若发生在此处，
+ * A 的 bootout 只是幂等空操作，而**计数变化会在锁内被检出并中止启动**。
+ * 这正是判据从「disable 位快照」换成计数的价值：不必靠扩大临界区来防这个窗口。
  */
-export async function startService(disabledBefore: boolean): Promise<{ started: boolean }> {
+export async function startService(stopEpochBefore: number): Promise<{ started: boolean }> {
   assertServiceLabelSafe();
   ensureServiceSymlink();
 
@@ -674,15 +741,17 @@ export async function startService(disabledBefore: boolean): Promise<{ started: 
   // enable 必须在 bootstrap 之前（见 installService 的注释）；stop 恒置 disable 位，
   // 「stop 之后再 start」是最常走的路径
   //
-  // 跨进程锁：慢速 start（订阅自动更新 ~10s）期间另一终端 stop 会 bootout+disable，
+  // 跨进程锁：慢速 start（订阅自动更新 ~10s）期间另一终端 stop 会 bootout+disable+bump，
   // start 随后的 enable+bootstrap 会把自启位又打开，终态与用户最后一条命令相反。
-  // 锁串行化 enable/bootstrap 与 stop 的 bootout/disable；锁内再查一次 disabled，
-  // **与命令开始前的快照比对**——只有「期间新出现」才是并发 stop，才跳过启动
-  // （判据见 shouldAbortStartOnDisable：光看「现在是否 disabled」会把 stop/tun 留下的
-  //   持久位也当成并发 stop，于是 stop 之后的每一次 start 都静默什么都不做）
+  // 锁串行化 enable/bootstrap 与 stop 的 bootout/disable/bump；锁内读一次停止计数，
+  // **与命令开始前的快照比对**——变了就是期间有人 stop 过，放弃启动
+  //
+  // 判据是计数而非 disable 位，见 shouldAbortStartOnDisable：位是持久的，
+  // 「上次 stop 留下的」与「刚刚并发置的」完全同形，比对位的快照在「上次也 stop 过」
+  // 这个最常见的前置状态下会让并发 stop 完全隐形（v4.7.6 的残留缺口）
   let started = true;
   withFileLock(PATHS.serviceLock, () => {
-    if (shouldAbortStartOnDisable(disabledBefore, isServiceDisabledInLaunchd())) {
+    if (shouldAbortStartOnDisable(stopEpochBefore, readStopEpoch())) {
       started = false;
       return;
     }
@@ -703,6 +772,11 @@ export async function startService(disabledBefore: boolean): Promise<{ started: 
  * 用户开机看到的是「代理不通、日志被刷爆」，且与自己上次用 TUN 毫无表面关联。
  *
  * 幂等：已 disable 时再调一次无副作用（launchctl 照常写一条同值记录）。
+ *
+ * **停止计数的递增收口在这里**，不在各调用点：五处调用（install 首装、stop、uninstall×2、
+ * cmdStart 的 TUN 分支）语义都是「让服务别自启」，任何一处漏 bump 都会让并发判据在那条
+ * 路径上失效——而「防线只铺一条路径」正是本仓反复栽的坑。放在这个唯一出口，新增调用点
+ * 自动获得正确行为。
  */
 export function disableServiceAutoStart(): void {
   assertServiceLabelSafe();
@@ -717,6 +791,10 @@ export function disableServiceAutoStart(): void {
       hint: [`手动确认: launchctl print-disabled ${bootstrapDomain()}`, '', '不关闭自启的话，重启后服务会拿 TUN 配置反复拉起必然失败的内核。'],
     });
   }
+
+  // 放在确认之后：位没真生效就不该记「停止过」，否则一次失败的 disable 会让
+  // 并发的 start 白白中止（用户拿到「启动已取消」，而实际上没有任何一方成功停止）
+  bumpStopEpoch();
 }
 
 /**

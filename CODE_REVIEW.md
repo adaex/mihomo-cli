@@ -1,8 +1,8 @@
 # 代码审查：风险与教训
 
-> 当前基线：v4.7.6
+> 当前基线：v4.7.7
 > 上次全面审查：2026-09-06（第二轮独立复审，聚焦「文档未覆盖」与「防线只铺一条路径」的同族缺口，修复 3 项缺陷 + 3 项过度设计）
-> v4.7.6：用户实测报告的单点修复（`start` 被持久 disable 位卡死），非全面审查
+> v4.7.6/v4.7.7：用户实测报告的单点修复及其残留缺口收尾（`start` 与并发 stop 的判据），非全面审查
 
 **这份文档只记录两类内容**：本轮发现的未处理项，以及**验证过、下轮不必重查**的结论。
 
@@ -91,7 +91,14 @@ v4.7.3 的信号死亡实测就是按「一次性 label + 只用 bootstrap/booto
 - **TUN 启动观察满 1.2s 窗口**（v4.2.3 修）：此前 0.4s 单次 `kill -0` 首次存活即收口，且 `kill -0` 对僵尸进程（bash 未收割的已死子进程）也返回成功——判活以 `ps -o stat=` 状态列为准（Z 开头或查不到都算死）；CLI 收口用 `isRunning()` 复核而非纯读 pid 文件
 - **install 重装恢复运行走健康确认**（v4.2.3 修）：`wasRunning` 分支 bootstrap 后复用 `assertServiceHealthy`，不再以「bootstrap 没报错」打印「已按原状态重新启动」（v4.2.0 给 start 修的同族缺陷，防线此前只铺了主路径）
 - **stop/tun/reset 覆盖遗留 root daemon**（v4.2.3 修）：`detectLegacySystemInstall` 此前只被 install/uninstall/status/reset(checkEmpty) 使用，stop 与 start(tun) 不查——legacy daemon 的 KeepAlive 会把刚杀掉的内核约 10s 拉回，「已停止」成谎报；`reset service` 的 onAfter 也不处理 legacy，报「已重置」原样保留。现在五处统一经 `cleanupLegacyInstallOrThrow()`（含 sudo 取消的 CliError 包装）
-- **`start` 不再被持久 disable 位永久卡死**（v4.7.6 修，用户实测报告）：`startService` 锁内「查到 disabled 就 return」的并发防线（v4.7.5 加）把 `stop`/`tun` 留下的**持久**位误当成并发 stop——disable 位持久化在 plist 之外且 launchctl 无清除动词，于是 `mihomo stop` 或 `mihomo tun` 之后的**每一次** `mihomo start` 都静默不 enable、不 bootstrap，内核永不被 launchd 拉起。失效面全是误导：报错是「内核未能进入运行状态」、附的日志路径**从未被创建**（用户据此以为是配置或内核问题，手动直跑内核却一切正常），而 CLI 自己的文案还承诺着「TUN 用完后 `mihomo start` 可恢复」。唯一出路是手动 `launchctl enable`。判据现收口为纯函数 `shouldAbortStartOnDisable(disabledBefore, disabledNow)`——只有「本次执行**期间**新出现」才算并发 stop，快照取自 `cmdStart` 开头（慢速阶段之前）经 `launchOrRestart` 透传；被并发 stop 取消时 `startService` 返回 `started:false`，抛专门文案而非落进 `assertServiceHealthy` 的通用分支。四条组合有单测，**反向验证过**（改回旧判据后「开始前就存在 → 必须照常启动」当场失败，其余三条仍过）；enable→bootstrap 的恢复效果用一次性 label + 桩内核真机实测（disabled 下 bootstrap 确为硬失败 `5: Input/output error`，enable 后 `state = running`，验完即 bootout 清理）。**教训**：给并发场景加防线时，要问「这个信号除了并发，还有没有别的来源」——disable 位的两种来源语义相反，而单次采样把它们抹平了
+- **并发 start/stop 的判据改用停止计数**（v4.7.7 修，v4.7.6 的残留缺口）：v4.7.6（见下一条）把判据从「当前是否 disabled」改成「disable 位的前后快照比对」，修好了日常失效，但**「上次也 stop 过」时两边快照都是 `true`**——并发 stop 完全隐形，防线在最常见的前置状态下是空的。可达序列：A 跑慢速 start（快照 `disabledBefore=true`，因上次 stop 过）→ B 跑完整个 `stop` → A 锁内查到 `disabledNow=true` → 判为「非并发」→ enable + bootstrap，把 B 的 stop 覆盖掉，终态与用户最后一条命令相反。
+
+  根因是 **launchd 只给当前值，给不出「位是何时被写的」**，任何基于位的判据都区分不了两种来源。改用 CLI 自己维护的单调计数（`PATHS.serviceStopEpoch`）：递增**收口在 `disableServiceAutoStart` 内**（五个调用点，任一漏 bump 就是那条路径的防线空洞），且放在「位已确认生效」之后。判据 `shouldAbortStartOnDisable(stopEpochBefore, stopEpochNow)` 退化为 `!==`，与位的当前值彻底解耦。
+
+  同族路径 `installService` 的 `wasRunning` 恢复分支共用该判据（它也在锁内 enable+bootstrap，同样会反噬并发 stop），取消时返回 `restoreSkipped:true`，`cmdInstall` 据此跳过健康确认——否则会把用户的 stop 报成「恢复运行失败」。`bootout` 刻意仍在锁外（`withFileLock` 要求 fn 同步，而 bootout 后需 `waitUntilUnloaded` 最多 5s）：并发 stop 落在该窗口时 A 的 bootout 只是幂等空操作，计数变化仍会在锁内被检出——这正是计数判据相对「扩大临界区」的价值。
+
+  验证：判据五条组合 + 三条走真实 `readStopEpoch`（经 `MIHOMO_CLI_DIR` 指向 tmpdir，不碰 launchctl 故无系统痕迹）+ 一条位置断言（epoch 不能落在会被 `rmrf` 的目录，否则被删后读作 0 丢失记录）。**反向验证过**：v4.7.6 判据在「基线非 0 且期间又 stop」下返回 `false`（放行 → 覆盖），计数判据返回 `true`。另跑了四场景端到端脚本，两代缺陷各自的失效点都覆盖到。**教训**：这个判据两版都错在同一件事上——拿一个**状态**去推断一个**事件**。位是状态，「有没有人 stop 过」是事件；状态没有历史，事件才有。
+- **`start` 不再被持久 disable 位永久卡死**（v4.7.6 修，用户实测报告）：`startService` 锁内「查到 disabled 就 return」的并发防线（v4.7.5 加）把 `stop`/`tun` 留下的**持久**位误当成并发 stop——disable 位持久化在 plist 之外且 launchctl 无清除动词，于是 `mihomo stop` 或 `mihomo tun` 之后的**每一次** `mihomo start` 都静默不 enable、不 bootstrap，内核永不被 launchd 拉起。失效面全是误导：报错是「内核未能进入运行状态」、附的日志路径**从未被创建**（用户据此以为是配置或内核问题，手动直跑内核却一切正常），而 CLI 自己的文案还承诺着「TUN 用完后 `mihomo start` 可恢复」。唯一出路是手动 `launchctl enable`。判据当时收口为 `shouldAbortStartOnDisable(disabledBefore, disabledNow)`（**v4.7.7 已改为计数判据，见上一条**）；被并发 stop 取消时 `startService` 返回 `started:false`，抛专门文案而非落进 `assertServiceHealthy` 的通用分支。enable→bootstrap 的恢复效果用一次性 label + 桩内核真机实测（disabled 下 bootstrap 确为硬失败 `5: Input/output error`，enable 后 `state = running`，验完即 bootout 清理）
 
 **内核下载**
 - 来源钉死、curl 全链路强制 https、下载后比对 `asset.size`、自检 `-v` 均已实现——规则见 CLAUDE.md「内核下载的来源信任」
@@ -139,6 +146,6 @@ macOS 硬依赖，无其他平台后端：
 
 ## 工程
 
-- 单测 314（`npm test`，经 tsx 跑 `*.spec.ts`）
+- 单测 319（`npm test`，经 tsx 跑 `*.spec.ts`）
 - `prepublishOnly: npm run build`：`dist/` 被 gitignore，漏跑 build 即发布陈旧产物。**它只保证 build 跑过，不保证 tarball 里的东西对**——版本号、`files` 字段任一出错 `npm publish` 都照样成功，故 publish 前至少 `node dist/index.js version` 自检一次（流程见 `/release` 的「产物自检」）
 - v4.7.5 起发布后会从 registry 拉回产物实跑本轮修的行为。验证锁位置时注意：**锁文件正常释放后即删，静态 `ls` 看不到**，要在持锁期间高频扫描才能观察到落点

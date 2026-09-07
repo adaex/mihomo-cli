@@ -43,12 +43,22 @@ export async function cmdInstall(_args: string[]): Promise<void> {
   // 重装保持原运行状态：不这么做的话，「代理开着时更新内核后重装」会静默把代理关掉
   const wasRunning = getServiceStatus().running;
 
-  await installService(wasRunning);
+  const { restoreSkipped } = await installService(wasRunning);
 
   console.log(`${colors.green('已安装服务')}`);
   console.log(colors.gray(`  plist: ${PATHS.userAgentPlist}`));
   console.log(colors.gray(`  登录项与扩展中显示为: ${SERVICE_BINARY_NAME}`));
   console.log('');
+
+  if (restoreSkipped) {
+    // 并发的 stop 在重装期间跑完。安装成功、恢复运行被取消，两件事都要说清楚——
+    // 不能走下面的健康确认分支，那会把用户自己的 stop 报成「恢复运行失败」
+    console.log(colors.yellow('未恢复运行：安装期间检测到 stop'));
+    console.log(colors.gray('  另一个终端执行了 mihomo stop，已按最后一条命令保持停止'));
+    console.log(colors.gray('  启动: mihomo start'));
+    console.log('');
+    return;
+  }
 
   if (wasRunning) {
     // bootstrap 返回 0 ≠ 内核活着（v4.2.0 实测的崩溃循环形态）：

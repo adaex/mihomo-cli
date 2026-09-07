@@ -4,7 +4,7 @@ import { readLogTail } from './log-files.js';
 import { PATHS } from './paths.js';
 import { getStatus } from './process-probe.js';
 import { startTun } from './process-start.js';
-import { describeExitCause, getServiceStatus, isServiceInstalled, restartService, startService, waitServiceHealthy } from './service.js';
+import { describeExitCause, getServiceStatus, isServiceInstalled, readStopEpoch, restartService, startService, waitServiceHealthy } from './service.js';
 import type { ProcessInfo, ServiceStatus } from './types.js';
 
 /**
@@ -83,11 +83,12 @@ export function isRestartNeededOnChange(): boolean {
  * 就报「已启动」——用户以为代理开着，实际完全没有代理。详见 waitServiceHealthy。
  * 热重载路径无需确认：它没有重启进程，且配置被拒时会回退到 kickstart（走确认分支）。
  *
- * @param disabledBefore 命令开始时的 disable 位快照，透传给 `startService` 用于区分
- *   「上次 stop/tun 留下的持久位」与「本次执行期间的并发 stop」。默认 `false`
- *   （无快照即视为非并发，照常 enable——宁可多 enable 一次，也不要静默什么都不做）
+ * @param stopEpochBefore 命令开始时的停止计数快照（`readStopEpoch()`），
+ *   透传给 `startService` 判定「本次执行期间是否有人 stop 过」。默认 `undefined`
+ *   表示无快照——此时现取一次，退化为「只防本函数执行期间的 stop」而非整条命令期间。
+ *   命令层应显式传入慢速阶段之前的快照（`cmdStart` 即如此）
  */
-export async function launchOrRestart(mode: RuntimeMode, disabledBefore = false): Promise<number | null> {
+export async function launchOrRestart(mode: RuntimeMode, stopEpochBefore?: number): Promise<number | null> {
   if (mode === 'tun') {
     const result = await startTun();
     return result.pid;
@@ -101,7 +102,7 @@ export async function launchOrRestart(mode: RuntimeMode, disabledBefore = false)
     const { hotReloaded } = await restartService();
     if (hotReloaded) return getServiceStatus().pid;
   } else {
-    const { started } = await startService(disabledBefore);
+    const { started } = await startService(stopEpochBefore ?? readStopEpoch());
 
     // 被并发的 stop 取消。必须单独成一条错误：落进 assertServiceHealthy 会报
     // 「内核未能进入运行状态」并附一个从未被创建的日志路径，指向完全错误的排查方向

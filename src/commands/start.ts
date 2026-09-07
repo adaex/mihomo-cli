@@ -3,7 +3,7 @@ import { hasKernel } from '../config.js';
 import { DEFAULT_AUTO_UPDATE_TIMEOUT } from '../constants.js';
 import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
-import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, disableServiceAutoStart, getServiceStatus } from '../service.js';
+import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, disableServiceAutoStart, getServiceStatus, readStopEpoch } from '../service.js';
 import { getPorts } from '../settings.js';
 import * as subscription from '../subscription.js';
 import type { PreparedConfig } from '../types.js';
@@ -38,6 +38,13 @@ export async function cmdStart(args: string[]): Promise<void> {
   const updateTimeout = parseIntArg(args, '-u', '--update-timeout', DEFAULT_AUTO_UPDATE_TIMEOUT);
 
   const serviceBefore = getServiceStatus();
+
+  // 停止计数的快照必须取在这里——**订阅自动更新等慢速阶段之前**。取晚了，期间发生的
+  // stop 就被算进基线，并发判定失效（见 service.ts 的 shouldAbortStartOnDisable）。
+  //
+  // 下面 TUN 分支的 disableServiceAutoStart() 也会 bump，但那与本快照无关：
+  // TUN 走 startTun()，压根不消费 epoch，两个分支互斥
+  const stopEpochBefore = readStopEpoch();
 
   if (targetMode === 'tun') {
     // 遗留 root daemon 与 TUN 抢同一组端口：KeepAlive 会反复拉起旧内核，
@@ -108,9 +115,9 @@ export async function cmdStart(args: string[]): Promise<void> {
   console.log([colors.cyan(modeLabel), sub.name, subscription.formatProxySummary(configInfo)].join(' · '));
 
   try {
-    // 传 serviceBefore.disabled：它取自命令开头（订阅自动更新等慢速阶段**之前**），
-    // 正是区分「上次 stop/tun 留下的持久 disable 位」与「本次执行期间的并发 stop」所需的快照
-    const pid = await runtime.launchOrRestart(targetMode, serviceBefore.disabled);
+    // 传 stopEpochBefore：取自命令开头（订阅自动更新等慢速阶段**之前**），
+    // 用于判定本次执行期间是否有另一终端跑过 stop
+    const pid = await runtime.launchOrRestart(targetMode, stopEpochBefore);
     console.log(`${colors.green('已启动')}${pid ? ` (PID ${pid})` : ''}`);
   } catch (e) {
     if (e instanceof CliError) throw e;

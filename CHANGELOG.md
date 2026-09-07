@@ -1,5 +1,27 @@
 # Changelog
 
+## [4.7.7] - 2026-09-07
+
+收尾 v4.7.6 修复留下的残留缺口：并发判据换成停止计数，与 launchd 的 disable 位解耦。单测 319（+5）。
+
+### 修复
+
+- **并发的 `stop` 在「上次也 stop 过」时会被 `start` 覆盖**：v4.7.6 把判据从「当前是否 disabled」改成「disable 位的前后快照比对」，修好了「stop 之后 start 永远起不来」，但留了个反向的洞——**两边快照都是 `true` 时判为「非并发」**。可达序列：A 跑慢速 start（上次 stop 过，故快照 `disabledBefore=true`）→ B 在订阅更新那约 10s 里跑完整个 `mihomo stop` → A 锁内查到仍是 `true` → 判为「无人 stop」→ enable + bootstrap，把 B 的 stop 覆盖掉。用户最后一条命令是 stop，终态却是运行中，而两个终端都拿到了成功回执。
+
+  根因是 **launchd 只提供 disable 位的当前值，给不出「它是何时被写的」**——任何基于位的判据都区分不了「上次留下的」与「刚刚新置的」。改用 CLI 自己维护的单调计数（`~/.mihomo-cli/service-stop-epoch`）：`start` 在慢速阶段之前取快照、锁内复读，值变了就说明期间有人 stop 过，与位的当前值完全解耦。递增**收口在 `disableServiceAutoStart` 内**（五个调用点，任一漏 bump 就是那条路径上的防线空洞），并放在「位已确认生效」之后——位没生效就记「停止过」，会让并发的 start 白白中止。
+
+  同族路径 `installService` 的 `wasRunning` 恢复分支共用该判据（它同样在锁内 enable+bootstrap，同样会反噬并发 stop），被取消时返回 `restoreSkipped: true`，`cmdInstall` 据此跳过健康确认并单独提示——否则会把用户自己的 stop 报成「恢复运行失败」。
+
+  `bootout` 刻意仍留在锁外：`withFileLock` 要求 fn 同步（持锁期间 await 会让另一进程等到强夺陈旧锁），而 bootout 后必须 `waitUntilUnloaded`（最多 5s）。这是安全的——并发 stop 落在该窗口时，start 侧的 bootout 只是幂等空操作，计数变化仍会在锁内被检出。这正是计数判据相对「扩大临界区」的价值。
+
+  **教训**：这个判据两版都错在同一件事上——拿一个**状态**去推断一个**事件**。disable 位是状态，「有没有人 stop 过」是事件；状态没有历史，事件才有。发现自己在用「读一下当前值」回答「期间发生过什么」时，就该换判据而不是换比较方式。
+
+### 测试
+
+- `shouldAbortStartOnDisable` 五条组合（含 v4.7.6 漏掉的「基线非 0 且期间又 stop」）+ 三条走**真实** `readStopEpoch` 的用例（经 `MIHOMO_CLI_DIR` 指向 tmpdir，不碰 launchctl 故系统无痕迹）。测试调的是 `service.ts` 导出的实现而非另抄一份——抄一份等于在验副本
+- `paths.spec.ts` 补一条：停止计数文件同样不能落在会被 `rmrf` 的目录（它命名刻意不带 `Lock` 后缀，不进锁枚举，故单独点名）。被删后读作 0，「期间发生过 stop」的记录就丢了
+- **反向验证过**：v4.7.6 的判据在「基线非 0 且期间又 stop」下返回 `false`（放行 → 覆盖并发 stop），计数判据返回 `true`。另跑四场景端到端脚本，两代缺陷各自的失效点都覆盖到
+
 ## [4.7.6] - 2026-09-07
 
 用户实测报告的单点修复：`mihomo stop` 或 `mihomo tun` 之后，`mihomo start` **再也起不来**。单测 314（+4）。

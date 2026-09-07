@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { isValidServiceLabel } from './constants.js';
@@ -327,32 +331,117 @@ describe('parseDisabledList：区分 disabled/enabled，不在表中视为启用
 });
 
 /**
- * v4.7.5 的缺陷：`startService` 锁内只查「当前是否 disabled」就 return，
- * 把 `stop`/`tun` 留下的**持久** disable 位误当成并发 stop。后果是 stop 之后的
- * **每一次** `start` 都静默不 enable、不 bootstrap，内核永不被拉起，
- * 而报错是「内核未能进入运行状态」+ 一个从未被创建的日志路径——完全指错方向，
- * 用户只能手动 `launchctl enable` 才能恢复（实测复现，darwin arm64 / v4.7.5）。
+ * 这个判据被改错过两次，两种错法的失效方向相反，故用例必须同时锁住两边。
  *
- * disable 位是持久状态、launchctl 无清除动词，所以「stop 之后再 start」是**必经路径**，
- * 这四条把两种来源的语义都锁死：光看 `disabledNow` 的实现会让第 2 条失败。
+ * - **v4.7.5**：判据是「当前是否 disabled」。disable 位是持久的（`stop`/`tun` 置位后
+ *   一直留着，launchctl 无清除动词），于是 stop 之后的**每一次** `start` 都被误判成
+ *   并发 stop，静默不 enable、不 bootstrap，内核永不被拉起。报错却是「内核未能进入
+ *   运行状态」+ 一个从未被创建的日志路径（实测复现，darwin arm64）
+ * - **v4.7.6**：判据是「disable 位的前后快照比对」。修好了上面那条，但「上次也 stop 过」时
+ *   两边快照都是 `true`，并发 stop 完全隐形——防线在最常见的前置状态下是空的
+ *
+ * 现在判据是**停止计数是否变化**：计数由 CLI 在每次 disable 成功后递增，与位的当前值
+ * 完全解耦。第 3 条（「上次 stop 过 + 本次又有人 stop」）就是 v4.7.6 漏掉的那个组合，
+ * 也是这一版真正修的东西。
  */
-describe('shouldAbortStartOnDisable：只有「执行期间新出现」的 disable 位才算并发 stop', () => {
-  it('期间新出现 → 是并发 stop，放弃启动（用户最后一条命令是 stop）', () => {
-    assert.equal(shouldAbortStartOnDisable(false, true), true);
+describe('shouldAbortStartOnDisable：判据是停止计数的变化，不是 disable 位的值', () => {
+  it('计数未变 → 无人 stop，照常启动', () => {
+    assert.equal(shouldAbortStartOnDisable(5, 5), false);
   });
 
-  // 这条是 v4.7.5 缺陷的直接回归：stop/tun 之后 start 的必经形态
-  it('开始前就存在 → 是上次 stop/tun 的残留，必须照常 enable 并启动', () => {
-    assert.equal(shouldAbortStartOnDisable(true, true), false);
+  // v4.7.5 缺陷的回归：上次 stop 留下的持久位不该拦住本次显式 start。
+  // 计数判据下它天然成立——位再怎么持久，没人新 stop 计数就不动
+  it('计数未变（哪怕当前 disabled 位是开着的）→ 照常启动', () => {
+    assert.equal(shouldAbortStartOnDisable(0, 0), false);
   });
 
-  it('全程未 disabled → 正常启动', () => {
-    assert.equal(shouldAbortStartOnDisable(false, false), false);
+  it('计数变了 → 期间有人 stop 过，放弃启动', () => {
+    assert.equal(shouldAbortStartOnDisable(5, 6), true);
   });
 
-  // 期间被 enable（如另一终端 install/start 跑完）：不该拦，用户意图仍是启动
-  it('开始前 disabled、期间被清掉 → 正常启动', () => {
-    assert.equal(shouldAbortStartOnDisable(true, false), false);
+  // **v4.7.6 漏掉的组合**：上次 stop 过（基线非 0）且本次期间又有人 stop。
+  // 旧的位快照判据在这里两边都是 true → 判为「非并发」→ 把并发 stop 覆盖掉
+  it('基线非 0 且期间又 stop → 仍能检出（v4.7.6 在此失效）', () => {
+    assert.equal(shouldAbortStartOnDisable(3, 4), true);
+  });
+
+  // 计数只增不减，但判据用「不等于」而非「大于」：epoch 文件被 reset 删掉后重置为 0，
+  // 若基线是 7、现值是 0，那也意味着期间发生过状态变更，保守起见同样中止
+  it('计数回退（文件被删后重置为 0）→ 同样视为发生过变更', () => {
+    assert.equal(shouldAbortStartOnDisable(7, 0), true);
+  });
+});
+
+/**
+ * 判据的纯函数用例只锁「给定两个数怎么判」，锁不住「这两个数是否真的反映了并发」。
+ * 这一组补的就是后者：epoch 文件在真实文件系统下能否让 start 侧看见 stop 侧的动作。
+ *
+ * 调的是 `service.ts` 导出的**真实** `readStopEpoch`（经 `MIHOMO_CLI_DIR` 指向 tmpdir），
+ * 不在测试里另抄一份——抄一份等于在验副本，两边一漂移就测了个假的。
+ *
+ * 不碰 launchctl——`disableServiceAutoStart` 会真改 launchd 的 disabled 表（在系统里
+ * 留永久记录，见 `CODE_REVIEW.md` 的「决策豁免」）。这里只验计数机制本身：
+ * 文件层通了，配合上面的判据用例，整条链路的正确性就锁住了。
+ */
+describe('停止计数的读取（并发判定的物理基础）', () => {
+  /**
+   * 在隔离数据目录里跑一段用真实 readStopEpoch 的脚本，返回其 stdout。
+   * 用子进程是因为 `PATHS` 在模块加载时就固化了 `MIHOMO_CLI_DIR`，同进程内改环境变量无效。
+   */
+  const readEpochIn = (dir: string): number => {
+    const servicePath = path.resolve('src/service.ts');
+    const r = spawnSync(
+      process.execPath,
+      ['--import', 'tsx', '-e', `import { readStopEpoch } from ${JSON.stringify(servicePath)}; process.stdout.write(String(readStopEpoch()));`],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, MIHOMO_CLI_DIR: dir, MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1' },
+        timeout: 30_000,
+      },
+    );
+    assert.equal(r.status, 0, `读取子进程应正常退出: ${r.stderr}`);
+    return Number.parseInt(r.stdout.trim(), 10);
+  };
+
+  it('文件不存在时读作 0（首次运行的正常形态，不能抛错挡住 start）', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-epoch-'));
+    try {
+      assert.equal(readEpochIn(dir), 0);
+      // 与 0 比对 → 判为「无并发」→ start 照常进行。首次运行必须能启动
+      assert.equal(shouldAbortStartOnDisable(0, readEpochIn(dir)), false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('内容损坏时读作 0，不抛错', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-epoch-'));
+    try {
+      for (const junk of ['', '  ', 'abc', '-1', 'NaN']) {
+        fs.writeFileSync(path.join(dir, 'service-stop-epoch'), junk);
+        assert.equal(readEpochIn(dir), 0, `损坏内容 ${JSON.stringify(junk)} 应读作 0`);
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // 核心场景：A 取基线 → B（另一进程）stop 递增 → A 复读，必须看见变化。
+  // 这正是 v4.7.6 检不出的那个组合——基线非 0（上次也 stop 过）且期间又发生 stop
+  it('基线非 0 时另一进程递增，复读能看见（v4.7.6 在此失效）', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-epoch-'));
+    const file = path.join(dir, 'service-stop-epoch');
+    try {
+      fs.writeFileSync(file, '3'); // 上次 stop 留下的基线
+      const before = readEpochIn(dir);
+      assert.equal(before, 3);
+
+      fs.writeFileSync(file, '4'); // 另一进程 stop
+
+      assert.equal(shouldAbortStartOnDisable(before, readEpochIn(dir)), true, '基线非 0 时也必须检出并发 stop');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
