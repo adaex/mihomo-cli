@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { isValidServiceLabel } from './constants.js';
-import { buildPlist, describeAbnormalExit, describeExitCause, parseDisabledList, parseServicePrint } from './service.js';
+import { buildPlist, describeAbnormalExit, describeExitCause, parseDisabledList, parseServicePrint, shouldAbortStartOnDisable } from './service.js';
 import type { ServiceStatus } from './types.js';
 
 /**
@@ -323,6 +323,36 @@ describe('parseDisabledList：区分 disabled/enabled，不在表中视为启用
   it('label 前缀相同但更长的条目不误匹配', () => {
     const out = '\t\t"com.mihomo-cli.daemon.extra" => disabled';
     assert.equal(parseDisabledList(out, 'com.mihomo-cli.daemon'), false);
+  });
+});
+
+/**
+ * v4.7.5 的缺陷：`startService` 锁内只查「当前是否 disabled」就 return，
+ * 把 `stop`/`tun` 留下的**持久** disable 位误当成并发 stop。后果是 stop 之后的
+ * **每一次** `start` 都静默不 enable、不 bootstrap，内核永不被拉起，
+ * 而报错是「内核未能进入运行状态」+ 一个从未被创建的日志路径——完全指错方向，
+ * 用户只能手动 `launchctl enable` 才能恢复（实测复现，darwin arm64 / v4.7.5）。
+ *
+ * disable 位是持久状态、launchctl 无清除动词，所以「stop 之后再 start」是**必经路径**，
+ * 这四条把两种来源的语义都锁死：光看 `disabledNow` 的实现会让第 2 条失败。
+ */
+describe('shouldAbortStartOnDisable：只有「执行期间新出现」的 disable 位才算并发 stop', () => {
+  it('期间新出现 → 是并发 stop，放弃启动（用户最后一条命令是 stop）', () => {
+    assert.equal(shouldAbortStartOnDisable(false, true), true);
+  });
+
+  // 这条是 v4.7.5 缺陷的直接回归：stop/tun 之后 start 的必经形态
+  it('开始前就存在 → 是上次 stop/tun 的残留，必须照常 enable 并启动', () => {
+    assert.equal(shouldAbortStartOnDisable(true, true), false);
+  });
+
+  it('全程未 disabled → 正常启动', () => {
+    assert.equal(shouldAbortStartOnDisable(false, false), false);
+  });
+
+  // 期间被 enable（如另一终端 install/start 跑完）：不该拦，用户意图仍是启动
+  it('开始前 disabled、期间被清掉 → 正常启动', () => {
+    assert.equal(shouldAbortStartOnDisable(true, false), false);
   });
 });
 

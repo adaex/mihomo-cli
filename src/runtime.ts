@@ -82,8 +82,12 @@ export function isRestartNeededOnChange(): boolean {
  * 内核因坏配置立即退出时 KeepAlive 会反复拉起，而此前只固定 sleep 500ms 取一次 pid
  * 就报「已启动」——用户以为代理开着，实际完全没有代理。详见 waitServiceHealthy。
  * 热重载路径无需确认：它没有重启进程，且配置被拒时会回退到 kickstart（走确认分支）。
+ *
+ * @param disabledBefore 命令开始时的 disable 位快照，透传给 `startService` 用于区分
+ *   「上次 stop/tun 留下的持久位」与「本次执行期间的并发 stop」。默认 `false`
+ *   （无快照即视为非并发，照常 enable——宁可多 enable 一次，也不要静默什么都不做）
  */
-export async function launchOrRestart(mode: RuntimeMode): Promise<number | null> {
+export async function launchOrRestart(mode: RuntimeMode, disabledBefore = false): Promise<number | null> {
   if (mode === 'tun') {
     const result = await startTun();
     return result.pid;
@@ -97,7 +101,16 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
     const { hotReloaded } = await restartService();
     if (hotReloaded) return getServiceStatus().pid;
   } else {
-    await startService();
+    const { started } = await startService(disabledBefore);
+
+    // 被并发的 stop 取消。必须单独成一条错误：落进 assertServiceHealthy 会报
+    // 「内核未能进入运行状态」并附一个从未被创建的日志路径，指向完全错误的排查方向
+    if (!started) {
+      throw new CliError('启动已取消：期间检测到 stop', {
+        label: '启动失败',
+        hint: ['另一个终端在本次启动过程中执行了 mihomo stop，已按最后一条命令保持停止。', '', '确实要启动: mihomo start'],
+      });
+    }
   }
 
   return assertServiceHealthy();

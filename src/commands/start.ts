@@ -108,7 +108,9 @@ export async function cmdStart(args: string[]): Promise<void> {
   console.log([colors.cyan(modeLabel), sub.name, subscription.formatProxySummary(configInfo)].join(' · '));
 
   try {
-    const pid = await runtime.launchOrRestart(targetMode);
+    // 传 serviceBefore.disabled：它取自命令开头（订阅自动更新等慢速阶段**之前**），
+    // 正是区分「上次 stop/tun 留下的持久 disable 位」与「本次执行期间的并发 stop」所需的快照
+    const pid = await runtime.launchOrRestart(targetMode, serviceBefore.disabled);
     console.log(`${colors.green('已启动')}${pid ? ` (PID ${pid})` : ''}`);
   } catch (e) {
     if (e instanceof CliError) throw e;

@@ -198,7 +198,7 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 改 `service.ts` 前先读该文件的函数头注释——launchd 的实测事实都锚在对应代码处，且由测试用真实 launchctl 锁住：
 
 - bootstrap 成功 ≠ 进程活着（假健康窗口长度不固定，必须观察满一个窗口）；判据是 `last exit code`
-- `enable` 必须在 `bootstrap` 之前；`stop` 恒置 disable 位，「stop 之后 start」是必经路径
+- `enable` 必须在 `bootstrap` 之前（disabled 时 bootstrap 是**硬失败** `Bootstrap failed: 5: Input/output error`，不是「装载但不启动」）；`stop` 恒置 disable 位，「stop 之后 start」是必经路径——故 start 路径**不得**因「当前 disabled」就跳过启动，判据见「settings.json / cache.json 的读-改-写必须持锁」末段的 `shouldAbortStartOnDisable`
 - disable 位持久化在 plist 之外，launchctl 没有「清除记录」的动词；uninstall 不清位是刻意的
 - 退出码分级：只有 `113` 是「未装载」，`112`/`125` 是查询失败（`assertLaunchctlQueryOk` 收口，`service-exitcode.spec.ts` 锁住）
 - **信号死亡走另一个字段**：被 `kill -9`/OOM killer 干掉时 launchd 只写 `last terminating signal = Killed: 9`，`last exit code` **整行消失**（两字段互斥，不跨 bootstrap 残留）。崩溃判据必须两者取一，只看退出码会让这类死法完全不可见。**判据只有一份：`describeExitCause(exitCode, signal)`**，三个消费者共用（`isCrashed` 判有无、`describeAbnormalExit` 供 status/doctor、`assertServiceHealthy` 供 start/install 的失败文案）——**别在任何地方散写 `lastExitCode !== 0`，也别自己拼 `退出码 ${exitCode}`**（信号死亡时它是 null，会显示成「退出码 null」；v4.7.3 收口时正是漏了 `assertServiceHealthy` 这个消费者，v4.7.4 才补上）
@@ -246,6 +246,8 @@ CI 在 `macos-latest` 上跑 typecheck/check/test/build（`.github/workflows/ci.
 **`cache.json` 同理**：`saveSubscriptionCache` / `deleteSubscriptionCache` 一律持 `withFileLock`。并发回归测试必须用 `spawn` 并行起子进程，`spawnSync` 逐个跑完根本测不出并发。实测细节见 `settings.ts`/`paths.ts` 注释与 `settings.spec.ts`。
 
 **服务操作同理**：`startService`/`stopService`/`installService`/`uninstallService` 的 enable/bootstrap/bootout/disable 共持 `service.lock`（`service.ts`）——慢速 `start`（订阅更新约 10s）期间另一终端 `stop` 跑完后，start 随后的 `enable` 会把自启位重新打开，终态与用户最后一条命令相反。start 在锁内要再查一次 disabled 再决定是否启动。
+
+**但「锁内再查一次」的判据是「与命令开始前的快照比对」，不是「当前是否 disabled」**：disable 位是**持久**状态（`stop`/`tun` 置位后一直留着，launchctl 无清除动词），而并发 stop 的特征是「本次执行**期间**新出现」。只看当前值会把两者混为一谈——v4.7.5 即如此，后果是 `stop`/`tun` 之后的**每一次** `start` 都静默不 enable、不 bootstrap，内核永不被拉起，报错却是「内核未能进入运行状态」并指向一个从未被创建的日志文件，用户只能手动 `launchctl enable` 才能恢复。判据收口在纯函数 `shouldAbortStartOnDisable(disabledBefore, disabledNow)`（`service.spec.ts` 四条组合全锁），快照由 `cmdStart` 开头的 `getServiceStatus()` 取、经 `launchOrRestart` 透传——**必须取自慢速阶段之前**，在 `startService` 内部现取就退化回原缺陷。被并发 stop 取消时 `startService` 返回 `started:false`，由 `launchOrRestart` 抛专门的「启动已取消：期间检测到 stop」，不能落进 `assertServiceHealthy` 的通用文案。
 
 ### 等进程退出的轮询必须让出事件循环
 

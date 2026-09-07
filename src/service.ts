@@ -588,7 +588,32 @@ export async function installService(wasRunning: boolean): Promise<void> {
 }
 
 /**
- * 启动服务并开启自启。
+ * 锁内是否应放弃启动。判据只有一份，`startService` 与回归测试共用——
+ * **别在别处散写 `isServiceDisabledInLaunchd()` 就 return**，那正是 v4.7.5 的缺陷形态。
+ *
+ * disable 位有两种来源，语义完全相反，只看「当前是否 disabled」区分不出来：
+ *
+ * - **命令开始前就存在**（`disabledBefore`）：上次 `stop` 或 `tun` 留下的持久状态。
+ *   该位持久化在 plist 之外、launchctl 没有清除动词，会一直躺在那儿直到被 `enable`。
+ *   用户现在显式敲了 `start`，意图就是启动——必须 enable 后照常 bootstrap。
+ * - **命令执行期间新出现**：另一终端在慢速 start（订阅自动更新约 10s）期间跑了 `stop`。
+ *   用户最后一条命令是 stop，此时启动会让终态与之相反——跳过。
+ *
+ * v4.7.5 把前者误判成后者：`stop`/`tun` 之后的每一次 `start` 都静默不 enable、不 bootstrap，
+ * 内核永不被 launchd 拉起，而 `assertServiceHealthy` 报的是「内核未能进入运行状态」并
+ * 指向一个从未被创建的日志文件——用户完全无从关联到上次的 stop，只能手动 `launchctl enable`。
+ */
+export function shouldAbortStartOnDisable(disabledBefore: boolean, disabledNow: boolean): boolean {
+  return !disabledBefore && disabledNow;
+}
+
+/**
+ * 启动服务并开启自启。返回 `started=false` 表示被**并发的 stop** 取消（见
+ * `shouldAbortStartOnDisable`）——调用方必须把它当失败处理，不能继续报「已启动」。
+ *
+ * @param disabledBefore 命令开始时（订阅更新等慢速阶段**之前**）的 disable 位快照。
+ *   取自 `cmdStart` 开头的 `getServiceStatus()`；**不能在本函数内部现取**——那时慢速阶段
+ *   已经过去，并发的 stop 与上次 stop 留下的持久位就分不出来了。
  *
  * 顺序关键：`enable` 必须在 `bootstrap` **之前**——本机实测，bootstrap 一个 disabled 的
  * label 直接硬失败 `Bootstrap failed: 5: Input/output error`（不是「加载了但不启动」）。
@@ -601,7 +626,7 @@ export async function installService(wasRunning: boolean): Promise<void> {
  * 只在「旧进程已退出、新进程未起」这个窗口里有效，见下方注释。两次调用都在用户域，
  * 全程免密，拆开不额外弹密码。
  */
-export async function startService(): Promise<void> {
+export async function startService(disabledBefore: boolean): Promise<{ started: boolean }> {
   assertServiceLabelSafe();
   ensureServiceSymlink();
 
@@ -652,16 +677,20 @@ export async function startService(): Promise<void> {
   // 跨进程锁：慢速 start（订阅自动更新 ~10s）期间另一终端 stop 会 bootout+disable，
   // start 随后的 enable+bootstrap 会把自启位又打开，终态与用户最后一条命令相反。
   // 锁串行化 enable/bootstrap 与 stop 的 bootout/disable；锁内再查一次 disabled，
-  // 若 stop 在等待期间已跑完则跳过启动（用户最后一条命令是 stop）
+  // **与命令开始前的快照比对**——只有「期间新出现」才是并发 stop，才跳过启动
+  // （判据见 shouldAbortStartOnDisable：光看「现在是否 disabled」会把 stop/tun 留下的
+  //   持久位也当成并发 stop，于是 stop 之后的每一次 start 都静默什么都不做）
+  let started = true;
   withFileLock(PATHS.serviceLock, () => {
-    if (isServiceDisabledInLaunchd()) {
-      // 服务在等待期间被 stop（或 TUN 启动前的 disableServiceAutoStart）停掉了，
-      // 不重新拉起——用户最后一条命令是 stop
+    if (shouldAbortStartOnDisable(disabledBefore, isServiceDisabledInLaunchd())) {
+      started = false;
       return;
     }
     runLaunchctlOrThrow(['enable', serviceTarget()], '启用服务');
     runLaunchctlOrThrow(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist], '启动服务');
   });
+
+  return { started };
 }
 
 /**
@@ -722,7 +751,9 @@ export async function stopService(): Promise<void> {
  * **不清 disable 位**：launchctl 没有「清除记录」的动词——`enable` 同样会往
  * /var/db/com.apple.xpc.launchd/ 写一条 `=> enabled`（实测可见），并不比 `disable` 干净。
  * 既然两者都留痕，就选语义更安全的那个：plist 若被别的途径放回也不会自动启动。
- * 而 startService 恒无条件 `enable`，残留位不影响任何正常路径。
+ * 而 `startService` 只在「本次执行期间新出现」的 disable 位上才放弃启动
+ * （见 `shouldAbortStartOnDisable`），残留位属「命令开始前就存在」，照常被 enable 覆盖，
+ * 不影响任何正常路径。
  */
 export async function uninstallService(): Promise<void> {
   assertServiceLabelSafe();
