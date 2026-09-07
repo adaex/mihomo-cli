@@ -1,5 +1,26 @@
 # Changelog
 
+## [4.7.6] - 2026-09-07
+
+用户实测报告的单点修复：`mihomo stop` 或 `mihomo tun` 之后，`mihomo start` **再也起不来**。单测 314（+4）。
+
+### 修复
+
+- **`start` 被 `stop`/`tun` 留下的持久 disable 位永久卡死**：v4.7.5 给 `startService` 加的并发防线判据用错了——锁内查到 disabled 就直接 return，既不 `enable` 也不 `bootstrap`。但 disable 位有**两种来源，语义完全相反**：一种是上次 `stop`/`tun` 留下的**持久**状态（该位存在 plist 之外，launchctl 没有清除动词，会一直躺着直到被 `enable`），另一种才是「本次执行**期间**另一终端跑了 `stop`」这个真正要防的并发。单次采样把两者抹平，于是前者被当成后者：`stop`/`tun` 之后的**每一次** `start` 都静默什么都不做，内核永不被 launchd 拉起，唯一出路是用户手动 `launchctl enable`。
+
+  失效面全是误导：报错是「启动失败: 内核未能进入运行状态」（走的是非 crashed 分支），附的日志路径**从未被创建过**——用户据此以为是配置或内核的问题，手动直跑同参数的内核却一切正常；而 CLI 自己的文案还在承诺「TUN 用完后 `mihomo start` 可恢复」「`stop` 后 `mihomo start` 可恢复服务」。
+
+  修法是**收窄判据而非删掉防线**（直接删能修好现象，但会把并发保护一起删了）：判据收口为纯函数 `shouldAbortStartOnDisable(disabledBefore, disabledNow)`，只有「期间新出现」才算并发 stop。快照取自 `cmdStart` 开头（订阅自动更新等慢速阶段**之前**）已有的 `getServiceStatus()`，经 `launchOrRestart` 透传——在 `startService` 内部现取会退化回原缺陷。另把并发取消单独成一条错误（「启动已取消：期间检测到 stop」），此前它也落进 `assertServiceHealthy`，意味着真并发场景同样会看到那句指错方向的「内核未能进入运行状态」。
+
+  顺带修掉 `uninstallService` 头注释里已失效的一句（「`startService` 恒无条件 `enable`」——v4.7.5 起就不成立，这处自相矛盾正好佐证了防线与原设计意图冲突）。
+
+  **教训**：给并发场景加防线时要问一句「这个信号除了并发，还有没有别的来源」。disable 位的两种来源语义相反，而「查一下当前是否 disabled」这个看似自然的判据把它们抹平了。
+
+### 测试
+
+- `shouldAbortStartOnDisable` 四条组合全锁（`service.spec.ts`）。**反向验证过**：把判据改回旧实现后，精确只有「开始前就存在 → 必须照常启动」这条失败，其余三条仍过——说明测试锁的是缺陷本身，不是顺带的行为
+- launchd 语义用一次性 label + 桩内核真机实测（验完即 `bootout`，无残留）：确认 disabled 下 `bootstrap` 是**硬失败** `Bootstrap failed: 5: Input/output error`（故只删 early-return 而不 `enable` 会换一种方式失败），`enable` → `bootstrap` 后 `state = running` 并拿到真实 pid
+
 ## [4.7.5] - 2026-09-06
 
 第二轮独立复审，聚焦**同族缺口**：三处缺陷有共同模式——防线或测试断言只铺了一条路径，同族的另一条躺在盲区里。另清理三处过度设计。单测 310（+20）。
