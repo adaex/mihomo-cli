@@ -1,7 +1,9 @@
+import { compareVersions } from 'compare-versions';
 import { colors } from './colors.js';
 import { printShortHelp } from './commands/help.js';
 import { allCommandTokens, findCommand } from './commands/registry.js';
 import { printStatus } from './commands/status.js';
+import { MIN_NODE_VERSION } from './constants.js';
 import { CliError } from './errors.js';
 import { isSilentSigint } from './lifecycle.js';
 import { ensureDirs } from './paths.js';
@@ -88,6 +90,27 @@ function assertNotRoot(commandName: string): void {
 }
 
 /**
+ * Node 版本守卫。`package.json` 的 `engines` 只让 npm 打一行 warn 就装上了——
+ * 之后炸在某个语法或 API 上，报错跟真实原因（Node 太旧）毫无表面关联。
+ *
+ * 与平台守卫同族：明确失败优于「部分成功」。豁免名单共用——`version` 必须能跑，
+ * 否则用户连「我装的是哪个版本」都问不出来；`help` 同理。
+ *
+ * `MIN_NODE_VERSION` 为 null（engines 写法不是 `>=x.y.z`）时跳过：不能因为声明格式变了
+ * 就把所有命令挡死。比较用已有的 compare-versions，不自己写版本比较。
+ */
+function assertSupportedNodeVersion(commandName: string): void {
+  if (!MIN_NODE_VERSION) return;
+  if (GUARD_EXEMPT_COMMANDS.has(commandName)) return;
+  const current = process.versions.node;
+  if (compareVersions(current, MIN_NODE_VERSION) >= 0) return;
+  throw new CliError(`Node 版本过低（当前 ${current}，需要 >= ${MIN_NODE_VERSION}）`, {
+    label: 'Node 版本不支持',
+    hint: ['升级 Node 后重试，例如:', '  brew upgrade node', '  或用 nvm: nvm install --lts && nvm use --lts', '', `当前解释器: ${process.execPath}`],
+  });
+}
+
+/**
  * 平台守卫：本工具的 launchd 服务（LaunchAgent/LaunchDaemon）、目录与 UI 打开（open）、提权（sudo）
  * 全部为 macOS 专有实现，无其他平台后端。缺此守卫时非 macOS 会「部分成功」——
  * status/sub 看着正常，install 才在 launchctl 撞墙，
@@ -115,6 +138,7 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
   if (args.length === 0) {
+    assertSupportedNodeVersion('status');
     assertSupportedPlatform('status');
     assertNotRoot('status');
     ensureDirs();
@@ -134,7 +158,9 @@ async function main(): Promise<void> {
   }
 
   // 守卫先于 ensureDirs：不支持的平台上不应在用户家目录留下数据目录，
-  // root 下更不能——sudo 的 HOME 可能是 /var/root，会在那里建一套用户永远看不到的数据目录
+  // root 下更不能——sudo 的 HOME 可能是 /var/root，会在那里建一套用户永远看不到的数据目录。
+  // Node 版本排在最前：版本太旧时后面两个守卫自己都可能因语法/API 报出无关的错
+  assertSupportedNodeVersion(command.name);
   assertSupportedPlatform(command.name);
   assertNotRoot(command.name);
   ensureDirs();

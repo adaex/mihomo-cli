@@ -8,6 +8,21 @@ export const VERSION: string = pkg.version;
 export const PKG_NAME: string = pkg.name;
 
 /**
+ * 支持的最低 Node 版本，取自 package.json 的 `engines.node`（单一来源，不另写一份常量）。
+ *
+ * 只剥掉 `>=` 前缀：本仓的 engines 一直是 `>=x.y.z` 这一种形态，不实现完整的 semver
+ * range 解析——真要改成复杂 range，运行时守卫也该跟着改，而不是在这里猜。
+ * 解析不出版本号时返回 null，守卫据此跳过检查（宁可不拦，也不能因为 engines 写法变了
+ * 就把所有命令挡死）。
+ */
+export const MIN_NODE_VERSION: string | null = (() => {
+  const raw: unknown = pkg.engines?.node;
+  if (typeof raw !== 'string') return null;
+  const m = raw.trim().match(/^>=\s*(\d+\.\d+\.\d+)$/);
+  return m ? m[1] : null;
+})();
+
+/**
  * 镜像的**单一真相源**：短别名 → 完整地址。`--mirror <别名>` 经 `MIRROR_ALIASES` 展开，
  * 帮助文案里的「可用镜像」由 `AVAILABLE_MIRRORS` 从本表派生。
  *

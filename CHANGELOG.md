@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **`mihomo config [--json]`**：查看当前生效的运行配置。**重新推导而非读 `runtime/config.yaml`**——那个文件在 `stop` 时被 `clearRuntime()` 整个删掉，而「停着的时候看看配置对不对」恰是最需要它的场景；改完订阅或覆写想确认结果，也不必先把服务跑起来。推导走 `buildConfig`（与 `start` 同一条路径，故看到的就是启动会写进去的内容），刻意不调 `prepareConfigForStart`——那会执行内核原生校验，而这是只读展示命令，校验归 `doctor` 和 `start`。`secret` 脱敏后展示。
+- **`mihomo completion uninstall <shell>`**：补全此前只能装、不能卸。bash 写的是共享文件 `~/.bash_completion`，故只剥掉自己的标记块、保留用户自己的补全（文件因此变空则一并删掉，避免装卸往返留下空文件）；zsh/fish 独占文件名可以整个删，但**删之前先确认那是本工具生成的**（按脚本特征串判断），否则报错并给出手动路径——误删用户自己写的同名补全比留个孤儿文件糟得多。
+- **Node 版本运行时守卫**：`package.json` 的 `engines` 只让 npm 打一行 warn 就装上了，之后炸在某个语法或 API 上，报错与真实原因（Node 太旧）毫无表面关联。下限从 `engines.node` 读（单一来源，不另写常量），与平台/root 守卫同族、同一份豁免名单（`help`/`version` 必须能跑，否则用户连「装的是哪个版本」都问不出来），并同样排在 `ensureDirs` 之前——否则旧 Node 上会先建出一套数据目录再报错。
+
+### 文档
+
+- 补上彻底卸载的**顺序**陷阱：先 `npm uninstall -g` 会留下带 `KeepAlive` 的 LaunchAgent plist 与已装的补全，而能清理它们的命令已经没了。给出反了之后的手动补救步骤（已逐条核对 label、域与路径）。
+
 ### 修复
 
 - **并发的停止在六条路径上仍会被覆盖或被误报**。v4.7.7 把并发判据换成停止计数后，`CODE_REVIEW` 里挂着三条静态发现的残留缺口；本轮逐条修掉，并顺着同一族形态又找出三处。共同签名是**递增点与消费点没有成对枚举**——收口的对象是判据，不是调用点。
@@ -37,7 +47,9 @@
 
 - 更新配置、设置并发与 reset 的行为测试；reset 测试同时隔离数据目录和服务 label
 - 用 mihomo v1.19.30 验证 Mixed/TUN 配置以及重名节点、缺失引用等拒绝场景，确认失败保留原有运行配置
-- 单测 305（+4）。新增 `commands/stop.spec`：隔离数据目录加不存在的服务 label 天然走「不在运行」分支，一次 launchctl 写操作都不做，故这条能自动化；断言消费者可见的后果而非计数文件内容，并含负向对照（`status` 不得改变计数）。游离内核用真实桩进程验证，判活以 `ps` 状态列为准而非 `kill -0`（僵尸进程会骗过它）
+- 单测 325（+24）。新增 `commands/stop.spec`：隔离数据目录加不存在的服务 label 天然走「不在运行」分支，一次 launchctl 写操作都不做，故这条能自动化；断言消费者可见的后果而非计数文件内容，并含负向对照（`status` 不得改变计数）。游离内核用真实桩进程验证，判活以 `ps` 状态列为准而非 `kill -0`（僵尸进程会骗过它）
+- 新增 `commands/node-guard.spec`（伪造 `process.versions.node` 而非真装旧 Node——真旧 Node 连 tsx 都未必起得来，反而测不到守卫）、`commands/completion-install.spec`（把 `HOME` 指向临时目录跑真实装卸，断言文件最终内容：用户自有内容完好、标记块消失、非本工具产物拒绝删除）、`commands/config.spec`（全部在没有 `runtime/config.yaml` 的目录里跑，锁住「重新推导」这一性质；输出用 js-yaml 实际解析，确认是合法 YAML 且 secret 已脱敏）
+- 三种 shell 的补全脚本经 `zsh -n` / `bash -n` 语法校验；fish 未装，其脚本未做语法校验
 - 复核测试有效性：临时注掉两处 `recordServiceStopped`，两条用例即转红
 - install 恢复与 restart 回退的并发交错仍只能手工双终端复现（需真装内核的机器），已记入 `CODE_REVIEW` 的未覆盖项，未假称已自动化
 

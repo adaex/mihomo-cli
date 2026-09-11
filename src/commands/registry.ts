@@ -1,4 +1,5 @@
 import { cmdCompletion } from './completion.js';
+import { cmdConfig } from './config.js';
 import { cmdDirectory } from './directory.js';
 import { cmdDoctor } from './doctor.js';
 import { printHelp, printVersion } from './help.js';
@@ -137,6 +138,13 @@ export const COMMANDS: Command[] = [
   },
   // === 配置 ===
   {
+    name: 'config',
+    aliases: [],
+    handler: cmdConfig,
+    group: 'config',
+    usage: [{ signature: 'config [--json]', description: '查看当前生效的运行配置（由订阅与覆写推导）' }],
+  },
+  {
     name: 'overwrite',
     aliases: ['ow'],
     handler: cmdOverwrite,
@@ -192,6 +200,7 @@ export const COMMANDS: Command[] = [
     group: 'system',
     usage: [
       { signature: 'completion install <zsh|bash|fish>', description: '安装补全到对应 shell 的默认位置' },
+      { signature: 'completion uninstall <zsh|bash|fish>', description: '移除已安装的补全' },
       { signature: 'completion <zsh|bash|fish>', description: '输出补全脚本（重定向或 eval 使用）' },
     ],
   },

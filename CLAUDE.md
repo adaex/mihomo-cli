@@ -64,13 +64,15 @@ npm run build
 - `FLAGS` 是带值选项与 start 选项的登记表，派生 `VALUE_FLAGS` 和重启透传集合；普通布尔选项不必登记
 - `--mirror` 值可选，由 `parseMirrorArg` 单独解析；布尔开关不接受 `=value` 或附加字符
 - `dispatchSubcommand` 必须 await/返回 Promise，无子命令走 fallback，未知子命令走必填的 onUnknown
+- `config` 命令重新推导而非读 runtime/config.yaml（停止时那个文件会被删掉），走 `buildConfig` 不走带内核校验的 `prepareConfigForStart`；展示前脱敏 secret
+- 补全卸载是安装的逆操作：bash 共享文件只剥标记块，zsh/fish 独占文件名但删前必须确认是本工具产物；三个 shell 的 `install`/`uninstall` 词表要同步
 
 ## 错误与操作结果
 
 - 预期错误抛 `CliError`，由 index 的 main().catch 统一渲染；命令层不直接 console.error + process.exit
 - 再包装错误前先透传已有 CliError，避免标签重复；模块顶层不抛 CliError，环境变量在使用点校验
 - detached/事件回调不得抛 CliError；信号处理与 tail 事件回调是直接 exit 的例外
-- 平台与非 root 守卫在 ensureDirs 之前执行，help/version 豁免；开发逃生阀为 `MIHOMO_CLI_ALLOW_ANY_PLATFORM=1`
+- Node 版本、平台与非 root 三个守卫都在 ensureDirs 之前执行，共用同一份 help/version 豁免名单；Node 下限取自 package.json 的 `engines.node`（只认 `>=x.y.z`，解析不出就跳过检查，不能挡死所有命令）；开发逃生阀为 `MIHOMO_CLI_ALLOW_ANY_PLATFORM=1`
 - 报告成功应有独立的结果依据：配置提交查写入结果，服务启动查健康，停止查卸载/残留，下载查大小与可执行性
 - `openUrl` 是 detached、返回 void，调用方始终显示地址/路径，供打开失败时手动使用
 - 破坏性操作需要确认时，非 TTY 且无显式跳过选项应报错退出 1；交互拒绝才显示已取消

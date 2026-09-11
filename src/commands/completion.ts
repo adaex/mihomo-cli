@@ -120,8 +120,8 @@ function buildZsh(commands: Command[], groups: SubGroup[]): string {
     '          ;;',
     '        completion)',
     '          if (( CURRENT == 2 )); then',
-    `            _values 'action' install ${SHELLS.join(' ')}`,
-    '          elif (( CURRENT == 3 )) && [[ ${words[2]} == install ]]; then',
+    `            _values 'action' install uninstall ${SHELLS.join(' ')}`,
+    '          elif (( CURRENT == 3 )) && [[ ${words[2]} == (install|uninstall) ]]; then',
     `            _values 'shell' ${SHELLS.join(' ')}`,
     '          fi',
     '          ;;',
@@ -191,8 +191,8 @@ ${subCase}
       ;;
     completion)
       if [[ \${COMP_CWORD} -eq 2 ]]; then
-        COMPREPLY=( $(compgen -W "install ${SHELLS.join(' ')}" -- "\${cur}") )
-      elif [[ \${COMP_CWORD} -eq 3 ]] && [[ "\${COMP_WORDS[2]}" == install ]]; then
+        COMPREPLY=( $(compgen -W "install uninstall ${SHELLS.join(' ')}" -- "\${cur}") )
+      elif [[ \${COMP_CWORD} -eq 3 ]] && [[ "\${COMP_WORDS[2]}" == install || "\${COMP_WORDS[2]}" == uninstall ]]; then
         COMPREPLY=( $(compgen -W "${SHELLS.join(' ')}" -- "\${cur}") )
       fi
       ;;
@@ -219,8 +219,8 @@ function buildFish(commands: Command[], groups: SubGroup[]): string {
   }
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from directory dir dirs directories open" -a '${DIR_TARGETS.join(' ')}'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from ui" -a '${UI_NAMES.join(' ')}'`);
-  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion" -a 'install ${SHELLS.join(' ')}' -d '安装补全到默认位置'`);
-  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion; and __fish_seen_subcommand_from install" -a '${SHELLS.join(' ')}'`);
+  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion" -a 'install uninstall ${SHELLS.join(' ')}' -d '安装/卸载补全'`);
+  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion; and __fish_seen_subcommand_from install uninstall" -a '${SHELLS.join(' ')}'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from kernel" -a '\\--mirror' -d '走镜像下载'`);
   lines.push('end');
   return lines.join('\n');
@@ -310,11 +310,91 @@ function installCompletion(shell: string | undefined, commands: Command[]): void
   }
 }
 
+/**
+ * 卸载补全：install 的逆操作。
+ *
+ * bash 与 zsh/fish 的策略不同，因为落盘方式本就不同：
+ * - bash 写的是**共享文件** `~/.bash_completion`，只能剥掉自己那段标记块，用户自己的
+ *   补全必须原样留下
+ * - zsh/fish 独占文件名，可以整个删——但**必须先确认那是本工具生成的**。用户可能自己
+ *   写过同名补全，误删别人的文件比留下一个孤儿文件糟得多
+ *
+ * 不改用户的 rc 文件（install 也没改过，只是提示 fpath）：那超出「卸载补全」的范围。
+ */
+function uninstallCompletion(shell: string | undefined, commands: Command[]): void {
+  if (!shell) {
+    throw new CliError('请指定 shell', { hint: [`用法: mihomo completion uninstall <${SHELLS.join('|')}>`] });
+  }
+  const target = completionInstallPath(shell);
+  if (!target) {
+    // 复用 buildCompletionScript 的 did-you-mean 报错（它会因未知 shell 抛错）
+    buildCompletionScript(shell, commands);
+    return;
+  }
+
+  if (!fs.existsSync(target)) {
+    console.log(`未安装 ${shell} 补全（${target} 不存在）`);
+    return;
+  }
+
+  console.log(`卸载 ${shell} 补全: ${target}`);
+
+  try {
+    if (shell === 'bash') {
+      const existing = fs.readFileSync(target, 'utf8');
+      const endMarker = BASH_MARKER.replace('>>>', '<<<');
+      const start = existing.indexOf(BASH_MARKER);
+      const end = existing.indexOf(endMarker);
+      if (start === -1 || end === -1 || end < start) {
+        console.log(colors.yellow('未找到 mihomo 补全标记，未做改动'));
+        console.log(colors.gray(`  若曾手动安装，请自行编辑 ${target}`));
+        return;
+      }
+      // 连同 install 追加的前导换行与末尾换行一并去掉，避免反复装卸堆积空行
+      const before = existing.slice(0, start).replace(/\n+$/, '\n');
+      const after = existing.slice(end + endMarker.length).replace(/^\n/, '');
+      const rest = `${before}${after}`;
+      // 只剩空白说明这个文件本就是我们建的，删掉比留个空文件干净
+      if (rest.trim() === '') {
+        fs.rmSync(target);
+        console.log(colors.green('已移除（文件已空，一并删除；重新打开终端生效）'));
+        return;
+      }
+      fs.writeFileSync(target, rest);
+      console.log(colors.green('已移除 mihomo 补全段，保留文件中其余内容（重新打开终端生效）'));
+      return;
+    }
+
+    // zsh/fish：独占文件名，但删之前必须确认是本工具生成的。
+    // 判据取脚本自身的固定首行/特征串，与 buildCompletionScript 的产物对齐
+    const existing = fs.readFileSync(target, 'utf8');
+    const fingerprint = shell === 'zsh' ? '#compdef mihomo' : 'for cmd in mihomo';
+    if (!existing.includes(fingerprint)) {
+      throw new CliError(`${target} 不像是 mihomo-cli 生成的补全，已跳过删除`, {
+        label: '卸载中止',
+        hint: ['该文件可能是你自己或其他工具写的。确认无用后手动删除:', `  rm ${target}`],
+      });
+    }
+    fs.rmSync(target);
+    console.log(colors.green('已删除（重新打开终端生效）'));
+  } catch (e) {
+    if (e instanceof CliError) throw e;
+    throw new CliError(`补全卸载失败: ${(e as Error).message}`, {
+      label: '卸载失败',
+      hint: ['请检查目标文件的权限，或手动删除:', `  rm ${target}`],
+    });
+  }
+}
+
 /** completion 命令入口。词表由 registry 传入（避免 import 成环）。 */
 export function cmdCompletion(args: string[], commands: Command[]): void {
   assertKnownFlags(args.slice(1), [], 'completion');
   if (args[1] === 'install') {
     installCompletion(args[2], commands);
+    return;
+  }
+  if (args[1] === 'uninstall') {
+    uninstallCompletion(args[2], commands);
     return;
   }
   const shell = args[1];
@@ -323,6 +403,7 @@ export function cmdCompletion(args: string[], commands: Command[]): void {
       hint: [
         `用法: mihomo completion <${SHELLS.join('|')}>`,
         `安装到默认位置: mihomo completion install <${SHELLS.join('|')}>`,
+        `卸载: mihomo completion uninstall <${SHELLS.join('|')}>`,
         '临时启用: eval "$(mihomo completion zsh)"',
       ],
     });
