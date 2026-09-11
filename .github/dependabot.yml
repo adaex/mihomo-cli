@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # 运行时依赖只有两个（js-yaml、compare-versions），devDeps 是构建与测试工具链。
+  # 每周检查够用；分组成一个 PR，避免每个 devDep 各开一条
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      dev-dependencies:
+        dependency-type: development
+  # CI 只有一个 workflow，但 actions 的大版本更新（checkout@v5、setup-node@v5）
+  # 不跟会在 runner 侧变旧
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
