@@ -2,7 +2,7 @@ import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { getMihomoPids } from '../process-probe.js';
 import { stop } from '../process-stop.js';
-import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, getServiceStatus, stopService } from '../service.js';
+import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, getServiceStatus, recordServiceStopped, stopService } from '../service.js';
 import type { StopResult } from '../types.js';
 import { assertKnownFlags } from '../utils.js';
 
@@ -39,6 +39,10 @@ export async function cmdStop(args: string[]): Promise<void> {
   // 登录后仍会自启，此时「已停止」是谎报，必须补上 disable
   const needsServiceWork = status.loaded || (status.installed && !status.disabled);
   if (!needsServiceWork && pids.length === 0) {
+    // 这条路径什么都没做，但**结论是确定的**（刚读到：未装载、未安装或已 disabled、无内核
+    // 进程），而并发的慢速 start 正等着这个信号——不记的话它随后 enable + bootstrap，
+    // 终态与用户最后一条命令相反，且两个终端都成功退出。见 recordServiceStopped
+    recordServiceStopped();
     console.log(colors.yellow('不在运行'));
     return;
   }
@@ -48,10 +52,15 @@ export async function cmdStop(args: string[]): Promise<void> {
     // 有 root 属主进程时它内部会提权，纯用户态进程则全程免密
     console.log(`停止 ${pids.length} 个进程...`);
     handleStopResult(await stop());
+    // 必须在 handleStopResult **之后**：它在有进程杀不掉时抛错，抢在前面记录就会让一次
+    // 失败的停止白白中止并发的 start。另注 stop() 会 rmrf(runtime/) 连带删掉 config.yaml，
+    // 并发的 start 更需要这个信号
+    recordServiceStopped();
     console.log(colors.green('已停止'));
     return;
   }
 
+  // 这条路径由 stopService → disableServiceAutoStart 递增，别在这里再记一次
   await stopService();
 
   const remaining = getMihomoPids();

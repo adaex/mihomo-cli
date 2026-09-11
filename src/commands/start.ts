@@ -37,14 +37,17 @@ export async function cmdStart(args: string[]): Promise<void> {
   const skipUpdate = hasFlag(args, '-s', '--no-update');
   const updateTimeout = parseIntArg(args, '-u', '--update-timeout', DEFAULT_AUTO_UPDATE_TIMEOUT);
 
-  const serviceBefore = getServiceStatus();
-
-  // 停止计数的快照必须取在这里——**订阅自动更新等慢速阶段之前**。取晚了，期间发生的
-  // stop 就被算进基线，并发判定失效（见 service.ts 的 shouldAbortStartOnDisable）。
+  // 停止计数的快照必须取在这里——**订阅自动更新等慢速阶段之前，且不晚于本命令赖以决策的
+  // 第一次观察**（下面的 getServiceStatus 有两次 launchctl 调用，取在它之后就有一个虽小
+  // 但真实的窗口，期间跑完的 stop 会被算进基线）。取晚了并发判定即失效，
+  // 见 service.ts 的 shouldAbortStartOnDisable。
   //
   // 下面 TUN 分支的 disableServiceAutoStart() 也会 bump，但那与本快照无关：
-  // TUN 走 startTun()，压根不消费 epoch，两个分支互斥
+  // TUN 走 startTun()，压根不消费 epoch，两个分支互斥。**若将来 TUN 分支之后还要走
+  // launchOrRestart('mixed')，这里就会检出自己的 bump 并自我取消。**
   const stopEpochBefore = readStopEpoch();
+
+  const serviceBefore = getServiceStatus();
 
   if (targetMode === 'tun') {
     // 遗留 root daemon 与 TUN 抢同一组端口：KeepAlive 会反复拉起旧内核，

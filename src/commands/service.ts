@@ -5,7 +5,16 @@ import { CliError } from '../errors.js';
 import { PATHS } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
 import * as runtime from '../runtime.js';
-import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, getServiceStatus, installService, SERVICE_BINARY_NAME, uninstallService } from '../service.js';
+import {
+  cleanupLegacyInstallOrThrow,
+  detectLegacySystemInstall,
+  getServiceStatus,
+  installService,
+  readStopEpoch,
+  SERVICE_BINARY_NAME,
+  shouldAbortStartOnDisable,
+  uninstallService,
+} from '../service.js';
 import { assertKnownFlags } from '../utils.js';
 
 /**
@@ -33,18 +42,38 @@ async function handleLegacyInstall(): Promise<void> {
   console.log('');
 }
 
+/**
+ * 「装好了，但没恢复运行，因为期间有人停了它」。两个消费点共用（installService 锁内判据、
+ * 健康确认失败后复读），文案只此一份。
+ *
+ * 说「停止操作」而非「执行了 mihomo stop」：递增点不止 stop，tun 与 install 首装同样
+ * 会关闭自启并递增，说成 stop 是在讲一件没发生的事。
+ */
+function printRestoreSkipped(): void {
+  console.log(colors.yellow('未恢复运行：安装期间检测到停止操作'));
+  console.log(colors.gray('  另一个终端关闭了服务自启，已按最后一条命令保持停止'));
+  console.log(colors.gray('  启动: mihomo start'));
+  console.log('');
+}
+
 export async function cmdInstall(args: string[]): Promise<void> {
   assertKnownFlags(args.slice(1), [], 'install');
   if (!hasKernel()) {
     throw new CliError('未找到内核', { hint: '下载内核: mihomo kernel' });
   }
 
+  // 停止计数的快照必须取在这里——**任何慢速阶段之前**，与 cmdStart 同一约定。
+  // 下面的 handleLegacyInstall 可能卡在交互式 sudo 密码输入上（时长无上界），
+  // installService 内部又有 bootout + 等待卸载（最多 5s）；取晚了，这些窗口里
+  // 发生的 stop 就被算进基线，重装的恢复运行会把它覆盖掉
+  const stopEpochBefore = readStopEpoch();
+
   await handleLegacyInstall();
 
   // 重装保持原运行状态：不这么做的话，「代理开着时更新内核后重装」会静默把代理关掉
   const wasRunning = getServiceStatus().running;
 
-  const { restoreSkipped } = await installService(wasRunning);
+  const { restoreSkipped } = await installService(wasRunning, stopEpochBefore);
 
   console.log(`${colors.green('已安装服务')}`);
   console.log(colors.gray(`  plist: ${PATHS.userAgentPlist}`));
@@ -54,10 +83,7 @@ export async function cmdInstall(args: string[]): Promise<void> {
   if (restoreSkipped) {
     // 并发的 stop 在重装期间跑完。安装成功、恢复运行被取消，两件事都要说清楚——
     // 不能走下面的健康确认分支，那会把用户自己的 stop 报成「恢复运行失败」
-    console.log(colors.yellow('未恢复运行：安装期间检测到 stop'));
-    console.log(colors.gray('  另一个终端执行了 mihomo stop，已按最后一条命令保持停止'));
-    console.log(colors.gray('  启动: mihomo start'));
-    console.log('');
+    printRestoreSkipped();
     return;
   }
 
@@ -68,6 +94,13 @@ export async function cmdInstall(args: string[]): Promise<void> {
       await runtime.assertServiceHealthy('恢复运行失败');
     } catch (e) {
       if (!(e instanceof CliError)) throw e;
+      // 与 launchOrRestart 同族：bootstrap 之后的健康观察窗（1.2–3s）完全在锁外，
+      // 期间的并发 stop 会把任务 bootout，健康确认于是失败。此时报「恢复运行失败」
+      // 是把用户自己的 stop 说成故障，必须复读计数区分——判据仍是那唯一一份
+      if (shouldAbortStartOnDisable(stopEpochBefore, readStopEpoch())) {
+        printRestoreSkipped();
+        return;
+      }
       throw new CliError(e.message, {
         label: e.label,
         hint: [...e.hint, '', '服务已安装成功，仅恢复运行失败；修正配置后可执行 mihomo start 重试。'],

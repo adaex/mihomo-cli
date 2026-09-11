@@ -536,8 +536,24 @@ function killResidualKernels(): void {
  * 返回 `restoreSkipped=true` 表示 `wasRunning` 的恢复运行被**并发的 stop** 取消
  * （安装本身已成功）。调用方必须据此跳过健康确认——否则会对着一个本就不该启动的服务
  * 报「恢复运行失败」，把用户的 stop 说成故障。
+ *
+ * @param stopEpochBefore 命令开始时的停止计数快照，取自 `cmdInstall` 的第一步。
+ *   与 `startService` 同一约定：**不能在本函数内部现取**。真正的危害窗口是
+ *   「产生 `wasRunning=true` 的那次 `getServiceStatus()`」到下方锁之间——中间有
+ *   `plutil -lint`、`bootoutService()` 与 `waitUntilUnloaded()`（最多 5s）。
+ *   更关键的是 `stopService` **在自己的锁内先 bump、之后才 waitUntilUnloaded**，
+ *   所以存在「B 已 bump 而 launchctl print 仍报 running」的区间：此时 cmdInstall 会
+ *   合理地读到 `wasRunning=true`，而在 bootout 之后现取的快照必然已经 ≥ B 的值，
+ *   并发就此隐形。快照取在命令最开头是免费的，也省掉「哪个窗口才有害」的推理。
+ *
+ *   注意 `handleLegacyInstall` 的 sudo 等待**不是**危害窗口：`wasRunning` 在它之后才读，
+ *   期间跑完的 stop 会让 `wasRunning=false`，恢复分支根本不执行，终态仍是停止。
+ *
+ *   **自我中止的雷**：本快照只被 `wasRunning` 恢复分支消费，而首装的
+ *   `disableServiceAutoStart()` 在互斥的另一条分支上，故 install 观察不到自己的 bump。
+ *   若将来在恢复分支之前新增任何递增，install 就会检出自己的 bump 并取消自己的恢复。
  */
-export async function installService(wasRunning: boolean): Promise<{ restoreSkipped: boolean }> {
+export async function installService(wasRunning: boolean, stopEpochBefore: number): Promise<{ restoreSkipped: boolean }> {
   assertServiceLabelSafe();
   ensureDirs();
   ensureServiceSymlink();
@@ -570,8 +586,8 @@ export async function installService(wasRunning: boolean): Promise<{ restoreSkip
     if (wasRunning) {
       // 与 startService 同族：并发的 stop 若在重装期间跑完（重装含 bootout + 等待，
       // 有真实窗口），这里的 enable+bootstrap 会把它的成果覆盖掉，终态与用户最后一条
-      // 命令相反。判据共用 shouldAbortStartOnDisable——**别在这里散写别的判据**
-      const stopEpochBefore = readStopEpoch();
+      // 命令相反。判据共用 shouldAbortStartOnDisable——**别在这里散写别的判据**。
+      // 基线是命令层传入的快照，不在此处现取（见函数头 @param 说明）
       withFileLock(PATHS.serviceLock, () => {
         if (shouldAbortStartOnDisable(stopEpochBefore, readStopEpoch())) {
           restoreSkipped = true;
@@ -641,6 +657,40 @@ function bumpStopEpoch(): void {
   } catch {
     /* ignore：见函数头注释 */
   }
+}
+
+/**
+ * 记录一次「已确认停止」。
+ *
+ * 为什么 `disableServiceAutoStart` 的收口不够：那五个调用点覆盖的是**有 disable 动作**
+ * 的路径，而另有几条路径同样得出「现在不会自启、也没有内核在跑」这个结论，却无 disable
+ * 可执行——`cmdStop` 的两条提前返回（未装载且「未安装或已 disabled」，`stop()` 只杀进程
+ * 不碰 disable 位），以及 `reset` 在服务未装时的游离内核清理。
+ *
+ * 不递增的后果：这些路径对并发的 `start` **完全隐形**。A 在 start 的慢速阶段（订阅更新
+ * 约 10s）时服务已装、未装载、disable 位为真（上次 stop/tun 留下的，是最常见的前置），
+ * B 此时跑 `stop` 正好走「不在运行」那条——不递增，A 随后照常 enable + bootstrap，
+ * 终态与用户最后一条命令相反，而两个终端都拿到了成功回执。
+ *
+ * **不变式不是放宽，是承认第二种同等强度的证据。** 递增只发生在「已确认不会自启、
+ * 且当下没有内核在跑」之后，证据有两种形态、强度相同：
+ *
+ * 1. 刚执行并**事后复核**过的 disable（`disableServiceAutoStart` 用 print-disabled 复核）
+ * 2. 刚**读到**的状态本身——`launchctl print` 判未装载、plist 缺失或 print-disabled 判
+ *    不会自启、`pgrep` 判无内核。这些读取失败时都抛错而非降级
+ *    （`assertLaunchctlQueryOk`、`getMihomoPids` 只接受退出码 0/1），故「走到了这条路径」
+ *    本身就是独立依据
+ *
+ * 两者都是**已成立的事实**，不是「打算做的事」。因此调用点必须放在该路径
+ * **最后一道失败检查之后**——放在开头（或 `handleStopResult` 之前）会让一次失败的停止
+ * 把并发的 `start` 白白中止，那正是 `disableServiceAutoStart` 里「放在确认之后」防的事。
+ *
+ * **不自己取锁**（与 `bumpStopEpoch` 同因：`withFileLock` 不可重入）。多写者交错时
+ * 极端情况下可能用较小值覆盖较大值，从而让某条后续命令的基线比对偶发为「变了」而中止——
+ * 判据是 `!==` 而非 `>`，本就偏保守，窗口只有两次系统调用，接受之，不为此加锁。
+ */
+export function recordServiceStopped(): void {
+  bumpStopEpoch();
 }
 
 /**
@@ -773,10 +823,15 @@ export async function startService(stopEpochBefore: number): Promise<{ started: 
  *
  * 幂等：已 disable 时再调一次无副作用（launchctl 照常写一条同值记录）。
  *
- * **停止计数的递增收口在这里**，不在各调用点：五处调用（install 首装、stop、uninstall×2、
- * cmdStart 的 TUN 分支）语义都是「让服务别自启」，任何一处漏 bump 都会让并发判据在那条
- * 路径上失效——而「防线只铺一条路径」正是本仓反复栽的坑。放在这个唯一出口，新增调用点
- * 自动获得正确行为。
+ * **停止计数有两个递增入口，这是其中之一**：本函数伴随一次真实 disable（靠下方
+ * print-disabled 事后复核），另一个是 `recordServiceStopped`（没有 disable 可做、
+ * 但状态读取已经证明「不会自启且无内核在跑」的路径，如 `cmdStop` 的提前返回、
+ * `reset` 在服务未装时的清理）。两者前提相同，见 `recordServiceStopped` 的不变式说明。
+ *
+ * 本函数五处调用（install 首装、stop、uninstall×2、cmdStart 的 TUN 分支）语义都是
+ * 「让服务别自启」，任何一处漏 bump 都会让并发判据在那条路径上失效——而「防线只铺一条
+ * 路径」正是本仓反复栽的坑，也正是 `recordServiceStopped` 那几条路径此前的处境。
+ * 走这个出口的新增调用点自动获得正确行为。
  */
 export function disableServiceAutoStart(): void {
   assertServiceLabelSafe();
@@ -996,13 +1051,23 @@ async function tryHotReload(): Promise<boolean> {
  * 日志超阈值时跳过热重载、强制 kickstart 顺便轮转：运行中不能 rename 轮转——
  * launchd 的 StandardOutPath fd 指向旧 inode，rename 后日志会继续写进归档文件。
  * 只能 copy-truncate（fd 为 O_APPEND，truncate 后从 0 续写不丢句柄）。
+ * 轮转发生在下方判据之前，故被取消的重启可能已经轮转过一次日志：copy 在 truncate 之前，
+ * 数据不丢，**刻意不为此再加一个判据消费点**——一个函数一个消费点比这点整洁更值。
+ *
+ * 返回 `started=false` 表示 kickstart 失败后的 enable+bootstrap 回退被**并发的 stop**
+ * 取消（与 `startService` 的 `started` 同名同义）。此时 `hotReloaded` 无意义，
+ * 调用方必须先判 `started`，不能继续报「已启动」。
+ *
+ * @param stopEpochBefore 命令开始时的停止计数快照。回退分支的 `enable` + `bootstrap`
+ *   与 `startService` 是同一动作，需要同一道防线：热重载探测加 kickstart 最长可达 60s，
+ *   期间的并发 stop 会被这个回退覆盖掉
  */
-export async function restartService(): Promise<{ hotReloaded: boolean }> {
+export async function restartService(stopEpochBefore: number): Promise<{ hotReloaded: boolean; started: boolean }> {
   if (!isServiceInstalled()) {
     throw new CliError('服务未安装，无法重启', { hint: '安装服务: mihomo install' });
   }
 
-  if (!logOversized() && (await tryHotReload())) return { hotReloaded: true };
+  if (!logOversized() && (await tryHotReload())) return { hotReloaded: true, started: true };
 
   // 日志超阈值时跳过热重载、强制 kickstart 顺便轮转：运行中不能 rename 轮转——
   // launchd 的 StandardOutPath fd 指向旧 inode，rename 后日志会继续写进归档文件。
@@ -1023,17 +1088,34 @@ export async function restartService(): Promise<{ hotReloaded: boolean }> {
   // 则 enable + bootstrap 自愈（旧脚本：kickstart 失败 → enable || true → bootstrap || exit 3）。
   //
   // kickstart -k 会**阻塞等进程死亡**（实测对不立即响应 SIGTERM 的进程可超过 5s），
-  // 不能用 runLaunchctl 的查询超时（5s）——旧脚本整体超时是 60s，这里单独放宽
+  // 不能用 runLaunchctl 的查询超时（5s）——旧脚本整体超时是 60s，这里单独放宽。
+  //
+  // **kickstart 刻意留在锁外**：它的超时是 60s，而 LOCK_STALE_MS 只有 10s，放进锁里必然
+  // 被别的进程强夺，等于没锁（与 startService 把 bootout 留在锁外同因）。代价是
+  // 「kickstart 成功 + 随后并发 stop」这一交错仍在锁外——那一支由 launchOrRestart 在
+  // 健康确认失败后复读计数兜住，不在这里重复设防。
   const kick = runLaunchctl(['kickstart', '-k', serviceTarget()], 60_000);
+  let started = true;
   if (kick.status !== 0) {
-    runLaunchctl(['enable', serviceTarget()]); // 容忍失败：bootstrap 会再判一次
-    runLaunchctlOrThrow(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist], '重启服务');
+    // 回退路径与 startService 同族：enable + bootstrap 会把并发 stop 的成果覆盖掉，
+    // 终态与用户最后一条命令相反。判据共用 shouldAbortStartOnDisable——
+    // **别在这里散写别的判据**
+    withFileLock(PATHS.serviceLock, () => {
+      if (shouldAbortStartOnDisable(stopEpochBefore, readStopEpoch())) {
+        started = false;
+        return;
+      }
+      runLaunchctl(['enable', serviceTarget()]); // 容忍失败：bootstrap 会再判一次
+      runLaunchctlOrThrow(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist], '重启服务');
+    });
+    // 被取消：直接返回，不清理归档也不做别的收尾
+    if (!started) return { hotReloaded: false, started: false };
   }
 
   // 顺手清理过期归档：归档可能为 root 属主，但 logs/ 目录归用户所有，unlink 只看目录权限
   cleanupOldLogs();
 
-  return { hotReloaded: false };
+  return { hotReloaded: false, started: true };
 }
 
 /** 符号链名，供命令层展示「登录项与扩展」里会看到的名字 */

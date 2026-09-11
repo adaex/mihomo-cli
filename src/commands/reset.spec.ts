@@ -108,4 +108,39 @@ describe('reset 的最终数据状态', () => {
         assert.equal(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8'), before);
       }
     }));
+
+  /**
+   * 会破坏运行前提的 reset 必须记录「停止过」，纯配置类的不记录。
+   *
+   * 缺了前者：服务未装（本 fixture 即如此，label 是隔离的假 label）时 reset 不走
+   * stopService，没有 disable 可执行，却已经把 runtime/config.yaml 或 kernel/ 删掉——
+   * 并发的慢速 start 看不到变化，就会 bootstrap 一个内核已被删除的 plist，
+   * 落进 KeepAlive 每约 10s 拉起一次的崩溃循环。
+   */
+  const readEpoch = (dataDir: string): number => {
+    const servicePath = path.resolve('src/service.ts');
+    const r = spawnSync(
+      process.execPath,
+      ['--import', 'tsx', '-e', `import { readStopEpoch } from ${JSON.stringify(servicePath)}; process.stdout.write(String(readStopEpoch()));`],
+      { encoding: 'utf8', env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1' }, timeout: 30_000 },
+    );
+    assert.equal(r.status, 0, `读取子进程应正常退出: ${r.stderr}`);
+    return Number.parseInt(r.stdout.trim(), 10);
+  };
+
+  it('删除运行前提的 reset 记录停止，纯配置的 reset 不记录', () =>
+    withFixture((dataDir, run) => {
+      // logs 的 needsStop 为真：清理游离内核后即将删文件
+      const beforeLogs = readEpoch(dataDir);
+      const logs = run(['reset', 'logs', '-y']);
+      assert.equal(logs.status, 0, logs.stderr);
+      assert.equal(fs.existsSync(path.join(dataDir, 'logs', 'mihomo.log')), false);
+      assert.notEqual(readEpoch(dataDir), beforeLogs, 'reset logs 会清进程并删文件，必须让并发的 start 看见');
+
+      // overwrites 的 needsStop 为假：只动配置文件，不该中止并发的 start
+      const beforeOw = readEpoch(dataDir);
+      const ow = run(['reset', 'ow', '-y']);
+      assert.equal(ow.status, 0, ow.stderr);
+      assert.equal(readEpoch(dataDir), beforeOw, 'reset ow 不碰运行前提，不该记录停止');
+    }));
 });

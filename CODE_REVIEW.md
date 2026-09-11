@@ -1,17 +1,21 @@
 # 代码审查：验证结论与边界
 
-当前审查：2026-09-08，基于 v4.7.7 的未发布改动
+当前审查：2026-09-11，基于 v4.7.7 的未发布改动
 
-本轮覆盖配置构建、设置读写、reset、命令注册与参数处理，并清理过期文档；launchd 的真实启停与 TUN 提权流程未做端到端复测
+本轮清掉「未覆盖与待复核」里挂着的三条服务并发缺陷，并顺着同一族形态又找出三处；launchd 的真实启停与 TUN 提权流程未做端到端复测
 
 规则见 CLAUDE，修复历史见 CHANGELOG；本文保留验证方法、仍有效的实测事实与未覆盖风险，改相关代码时同步更新
 
 ## 本轮验证
 
-类型检查、301 项测试、Biome（实际检查 67 个文件）与构建通过；构建产物在隔离目录通过 31 项命令检查，覆盖旧输入拒绝、help/version、三种 shell 补全、JSON 状态与完整 reset
+类型检查、305 项测试（+4）、Biome（实际检查 64 个文件）与构建通过；构建产物在隔离目录（含隔离服务 label）复核 stop 两次递增、无 plist 残留、无进程残留
 
 | 范围 | 验证方式与结论 |
 | --- | --- |
+| stop 的提前返回 | commands/stop.spec 用真实 CLI 打隔离目录 + 不存在的 label：该组合天然走「不在运行」分支，一次 launchctl 写操作都不做。断言消费者可见的后果（`shouldAbortStartOnDisable` 判为变了）而非文件内容，并含负向对照（`status` 不得改变计数） |
+| 游离内核清理 | 同上文件：真实桩内核（命令行绑定隔离目录）被杀后同样记录；判活以 `ps` 状态列为准，不用 `kill -0`（僵尸进程会骗过它） |
+| reset 的边界 | commands/reset.spec 补一条：`needsStop` 为真的 `reset logs` 记录停止，纯配置的 `reset ow` 不记录 |
+| 测试有效性 | 临时注掉两处 `recordServiceStopped` 复核，两条用例即转红，确认不是恒真断言 |
 | 配置构建 | config/config-dns/overwrite 测试验证 JSON/YAML、形态错误、覆写 DSL、作用域与 TUN DNS；节点、分组和规则不再被隐式修复 |
 | 原生配置校验 | mihomo v1.19.30 在临时目录执行 -t：Mixed/TUN 合法配置通过；缺失节点、规则目标、重复节点名和缺失 provider 被拒绝；拒绝后旧 config.yaml 保留、候选文件清理 |
 | 配置提交协议 | subscription-prepare.spec 用隔离桩内核验证 -t/-d/-f、并发临时文件、拒绝时保持旧配置、提交只写最终配置 |
@@ -40,7 +44,11 @@
 ## 未覆盖与待复核
 
 - 健康观察窗只覆盖启动初期，之后的 OOM/panic 由 status/doctor 展示异常退出；延长 start 到无限观察不在目标内
-- 停止计数的纯函数与文件测试不能代替所有命令交错验证；静态检查发现 install 恢复分支取快照偏晚、已停止时 cmdStop 提前返回不更新计数、restartService 回退启动缺少同样的计数保护，这三条需在服务并发专题中复现并处理
+- install 恢复分支与 restart 回退的并发只能手工双终端复现（需真装了内核的机器）：自动化要么得真跑 launchctl enable/disable（留永久记录），要么退化成对实现清单的断言。已修，未自动化
+- `kickstart -k` 超时 60s 远超锁的 10s 强夺阈值，必须留在锁外，故它与并发 bootout 的交错无法用锁串行化；现在只保证「不再 re-enable/re-bootstrap」与「不再把用户的 stop 报成内核故障」，不是把这个交错消掉了
+- 锁内 enable+bootstrap 最坏两次 5s 超时，恰好等于 `LOCK_STALE_MS`；这是既有基线（startService/installService 本就如此），不因本轮变化，但别再往锁内加东西
+- 停止计数是多写者读-改-写且刻意不加锁：极端交错下可能用较小值覆盖较大值，使某条后续命令偶发判为「变了」而中止。判据是 `!==` 本就偏保守，接受之
+- `cmdStop` 路径 (b) 的「记录必须在 handleStopResult 之后」只由代码位置与注释保证：非 root 下无法让 SIGKILL 失败，测不出来
 - settings/cache 写入有锁，但 reset 的跨文件删除不是事务；未承诺与下载、另一次 reset 并行时整个目录原子切换
 
 ## 自动化测试边界

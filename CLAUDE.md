@@ -125,9 +125,9 @@ npm run build
 
 - bootstrap 成功只代表装载，启动需观察完整健康窗口；窗口之后的崩溃由 status/doctor 诊断
 - disabled 状态下 bootstrap 硬失败，必须先 enable；disabled 位持久化在 plist 之外，uninstall 保留它
-- 并发 start/stop 以 service-stop-epoch 的变化判断；cmdStart 在订阅更新、原生校验等慢操作之前取快照，startService 在 service.lock 内复读
-- 当前 disable 位无法表示停止事件：上次 stop 和本次并发 stop 都可能是 true；计数在确认 disable 生效后递增
-- 同步 service.lock 临界区不跨异步等待，bootout 后通过 waitUntilUnloaded 轮询确认
+- 并发 start/stop 以 service-stop-epoch 的变化判断；快照由命令层取（不晚于本命令赖以决策的第一次观察），经参数透传，startService/restartService/installService 在 service.lock 内复读，健康确认失败后再复读一次
+- 当前 disable 位无法表示停止事件：上次 stop 和本次并发 stop 都可能是 true；递增只在「已确认不会自启且无内核在跑」之后，证据可以是复核过的 disable，也可以是读到的状态本身（`recordServiceStopped`），两者强度相同，都必须放在该路径最后一道失败检查之后
+- 同步 service.lock 临界区不跨异步等待，bootout 后通过 waitUntilUnloaded 轮询确认；kickstart 的 60s 超时远超锁的 10s 强夺阈值，必须留在锁外
 - launchctl print 仅 113 表示未装载，112/125 是查询失败；bootout 对未装载目标返回 3
 - 退出码与 terminating signal 互斥；统一用 describeExitCause，status/doctor/启动失败共享判据
 - launchctl print 顶层字段以单 tab 开头，嵌套字段双 tab，解析锚定行首

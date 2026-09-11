@@ -4,7 +4,16 @@ import { readLogTail } from './log-files.js';
 import { PATHS } from './paths.js';
 import { getStatus } from './process-probe.js';
 import { startTun } from './process-start.js';
-import { describeExitCause, getServiceStatus, isServiceInstalled, readStopEpoch, restartService, startService, waitServiceHealthy } from './service.js';
+import {
+  describeExitCause,
+  getServiceStatus,
+  isServiceInstalled,
+  readStopEpoch,
+  restartService,
+  shouldAbortStartOnDisable,
+  startService,
+  waitServiceHealthy,
+} from './service.js';
 import type { ProcessInfo, ServiceStatus } from './types.js';
 
 /**
@@ -83,12 +92,13 @@ export function isRestartNeededOnChange(): boolean {
  * 就报「已启动」——用户以为代理开着，实际完全没有代理。详见 waitServiceHealthy。
  * 热重载路径无需确认：它没有重启进程，且配置被拒时会回退到 kickstart（走确认分支）。
  *
- * @param stopEpochBefore 命令开始时的停止计数快照（`readStopEpoch()`），
- *   透传给 `startService` 判定「本次执行期间是否有人 stop 过」。默认 `undefined`
- *   表示无快照——此时现取一次，退化为「只防本函数执行期间的 stop」而非整条命令期间。
- *   命令层应显式传入慢速阶段之前的快照（`cmdStart` 即如此）
+ * @param stopEpochBefore 命令开始时的停止计数快照（`readStopEpoch()`），透传给
+ *   `startService` / `restartService` 判定「本次执行期间是否有人 stop 过」。
+ *   **必填**：可选默认值会让新调用方静默退化成「只防本函数执行期间的 stop」，
+ *   而这正是本仓反复栽的「防线只铺一条路径」。TUN 分支不消费它（`startTun` 与 launchd
+ *   无关），保留形参是为了调用方无需分支
  */
-export async function launchOrRestart(mode: RuntimeMode, stopEpochBefore?: number): Promise<number | null> {
+export async function launchOrRestart(mode: RuntimeMode, stopEpochBefore: number): Promise<number | null> {
   if (mode === 'tun') {
     const result = await startTun();
     return result.pid;
@@ -98,23 +108,50 @@ export async function launchOrRestart(mode: RuntimeMode, stopEpochBefore?: numbe
 
   // running && !disabled 才走热重载：`stop` 后被手动 bootstrap 的服务处于「在跑但 disabled」，
   // 只看 running 会走热重载、不清 disable 位，用户以为开了自启其实没有
+  let hotReloaded = false;
+  let started: boolean;
   if (status.running && !status.disabled) {
-    const { hotReloaded } = await restartService();
-    if (hotReloaded) return getServiceStatus().pid;
+    ({ hotReloaded, started } = await restartService(stopEpochBefore));
   } else {
-    const { started } = await startService(stopEpochBefore ?? readStopEpoch());
-
-    // 被并发的 stop 取消。必须单独成一条错误：落进 assertServiceHealthy 会报
-    // 「内核未能进入运行状态」并附一个从未被创建的日志路径，指向完全错误的排查方向
-    if (!started) {
-      throw new CliError('启动已取消：期间检测到 stop', {
-        label: '启动失败',
-        hint: ['另一个终端在本次启动过程中执行了 mihomo stop，已按最后一条命令保持停止。', '', '确实要启动: mihomo start'],
-      });
-    }
+    ({ started } = await startService(stopEpochBefore));
   }
 
-  return assertServiceHealthy();
+  // 被并发的 stop 取消。必须单独成一条错误：落进 assertServiceHealthy 会报
+  // 「内核未能进入运行状态」并附一个从未被创建的日志路径，指向完全错误的排查方向
+  if (!started) throw cancelledByConcurrentStop();
+  if (hotReloaded) return getServiceStatus().pid;
+
+  try {
+    return await assertServiceHealthy();
+  } catch (e) {
+    // 健康确认失败有两种成因，报错必须区分：内核真崩了，还是「期间有人 stop 把它 bootout 了」。
+    // 后者报「内核未能进入运行状态」+ 日志尾部会把用户指向完全错误的方向——而 bootstrap
+    // 之后到健康确认结束有 1.2–3s（SERVICE_OBSERVE_MS + GRACE）**完全在锁外**，
+    // v4.7.7 的防线只覆盖了锁内那一瞬。
+    //
+    // 判据仍是唯一那份 shouldAbortStartOnDisable，只是多一个消费点：只在**失败之后**复读，
+    // 绝不改写健康的结果，也绝不在计数未变时吞掉真实死因
+    if (shouldAbortStartOnDisable(stopEpochBefore, readStopEpoch())) throw cancelledByConcurrentStop();
+    throw e;
+  }
+}
+
+/**
+ * 「启动被并发的停止取消」这条错误的唯一出处。两个消费点共用（锁内判据、健康确认失败后复读），
+ * 文案只此一份——散写两份，改一处忘一处就是本仓反复栽的漂移。
+ *
+ * 文案刻意说「停止操作」而非「执行了 mihomo stop」：递增点不止 `stop`，`tun` 与 install
+ * 首装同样会关闭自启并递增，说成 stop 是在讲一件没发生的事。
+ */
+function cancelledByConcurrentStop(): CliError {
+  return new CliError('启动已取消：期间检测到停止操作', {
+    label: '启动失败',
+    hint: [
+      '另一个终端在本次启动过程中关闭了服务自启（mihomo stop，或 tun / install 等同样会关闭自启的命令），已按最后一条命令保持停止。',
+      '',
+      '确实要启动: mihomo start',
+    ],
+  });
 }
 
 /**

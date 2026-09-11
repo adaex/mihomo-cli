@@ -6,7 +6,7 @@ import { isOverwriteFilename } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
 import { cleanupAll } from '../process-stop.js';
-import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, getServiceStatus, stopService, uninstallService } from '../service.js';
+import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, getServiceStatus, recordServiceStopped, stopService, uninstallService } from '../service.js';
 import { updateSettings } from '../settings.js';
 import type { ResetTarget, Settings } from '../types.js';
 import { assertKnownFlags } from '../utils.js';
@@ -115,6 +115,16 @@ export async function cmdReset(args: string[]): Promise<void> {
         hint: ['请手动运行: sudo pkill -9 mihomo'],
       });
     }
+    // 与 cmdStop 的提前返回同族：serviceActive 为假时上面的 stopService/uninstallService
+    // 一个都没跑，没有 disable 可执行，但这里即将删掉 runtime/config.yaml 或 kernel/——
+    // 并发的慢速 start 若看不到变化，就会 bootstrap 一个内核已被删除的 plist，
+    // 落进 KeepAlive 每约 10s 拉起一次的崩溃循环。
+    //
+    // 无条件记录（哪怕本来什么都没在跑）：reset runtime 在零进程下同样删掉 config.yaml。
+    // 必须在上面的 remaining 抛错之后——失败的清理不该中止并发的 start。
+    // serviceActive 为真时会与 stopService/uninstallService 重复递增，无害：
+    // 判据只问值变没变（uninstallService 本来就 bump 两次）
+    recordServiceStopped();
   }
 
   const deleted = new Set<string>();

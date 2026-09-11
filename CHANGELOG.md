@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **并发的停止在六条路径上仍会被覆盖或被误报**。v4.7.7 把并发判据换成停止计数后，`CODE_REVIEW` 里挂着三条静态发现的残留缺口；本轮逐条修掉，并顺着同一族形态又找出三处。共同签名是**递增点与消费点没有成对枚举**——收口的对象是判据，不是调用点。
+
+  「停止被静默覆盖」类（终态与用户最后一条命令相反，而两个终端都拿到成功回执）：
+
+  - **`stop` 的两条提前返回一次都不记账**。「不在运行」（未装载、且未安装或已 disabled、无内核进程）与「只杀游离内核」都成功返回却不碰 `disableServiceAutoStart`，于是对并发的 `start` 完全隐形。前者的前置恰是最常见的组合：上次 `stop`/`tun` 留下 disable 位，A 正在 `start` 的慢速阶段（订阅更新约 10s），B 此时 `stop` 走的就是这条。
+  - **`reset` 在服务未装时删掉运行前提也不记账**。`reset logs/runtime/kernel/subs` 在 `serviceActive` 为假时不走 `stopService`，却已经把 `runtime/config.yaml` 或 `kernel/` 删掉——并发的 `start` 随后 bootstrap 一个内核已被删除的 plist，落进 KeepAlive 每约 10s 拉起一次的崩溃循环。
+  - **`restartService` 的回退启动没有防线**。`kickstart -k` 失败后回退 `enable` + `bootstrap`，与 `startService` 是同一动作却少了同一道判据，而热重载探测加 kickstart 最长可达 60s。
+  - **`installService` 的恢复分支快照取得太晚**。取在 `bootoutService()` + `waitUntilUnloaded()`（最多 5s）之后。更关键的是 `stopService` **在自己的锁内先递增、之后才等卸载**，所以存在「B 已递增而 `launchctl print` 仍报 running」的区间：`cmdInstall` 会合理地读到 `wasRunning=true`，而在 bootout 之后现取的快照必然已经 ≥ B 的值，并发就此隐形。快照改由命令层传入。
+
+  「把用户自己的停止报成内核故障」类（终态正确，但报错指向完全错误的排查方向）：
+
+  - **bootstrap 成功到健康确认结束的 1.2–3s 完全在锁外**（`SERVICE_OBSERVE_MS` + GRACE），v4.7.7 的防线只覆盖了锁内那一瞬。这段窗口在**最常走的 `mihomo start` 路径上**，且比上面几条都长：期间的 `stop` 把任务 bootout，`waitServiceHealthy` 于是走 `!loaded` 分支，用户拿到「内核未能进入运行状态」加一段与问题无关的日志尾部。`cmdInstall` 的恢复运行确认有同样的暴露，此前会报「恢复运行失败」。两处都改为失败后复读计数再下结论。
+  - **取消文案本来就不实**：递增点不止 `stop`，`tun` 与 install 首装同样会关闭自启并递增，而文案写死「另一个终端执行了 mihomo stop」——说的是一件没发生的事。改为「检测到停止操作」并说明哪些命令会关闭自启。
+
+  判据仍是唯一那份 `shouldAbortStartOnDisable`，本轮只增加消费点、不新增判据。不变式不是放宽而是承认第二种同等强度的证据：递增只发生在「已确认不会自启且无内核在跑」之后，证据可以是复核过的 `disable`，也可以是刚读到的状态本身（这些读取失败时都抛错而非降级，故「走到了这条路径」本身就是独立依据）；因此调用点必须放在该路径**最后一道失败检查之后**——抢在前面就会让一次失败的停止把并发的 `start` 白白中止。新入口取名 `recordServiceStopped` 而非 `…Intent`：叫「意图」会引来「那就在 `cmdStop` 开头记一次」的改法，那正是要防的。
+
+  `launchOrRestart` 的 `stopEpochBefore` 由可选改为必填：可选默认值会让新调用方静默退化成「只防本函数执行期间的 stop」，而这正是本轮六条缺陷的共同形态。
+
 ### 变更
 
 - 删除 quickstart.sh，只维护 TypeScript CLI 的下载、配置和启动流程
@@ -17,6 +37,9 @@
 
 - 更新配置、设置并发与 reset 的行为测试；reset 测试同时隔离数据目录和服务 label
 - 用 mihomo v1.19.30 验证 Mixed/TUN 配置以及重名节点、缺失引用等拒绝场景，确认失败保留原有运行配置
+- 单测 305（+4）。新增 `commands/stop.spec`：隔离数据目录加不存在的服务 label 天然走「不在运行」分支，一次 launchctl 写操作都不做，故这条能自动化；断言消费者可见的后果而非计数文件内容，并含负向对照（`status` 不得改变计数）。游离内核用真实桩进程验证，判活以 `ps` 状态列为准而非 `kill -0`（僵尸进程会骗过它）
+- 复核测试有效性：临时注掉两处 `recordServiceStopped`，两条用例即转红
+- install 恢复与 restart 回退的并发交错仍只能手工双终端复现（需真装内核的机器），已记入 `CODE_REVIEW` 的未覆盖项，未假称已自动化
 
 ## [4.7.7] - 2026-09-07
 
