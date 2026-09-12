@@ -20,10 +20,14 @@ import {
 } from '../utils.js';
 import { confirmOrThrow, confirmPrompt, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
-/** 订阅内容更新后，运行中的实例仍用旧配置，提示重启生效 */
+/** 订阅内容更新后，运行中的实例仍用旧配置，提示重启生效。
+ * 提示的命令须与 restartToApply 选出的重启模式一致：TUN 在跑时裸 start 默认 Mixed，
+ * 用户照提示执行会把全局路由静默切走——与「配置变更按原模式重启」是同一判据的两面 */
 function printRestartHintIfRunning(): void {
-  if (runtime.getRunningState().running) {
-    console.log(colors.yellow('提示: 运行中的实例仍使用旧配置，执行 mihomo start 使更新生效'));
+  const state = runtime.getRunningState();
+  if (state.running) {
+    const hintCommand = state.kind === 'tun' ? 'mihomo start tun' : 'mihomo start';
+    console.log(colors.yellow(`提示: 运行中的实例仍使用旧配置，执行 ${hintCommand} 使更新生效`));
     console.log('');
   }
 }
