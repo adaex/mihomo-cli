@@ -110,7 +110,7 @@ npm run build
 - mixed-port 与 external-controller 由 settings.ports 决定（默认 7890/9090）；端口需为不同的 1–65535 整数
 - secret 只取 settings.controller_secret；订阅的独立入站端口（port/socks-port/redir-port/tproxy-port）和 external-ui 字段不进入运行配置
 - Mixed 清除 tun 字段；TUN 使用系统 tun 配置并强制 dns.enable=true，显式冲突要提示，其他 DNS 字段尊重用户配置
-- DNS 必须是映射，Mixed 与 TUN 共用形态检查；fake-ip 模式未显式配置 sniffer 时补默认嗅探配置
+- DNS 必须是映射，Mixed 与 TUN 共用形态检查；fake-ip 模式未显式配置 sniffer 时补默认嗅探配置——判据是合并后 dns 的 enhanced-mode（与启动模式无关），`sniffer:` 键存在即算显式、值为 null 也不注入（mihomo 把 null 解码为零值即嗅探关闭，内核不拒）
 - 覆写主文件先加载，扩展文件按名称排序；match 的 subscription/url-domain 为 AND 条件，订阅名匹配不区分大小写，无 match 全局应用，非法或空 match 报错
 - `key!` 整体覆盖，`+key`/`key+` 数组插入，`~key` 按 name 合并（未命中追加）、`~?key` 按 name 合并但未命中忽略，`<+key>` 转义；数组操作遇到已存在的非数组值应报错
 - 覆写默认开启；applyOverwrite 只接收调用方已筛选的文件，不自行读设置或加载文件
@@ -144,7 +144,7 @@ npm run build
 - pgrep/pkill 使用 POSIX ERE，不支持 `(?:...)` 等 JS 正则；退出码仅接受 0/1，其他情况报错
 - BSD ps 读取 command 列必须带 -ww，否则路径可能截断；kill -0 不能区分僵尸进程，TUN 判活还需进程状态与完整观察窗口
 - 日志 rename 只在旧进程退出、新进程未起的窗口使用；运行中轮转用 copy-truncate
-- 归档命名与判据统一用 allocateArchivePath/isArchiveLogFilename，支持同秒序号后缀
+- 归档命名与判据统一用 allocateArchivePath/isArchiveLogFilename，支持同秒序号后缀；分配即原子占名（`wx` 空占位，调用方 rename/copy 直接盖掉），并发轮转不会互相覆盖，序号耗尽抛 CliError
 
 ## 内核下载
 

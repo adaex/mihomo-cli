@@ -143,3 +143,68 @@ describe('dns 形态校验（TUN 与 mixed 两条路径）', () => {
     );
   });
 });
+
+/**
+ * fake-ip 模式的默认 sniffer 注入（config.ts buildConfig 尾段）。
+ *
+ * 机理：fake-ip 下 DNS 返回的是假 IP，基于域名的规则要靠 sniffer 嗅探真实域名才能
+ * 命中；不注入时域名规则静默失效。判据是**合并后 dns 的 enhanced-mode**，与启动
+ * 模式无关——mixed 下订阅自带 fake-ip 同样需要嗅探。订阅/覆写显式给了 sniffer
+ * （哪怕值为 null）则视为用户意图，原样保留不注入。
+ */
+describe('fake-ip 模式注入默认 sniffer', () => {
+  // config.ts 硬编码的 11 行默认配置，逐字段锁定：这里的每个端口与域名
+  // 都是行为决策（HTTP 嗅探开 override-destination、放行 Apple 推送），
+  // 改动必须是有意识的，不能被顺手重构带走
+  const DEFAULT_SNIFFER = {
+    enable: true,
+    sniff: {
+      HTTP: { ports: [80, '8080-8880'], 'override-destination': true },
+      TLS: { ports: [443, 8443] },
+      QUIC: { ports: [443, 8443] },
+    },
+    'skip-domain': ['+.push.apple.com'],
+  };
+
+  it('TUN + 订阅未写 dns（补齐 fake-ip 缺省）→ 注入完整默认 sniffer', () => {
+    const { config } = buildConfig(BASE_SUB, 'tun');
+    assert.deepEqual(config.sniffer, DEFAULT_SNIFFER);
+  });
+
+  it('TUN + 订阅显式 dns.enhanced-mode: fake-ip → 注入', () => {
+    const { config } = buildConfig(withDns('dns:\n  enhanced-mode: fake-ip\n'), 'tun');
+    assert.deepEqual(config.sniffer, DEFAULT_SNIFFER);
+  });
+
+  it('mixed + 订阅 dns.enhanced-mode: fake-ip → 同样注入（判据是最终 DNS 模式，与启动模式无关）', () => {
+    const { config } = buildConfig(withDns('dns:\n  enable: true\n  enhanced-mode: fake-ip\n'), 'mixed');
+    assert.deepEqual(config.sniffer, DEFAULT_SNIFFER);
+  });
+
+  it('mixed + 订阅未写 dns → 不注入（没有 fake-ip 就没有嗅探的必要）', () => {
+    const { config } = buildConfig(BASE_SUB, 'mixed');
+    assert.equal('sniffer' in config, false);
+  });
+
+  it('dns.enhanced-mode 非 fake-ip（redir-host）→ 不注入', () => {
+    const { config } = buildConfig(withDns('dns:\n  enable: true\n  enhanced-mode: redir-host\n'), 'tun');
+    assert.equal('sniffer' in config, false);
+  });
+
+  it('订阅显式配置 sniffer → 原样保留，不混入任何默认字段', () => {
+    const sub = `${BASE_SUB}sniffer:\n  enable: false\n`;
+    const { config } = buildConfig(sub, 'tun');
+    assert.deepEqual(config.sniffer, { enable: false }, '用户显式关闭嗅探时不注入默认配置，也不部分合并');
+  });
+
+  it('订阅写 sniffer: null（有键无值）→ 视同显式配置，不注入', () => {
+    // `'sniffer' in obj` 对 null 为真。口径：键存在即用户意图，null 也算——
+    // mihomo 把 sniffer: null 解码为零值结构体（嗅探关闭），内核 -t 不拒，
+    // 最终配置合法，无须 CLI 代为补默认（本机无内核，依据 MetaCubeX/mihomo
+    // config.go：RawConfig.Sniffer 是 struct 值类型而非指针）。
+    const sub = `${BASE_SUB}sniffer:\n`;
+    const { config } = buildConfig(sub, 'tun');
+    assert.equal('sniffer' in config, true);
+    assert.equal(config.sniffer, null);
+  });
+});

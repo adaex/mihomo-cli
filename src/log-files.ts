@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { CliError } from './errors.js';
 import { DIRS, PATHS } from './paths.js';
 import type { LogList } from './types.js';
 import { formatLocalTimestamp } from './utils.js';
@@ -79,34 +80,84 @@ export function readLogTail(maxLines = 15): string[] {
 }
 
 /**
- * 分配一个尚未占用的归档路径：`mihomo.<时间戳>.log`，已存在则追加序号。
+ * 同秒序号的重试上限。正常并发（双终端 start、start + tun）至多烧掉个位数；
+ * 到达上限说明 logs/ 里躺着上千个同一秒的归档——只有失控的循环轮转造得出来，
+ * 按 CliError 报出来，不能无限换名。
+ */
+const MAX_ARCHIVE_SEQ = 1000;
+
+/**
+ * 分配一个归档路径并**原子占名**：`mihomo.<时间戳>.log`，名字被占则追加序号。
  *
- * 同一秒内两次轮转（start 失败后立即重试、tun 紧接 start）会互相覆盖归档——
- * POSIX rename 与 copyFileSync 都静默覆盖已存在文件。加序号后缀避免丢日志。
+ * 返回时该名字已被本进程以空占位文件占住：`openSync` 的 `wx`（O_EXCL）标志让
+ * 「名字可用」与「名字归我」在同一次系统调用内判定（与 withFileLock 的锁同一范式）。
+ * 此前是 existsSync 判否后返回，跨进程是 TOCTOU：两个 CLI 进程同秒轮转
+ * （双终端 start、start + tun）都判否并选中同一归档名，后到的 renameSync/copyFileSync
+ * 在 POSIX 上静默覆盖先到者——一份历史日志无提示丢失。序号后缀只防同进程先后两次
+ * 同秒轮转，防不了跨进程；占位才防得住。
+ *
+ * 调用方随后的 renameSync/copyFileSync 对已存在目标是原子替换/覆写，直接盖掉占位
+ * 即可——service.ts 的 copy-truncate（restartService）与本文件的 rotateLog 都无需
+ * 感知此语义。若覆写失败，占位残留为空归档文件：仍被 isArchiveLogFilename 认得、
+ * 随保留期清理，也不影响后续分配（占名只烧掉一个名字，不存在等锁问题）。
  *
  * 导出供 service.ts 的 copy-truncate 轮转复用（运行中不能 rename，见 restartService）：
  * 此前两处各写一份同样的 while 循环，命名规则漂移就会让归档被静默覆盖或列不出来。
  */
 export function allocateArchivePath(): string {
   const timestamp = formatLocalTimestamp();
-  let archivePath = path.join(DIRS.logs, `mihomo.${timestamp}.log`);
-  let seq = 1;
-  while (fs.existsSync(archivePath)) {
-    archivePath = path.join(DIRS.logs, `mihomo.${timestamp}.${seq}.log`);
-    seq++;
+  for (let seq = 0; seq <= MAX_ARCHIVE_SEQ; seq++) {
+    const name = seq === 0 ? `mihomo.${timestamp}.log` : `mihomo.${timestamp}.${seq}.log`;
+    const archivePath = path.join(DIRS.logs, name);
+    let fd: number | null = null;
+    try {
+      fd = fs.openSync(archivePath, 'wx');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'EEXIST') continue; // 名字被占（并发进程或同秒既有归档），换下一个序号
+      throw e;
+    }
+    try {
+      fs.closeSync(fd);
+    } catch {
+      /* 名字已占住；关闭失败只是泄漏一个 fd，不影响轮转 */
+    }
+    return archivePath;
   }
-  return archivePath;
+  throw new CliError(`同一秒的归档序号已达上限 ${MAX_ARCHIVE_SEQ}，无法分配新的归档名`, {
+    label: '日志轮转失败',
+    hint: [`${DIRS.logs} 下存在大量同一时间戳的归档，通常由失控的循环轮转造成；请检查是否有脚本在反复触发 start/tun，确认后手动清理归档。`],
+  });
 }
 
 function rotateLog(): string | null {
   const logFile = PATHS.logFile;
-  if (!fs.existsSync(logFile)) return null;
 
-  const stat = fs.statSync(logFile);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(logFile);
+  } catch (e) {
+    // 日志不存在，或恰好被并发轮转搬走（检查与 stat 之间被 rename）——都没有可轮转的内容
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw e;
+  }
   if (stat.size === 0) return null;
 
   const rotatedPath = allocateArchivePath();
-  fs.renameSync(logFile, rotatedPath);
+  try {
+    // rename 对已存在目标是原子替换：直接盖掉分配时的空占位
+    fs.renameSync(logFile, rotatedPath);
+  } catch (e) {
+    // 覆写失败时回收占位，不留一个混进 logs 列表的空归档。最常见的 ENOENT 是
+    // 并发轮转已把日志搬走：归档已由对方完成，本次无事可做，不能让并发的
+    // start/tun 因此报错。
+    try {
+      fs.unlinkSync(rotatedPath);
+    } catch {
+      /* ignore */
+    }
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw e;
+  }
   return rotatedPath;
 }
 
