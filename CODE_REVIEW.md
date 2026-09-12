@@ -1,14 +1,14 @@
 # 代码审查：验证结论与边界
 
-当前审查：2026-09-12，已随 v4.8.1 发布
+当前审查：2026-09-12，待发布（基于 v4.8.1 之上的 16 项修复）
 
-本轮清掉「未覆盖与待复核」里挂着的三条服务并发缺陷，顺着同一族形态又找出三处；另补三处用户侧缺口（Node 版本守卫、补全卸载、`config` 查看生效配置），并补覆写上下文诊断。launchd 的真实启停与 TUN 提权流程未做端到端复测
+本轮对全仓做了一次分模块深审（launchd 与进程、数据锁与下载、配置构建与覆写、命令层与横切），产出 28 条发现并修掉 16 条：三条实测复现的并发缺陷（锁 deadline 删新鲜锁、TUN 运行中配置变更被切回 Mixed、热重载成功不复读停止计数）、覆写嵌套键语义统一为字面（用户拍板）、以及一批「承诺写在注释、机制没盖到」的一致性缺陷（紧贴值选项三套解析器、sub 白名单全组放行、补全四份词表、豁免命令副作用、warnings 出口）。剩余 12 条多为待真机验证或低危，见「未覆盖与待复核」。launchd 的真实启停与 TUN 提权流程未做端到端复测
 
 规则见 CLAUDE，修复历史见 CHANGELOG；本文保留验证方法、仍有效的实测事实与未覆盖风险，改相关代码时同步更新
 
 ## 本轮验证
 
-类型检查、340 项测试（+15）、Biome（实际检查 72 个文件）与构建通过；构建产物在隔离目录（含隔离服务 label）复核 stop 两次递增、无 plist 残留、无进程残留
+类型检查、550 项测试（+210）、Biome（实际检查 79 个文件）与构建通过
 
 | 范围 | 验证方式与结论 |
 | --- | --- |
@@ -18,14 +18,19 @@
 | 测试有效性 | 临时注掉两处 `recordServiceStopped` 复核，两条用例即转红，确认不是恒真断言 |
 | Node 版本守卫 | commands/node-guard.spec 伪造 `process.versions.node` 跑真实入口（真装旧 Node 连 tsx 都未必起得来，反而测不到守卫）：四个命令被拒且退出非 0、help/version 豁免、被拒时不留数据目录、满足下限时放行 |
 | 补全装卸 | commands/completion-install.spec 把 HOME 指向临时目录跑真实装卸，断言文件最终内容：bash 卸载后用户自有内容完好且标记块消失、反复装卸不留空文件、非本工具产物拒绝删除且文件仍在 |
-| config 命令 | commands/config.spec 全部在没有 runtime/config.yaml 的目录里跑（锁住「重新推导」这一性质）；输出经 js-yaml 实际解析确认是合法 YAML，secret 已脱敏，`--json` 同样脱敏 |
+| config 命令 | commands/config.spec 全部在没有 runtime/config.yaml 的目录里跑（锁住「重新推导」这一性质）；输出经 js-yaml 实际解析确认是合法 YAML，secret 已脱敏，`--json` 同样脱敏且携带 `warnings`（空时为数组） |
 | 补全脚本语法 | 生成的 zsh/bash 脚本经 `zsh -n`/`bash -n` 校验；fish 未装，未校验 |
-| 配置构建 | config/config-dns/overwrite 测试验证 JSON/YAML、形态错误、覆写 DSL、作用域与 TUN DNS；节点、分组和规则不再被隐式修复；`~?key` 未命中即跳过并告警（反向验证：短路成追加后精确三条转红）；覆写操作符只在顶层生效、嵌套键一律字面（反向验证：恢复内层 DSL 解析后通配键/告警用例共九条转红），校验失败提示的覆写清单按作用域过滤、文案逐行锁定 |
+| 配置构建 | config/config-dns/overwrite 测试验证 JSON/YAML、形态错误、覆写 DSL、作用域与 TUN DNS；节点、分组和规则不再被隐式修复；`~?key` 未命中即跳过并告警（反向验证：短路成追加后精确三条转红）；覆写操作符只在顶层生效、嵌套键一律字面（反向验证：恢复内层 DSL 解析后通配键/告警用例共九条转红），校验失败提示的覆写清单按作用域过滤、文案逐行锁定；订阅自带 port/socks-port/redir-port/tproxy-port/secret/external-ui 被剥掉、生效值取 settings；fake-ip 注入 sniffer 的判据是合并后 dns 的 enhanced-mode（mixed + 订阅 fake-ip 也注入），`sniffer: null` 不注入（内核把 null 解码为零值，-t 不拒） |
 | 原生配置校验 | mihomo v1.19.30 在临时目录执行 -t：Mixed/TUN 合法配置通过；缺失节点、规则目标、重复节点名和缺失 provider 被拒绝；拒绝后旧 config.yaml 保留、候选文件清理 |
 | 配置提交协议 | subscription-prepare.spec 用隔离桩内核验证 -t/-d/-f、并发临时文件、拒绝时保持旧配置、提交只写最终配置，并验证拒绝提示带出生效的覆写文件与作用域（无覆写生效时不出现该段） |
-| 设置 | settings.spec 用真实子进程验证每次读盘、mutator 失败不写入，以及 4 进程并发更新设置和订阅缓存不丢条目 |
+| 设置 | settings.spec 用真实子进程验证每次读盘、mutator 失败不写入，以及 4 进程并发更新设置和订阅缓存不丢条目；端口校验在合并默认值之后执行，单侧配置撞另一侧默认报错 |
 | reset | commands/reset.spec 用临时数据目录和独立服务 label 跑真实 CLI，检查全量/部分/不同目标顺序、不重建设置、默认覆写开关与下载残留清理 |
-| 命令与选项 | 注册表/补全与参数测试；带值选项 exact / attached / 等号三种形式由 `matchValueFlagToken` 统一判定（白名单、`parseIntArg`、重启透传三处共用），不变量测试遍历 `FLAGS` 锁死「白名单接受 ⟹ 下游可消费」（反向验证：临时让透传丢掉 attached 即转红）；布尔开关拒绝附加值，未知输入统一报错 |
+| 命令与选项 | 注册表/补全与参数测试；带值选项 exact / attached / 等号三种形式由 `matchValueFlagToken` 统一判定（白名单、`parseIntArg`、重启透传三处共用），不变量测试遍历 `FLAGS` 锁死「白名单接受 ⟹ 下游可消费」（反向验证：临时让透传丢掉 attached 即转红）；布尔开关拒绝附加值，未知输入统一报错；sub 白名单按子命令校验（13 条用例，反向验证：换回全组放行恰好 5 条转红）；多余位置参数在全部消费点报错（positional-args.spec 25 拒 + 19 放行） |
+| 服务并发 | service-concurrency.spec 用 PATH 前置桩 launchctl + 桩 controller 驱动真实模块（launchd 零接触）：热重载成功后计数已变则报「启动已取消」（反向验证：撤掉复读恰好转红）；stop 锁内慢 launchctl 的持锁时长断言低于 `LOCK_STALE_MS` 真实常量（反向验证：还原 5s 超时实测持锁约 12s 超阈值，原缺陷复现） |
+| 文件锁 | paths.spec：deadline 到点不抢新鲜锁（等待者各自过线也只等对方释放，双等待者临界区不重叠）；反向验证：还原无条件 rmSync 后以正确原因转红 |
+| 归档轮转 | log-files.spec：原子占名（openSync 'wx'）后双进程同时分配拿不同路径、同时轮转同一日志恰一份归档；反向验证：换回 existsSync-then-rename 后 4 条转红且两次运行稳定复现覆盖 |
+| 网络路径 | kernel/http.spec：代理路径 curl 加 `--fail-with-body` + 状态码复核（3xx 不跟随时退出码也是 0，故双保险）；真实 CONNECT 隧道代理对 api.github.com 端到端取到版本，连接拒绝口径不变；API 查询异步化（130s 不再阻塞事件循环）；https 判定经 `new URL` 规范化，大写 scheme 不再绕过降级守卫 |
+| TUN 模式判据 | runtime.spec：`restartModeFor` 纯函数锁「TUN 在跑即 tun（含服务已装组合）」，真实桩内核 + pid 文件端到端验证 `getRuntimeMode` 答错时决策仍答 tun |
 
 原生 -t 只验证配置解析，不能证明节点可达、端口可绑定或真实 TUN 路由正常；服务健康与代理连通性检查仍有独立价值
 
@@ -55,8 +60,13 @@
 - 停止计数是多写者读-改-写且刻意不加锁：极端交错下可能用较小值覆盖较大值，使某条后续命令偶发判为「变了」而中止。判据是 `!==` 本就偏保守，接受之
 - `cmdStop` 路径 (b) 的「记录必须在 handleStopResult 之后」只由代码位置与注释保证：非 root 下无法让 SIGKILL 失败，测不出来
 - settings/cache 写入有锁，但 reset 的跨文件删除不是事务；未承诺与下载、另一次 reset 并行时整个目录原子切换
-- fish 补全脚本未做语法校验：本机未装 fish。zsh/bash 经 `zsh -n`/`bash -n` 校验过，改动补全生成逻辑时注意 fish 那份只有生成、没有验证
+- fish 补全脚本未做语法校验：本机未装 fish。zsh/bash 经 `zsh -n`/`bash -n` 校验过，改动补全生成逻辑时注意 fish 那份只有生成、没有验证（gating 与词表派生已由 completion.spec 字符串级断言锁住，语法仍无验证）
 - `config` 命令不做内核校验，故它能输出「形态合法但内核会拒绝」的配置（例如引用了不存在的节点）。这是刻意的分工——校验归 `doctor` 与 `start`，只读展示不该要求装了内核
+- sudo 三处收口（超时 60s、退出码分工、残留清理 CliError）的完整链路只能真机 sudo 验证：慢密码场景、bootout 真实失败的 exit 3 渲染、四个命令下的实际终端输出；包装决策已纯函数化测试
+- `restartService` 的 copy-truncate 路径中 `allocateArchivePath()` 在 best-effort try 之外：同秒已存在 1001 个归档（序号耗尽）时 CliError 会穿出而非被吞。病态场景，接受之；动这段时别顺手「修」进 try——归档名拿不到时轮转整体跳过是更合理的语义
+- `listeners` 是否进删除清单属未定产品决策（订阅以 listeners 投递入站是否合法）：本批未动，订阅自带 listeners 仍原样进运行配置
+- TUN 运行中 `sub use`/`ow` 的按原模式重启与更新提示（`start tun`）已修，但真实 TUN 提权流程的端到端（sudo 弹窗、路由切换、恢复）未复测，仅经 runtime.spec 的桩内核路径验证决策
+- 本轮深审其余未修的低危项：`unhandledRejection`/`uncaughtException` 已统一口径但渲染函数本身不可注入测试；补全 install 的「已含标记块幂等跳过」无用例；`NO_COLOR`/stderr 设色经 pty 手工验证、无自动化；clearProxyEnv 对企业 env 代理网络的影响已文档化（CLAUDE）但无提示机制
 
 ## 已评估未采纳
 
