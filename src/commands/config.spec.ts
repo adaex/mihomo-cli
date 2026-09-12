@@ -98,6 +98,23 @@ describe('config：查看当前生效的运行配置', () => {
     const parsed = JSON.parse(stdout) as Record<string, unknown>;
     assert.equal(parsed.secret, '***');
     assert.ok(Array.isArray(parsed.proxies));
+    // 无警告时 warnings 也在场且是空数组：字段形状稳定，消费者不必判 undefined
+    assert.deepEqual(parsed.warnings, []);
+  });
+
+  it('--json 携带 buildConfig 的 warnings，不把信号丢在 JSON 之外', () => {
+    // 分组名拼错的 ~? 补丁会被跳过——这正是 warnings 要暴露、而 JSON 分支此前丢弃的信号
+    fs.writeFileSync(path.join(dataDir, 'overwrite.yaml'), '~?proxy-groups:\n  - { name: TYPO-GROUP, type: select, proxies: [HK-1] }\n');
+
+    const { status, stdout, output } = run(['config', '--json']);
+    assert.equal(status, 0, output);
+    // stdout 仍是单个可整体解析的 JSON 对象：warnings 在对象内，而不是溢到 stderr 或第二段输出
+    const parsed = JSON.parse(stdout) as { warnings?: string[] };
+    assert.ok(Array.isArray(parsed.warnings), 'warnings 必须是 JSON 输出里的顶层数组字段');
+    assert.equal(parsed.warnings.length, 1);
+    assert.match(parsed.warnings[0], /~\?proxy-groups/);
+    assert.match(parsed.warnings[0], /TYPO-GROUP/);
+    assert.match(parsed.warnings[0], /未匹配到当前订阅中的同名元素/);
   });
 
   it('无订阅时报错并给出下一步', () => {

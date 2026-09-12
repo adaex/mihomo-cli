@@ -42,7 +42,9 @@ export function cmdConfig(args: string[] = []): void {
   if (typeof shown.secret === 'string' && shown.secret) shown.secret = '***';
 
   if (asJson) {
-    console.log(JSON.stringify(shown, null, 2));
+    // warnings 必须在 JSON 对象内：stdout 得仍是单个可整体解析的 JSON，信号挪去 stderr
+    // 等于让脚本与下游工具永远看不到。无警告时也输出空数组——字段形状稳定，消费者不必判 undefined
+    console.log(JSON.stringify({ ...shown, warnings }, null, 2));
     return;
   }
 

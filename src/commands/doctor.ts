@@ -159,8 +159,22 @@ async function collectChecks(): Promise<Check[]> {
   if (active && hasKernel()) {
     try {
       const mode = info?.tun ? 'tun' : 'mixed';
-      await prepareConfigForStart(mode, active.name);
-      push('配置构建', 'ok', `当前订阅通过内核校验（${mode}）`);
+      const prepared = await prepareConfigForStart(mode, active.name);
+      const warnings = prepared.buildResult.warnings;
+      if (warnings.length > 0) {
+        // 内核校验是通过的，不升为 fail；但 warnings 是「配置没按用户预期生效」的信号
+        // （~? 补丁未命中被跳过、TUN 强制开 DNS），丢掉的话体检反而成了盲区。逐条挂
+        // notes，缩进沿用 hint 的样式；措辞强调校验已过，提示不等于失败
+        push(
+          '配置构建',
+          'warn',
+          `当前订阅通过内核校验（${mode}），另有 ${warnings.length} 条配置提示`,
+          undefined,
+          warnings.map(w => `  ${w}`),
+        );
+      } else {
+        push('配置构建', 'ok', `当前订阅通过内核校验（${mode}）`);
+      }
     } catch (e) {
       // hint 带着内核原文与本次生效的覆写清单；只取 message 首行会把唯一有用的线索丢掉
       // （体检是紧凑列表，滤掉纯排版空行）
