@@ -22,9 +22,14 @@ export const SAFE_YAML_LOAD_OPTIONS: yaml.LoadOptions = { maxAliases: 200 };
 /**
  * 系统锁定的入站/控制面键：只允许来自 settings 或系统约束，订阅与覆写显式提供时
  * 一律剥除（buildConfig）。新增入站/控制器键时加在这里——redir/tproxy、
- * external-controller-tls/-unix/-cors、tuic-server、external-doh-server 都曾是漏网之鱼。
- * 对应上游 mihomo `config/config.go` 的 General 段（端口家族 + ExternalController* +
- * ExternalUI* + Secret + ExternalDohServer + TuicServer）。
+ * external-controller-tls/-unix/-cors、tuic-server、external-doh-server、
+ * ss-config/vmess-config 都曾是漏网之鱼。对应上游 mihomo `config/config.go` 的
+ * General 段（端口家族 + ExternalController* + ExternalUI* + Secret +
+ * ExternalDohServer + TuicServer + ShadowSocksConfig/VmessConfig）。
+ *
+ * 核对方法不是按键名眼熟程度挑，而是看上游 `config.Inbound` 结构体的字段全集与
+ * `hub/executor.updateListeners()` 里逐个 ReCreate* 的入参——凡进得去那份名单的
+ * 都能开监听。tuic-server/ss-config/vmess-config 是该结构体里并列的三个字段。
  *
  * 刻意不在内的入站面：
  * - `listeners` / `tunnels`：通用入站声明，是否允许订阅投递属未定的产品决策，
@@ -51,6 +56,13 @@ export const LOCKED_CONFIG_KEYS = [
   // 完整入站代理服务端（监听 + 认证 + 自带证书字段）：订阅借此可把本机变成开放代理，
   // 比 redir/tproxy 严重得多，与「入站由 mixed/tun 托管」的产品边界直接冲突
   'tuic-server',
+  // 同族的另外两个入站服务端，只是形态是一行 URL 而非映射，更易被忽略：
+  // 上游 ParseSSURL/ParseVmessURL 直接把 URL 的 host 当 Listen，New() 再对
+  // `strings.Split(Listen, ",")` 逐个 bind——**不经过 genAddr**，故 allow-lan 与
+  // bind-address 都管不到它们（那两个只作用于 HTTP/Socks/Redir/TProxy/Mixed）。
+  // 即订阅里一行 `ss-config: ss://aes-128-gcm:pass@0.0.0.0:8388` 就是全网卡开放代理
+  'ss-config',
+  'vmess-config',
 ] as const;
 
 /** 统一入口:带别名上限的 yaml.load,替代裸 yaml.load。 */

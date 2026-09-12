@@ -213,6 +213,33 @@ describe('系统锁定项：订阅自带的端口与控制面字段不进运行�
     });
   }
 
+  // ss-config/vmess-config 与 tuic-server 是上游 config.Inbound 里并列的三个字段、
+  // 同由 updateListeners() 逐个 ReCreate* 起监听，但形态是一行 URL 而非映射，容易漏。
+  // 上游 ParseSSURL/ParseVmessURL 把 URL 的 host 直接当 Listen 且不经 genAddr，
+  // 故 allow-lan/bind-address 都拦不住：一行订阅字段即全网卡开放代理
+  for (const mode of ['mixed', 'tun'] as const) {
+    it(`${mode}: 订阅的 ss-config/vmess-config 入站服务端不进运行配置`, () => {
+      const sub = dumpYaml({
+        ...BASE,
+        'ss-config': 'ss://aes-128-gcm:leaked-password@0.0.0.0:8388',
+        'vmess-config': 'vmess://user:b831381d-6324-4d53-ad4f-8cda48b30811@0.0.0.0:8443',
+      });
+      const { config } = buildConfig(sub, mode);
+      assert.equal('ss-config' in config, false, 'ss-config 会开出带密码的 Shadowsocks 入站，必须剥除');
+      assert.equal('vmess-config' in config, false, 'vmess-config 会开出 Vmess 入站，必须剥除');
+    });
+  }
+
+  // allow-lan=false 是 BASE_CONFIG 的默认，但它只作用于 HTTP/Socks/Redir/TProxy/Mixed
+  // （上游 genAddr）；ss/vmess/tuic 入站自带 Listen，不受其约束——别把「默认不开放局域网」
+  // 当成这三个键的兜底，锁定表才是唯一防线
+  it('allow-lan 关闭也拦不住 ss-config：两者是独立机制，剥除不能依赖 allow-lan', () => {
+    const sub = dumpYaml({ ...BASE, 'allow-lan': false, 'ss-config': 'ss://aes-128-gcm:p@0.0.0.0:8388' });
+    const { config } = buildConfig(sub, 'mixed');
+    assert.equal(config['allow-lan'], false);
+    assert.equal('ss-config' in config, false);
+  });
+
   // listeners/tunnels 是通用入站声明，是否允许订阅投递属未定产品决策，两者须一起评估
   // （CODE_REVIEW 有记录）；iptables 是 Linux 专用、darwin 无此路径——现状是原样保留，
   // 这条用例把现状锁死，决策改变时会明确失败而不是悄悄漂移
@@ -250,6 +277,22 @@ describe('系统锁定项：订阅自带的端口与控制面字段不进运行�
       assert.match(locked, /redir-port/);
       assert.match(locked, /external-doh-server/);
       assert.match(locked, /\btls\b/);
+    } finally {
+      fs.rmSync(owPath);
+    }
+  });
+
+  it('覆写里的 ss-config/vmess-config 同样剥除并告警（含 +key 操作符形式）', () => {
+    const owPath = path.join(tmpDir, 'overwrite.yaml');
+    fs.writeFileSync(owPath, ["ss-config: 'ss://aes-128-gcm:p@0.0.0.0:8388'", "vmess-config!: 'vmess://user:uuid@0.0.0.0:8443'"].join('\n'));
+    try {
+      const { config, warnings } = buildConfig(dumpYaml(BASE), 'mixed');
+      assert.equal('ss-config' in config, false);
+      assert.equal('vmess-config' in config, false);
+      const locked = warnings.find(w => w.includes('系统锁定项已忽略'));
+      assert.ok(locked, `覆写锁定键应告警，实际: ${JSON.stringify(warnings)}`);
+      assert.match(locked, /ss-config/);
+      assert.match(locked, /vmess-config/);
     } finally {
       fs.rmSync(owPath);
     }

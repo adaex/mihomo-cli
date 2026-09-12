@@ -1,16 +1,29 @@
 # 代码审查：验证结论与边界
 
-当前审查：2026-09-12，待发布（基于 v4.9.0 之上的 13 项复审修复）
+当前审查：2026-09-12，v4.9.2（v4.9.1 的锁定清单复核：补 `ss-config`/`vmess-config`）
 
-本轮在 v4.9.0 发布当天复审：一人通读并发状态机全线（service/runtime/paths/start/stop/reset/install 命令层），三个分模块深审（覆写与配置、命令层、进程下载），重要线索逐条实测或回上游源码核实；收尾时回上游 General 段逐键复查又补出 `tuic-server`/`external-doh-server` 两个入站面，并修正了锁定告警对真实订阅刷屏的自引入回归。修 15 项：入站/控制面安全边界、一条热重载自愈缺口，其余为一致性收口。两条子审查报的缺陷经对照实验排除（pkill 自匹配、见下）。launchd 的真实启停与 TUN 提权流程仍未做真机端到端复测。单测 599（+48），关键新用例在恢复缺陷时均转红（反向验证过）
+本轮起因是复核 v4.9.1 的 CODE_REVIEW 声明本身：文档称锁定键「逐个回上游 General 段核对」，照着上游 `RawConfig`/`config.Inbound` 重新对表时发现 `ss-config`、`vmess-config` 两个入站服务端从未被任何文档、清单或测试提及——不是待定决策，是纯遗漏。它们与已锁的 `tuic-server` 是同一个 `Inbound` 结构体的并列字段，同由 `executor.updateListeners()` 起监听，只因形态是一行 URL 而非映射而被漏看。修 1 项（安全边界），并修正 v4.9.1 文档里两处与事实不符的记述（「待发布」、测试数 596）。单测 603（+4）
+
+上一轮（v4.9.1）在 v4.9.0 发布当天复审：一人通读并发状态机全线（service/runtime/paths/start/stop/reset/install 命令层），三个分模块深审（覆写与配置、命令层、进程下载），重要线索逐条实测或回上游源码核实；收尾时回上游 General 段逐键复查又补出 `tuic-server`/`external-doh-server` 两个入站面，并修正了锁定告警对真实订阅刷屏的自引入回归。修 15 项：入站/控制面安全边界、一条热重载自愈缺口，其余为一致性收口。两条子审查报的缺陷经对照实验排除（pkill 自匹配、见下）。launchd 的真实启停与 TUN 提权流程仍未做真机端到端复测
 
 规则见 CLAUDE，修复历史见 CHANGELOG；本文保留验证方法、仍有效的实测事实与未覆盖风险，改相关代码时同步更新
 
-## 本轮验证（v4.9.0 复审）
+## 本轮验证（v4.9.2 锁定清单复核）
 
 | 范围 | 验证方式与结论 |
 | --- | --- |
-| 控制面与入站锁定 | 实测 `buildConfig`：订阅带 `external-controller-tls/-unix/-pipe/-cors/-routing-mark/-doh`、`tuic-server` 与顶层 `tls` 段时全部剥除；订阅侧无锁定 warning（机场订阅普遍带端口段，静默剥除），生效覆写文件含锁定键（含 `+key`/`key!` 形式）才有带文件名的 warning；`listeners`/`tunnels`/`iptables` 现状保留有测试锁死。键名逐个回上游 `MetaCubeX/mihomo` `config/config.go`（General 段）、`listener/config/tunnel.go`（tunnels 含 address 是入站）、`hub/route/server.go`（TLS 需证书、unix/doh 无前提、CORS 作用于主控制器）核对。反向验证：恢复旧删除清单或恢复订阅侧告警，对应用例即红 |
+| ss-config / vmess-config 锁定 | 实测 `buildConfig`：订阅与覆写（含 `vmess-config!` 操作符形式）提供时均剥除，覆写侧告警带文件名与键名；`allow-lan: false` 与剥除是两套独立机制，单独一条用例锁死「别拿 allow-lan 当兜底」。上游依据逐处核对（v1.19.30）：`config.go` 的 `RawConfig`/`Inbound` 两个结构体里 `ShadowSocksConfig`/`VmessConfig` 与 `TuicServer` 并列；`hub/executor/executor.go:updateListeners()` 对三者各调一次 `ReCreate*`；`listener/shadowsocks/utils.go:ParseSSURL` 与 `sing_vmess` 的 `ParseVmessURL` 把 URL 的 host 直接当 `Listen`，`New()` 里 `strings.Split(config.Listen, ",")` 逐个 bind——**不经过 `genAddr`**，故 `allow-lan`/`bind-address` 对它们无效（那两个只作用于 HTTP/Socks/Redir/TProxy/Mixed）。反向验证：从 `LOCKED_CONFIG_KEYS` 摘掉这两键，恰好 4 条新用例转红、其余全绿 |
+| 既有防线回归 | typecheck / 603 测试 / Biome（实际检查 80 个文件）/ build 全绿；v4.9.1 的锁定家族、告警只对覆写、待定入站面三组用例均仍通过 |
+
+---
+
+## v4.9.1 复审验证（历史，结论仍有效）
+
+单测 599（+48），关键新用例在恢复缺陷时均转红（反向验证过）
+
+| 范围 | 验证方式与结论 |
+| --- | --- |
+| 控制面与入站锁定 | 实测 `buildConfig`：订阅带 `external-controller-tls/-unix/-pipe/-cors/-routing-mark/-doh`、`tuic-server` 与顶层 `tls` 段时全部剥除；订阅侧无锁定 warning（机场订阅普遍带端口段，静默剥除），生效覆写文件含锁定键（含 `+key`/`key!` 形式）才有带文件名的 warning；`listeners`/`tunnels`/`iptables` 现状保留有测试锁死。键名逐个回上游 `MetaCubeX/mihomo` `config/config.go`（General 段）、`listener/config/tunnel.go`（tunnels 含 address 是入站）、`hub/route/server.go`（TLS 需证书、unix/doh 无前提、CORS 作用于主控制器）核对——**但这次核对漏了同段的 `ss-config`/`vmess-config`，v4.9.2 才补上**。反向验证：恢复旧删除清单或恢复订阅侧告警，对应用例即红 |
 | 热重载查询失败回退 | PATH 前置计数桩 launchctl（入口 print 成功→热重载 print 退 112→kickstart→健康窗恢复 running）+ 子进程真实模块：查询失败走 kickstart 并健康确认，不再整体失败。反向验证：getServiceStatus 移回 try 外用例即红 |
 | 补全指纹 | 临时 HOME 跑真实 CLI：仅含 `#compdef mihomo` 行业首行的第三方补全、fish 只循环 mihomo 的手写文件均拒绝删除；本工具完整指纹正常装卸；XDG_CONFIG_HOME 下安装/卸载同位置。反向验证：恢复弱指纹两条用例即红。zsh/bash 生成脚本经 `zsh -n`/`bash -n`，fish 仍未装 |
 | 覆写矛盾操作符 | `+x+`/`~x!`/`~?x!`/`<x>+!`/`~<x>!` 抛 CliError；裸 `+`/`~`/`!`/`~?` 报空键名；`~?key`、`<+key>!`、`+<+key>` 等合法单一操作符不误伤 |
@@ -18,7 +31,7 @@
 | 内核下载 | `--fail-with-body` 在 buildKernelCurlArgs 纯函数用例锁定；`parseTarEntrySize` 对 bsdtar（第 5 列）与 GNU tar（owner/group 第 3 列）两种 `-tv` 布局取大小，目录行计 0，超 512MB 上限被调用方拒绝 |
 | 命令层口径 | 真实 CLI（隔离目录 + 隔离 label）：`ui ""`/`dir open ""`/`sub update ""` 报错；`ow on -u`/`sub use x -u5s` 未运行也报错；重复 `--mirror` 报错；`ow -s`/`dir -x` 给未知选项文案；resolveUiName 纯函数测大小写归一 |
 | 损坏备份 | 子进程真实模块连写两次损坏内容：settings.json 与 cache.json 的 `.bak` 都只保留第一份原件 |
-| 既有防线回归 | typecheck/596 测试/Biome/build 全绿；4.9.0 的锁三进程编排、热重载计数复读、TUN 模式重启、sub 白名单等用例全部仍通过 |
+| 既有防线回归 | typecheck/599 测试/Biome/build 全绿；4.9.0 的锁三进程编排、热重载计数复读、TUN 模式重启、sub 白名单等用例全部仍通过 |
 
 **复审实测排除的疑似缺陷**：
 
@@ -77,7 +90,8 @@
 
 - 健康观察窗只覆盖启动初期，之后的 OOM/panic 由 status/doctor 展示异常退出；延长 start 到无限观察不在目标内
 - install 恢复分支的并发只能手工双终端复现（需真装了内核的机器）：自动化要么得真跑 launchctl enable/disable（留永久记录），要么退化成对实现清单的断言。已修；热重载成功分支（PATH 前置桩 launchctl + 桩 controller）与查询失败回退分支（计数桩 launchctl）均已自动化（service-concurrency.spec，不碰真实 launchd），install 恢复分支仍只能手工复现
-- 控制器/入站家族锁定（external-controller-tls/-unix/-cors/-doh、tuic-server、tls 段）只回上游源码核对了键名与启动前提、用 buildConfig 实测了剥除，没用真内核验证过额外监听真的开不出来；unix socket 文件创建、TUIC server bind 等内核侧行为同理
+- 控制器/入站家族锁定（external-controller-tls/-unix/-cors/-doh、tuic-server、ss-config/vmess-config、tls 段）只回上游源码核对了键名与启动前提、用 buildConfig 实测了剥除，没用真内核验证过额外监听真的开不出来；unix socket 文件创建、TUIC/SS/Vmess server bind 等内核侧行为同理
+- **锁定清单的完整性靠人肉对表，没有机制保证**：`LOCKED_CONFIG_KEYS` 与上游 `config.Inbound` 字段集之间没有自动比对（要做得解析 Go 源码或钉住上游版本），漏键只能靠复核发现——redir/tproxy（4.9.0）、-tls/-unix/-doh 与 tuic-server（4.9.1）、ss-config/vmess-config（4.9.2）三轮各漏一批，每轮都以为「这次逐个核对过了」。下次核对别按键名眼熟程度挑，照 `Inbound` 结构体字段 + `updateListeners()` 的 ReCreate* 入参逐个对；上游新增入站类型时本清单必然滞后
 - `listeners` 与 `tunnels` 都是通用入站声明、订阅可指定监听地址，当前原样进运行配置（与 4.9.0 对 listeners 的决定一致，两个键须一起评估）；`iptables` 是 Linux 专用、darwin 内核无该路径，同样保留。若产品上决定锁定，三者的测试在 config.spec「待定入站面」用例会立即失败提示
 - 锁定告警只对覆写文件：覆写经操作符设置锁定键（如 `+secret`）已覆盖，但覆写文件内 `match:` 块之后、且文件解析失败被 warn 跳过时不会有告警（文件整体没生效，合理）
 - `kickstart -k` 超时 60s 远超锁的 10s 强夺阈值，必须留在锁外，故它与并发 bootout 的交错无法用锁串行化；现在只保证「不再 re-enable/re-bootstrap」与「不再把用户的 stop 报成内核故障」，不是把这个交错消掉了
@@ -115,6 +129,10 @@
 
 ## 文档与流程复盘
 
-本轮删除了过期实现说明与重复事故清单；稳定约束集中在 CLAUDE，历史保留在 CHANGELOG/git
+稳定约束集中在 CLAUDE，历史保留在 CHANGELOG/git
+
+v4.9.2 的教训是关于本文自身：**「已核对」的记述会被后人当成已核对，从而关掉这条线索**。v4.9.1 写下「键名逐个回上游 General 段核对」时并未真正遍历 `Inbound` 字段集，而这句话此后成了不必重查的理由。此类声明要落到可复现的对表方法（照哪个结构体、哪个函数的入参），不写「逐个核对过」这种无法复核的完成态；写完再回头验一遍声明本身是否属实
+
+发布后也要回头改状态：v4.9.1 发布后本文仍留着「待发布」和旧的测试数（596，`d4eb38b` 补 3 条后没同步），两处都在 v4.9.2 修正。release 流程第 14 项要求同步本文档，实际漏的是**发布动作完成之后**那次状态更新
 
 类型检查曾漏掉测试字符串内对已删除导出的引用，已修正并把全仓搜索要求写入 CLAUDE；发布流程的注册表示例也同步去掉了失效字段

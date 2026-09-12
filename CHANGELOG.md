@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.9.2] - 2026-09-12
+
+复核 v4.9.1 的 CODE_REVIEW 声明本身时发现的锁定清单遗漏。单测 603（+4）。
+
+### 安全
+
+- **订阅一行 `ss-config` 即可把本机变成带密码的 Shadowsocks 开放代理**（`vmess-config` 同理）。4.9.1 补 `tuic-server` 时声称「回上游 General 段逐键核对」，实际漏了同一个 `config.Inbound` 结构体里紧挨着的另外两个入站服务端——三者同由 `hub/executor.updateListeners()` 逐个 `ReCreate*` 起监听，只因 `tuic-server` 是映射、这两个是一行 URL 而被漏看。上游 `ParseSSURL`/`ParseVmessURL` 把 URL 的 host 直接当 `Listen`，`New()` 再对 `strings.Split(Listen, ",")` 逐个 bind，且**不经过 `genAddr`**——`allow-lan: false` 与 `bind-address` 对它们完全无效（那两个只作用于 HTTP/Socks/Redir/TProxy/Mixed），所以「入站默认关闭」这条 README 承诺挡不住它。两键进 `LOCKED_CONFIG_KEYS`（订阅与覆写一律剥除，告警仍只对生效的覆写文件），并补一条用例锁死「剥除不能依赖 allow-lan」这个判据。反向验证：摘掉两键恰好 4 条新用例转红
+
+### 文档
+
+- CODE_REVIEW 修正两处与事实不符的记述：v4.9.1 已发布却仍写「待发布」、既有防线回归一格的测试数停在 596（`d4eb38b` 补 3 条后未同步）。并记入一条新的未覆盖项——锁定清单与上游 `Inbound` 字段集之间没有自动比对，连续三个版本各漏一批键，每轮都以为已逐个核对过；对表方法（照结构体字段 + `updateListeners()` 入参，而非按键名眼熟程度挑）写进 CLAUDE 与 `LOCKED_CONFIG_KEYS` 注释
+
 ## [4.9.1] - 2026-09-12
 
 4.9.0 发布后的全仓复审（自审并发状态机全线 + 三个分模块深审，重要线索逐条实测或回上游源码核实）。修掉 15 项：入站/控制面安全边界（含复审末尾回上游 General 段补出的 `tuic-server`/`external-doh-server`）、一条热重载自愈缺口，其余是一致性收口。单测 599（+48）。
