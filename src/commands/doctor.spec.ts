@@ -164,12 +164,15 @@ describe('doctor：npm 查询与本地检查并行', () => {
         const [who, phase, ms] = line.trim().split(/\s+/);
         marks.set(`${who}.${phase}`, Number(ms));
       }
-      for (const key of ['npm.start', 'npm.end', 'kernel.start', 'kernel.end']) {
-        assert.ok(Number.isFinite(marks.get(key)), `时间线缺少 ${key}：${fs.readFileSync(timeline, 'utf8')}`);
-      }
+      // 取值兼校验：缺任何一个都说明桩没被调到，此时报「时间线缺失」比报交集为 0 准确
+      const at = (key: string): number => {
+        const v = marks.get(key);
+        assert.ok(typeof v === 'number' && Number.isFinite(v), `时间线缺少 ${key}：${fs.readFileSync(timeline, 'utf8')}`);
+        return v;
+      };
 
       // 交集 = min(两个 end) - max(两个 start)，> 0 即两段同时在跑
-      const overlapMs = Math.min(marks.get('npm.end')!, marks.get('kernel.end')!) - Math.max(marks.get('npm.start')!, marks.get('kernel.start')!);
+      const overlapMs = Math.min(at('npm.end'), at('kernel.end')) - Math.max(at('npm.start'), at('kernel.start'));
       assert.ok(overlapMs > 0, `npm 查询与内核校验未同时运行（交集 ${overlapMs}ms）：串行实现下两段首尾相接，交集必然 <= 0`);
     } finally {
       fs.rmSync(binDir, { recursive: true, force: true });
