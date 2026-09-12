@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import * as yaml from 'js-yaml';
 import { BASE_CONFIG, TUN_CONFIG } from './constants.js';
 import { CliError } from './errors.js';
-import { applyOverwrite, describeOverwriteScope, filterOverwriteFilesByScope, loadOverwriteFile } from './overwrite.js';
+import { applyOverwrite, describeOverwriteScope, filterOverwriteFilesByScope, loadOverwriteFile, parseOverrideKey } from './overwrite.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
 import { getPorts, readSettings } from './settings.js';
 import type { BuildConfigResult, ConfigInfo, OverwriteScope } from './types.js';
@@ -21,10 +21,15 @@ export const SAFE_YAML_LOAD_OPTIONS: yaml.LoadOptions = { maxAliases: 200 };
 
 /**
  * 系统锁定的入站/控制面键：只允许来自 settings 或系统约束，订阅与覆写显式提供时
- * 剥除并告警（buildConfig）。新增入站/控制器键时加在这里——redir/tproxy 与
- * external-controller-tls/-unix/-cors 都曾是漏网之鱼。
+ * 一律剥除（buildConfig）。新增入站/控制器键时加在这里——redir/tproxy、
+ * external-controller-tls/-unix/-cors、tuic-server、external-doh-server 都曾是漏网之鱼。
  * 对应上游 mihomo `config/config.go` 的 General 段（端口家族 + ExternalController* +
- * ExternalUI* + Secret）；listeners 刻意不在内（产品决策未定）。
+ * ExternalUI* + Secret + ExternalDohServer + TuicServer）。
+ *
+ * 刻意不在内的入站面：
+ * - `listeners` / `tunnels`：通用入站声明，是否允许订阅投递属未定的产品决策，
+ *   两者须一起评估（见 CODE_REVIEW），不随单点修复静默收口
+ * - `iptables`：Linux 专用的系统集成开关，非监听、darwin 内核无该路径
  */
 export const LOCKED_CONFIG_KEYS = [
   'mixed-port',
@@ -38,10 +43,14 @@ export const LOCKED_CONFIG_KEYS = [
   'external-controller-pipe',
   'external-controller-cors',
   'external-controller-routing-mark',
+  'external-doh-server',
   'external-ui',
   'external-ui-name',
   'external-ui-url',
   'secret',
+  // 完整入站代理服务端（监听 + 认证 + 自带证书字段）：订阅借此可把本机变成开放代理，
+  // 比 redir/tproxy 严重得多，与「入站由 mixed/tun 托管」的产品边界直接冲突
+  'tuic-server',
 ] as const;
 
 /** 统一入口:带别名上限的 yaml.load,替代裸 yaml.load。 */
@@ -203,32 +212,43 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   }
 
   // 系统锁定项：入站端口与整个控制面只能来自 settings 与系统约束，订阅/覆写（远端不可信
-  // 内容）显式设置时必须剥除并告警——静默忽略就是「用户以为生效了，实际行为完全没变」。
-  // 端口经 settings.ports（getPorts）解析——默认 7890/9090，可在 settings.json 覆盖
-  // （与其他代理工具共存的逃生口）。
+  // 内容）显式设置时一律剥除。端口经 settings.ports（getPorts）解析——默认 7890/9090，
+  // 可在 settings.json 覆盖（与其他代理工具共存的逃生口）。
   //
   // 控制器家族一个都不能漏：external-controller-tls 可在 0.0.0.0 再开一个控制器（配合顶层
-  // tls 段给证书）、-unix 可在任意路径建 socket 控制器、-cors 直接放宽现有控制器的浏览器
-  // 跨域，而订阅自带的 secret 同在此处被剥除、默认又不设密钥——额外控制器将无鉴权，打破
-  // 「控制器仅监听本机回环」的信任边界（上游 config.go 的 General 键逐个核对过）。
+  // tls 段给证书）、-unix 可在任意路径建 socket 控制器、-doh 让控制器对外提供 DoH 解析、
+  // -cors 直接放宽浏览器跨域，tuic-server 是自带证书字段的完整入站代理——而订阅自带的
+  // secret 同在此处被剥除、默认又不设密钥，额外入站将无鉴权或变开放代理，打破
+  // 「控制器仅监听本机回环、入站由 mixed/tun 托管」的信任边界（上游 config.go 逐个核对）。
   // -pipe 仅 Windows 内核识别，一并剥除保持跨平台输出一致。
   // allow-lan 不锁定——订阅/覆写显式提供时按其值（见入站需求），未提供时由上面的 BASE_CONFIG 循环兜底为 false。
-  // listeners 不在本清单：订阅以 listeners 投递入站是否合法属未定的产品决策，不在删除表收口。
-  const ignoredLockedKeys = LOCKED_CONFIG_KEYS.filter(k => k in withOverwrites);
-  if (ignoredLockedKeys.length > 0) {
-    lockedWarnings.push(
-      `订阅/覆写中的系统锁定项已忽略: ${ignoredLockedKeys.join('、')}（入站端口与控制面由 mihomo-cli 管理；端口与 controller secret 在 settings.json 配置）`,
-    );
+  // listeners/tunnels 不在本清单：通用入站声明是否允许订阅投递属未定的产品决策（见 LOCKED_CONFIG_KEYS 注释）。
+  // 剥除对订阅与覆写一视同仁（都不进终态）；但告警只对**生效的覆写文件**——
+  // 机场订阅几乎必带 mixed-port/port 等端口段，系统约束接管订阅入站是核心设计、
+  // 用户没有行动手段，逐条告警只会刷屏；亲手写覆写文件的高级用户才会以为这些键
+  // 生效，提示才有意义。同时识别操作符形式（+secret / tls! 解析后的规范键）
+  for (const file of overwriteFiles) {
+    const hit = new Set<string>();
+    for (const rawKey of Object.keys(file.config)) {
+      if ((LOCKED_CONFIG_KEYS as readonly string[]).includes(rawKey)) hit.add(rawKey);
+      const parsedKey = parseOverrideKey(rawKey).key;
+      if (parsedKey !== rawKey && ((LOCKED_CONFIG_KEYS as readonly string[]).includes(parsedKey) || parsedKey === 'tls')) {
+        hit.add(parsedKey);
+      }
+      if (rawKey === 'tls') hit.add('tls');
+    }
+    if (hit.size > 0) {
+      lockedWarnings.push(
+        `覆写文件 ${file.name} 中的系统锁定项已忽略: ${[...hit].join('、')}（入站端口、控制面与控制器证书由 mihomo-cli 管理；端口与 controller secret 在 settings.json 配置）`,
+      );
+    }
   }
   for (const key of LOCKED_CONFIG_KEYS) {
     delete withOverwrites[key];
   }
   // 顶层 tls 段是 external-controller-tls 的证书/私钥来源（上游 parseTLS 只喂控制器），
-  // 与控制器家族同属控制面、一并锁定，否则剥了监听地址却留下证书配置只会误导排查
-  if ('tls' in withOverwrites) {
-    delete withOverwrites.tls;
-    lockedWarnings.push('订阅/覆写中的 tls 段已忽略: 该段仅用于外部控制器 TLS 证书，控制面由 mihomo-cli 管理');
-  }
+  // 与控制器家族同属控制面、订阅与覆写都剥除（告警仅对覆写，见上）
+  delete withOverwrites.tls;
 
   const ports = getPorts(settings);
   systemConfig['external-controller'] = `127.0.0.1:${ports.controller}`;

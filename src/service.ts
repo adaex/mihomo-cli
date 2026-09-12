@@ -1139,10 +1139,12 @@ async function tryHotReload(): Promise<boolean> {
 
     // 端口经 settings.ports 解析（默认 9090），与 buildConfig 写进配置的值同源
     const baseUrl = `http://127.0.0.1:${getPorts().controller}`;
-    // 配置了 controller_secret 时必须带 Bearer，否则内核返回 401 → 热重载恒失败回退重启
+    // 配置了 controller_secret 时必须带 Bearer，否则内核返回 401 → 热重载恒失败回退重启。
+    // 只接受字符串：非字符串在 buildConfig 已 fail-closed（start 链路先构建配置），
+    // 这里是纵深防御，别把数字/对象拼进 Authorization
     const secret = readSettings().controller_secret;
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (secret) headers.Authorization = `Bearer ${secret}`;
+    if (typeof secret === 'string' && secret) headers.Authorization = `Bearer ${secret}`;
     // /version 是 mihomo 特有端点，返回体带 version 字段；用它确认应答方是 mihomo
     // 而非碰巧监听同端口的其他程序（后者极可能对未知路径的 PUT 也返回 2xx）
     const probe = await fetch(`${baseUrl}/version`, { headers, signal: controller.signal });

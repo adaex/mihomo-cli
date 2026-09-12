@@ -179,10 +179,11 @@ describe('系统锁定项：订阅自带的端口与控制面字段不进运行�
     }
   });
 
-  // redir/tproxy 曾是漏网之鱼；external-controller-tls/-unix/-cors 与 tls 段同族——
-  // 订阅是远端不可信内容，留着任一个都能开出 CLI 不知道的控制器（无鉴权、可监听全网卡）
+  // redir/tproxy 曾是漏网之鱼；external-controller-tls/-unix/-cors、-doh、tuic-server
+  // 与 tls 段同族——订阅是远端不可信内容，留着任一个都能开出 CLI 不知道的入站
+  // （无鉴权控制器、开放代理，可监听全网卡）
   for (const mode of ['mixed', 'tun'] as const) {
-    it(`${mode}: 控制器家族键与 tls 证书段不进运行配置`, () => {
+    it(`${mode}: 控制器家族键、tuic-server 与 tls 证书段不进运行配置`, () => {
       const sub = dumpYaml({
         ...BASE,
         'external-controller-tls': '0.0.0.0:19443',
@@ -190,6 +191,8 @@ describe('系统锁定项：订阅自带的端口与控制面字段不进运行�
         'external-controller-pipe': '\\\\.\\pipe\\evil',
         'external-controller-cors': { 'allow-origins': ['*'], 'allow-private-network': true },
         'external-controller-routing-mark': 42,
+        'external-doh-server': '/dns-query',
+        'tuic-server': { enable: true, listen: '0.0.0.0:9999', token: ['abc'] },
         tls: { certificate: '/tmp/cert.pem', 'private-key': '/tmp/key.pem' },
       });
       const { config } = buildConfig(sub, mode);
@@ -199,6 +202,8 @@ describe('系统锁定项：订阅自带的端口与控制面字段不进运行�
         'external-controller-pipe',
         'external-controller-cors',
         'external-controller-routing-mark',
+        'external-doh-server',
+        'tuic-server',
         'tls',
       ]) {
         assert.equal(key in config, false, `${key} 不应进入运行配置`);
@@ -208,13 +213,57 @@ describe('系统锁定项：订阅自带的端口与控制面字段不进运行�
     });
   }
 
-  it('订阅/覆写显式设置锁定项时逐条告警，指出被忽略的键名', () => {
-    const sub = dumpYaml({ ...BASE, 'redir-port': 7893, 'external-controller-unix': '/tmp/x.sock' });
-    const { warnings } = buildConfig(sub, 'mixed');
-    const locked = warnings.find(w => w.includes('系统锁定项已忽略'));
-    assert.ok(locked, `应有锁定项告警，实际: ${JSON.stringify(warnings)}`);
-    assert.match(locked, /redir-port/);
-    assert.match(locked, /external-controller-unix/);
+  // listeners/tunnels 是通用入站声明，是否允许订阅投递属未定产品决策，两者须一起评估
+  // （CODE_REVIEW 有记录）；iptables 是 Linux 专用、darwin 无此路径——现状是原样保留，
+  // 这条用例把现状锁死，决策改变时会明确失败而不是悄悄漂移
+  it('listeners/tunnels/iptables 当前原样保留（待定入站面，非本次锁定范围）', () => {
+    const sub = dumpYaml({
+      ...BASE,
+      listeners: [{ name: 'x', type: 'mixed', listen: '0.0.0.0:7777' }],
+      tunnels: ['tcp,0.0.0.0:4444,1.2.3.4:443,DIRECT'],
+      iptables: { enable: true },
+    });
+    const { config } = buildConfig(sub, 'mixed');
+    assert.ok(Array.isArray(config.listeners));
+    assert.ok(Array.isArray(config.tunnels));
+    assert.deepEqual(config.iptables, { enable: true });
+  });
+
+  it('订阅侧的锁定键静默剥除：机场订阅普遍自带端口段，不产生锁定 warning', () => {
+    const sub = dumpYaml({ ...BASE, 'mixed-port': 17890, port: 7891, 'socks-port': 7892, secret: 'x' });
+    const { config, warnings } = buildConfig(sub, 'mixed');
+    assert.equal(config['mixed-port'], 7890);
+    assert.equal('secret' in config, false);
+    assert.deepEqual(warnings, [], `订阅侧锁定键不应告警，实际: ${JSON.stringify(warnings)}`);
+  });
+
+  it('生效覆写文件里的锁定键（含操作符形式）才告警并带文件名', () => {
+    const owPath = path.join(tmpDir, 'overwrite.yaml');
+    fs.writeFileSync(owPath, ['redir-port: 7893', 'external-doh-server: /dns-query', 'tls!:', '  certificate: /x.pem'].join('\n'));
+    try {
+      const { config, warnings } = buildConfig(dumpYaml(BASE), 'mixed');
+      assert.equal('redir-port' in config, false);
+      assert.equal('tls' in config, false);
+      const locked = warnings.find(w => w.includes('系统锁定项已忽略'));
+      assert.ok(locked, `覆写锁定键应告警，实际: ${JSON.stringify(warnings)}`);
+      assert.match(locked, /overwrite\.yaml/);
+      assert.match(locked, /redir-port/);
+      assert.match(locked, /external-doh-server/);
+      assert.match(locked, /\btls\b/);
+    } finally {
+      fs.rmSync(owPath);
+    }
+  });
+
+  it('未命中当前订阅作用域的覆写文件不产生锁定告警', () => {
+    const owPath = path.join(tmpDir, 'overwrite.other.yaml');
+    fs.writeFileSync(owPath, ['match:', '  subscription: other-sub', 'redir-port: 7893'].join('\n'));
+    try {
+      const { warnings } = buildConfig(dumpYaml(BASE), 'mixed', { subName: 'demo', subUrl: 'https://example.com/x' });
+      assert.deepEqual(warnings, []);
+    } finally {
+      fs.rmSync(owPath);
+    }
   });
 
   it('不设置任何锁定项时无锁定告警（普通订阅不被噪音打扰）', () => {

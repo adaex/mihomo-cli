@@ -2,7 +2,7 @@
 
 当前审查：2026-09-12，待发布（基于 v4.9.0 之上的 13 项复审修复）
 
-本轮在 v4.9.0 发布当天复审：一人通读并发状态机全线（service/runtime/paths/start/stop/reset/install 命令层），三个分模块深审（覆写与配置、命令层、进程下载），重要线索逐条实测或回上游源码核实。修 13 项：一条控制面安全边界遗漏（订阅可开第二个无鉴权控制器）、一条热重载自愈缺口，其余为一致性收口。两条子审查报的缺陷经对照实验排除（pkill 自匹配、见下）。launchd 的真实启停与 TUN 提权流程仍未做真机端到端复测。单测 596（+45），全部反向验证过的新用例在恢复缺陷时转红
+本轮在 v4.9.0 发布当天复审：一人通读并发状态机全线（service/runtime/paths/start/stop/reset/install 命令层），三个分模块深审（覆写与配置、命令层、进程下载），重要线索逐条实测或回上游源码核实；收尾时回上游 General 段逐键复查又补出 `tuic-server`/`external-doh-server` 两个入站面，并修正了锁定告警对真实订阅刷屏的自引入回归。修 15 项：入站/控制面安全边界、一条热重载自愈缺口，其余为一致性收口。两条子审查报的缺陷经对照实验排除（pkill 自匹配、见下）。launchd 的真实启停与 TUN 提权流程仍未做真机端到端复测。单测 599（+48），关键新用例在恢复缺陷时均转红（反向验证过）
 
 规则见 CLAUDE，修复历史见 CHANGELOG；本文保留验证方法、仍有效的实测事实与未覆盖风险，改相关代码时同步更新
 
@@ -10,7 +10,7 @@
 
 | 范围 | 验证方式与结论 |
 | --- | --- |
-| 控制面锁定 | 实测 `buildConfig`：订阅带 `external-controller-tls/-unix/-pipe/-cors/-routing-mark` 与顶层 `tls` 段时全部剥除、且产生锁定项 warning；键名逐个回上游 `MetaCubeX/mihomo` `config/config.go`（General 段）与 `hub/route/server.go`（TLS 需证书、unix 无前提、CORS 作用于主控制器）核对。反向验证：恢复旧删除清单两条用例即红 |
+| 控制面与入站锁定 | 实测 `buildConfig`：订阅带 `external-controller-tls/-unix/-pipe/-cors/-routing-mark/-doh`、`tuic-server` 与顶层 `tls` 段时全部剥除；订阅侧无锁定 warning（机场订阅普遍带端口段，静默剥除），生效覆写文件含锁定键（含 `+key`/`key!` 形式）才有带文件名的 warning；`listeners`/`tunnels`/`iptables` 现状保留有测试锁死。键名逐个回上游 `MetaCubeX/mihomo` `config/config.go`（General 段）、`listener/config/tunnel.go`（tunnels 含 address 是入站）、`hub/route/server.go`（TLS 需证书、unix/doh 无前提、CORS 作用于主控制器）核对。反向验证：恢复旧删除清单或恢复订阅侧告警，对应用例即红 |
 | 热重载查询失败回退 | PATH 前置计数桩 launchctl（入口 print 成功→热重载 print 退 112→kickstart→健康窗恢复 running）+ 子进程真实模块：查询失败走 kickstart 并健康确认，不再整体失败。反向验证：getServiceStatus 移回 try 外用例即红 |
 | 补全指纹 | 临时 HOME 跑真实 CLI：仅含 `#compdef mihomo` 行业首行的第三方补全、fish 只循环 mihomo 的手写文件均拒绝删除；本工具完整指纹正常装卸；XDG_CONFIG_HOME 下安装/卸载同位置。反向验证：恢复弱指纹两条用例即红。zsh/bash 生成脚本经 `zsh -n`/`bash -n`，fish 仍未装 |
 | 覆写矛盾操作符 | `+x+`/`~x!`/`~?x!`/`<x>+!`/`~<x>!` 抛 CliError；裸 `+`/`~`/`!`/`~?` 报空键名；`~?key`、`<+key>!`、`+<+key>` 等合法单一操作符不误伤 |
@@ -77,7 +77,9 @@
 
 - 健康观察窗只覆盖启动初期，之后的 OOM/panic 由 status/doctor 展示异常退出；延长 start 到无限观察不在目标内
 - install 恢复分支的并发只能手工双终端复现（需真装了内核的机器）：自动化要么得真跑 launchctl enable/disable（留永久记录），要么退化成对实现清单的断言。已修；热重载成功分支（PATH 前置桩 launchctl + 桩 controller）与查询失败回退分支（计数桩 launchctl）均已自动化（service-concurrency.spec，不碰真实 launchd），install 恢复分支仍只能手工复现
-- 控制器家族锁定（external-controller-tls/-unix/-cors、tls 段）只回上游源码核对了键名与启动前提、用 buildConfig 实测了剥除，没用真内核验证过额外监听真的开不出来；unix socket 文件创建等内核侧行为同理
+- 控制器/入站家族锁定（external-controller-tls/-unix/-cors/-doh、tuic-server、tls 段）只回上游源码核对了键名与启动前提、用 buildConfig 实测了剥除，没用真内核验证过额外监听真的开不出来；unix socket 文件创建、TUIC server bind 等内核侧行为同理
+- `listeners` 与 `tunnels` 都是通用入站声明、订阅可指定监听地址，当前原样进运行配置（与 4.9.0 对 listeners 的决定一致，两个键须一起评估）；`iptables` 是 Linux 专用、darwin 内核无该路径，同样保留。若产品上决定锁定，三者的测试在 config.spec「待定入站面」用例会立即失败提示
+- 锁定告警只对覆写文件：覆写经操作符设置锁定键（如 `+secret`）已覆盖，但覆写文件内 `match:` 块之后、且文件解析失败被 warn 跳过时不会有告警（文件整体没生效，合理）
 - `kickstart -k` 超时 60s 远超锁的 10s 强夺阈值，必须留在锁外，故它与并发 bootout 的交错无法用锁串行化；现在只保证「不再 re-enable/re-bootstrap」与「不再把用户的 stop 报成内核故障」，不是把这个交错消掉了
 - 锁内 launchctl 调用有持锁预算（最坏总时长 < `LOCK_STALE_MS`）：start 侧 enable+bootstrap 两次默认 5s、恰好等于阈值，是既有基线（startService/installService 本就如此），不因本轮变化；stop 侧 bootout+disable+复核共三次，单次 `SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS`（3s，合计 9s），别再往任何锁内加东西。锁内三环节（复核先于递增、递增在锁内、bootout 与 disable 同锁）谁也挪不出锁，缩减调用次数的路走不通，理由见 service.ts 该常量注释
 - 停止计数是多写者读-改-写且刻意不加锁：极端交错下可能用较小值覆盖较大值，使某条后续命令偶发判为「变了」而中止。判据是 `!==` 本就偏保守，接受之
@@ -87,7 +89,6 @@
 - `config` 命令不做内核校验，故它能输出「形态合法但内核会拒绝」的配置（例如引用了不存在的节点）。这是刻意的分工——校验归 `doctor` 与 `start`，只读展示不该要求装了内核
 - sudo 三处收口（超时 60s、退出码分工、残留清理 CliError）的完整链路只能真机 sudo 验证：慢密码场景、bootout 真实失败的 exit 3 渲染、四个命令下的实际终端输出；包装决策已纯函数化测试
 - `restartService` 的 copy-truncate 路径中 `allocateArchivePath()` 在 best-effort try 之外：同秒已存在 1001 个归档（序号耗尽）时 CliError 会穿出而非被吞。病态场景，接受之；动这段时别顺手「修」进 try——归档名拿不到时轮转整体跳过是更合理的语义
-- `listeners` 是否进删除清单属未定产品决策（订阅以 listeners 投递入站是否合法）：本批未动，订阅自带 listeners 仍原样进运行配置
 - TUN 运行中 `sub use`/`ow` 的按原模式重启与更新提示（`start tun`）已修，但真实 TUN 提权流程的端到端（sudo 弹窗、路由切换、恢复）未复测，仅经 runtime.spec 的桩内核路径验证决策
 - 本轮深审其余未修的低危项：`unhandledRejection`/`uncaughtException` 已统一口径但渲染函数本身不可注入测试；补全 install 的「已含标记块幂等跳过」无用例；`NO_COLOR`/stderr 设色经 pty 手工验证、无自动化；clearProxyEnv 对企业 env 代理网络的影响已文档化（CLAUDE）但无提示机制。`npm_config_proxy` 等 npm 专属代理变量未清——npm 读 npmrc 不依赖该 env、gh/curl 不识别，不构成下载死锁，保持现状
 - 4.9.0 复审记录但未修（判定接受或不可自动化）：`FORCE_COLOR` 不支持、`TERM=dumb` 仍出色；无 `--` 结束选项约定（当前无需要它的入口，订阅名已禁止 `-` 开头）；tar 穿越/类型两道守卫仍内联无直接测试；gh 资产名未拦前导 `-`（仅 GitHub API 被篡改时可达）；代理探测 curl 未加 `--proto =https`（只看 204 无机密）；findBinaryInDir 同目录多匹配时不保证精确名优先（有 -v + 版本对账两道门）

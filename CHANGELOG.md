@@ -2,18 +2,18 @@
 
 ## [Unreleased]
 
-4.9.0 发布后的全仓复审（自审并发状态机全线 + 三个分模块深审，重要线索逐条实测或回上游源码核实）。修掉 13 项：一条控制面安全边界遗漏、一条热重载自愈缺口，其余是一致性收口。单测 596（+45）。
+4.9.0 发布后的全仓复审（自审并发状态机全线 + 三个分模块深审，重要线索逐条实测或回上游源码核实）。修掉 15 项：入站/控制面安全边界（含复审末尾回上游 General 段补出的 `tuic-server`/`external-doh-server`）、一条热重载自愈缺口，其余是一致性收口。单测 599（+48）。
 
 ### 安全
 
-- **订阅可偷偷开出第二个、无鉴权的 external-controller**。4.9.0 把 `redir-port`/`tproxy-port` 补进锁定删除清单时，漏了控制器家族：上游 `config.go` 的 General 键 `external-controller-tls`（配合顶层 `tls:` 段给证书即可在 `0.0.0.0` 再开一个 TLS 控制器）、`external-controller-unix`（任意路径 unix socket 控制器，无前置条件）、`-pipe`/`-routing-mark`、`external-controller-cors`（直接放宽现有回环控制器的浏览器跨域）。订阅是远端不可信内容，而 CLI 又剥掉订阅自带的 `secret`、默认不设密钥——机场可借此让同网段设备或任意网页直接操作内核，打破 README「控制器仅监听回环」的承诺。锁定项收成 `LOCKED_CONFIG_KEYS` 一张表（含 `tls` 证书段），Mixed/TUN 共用；以后新增入站/控制器键只改这一处，不再零散 delete。每个键已对照上游 `MetaCubeX/mihomo` 源码确认内核识别，行为实测。
+- **订阅可偷偷开出第二个、无鉴权的 external-controller，甚至一个入站代理服务端**。4.9.0 把 `redir-port`/`tproxy-port` 补进锁定删除清单时，漏了整个入站/控制面家族：上游 `config.go` 的 General 键 `external-controller-tls`（配合顶层 `tls:` 段给证书即可在 `0.0.0.0` 再开一个 TLS 控制器）、`external-controller-unix`（任意路径 unix socket 控制器，无前置条件）、`-pipe`/`-routing-mark`、`external-controller-cors`（直接放宽现有回环控制器的浏览器跨域）、`external-doh-server`（控制器上挂 DoH 端点）、`tuic-server`（**完整入站代理服务端**，配置内嵌证书/认证字段，订阅借此可把本机变成监听全网卡的开放代理——比透明端口严重）。订阅是远端不可信内容，而 CLI 又剥掉订阅自带的 `secret`、默认不设密钥——机场可让同网段设备或任意网页直接操作内核，打破 README「控制器仅监听回环」「入站由 mixed/tun 托管」两条承诺。锁定项收成 `LOCKED_CONFIG_KEYS` 一张表（含顶层 `tls` 证书段），Mixed/TUN 共用；以后新增入站/控制器键只改这一处，不再零散 delete。每个键已对照上游 `MetaCubeX/mihomo` 源码确认内核识别，行为实测。`listeners`/`tunnels` 两个通用入站声明与 `iptables`（Linux 专用）本版不锁——前两者是否允许订阅投递是未定产品决策、须一起评估，已记入 CODE_REVIEW 并用测试锁住现状
+- **锁定项告警源只对订阅、会对真实机场订阅刷屏**。最初实现对订阅与覆写一视同仁地告警，但机场订阅几乎必带 `mixed-port`/`socks-port` 等端口段，系统约束接管订阅入站本就是核心设计、用户没有行动手段——每个用户每次启动都会看到一条无法消除的黄字。改为剥除不看来源、**告警只对生效的覆写文件**（亲手写覆写的用户才会以为键生效），文案带文件名并识别 `+key`/`key!` 操作符形式；未命中当前订阅作用域的覆写不告警。热重载请求的 Authorization 头同步加字符串类型守护
 
 ### 修复
 
 - **热重载探测的首个状态查询在兜底 try 之外**：`tryHotReload` 里的 `getServiceStatus()`（launchctl print/print-disabled，可能退 112/125 或超时）一旦抛错，不履行函数注释「返回 false 即回退 kickstart」的契约，而是让 `start`/`sub use`/`ow` 整体失败——launchd 病态时恰恰最需要 kickstart 自愈。探测全程（含 `getPorts`）收入 try，桩 launchctl 计数场景（入口查询成功、热重载查询退 112、kickstart 后恢复 running）端到端验证回退并通过健康确认；反向验证：查询移回 try 外用例即红
 - **zsh/fish 补全卸载的身份指纹过弱**：zsh 指纹是 `#compdef mihomo`——这是 compinit 对每个 `_mihomo` 补全要求的固定首行，用户手写或第三方分发的同名补全必然以它开头，`completion uninstall zsh` 会误删别人的文件，与函数注释的保护承诺相反。指纹改为本工具独有的完整行 `#compdef mihomo mhm mh mihomo-cli`；fish 同族收紧到四别名循环行。两条「弱指纹文件拒绝删除」用例锁死，反向验证旧指纹即红
 - **非字符串 `controller_secret` 绕过脱敏**：settings.json 手误写成数字/布尔时，`config` 两个出口的 `typeof === 'string'` 条件都不成立、明文上屏（`config` 不跑内核校验）。`buildConfig` 唯一消费点对齐 `getPorts` 的 fail-closed：非字符串直接报「配置错误」；展示侧脱敏也不再依赖类型判断
-- **系统锁定项被订阅/覆写显式设置时零反馈**：在覆写里写 `mixed-port`/`redir-port`/`secret` 被静默丢弃，正是本仓反复修的「以为生效了其实没有」形态。检测到锁定键即出一条 warning 列出键名，与 TUN 强制 DNS、`~?` 跳过同走 buildConfig 的告警通道；不设锁定项的普通订阅无噪音
 - **内核下载的 curl 没有 `--fail-with-body`**：镜像/CDN 返回 404/500 的 HTML 错误页时退出码 0、错误内容落盘，最终只报「文件大小与 release 元数据不符」，真正的 HTTP 原因丢失（4.9.0 只修了 release API 查询通道）。下载通道对齐；退出码 22 翻译为「镜像或服务器返回 HTTP 错误」
 - **tar 解压无总量上限（压缩炸弹）**：`--max-filesize` 只卡压缩后体积，高压缩比 tar 可解压上千倍撑满磁盘，而镜像通道不可信、产物又以 root 运行。`tar -tvzf` 列表阶段汇总条目字节（`parseTarEntrySize` 同时认 bsdtar/GNU 两种列布局），超 512MB 拒绝解压；`.gz` 单文件路径原有 256MB maxBuffer 兜底
 - **内核校验超时分支的 hint 仍引导「修正订阅或覆写」**：超时与配置内容无关，也不该附覆写清单；`buildKernelRejectHint` 加 `timedOut` 形态，尾行指向内核/系统异常
