@@ -272,4 +272,30 @@ describe('buildConfig 带出本次生效的覆写清单', () => {
       fs.rmSync(path.join(tmpDir, OW_SCOPED));
     }
   });
+
+  // 操作符只在覆写顶层生效：嵌套层的键按字面处理，形似操作符的形态进 warnings 提示
+  it('嵌套层形似操作符的键按字面保留并进 warnings（含文件名与键名）', () => {
+    fs.writeFileSync(path.join(tmpDir, OW_SCOPED), "dns:\n  nameserver-policy:\n    '~x': 'https://q.example.com/dns-query'\n");
+    try {
+      const subWithDns = dumpYaml({
+        // 订阅自带 nameserver-policy 映射，覆写的同名段才会走逐键合并（递归）路径，
+        // 嵌套键被实际遍历；订阅没有该段时整棵移植，键天然字面、不产生告警
+        dns: { enable: true, 'nameserver-policy': { 'geosite:cn': 'https://doh.pub/dns-query' } },
+        'proxy-groups': [{ name: 'PROXY', type: 'select', proxies: ['DIRECT'] }],
+        rules: ['MATCH,PROXY'],
+      });
+      const { config, warnings } = buildConfig(subWithDns, 'mixed');
+      assert.deepEqual((config.dns as Record<string, unknown>)['nameserver-policy'], {
+        'geosite:cn': 'https://doh.pub/dns-query',
+        '~x': 'https://q.example.com/dns-query',
+      });
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0], /~x/);
+      assert.match(warnings[0], /字面/);
+      assert.match(warnings[0], /顶层/);
+      assert.match(warnings[0], new RegExp(OW_SCOPED.replace('.', '\\.')));
+    } finally {
+      fs.rmSync(path.join(tmpDir, OW_SCOPED));
+    }
+  });
 });

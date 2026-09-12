@@ -230,6 +230,19 @@ export interface SkippedMerge {
   file?: string;
 }
 
+/**
+ * 嵌套层形似 DSL 操作符、已按字面键名处理的键，供启动时告警。
+ * 操作符只在覆写文件顶层生效；嵌套层的 `~x`/`x!`/`x+`/`<...>` 等形态大概率是
+ * 把顶层语法写进了嵌套层（用户以为操作符会生效），记一条提示。`+.` 开头不记：
+ * 那是 mihomo 原生通配域名的常见形态。
+ */
+export interface OperatorShapedKey {
+  /** 原样键名（含操作符形态，如 "+rules"） */
+  key: string;
+  /** 来源覆写文件名，由 applyOverwrite 补上 */
+  file?: string;
+}
+
 /** 覆写文件作用域限定：所列条件需同时满足（AND），条件值为数组时其内部为 OR。 */
 export interface OverwriteMatch {
   /** 按订阅名精确匹配 */

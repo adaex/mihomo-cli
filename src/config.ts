@@ -153,7 +153,7 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   const settings = readSettings();
   const allFiles = settings.overwrite_enabled !== false ? loadOverwriteFile() : [];
   const overwriteFiles = filterOverwriteFilesByScope(allFiles, scope);
-  const { config: withOverwrites, skipped: skippedMerges } = applyOverwrite(subscriptionConfig, overwriteFiles);
+  const { config: withOverwrites, skipped: skippedMerges, operatorShapedKeys } = applyOverwrite(subscriptionConfig, overwriteFiles);
   const overwriteSummaries = overwriteFiles.map(describeOverwriteScope);
 
   const systemConfig: Record<string, unknown> = {};
@@ -162,6 +162,13 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   // `~?key` 跳过的补丁：静默跳过与「分组名拼错」无法区分，用户会以为覆写生效了
   for (const s of skippedMerges) {
     lockedWarnings.push(`覆写 ~?${s.key} 的补丁 "${s.name}" 未匹配到当前订阅中的同名元素，已跳过${s.file ? `（${s.file}）` : ''}`);
+  }
+  // 嵌套层形似操作符的键：已按字面处理，但用户可能以为操作符会生效（如把 +rules 写进
+  // dns 里）；若是 mihomo 原生键则无碍，文案里说清可忽略
+  for (const n of operatorShapedKeys) {
+    lockedWarnings.push(
+      `覆写${n.file ? `文件 ${n.file} 的` : ''}嵌套键 "${n.key}" 形似操作符，已按字面键名保留；操作符只在覆写文件顶层生效，若这是 mihomo 原生键可忽略本提示`,
+    );
   }
   for (const [key, value] of Object.entries(BASE_CONFIG)) {
     if (!(key in withOverwrites)) {
