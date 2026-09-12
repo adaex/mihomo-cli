@@ -17,3 +17,4 @@ description: worktree 改动合并进 main 并就地收尾清理
 
 - 合并时若 worktree 与 `main` 改了同一处文档，**保留双方的实测结论**——它们通常是各自独立验证出来的，丢掉任何一条都是白跑一次验证
 - worktree 隔离会话里，带 heredoc / `&&` 组合的复杂 git 命令会被 harness 拒绝：提交信息先写临时文件再 `git commit -F`，多步操作拆成单条命令执行
+- 同样被拒的还有 `HOME=... cmd`（改 git 配置位置）与把运行时变量拼进命令（`sed -n "$(grep -n …)"`、`FOO=$(mktemp -d) … npx …`）。要验证依赖 `HOME` 或临时目录的行为，**写成 `*.spec.ts` 用 `spawnSync` 传 env**——比在 shell 里凑一次性命令更好，还顺带留下回归测试
