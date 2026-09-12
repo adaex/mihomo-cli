@@ -139,8 +139,10 @@ export async function printStatus(args: string[] = []): Promise<void> {
           activeSub,
           cached,
           overwriteEnabled,
-          // 只报启用的文件：字段语义是「当前生效的覆写」，脚本据此判断实际配置来源；
-          // 契约仍是 string[]，被 enabled: false 停用的不在其中
+          // 只滤掉被 `enabled: false` 停用的文件。**不是**「当前生效的覆写」——这里拿不到
+          // 活跃订阅的 scope（listOverwriteFile 不做 match 过滤），也不受同级 enabled 字段
+          // （全局开关）影响：全局 off 时本数组照样列出文件。真·生效清单只有 buildConfig
+          // 侧的 overwriteSummaries（已按 match 与全局开关过滤）。契约仍是 string[]
           overwriteFiles: overwriteFiles.filter(f => f.enabled).map(f => f.name),
           service,
           legacy,

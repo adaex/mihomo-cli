@@ -2,7 +2,7 @@
 
 当前审查：2026-09-12，v4.9.2（v4.9.1 的锁定清单复核：补 `ss-config`/`vmess-config`）
 
-**待发布改动**（Unreleased，尚未进版本号）：覆写 match 的 `name` 通配与文件内 `enabled` 开关，连带堵上元数据键的操作符/大小写绕过、`*` 开头值的静默跳过，以及 glob 的灾难性回溯。单测 648（+45），验证结论见下方「覆写作用域与单文件开关」一行。
+**待发布改动**（Unreleased，尚未进版本号）：覆写 match 的 `name` 通配与文件内 `enabled` 开关，连带堵上元数据键的操作符/大小写绕过、`*` 开头值的静默跳过，以及 glob 的灾难性回溯。单测 649（+46），验证结论见下方「覆写作用域与单文件开关」一行。
 
 本轮起因是复核 v4.9.1 的 CODE_REVIEW 声明本身：文档称锁定键「逐个回上游 General 段核对」，照着上游 `RawConfig`/`config.Inbound` 重新对表时发现 `ss-config`、`vmess-config` 两个入站服务端从未被任何文档、清单或测试提及——不是待定决策，是纯遗漏。它们与已锁的 `tuic-server` 是同一个 `Inbound` 结构体的并列字段，同由 `executor.updateListeners()` 起监听，只因形态是一行 URL 而非映射而被漏看。修 1 项（安全边界），并修正 v4.9.1 文档里两处与事实不符的记述（「待发布」、测试数 596）。单测 603（+4）
 
@@ -16,6 +16,12 @@
 | --- | --- |
 | ss-config / vmess-config 锁定 | 实测 `buildConfig`：订阅与覆写（含 `vmess-config!` 操作符形式）提供时均剥除，覆写侧告警带文件名与键名；`allow-lan: false` 与剥除是两套独立机制，单独一条用例锁死「别拿 allow-lan 当兜底」。上游依据逐处核对（v1.19.30）：`config.go` 的 `RawConfig`/`Inbound` 两个结构体里 `ShadowSocksConfig`/`VmessConfig` 与 `TuicServer` 并列；`hub/executor/executor.go:updateListeners()` 对三者各调一次 `ReCreate*`；`listener/shadowsocks/utils.go:ParseSSURL` 与 `sing_vmess` 的 `ParseVmessURL` 把 URL 的 host 直接当 `Listen`，`New()` 里 `strings.Split(config.Listen, ",")` 逐个 bind——**不经过 `genAddr`**，故 `allow-lan`/`bind-address` 对它们无效（那两个只作用于 HTTP/Socks/Redir/TProxy/Mixed）。反向验证：从 `LOCKED_CONFIG_KEYS` 摘掉这两键，恰好 4 条新用例转红、其余全绿 |
 | 既有防线回归 | typecheck / 603 测试 / Biome（实际检查 80 个文件）/ build 全绿；v4.9.1 的锁定家族、告警只对覆写、待定入站面三组用例均仍通过 |
+
+## 待发布改动的验证（覆写 match name 通配与文件内 enabled）
+
+| 范围 | 验证方式与结论 |
+| --- | --- |
+| 覆写作用域与单文件开关 | match 的 `name`/`subscription` 同义归一、订阅名 glob 全串匹配与「除 `*`/`?` 外全字面」（反向验证：去掉全串锚定 3 条转红。注意无通配的 pattern 走精确比对快路径，字面性只有在「特殊字符 + 通配」同时出现时才被考验，用例必须含 `a.c*` 这类形态；glob 已改为双指针实现、不再有正则，详见「未覆盖与待复核」首条）；文件内 `enabled` 只认真布尔（`no`/`off` 是 YAML 字符串，实测 js-yaml 5.3.0）、被停用文件仍加载并校验 match；两道过滤合一于 `selectActiveOverwriteFiles`（反向验证：去掉 enabled 过滤 2 条转红）；元数据键的操作符形式（`enabled!`/`match!`/`<enabled>`）与大小写空白近失（`Enabled`/`MATCH`/`enabled `）均被拒——两者此前都能绕过剥离、两头落空（文件不停用 + 键进运行配置 + 内核不报错），大小写这条是复审补出的（反向验证：摘掉该检查 1 条转红）。展示层由 commands/overwrite.spec 真跑 CLI 锁住「停用文件仍列出并标注」（反向验证：改成加载时丢弃 4 条转红）——纯单元层面测不出这条，因为丢弃后筛选结果同样为空 |
 
 ---
 
@@ -58,7 +64,6 @@
 | config 命令 | commands/config.spec 全部在没有 runtime/config.yaml 的目录里跑（锁住「重新推导」这一性质）；输出经 js-yaml 实际解析确认是合法 YAML，secret 已脱敏，`--json` 同样脱敏且携带 `warnings`（空时为数组） |
 | 补全脚本语法 | 生成的 zsh/bash 脚本经 `zsh -n`/`bash -n` 校验；fish 未装，未校验 |
 | 配置构建 | config/config-dns/overwrite 测试验证 JSON/YAML、形态错误、覆写 DSL、作用域与 TUN DNS；节点、分组和规则不再被隐式修复；`~?key` 未命中即跳过并告警（反向验证：短路成追加后精确三条转红）；覆写操作符只在顶层生效、嵌套键一律字面（反向验证：恢复内层 DSL 解析后通配键/告警用例共九条转红），校验失败提示的覆写清单按作用域过滤、文案逐行锁定；订阅自带 port/socks-port/redir-port/tproxy-port/secret/external-ui 被剥掉、生效值取 settings；fake-ip 注入 sniffer 的判据是合并后 dns 的 enhanced-mode（mixed + 订阅 fake-ip 也注入），`sniffer: null` 不注入（内核把 null 解码为零值，-t 不拒） |
-| 覆写作用域与单文件开关 | match 的 `name`/`subscription` 同义归一、订阅名 glob 全串匹配与「除 `*`/`?` 外全字面」（反向验证：去掉全串锚定 3 条转红。注意无通配的 pattern 走精确比对快路径，字面性只有在「特殊字符 + 通配」同时出现时才被考验，用例必须含 `a.c*` 这类形态；glob 已改为双指针实现、不再有正则，详见下方未覆盖项第一条）；文件内 `enabled` 只认真布尔（`no`/`off` 是 YAML 字符串，实测 js-yaml 5.3.0）、被停用文件仍加载并校验 match；两道过滤合一于 `selectActiveOverwriteFiles`（反向验证：去掉 enabled 过滤 2 条转红）；元数据键的操作符形式（`enabled!`/`match!`/`<enabled>`）与大小写空白近失（`Enabled`/`MATCH`/`enabled `）均被拒——两者此前都能绕过剥离、两头落空（文件不停用 + 键进运行配置 + 内核不报错），大小写这条是复审补出的（反向验证：摘掉该检查 1 条转红）。展示层由 commands/overwrite.spec 真跑 CLI 锁住「停用文件仍列出并标注」（反向验证：改成加载时丢弃 4 条转红）——纯单元层面测不出这条，因为丢弃后筛选结果同样为空 |
 | 原生配置校验 | mihomo v1.19.30 在临时目录执行 -t：Mixed/TUN 合法配置通过；缺失节点、规则目标、重复节点名和缺失 provider 被拒绝；拒绝后旧 config.yaml 保留、候选文件清理；顶层未知键（如元数据键 `enabled`）内核**不拒**，实测 `enabled: false` 照常通过——剥离元数据键完全是 CLI 的责任，没有内核兜底 |
 | 配置提交协议 | subscription-prepare.spec 用隔离桩内核验证 -t/-d/-f、并发临时文件、拒绝时保持旧配置、提交只写最终配置，并验证拒绝提示带出生效的覆写文件与作用域（无覆写生效时不出现该段） |
 | 设置 | settings.spec 用真实子进程验证每次读盘、mutator 失败不写入，以及 4 进程并发更新设置和订阅缓存不丢条目；端口校验在合并默认值之后执行，单侧配置撞另一侧默认报错 |

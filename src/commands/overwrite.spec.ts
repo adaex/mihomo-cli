@@ -51,8 +51,16 @@ describe('ow 列表展示文件级开关', () => {
       assert.match(out, /2 个，1 个未禁用/);
       // 回显用户写的原键名
       assert.match(out, /作用域: name=edu\*/);
-      // 告诉用户怎么改回来
-      assert.match(out, /enabled: false/);
+    });
+  });
+
+  it('用法提示恒在：看到 [已禁用] 却不知怎么改回来是最直接的死路', () => {
+    // 该行无条件打印，故断言点在「所有状态下都有」，而不是混在上面那条里
+    // 当成功能性断言——那样无论功能好坏它都通过，测不出东西
+    withFixture((dataDir, run) => {
+      assert.match(run(['ow']).stdout, /停用单个文件: 在该文件顶部写 enabled: false/, '空列表时也应给出用法');
+      fs.writeFileSync(path.join(dataDir, 'overwrite.a.yaml'), 'enabled: false\nlog-level: debug\n');
+      assert.match(run(['ow']).stdout, /停用单个文件: 在该文件顶部写 enabled: false/, '有停用文件时更要给出用法');
     });
   });
 

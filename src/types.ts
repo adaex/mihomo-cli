@@ -352,6 +352,11 @@ export interface StatusJson {
     stale: boolean;
     urgency: Exclude<SubscriptionUrgency, null> | null;
   } | null;
+  /**
+   * `enabled` 是全局开关（settings.overwrite_enabled）；`files` 是目录里未被
+   * `enabled: false` 停用的覆写文件名——**不等于本次生效的清单**，它不按 match
+   * 作用域过滤、也不随全局开关变空。生效清单见 BuildConfigResult.overwriteSummaries
+   */
   overwrite: { enabled: boolean; files: string[] };
   service: {
     installed: boolean;
