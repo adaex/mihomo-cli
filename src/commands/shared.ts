@@ -70,12 +70,13 @@ export async function confirmOrThrow(question: string, opts: { nonTtyMessage: st
 }
 
 /**
- * 配置变更（切订阅、覆写开关）后，运行中则重启使之生效并返回 true；否则返回 false。
- * 装了服务恒 Mixed；否则保留当前模式（避免订阅残留 tun 字段误判）。透传用户显式启动选项（-s/-u 等）。
+ * 配置变更（切订阅、覆写开关）后，运行中则按**当前实际在跑的模式**重启使之生效并返回
+ * true；否则返回 false。TUN 在跑（即便服务已装）就按 TUN 重启，不静默切回 Mixed；
+ * 服务在跑按 Mixed。透传用户显式启动选项（-s/-u 等）。
  */
 export async function restartToApply(args: string[]): Promise<boolean> {
-  if (!runtime.isRestartNeededOnChange()) return false;
-  const currentMode = runtime.getRuntimeMode();
+  const currentMode = runtime.restartModeOnChange();
+  if (!currentMode) return false;
   console.log('');
   await cmdStart(['start', currentMode, ...extractStartOptions(args)]);
   return true;

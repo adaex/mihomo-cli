@@ -30,8 +30,11 @@ import type { ProcessInfo, ServiceStatus } from './types.js';
 export type RuntimeMode = 'mixed' | 'tun';
 
 /**
- * 当前应使用的运行模式。装了服务恒为 Mixed（服务只跑 Mixed）；
+ * 当前应使用的运行模式（未运行时的默认）。装了服务恒为 Mixed（服务只跑 Mixed）；
  * 否则沿用运行时配置的 tun 字段——避免订阅/覆写残留 tun 字段时被误判。
+ *
+ * 它**不反映实际在跑的东西**：`stop` 服务再 `start tun` 后，服务装着而 TUN 以 root
+ * 在跑，本函数仍答 mixed。配置变更后的重启模式走 restartModeFor / restartModeOnChange。
  */
 export function getRuntimeMode(): RuntimeMode {
   if (isServiceInstalled()) return 'mixed';
@@ -74,11 +77,29 @@ export function getRunningState(serviceStatus?: ServiceStatus): RunningState {
 }
 
 /**
- * 改动配置(切换订阅、覆写开关)后是否需要重启内核使之生效。
- * 只在确有实例在跑时才需要——服务已装但未启动时不该顺手把它拉起来。
+ * 纯决策：配置变更后应以哪种模式重启，取决于**实际在跑的东西**（判据唯一份，命令层不另写）。
+ *
+ * kind='tun' → 'tun'——**即便服务已装**：`stop` 服务再 `start tun` 的正常形态是
+ * 服务 installed+disabled+unloaded、TUN 内核以 root 在跑，此刻 getRuntimeMode 按
+ * 「装了服务恒 Mixed」答 mixed，照它重启会把 TUN 静默切回 Mixed、还为清 root 内核弹 sudo。
+ * 其余（服务在跑或没在跑）回落 fallbackMode，调用方传 getRuntimeMode()：
+ * 服务在跑必已装、它恒答 mixed；「装了服务恒 Mixed」的判据仍只有一份，本函数不重写。
  */
-export function isRestartNeededOnChange(): boolean {
-  return getRunningState().running;
+export function restartModeFor(state: RunningState, fallbackMode: RuntimeMode): RuntimeMode {
+  return state.kind === 'tun' ? 'tun' : fallbackMode;
+}
+
+/**
+ * 改动配置(切换订阅、覆写开关)后应以哪种模式重启内核使之生效；没有实例在跑返回
+ * null——服务已装但未启动时不该顺手把它拉起来。
+ *
+ * 只查一次 getRunningState：「要不要重启」与「以哪种模式重启」共用同一份观察。
+ * 分开查两次 launchctl 之间状态会漂移：期间内核恰好停掉时，模式判断会回落
+ * getRuntimeMode（装了服务恒 Mixed），TUN 就被静默切走——正是要防的缺陷。
+ */
+export function restartModeOnChange(): RuntimeMode | null {
+  const state = getRunningState();
+  return state.running ? restartModeFor(state, getRuntimeMode()) : null;
 }
 
 /**
