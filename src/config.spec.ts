@@ -125,6 +125,61 @@ describe('配置构建保留用户的节点和分流语义', () => {
   });
 });
 
+describe('系统锁定项：订阅自带的端口与控制面字段不进运行配置', () => {
+  const BASE = {
+    proxies: [{ name: 'a', type: 'socks5', server: '127.0.0.1', port: 1080 }],
+    'proxy-groups': [{ name: 'PROXY', type: 'select', proxies: ['a', 'DIRECT'] }],
+    rules: ['MATCH,PROXY'],
+  };
+
+  // redir/tproxy 与 port/socks-port 同族，都是订阅自带的入站端口；泄漏进 mixed 会让内核
+  // 额外开透明代理入站监听。删除清单在 mode 分支之前执行，Mixed 与 TUN 共用同一份，
+  // 故两种模式各锁一条：TUN 是 L3 透明代理，透明端口同样不该由订阅决定
+  for (const mode of ['mixed', 'tun'] as const) {
+    it(`${mode}: 订阅自带的 redir-port/tproxy-port 被剥掉`, () => {
+      const { config } = buildConfig(dumpYaml({ ...BASE, 'redir-port': 7893, 'tproxy-port': 7894 }), mode);
+      assert.equal('redir-port' in config, false, 'redir-port 不应进入运行配置');
+      assert.equal('tproxy-port' in config, false, 'tproxy-port 不应进入运行配置');
+    });
+  }
+
+  it('锁定项家族整体生效：端口与控制面取 settings（默认值），订阅提供的值全部被剥掉', () => {
+    const sub = dumpYaml({
+      ...BASE,
+      port: 7891,
+      'socks-port': 7892,
+      'redir-port': 7893,
+      'tproxy-port': 7894,
+      'mixed-port': 17890,
+      'external-controller': '0.0.0.0:19090',
+      secret: 'from-subscription',
+      'external-ui': 'ui',
+      'external-ui-name': 'yacd',
+      'external-ui-url': 'https://example.com/ui.zip',
+    });
+    const { config } = buildConfig(sub, 'mixed');
+    // 本 spec 未写 settings.json，getPorts 取默认 7890/9090、无 controller_secret
+    assert.equal(config['mixed-port'], 7890);
+    assert.equal(config['external-controller'], '127.0.0.1:9090');
+    for (const key of ['port', 'socks-port', 'redir-port', 'tproxy-port', 'secret', 'external-ui', 'external-ui-name', 'external-ui-url']) {
+      assert.equal(key in config, false, `${key} 应从运行配置中剥掉`);
+    }
+  });
+
+  it('settings.ports 与 controller_secret 才是生效来源，订阅同名字段对结果无影响', () => {
+    fs.writeFileSync(path.join(tmpDir, 'settings.json'), JSON.stringify({ ports: { mixed: 17891, controller: 19091 }, controller_secret: 'from-settings' }));
+    try {
+      const sub = dumpYaml({ ...BASE, 'mixed-port': 7890, 'external-controller': '0.0.0.0:9090', secret: 'from-subscription' });
+      const { config } = buildConfig(sub, 'mixed');
+      assert.equal(config['mixed-port'], 17891);
+      assert.equal(config['external-controller'], '127.0.0.1:19091');
+      assert.equal(config.secret, 'from-settings');
+    } finally {
+      fs.rmSync(path.join(tmpDir, 'settings.json'));
+    }
+  });
+});
+
 describe('buildKernelRejectHint：内核拒绝配置时的排查线索', () => {
   it('目标文案逐行一致（含覆写清单与作用域）', () => {
     const hint = buildKernelRejectHint("ProxyGroup Developer: '' has unset fields: type", [

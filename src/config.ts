@@ -169,7 +169,8 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
     }
   }
 
-  // 系统锁定项：controller/端口固定是 UI 与热重载的统一依赖地址；secret 仅取自用户设置。
+  // 系统锁定项：controller/端口固定是 UI 与热重载的统一依赖地址（redir/tproxy 透明代理入站
+  // 同属本清单，在 mode 分支之前删除，Mixed 与 TUN 共用）；secret 仅取自用户设置。
   // 端口经 settings.ports（getPorts）解析——默认 7890/9090，可在 settings.json 覆盖（与其他代理工具共存的逃生口）。
   // allow-lan 不锁定——订阅/覆写显式提供时按其值（见入站需求），未提供时由上面的 BASE_CONFIG 循环兜底为 false。
   const ports = getPorts(settings);
@@ -178,6 +179,11 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   delete withOverwrites['mixed-port'];
   delete withOverwrites.port;
   delete withOverwrites['socks-port'];
+  // redir/tproxy 与 port/socks-port 同族：订阅自带的入站端口不该进入运行配置——泄漏时内核
+  // 会额外开透明代理入站监听，与入站由本工具的 mixed/tun 托管相矛盾。
+  // listeners 不在本清单：订阅以 listeners 投递入站是否合法属未定的产品决策，不在删除表收口
+  delete withOverwrites['redir-port'];
+  delete withOverwrites['tproxy-port'];
   delete withOverwrites['external-ui'];
   delete withOverwrites['external-ui-name'];
   delete withOverwrites['external-ui-url'];
@@ -275,9 +281,10 @@ export function buildKernelRejectHint(detail: string, overwriteSummaries: string
  *
  * overwriteSummaries 由调用方从 buildConfig 的结果透传（见 BuildConfigResult）：
  * 本函数不自行 loadOverwriteFile——它拿不到 scope 无从按作用域过滤，且违反
- * 「覆写的加载与筛选由调用方完成」的分工。省略该参数时行为与此前完全一致。
+ * 「覆写的加载与筛选由调用方完成」的分工。参数必填、不给默认值：透传快照的可选默认值
+ * 会让新调用方静默丢覆写清单（CLAUDE.md「透传快照的参数一律必填」的成文教训）。
  */
-export async function validateConfigWithKernel(config: Record<string, unknown>, overwriteSummaries: string[] = []): Promise<void> {
+export async function validateConfigWithKernel(config: Record<string, unknown>, overwriteSummaries: string[]): Promise<void> {
   if (!hasKernel()) throw new CliError('未找到内核', { hint: '下载内核: mihomo kernel' });
   ensureDirs();
   const stageDir = fs.mkdtempSync(path.join(DIRS.runtime, 'check-'));

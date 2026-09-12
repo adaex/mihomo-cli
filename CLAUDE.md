@@ -108,7 +108,7 @@ npm run build
 - 不自动删除节点、分组或规则，不为覆写节点注入 exclude-filter；include-all 和用户写的过滤条件按 mihomo 原生语义生效
 - 只持久化最终运行配置；原始订阅保存在 subscriptions，覆写保存在数据根目录
 - mixed-port 与 external-controller 由 settings.ports 决定（默认 7890/9090）；端口需为不同的 1–65535 整数
-- secret 只取 settings.controller_secret；订阅的独立 HTTP/SOCKS 端口和 external-ui 字段不进入运行配置
+- secret 只取 settings.controller_secret；订阅的独立入站端口（port/socks-port/redir-port/tproxy-port）和 external-ui 字段不进入运行配置
 - Mixed 清除 tun 字段；TUN 使用系统 tun 配置并强制 dns.enable=true，显式冲突要提示，其他 DNS 字段尊重用户配置
 - DNS 必须是映射，Mixed 与 TUN 共用形态检查；fake-ip 模式未显式配置 sniffer 时补默认嗅探配置
 - 覆写主文件先加载，扩展文件按名称排序；match 的 subscription/url-domain 为 AND 条件，订阅名匹配不区分大小写，无 match 全局应用，非法或空 match 报错
