@@ -11,6 +11,39 @@ const MAX_RESPONSE_BYTES = 50 * 1024 * 1024;
  */
 const MAX_ERROR_BODY_BYTES = 64 * 1024;
 
+/**
+ * URL 是否为 https 协议。降级重定向守卫的判据，**必须用 URL 解析而非
+ * `startsWith('https://')`**：URL 解析会把 scheme 规范化为小写——`HTTPS://…`
+ * 照常 fetch 却绕过 startsWith 判定，整条 https→http 降级检查被跳过。
+ * 非法 URL 返回 false（与旧 startsWith 行为一致，fetch 自会报错）。
+ */
+export function isHttpsUrl(url: string): boolean {
+  try {
+    return new URL(url).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 构造带响应载荷的 HTTP 错误。直连 fetch 与代理 curl（GitHub API 版本查询）两条
+ * 路径共用同一形态：message 为 `HTTP <status>`，`response.data` 为限量摘录后
+ * 尽力解析的错误体——命令层据此提取「原因/文档」（GitHub 错误体的 message /
+ * documentation_url 字段），保证两条路径的诊断等价。
+ */
+export function createHttpError(status: number, bodyText: string): Error & { response: { status: number; data?: Record<string, unknown> } } {
+  const error = new Error(`HTTP ${status}`) as Error & { response: { status: number; data?: Record<string, unknown> } };
+  error.response = { status };
+  try {
+    // 限量摘录：错误体不参与业务解析，只做诊断。curl 路径的 body 已整体读入内存，
+    // 统一在这里截断（fetch 路径读取时已限量，截两次无副作用）
+    error.response.data = JSON.parse(bodyText.slice(0, MAX_ERROR_BODY_BYTES)) as Record<string, unknown>;
+  } catch {
+    // 错误体读取/解析失败无所谓：status 已足够定位问题
+  }
+  return error;
+}
+
 export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
   const { timeout = 60_000 } = options;
 
@@ -26,20 +59,18 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
         });
         // 防 https→http 降级重定向：fetch 默认静默跟随协议降级，
         // 订阅配置等敏感内容明文传输可被 MITM 替换。内核下载走 curl --proto =https 有同等防线。
-        if (url.startsWith('https://') && !response.url.startsWith('https://')) {
+        if (isHttpsUrl(url) && !isHttpsUrl(response.url)) {
           throw new Error(`请求被重定向到非 https 地址（${response.url}），已拒绝`);
         }
         if (!response.ok) {
-          const error: Error & { response?: { status: number; data?: Record<string, unknown> } } = new Error(`HTTP ${response.status}`);
-          error.response = { status: response.status };
+          let text = '';
           try {
             // 限量读取错误体：读满 64KB 即 abort，不把整个 body 拉进内存
-            const text = await readBodyWithLimit(response, controller, MAX_ERROR_BODY_BYTES);
-            error.response.data = JSON.parse(text) as Record<string, unknown>;
+            text = await readBodyWithLimit(response, controller, MAX_ERROR_BODY_BYTES);
           } catch {
-            // 错误体读取/解析失败无所谓：status 已足够定位问题
+            // 错误体读取失败无所谓：status 已足够定位问题
           }
-          throw error;
+          throw createHttpError(response.status, text);
         }
         // 提前拒绝声明超大的响应，避免把 GB 级 body 读进内存（订阅/内核下载被劫持或故障时的 OOM 防护）
         const declaredLen = Number(response.headers.get('content-length'));

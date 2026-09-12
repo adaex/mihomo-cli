@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { buildGhReleaseDownloadArgs, buildKernelCurlArgs, findMatchingAsset, pickLatestRelease, resolveDownloadChannel } from './kernel.js';
+import {
+  buildGhReleaseDownloadArgs,
+  buildKernelCurlArgs,
+  buildReleaseApiCurlArgs,
+  findMatchingAsset,
+  parseCurlStatusOutput,
+  pickLatestRelease,
+  resolveDownloadChannel,
+  translateReleaseApiCurlError,
+} from './kernel.js';
 import type { GitHubAsset, GitHubRelease } from './types.js';
 
 /** GitHub API 的 assets 按名称排序返回——fixture 顺序即 find() 的命中顺序，勿重排 */
@@ -145,6 +154,88 @@ describe('buildKernelCurlArgs', () => {
     const i = args.indexOf('-o');
     assert.equal(args[i + 1], '/tmp/x.gz');
     assert.equal(args[args.length - 1], common.url);
+  });
+});
+
+describe('buildReleaseApiCurlArgs（代理路径的 release API 查询）', () => {
+  const url = 'https://api.github.com/repos/MetaCubeX/mihomo/releases';
+
+  it('恒含 --proto =https / --proto-redir =https（API 全链路 https）', () => {
+    const args = buildReleaseApiCurlArgs(7890, url);
+    assert.equal(args[args.indexOf('--proto') + 1], '=https');
+    assert.equal(args[args.indexOf('--proto-redir') + 1], '=https');
+  });
+
+  it('含 --fail-with-body 与 -w 状态码回传（4xx 不再以退出码 0 混过 JSON 解析）', () => {
+    const args = buildReleaseApiCurlArgs(7890, url);
+    assert.ok(args.includes('--fail-with-body'));
+    assert.equal(args[args.indexOf('-w') + 1], '\n%{http_code}');
+  });
+
+  it('URL 直指 api.github.com 且居末位——API 绝不经过镜像', () => {
+    const args = buildReleaseApiCurlArgs(7890, url);
+    assert.equal(args[args.length - 1], url);
+    assert.ok(url.startsWith('https://api.github.com/'));
+  });
+
+  it('-x 指向本机混合端口', () => {
+    const args = buildReleaseApiCurlArgs(7890, url);
+    assert.equal(args[args.indexOf('-x') + 1], 'http://127.0.0.1:7890');
+  });
+});
+
+describe('parseCurlStatusOutput（-w 追加的状态码拆解）', () => {
+  it('拆出响应体与末行状态码', () => {
+    assert.deepEqual(parseCurlStatusOutput('[{"tag_name":"v1.19.30"}]\n200'), { body: '[{"tag_name":"v1.19.30"}]', statusCode: 200 });
+  });
+
+  it('空错误体（如 403 无 body）也能取到状态码', () => {
+    assert.deepEqual(parseCurlStatusOutput('\n403'), { body: '', statusCode: 403 });
+  });
+
+  it('无状态码行（输出截断/早期失败）statusCode 为 null，原文保留为 body', () => {
+    assert.deepEqual(parseCurlStatusOutput('{"partial":'), { body: '{"partial":', statusCode: null });
+    assert.deepEqual(parseCurlStatusOutput(''), { body: '', statusCode: null });
+  });
+
+  it('000（未收到 HTTP 响应）视为无状态码', () => {
+    assert.deepEqual(parseCurlStatusOutput('\n000'), { body: '', statusCode: null });
+  });
+});
+
+describe('translateReleaseApiCurlError（代理路径 4xx 诊断对齐直连）', () => {
+  it('退出码 22 + 状态码 + GitHub 错误体 → 与直连路径同形的 HTTP 错误', () => {
+    const body = JSON.stringify({
+      message: 'API rate limit exceeded for 203.0.113.7.',
+      documentation_url: 'https://docs.github.com/rest/overview/resources-in-the-rest-api#rate-limiting',
+    });
+    const error = translateReleaseApiCurlError({ code: 22, stdout: `${body}\n403` });
+    const withResponse = error as Error & { response: { status: number; data?: { message?: string; documentation_url?: string } } };
+    assert.equal(error.message, 'HTTP 403');
+    assert.equal(withResponse.response.status, 403);
+    assert.equal(withResponse.response.data?.message, 'API rate limit exceeded for 203.0.113.7.');
+    assert.equal(withResponse.response.data?.documentation_url, 'https://docs.github.com/rest/overview/resources-in-the-rest-api#rate-limiting');
+  });
+
+  it('退出码 22 但拿不到状态码（无 -w 输出）回退退出码口径', () => {
+    assert.match(translateReleaseApiCurlError({ code: 22, stdout: '' }).message, /curl 退出码 22/);
+  });
+
+  it('ENOENT → 安装提示', () => {
+    assert.equal(translateReleaseApiCurlError({ code: 'ENOENT' }).message, '未找到 curl 命令，请先安装 curl 后重试');
+  });
+
+  it('超时被终止（execFile timeout 兜底，000 无状态码）→ 超时信息', () => {
+    const error = translateReleaseApiCurlError({ code: null, killed: true, signal: 'SIGTERM', stdout: '\n000' });
+    assert.match(error.message, /130s 未完成/);
+  });
+
+  it('网络错误退出码保留原口径（含 stderr 末行剥离）', () => {
+    assert.match(translateReleaseApiCurlError({ code: 7, stderr: '' }).message, /curl 退出码 7/);
+    assert.match(
+      translateReleaseApiCurlError({ code: 7, stderr: 'curl: (7) Failed to connect to 127.0.0.1 port 7890' }).message,
+      /Failed to connect to 127.0.0.1 port 7890/,
+    );
   });
 });
 

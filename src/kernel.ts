@@ -1,11 +1,12 @@
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 import { compareVersions } from 'compare-versions';
 import { clearKernelVersionCache, getKernelVersion } from './config.js';
 import { VERSION } from './constants.js';
-import { createHttpClient } from './http.js';
+import { createHttpClient, createHttpError } from './http.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
 import type { GitHubAsset, GitHubRelease, KernelUpdateInfo } from './types.js';
 import { escapeRegExp } from './utils.js';
@@ -15,6 +16,8 @@ const KERNEL_HTTP_TIMEOUT = 120_000;
 const KERNEL_DOWNLOAD_TIMEOUT = 180_000;
 
 const HTTP_CLIENT = createHttpClient({ timeout: KERNEL_HTTP_TIMEOUT });
+
+const execFileAsync = promisify(execFile);
 
 /** 给 GitHub 下载地址套镜像前缀；非 GitHub 地址原样返回（调用前必须已过 assertTrustedAssetUrl）。 */
 function withMirror(url: string, mirror: string | null): string {
@@ -156,6 +159,86 @@ export function pickLatestRelease(releases: GitHubRelease[]): GitHubRelease {
 }
 
 /**
+ * 构造代理路径查询 release API 的 curl 参数。纯函数，参数数组单测锁死（口径同 buildKernelCurlArgs）：
+ * - URL 直指 api.github.com 且居末位——API 绝不经过镜像（镜像可伪造 browser_download_url）
+ * - `--proto '=https'` / `--proto-redir '=https'`：全链路强制 https，与下载通道同防线
+ * - `--fail-with-body` + `-w '\n%{http_code}'`：此前 4xx（api.github.com 未认证限流 60 次/时，
+ *   403 常见）时 curl 退出码为 0，JSON 错误对象一路流到 pickLatestRelease 才抛出笼统的
+ *   「无法获取版本信息」，与直连路径「HTTP 403 + 原因」的诊断不等价；现在非 2xx 在
+ *   curl 层就失败（退出码 22），错误体与状态码随 stdout 带回，由 translateReleaseApiCurlError
+ *   组装成与直连路径同形态的 HTTP 错误
+ */
+export function buildReleaseApiCurlArgs(proxyPort: number, url: string): string[] {
+  return [
+    '-s',
+    '-x',
+    `http://127.0.0.1:${proxyPort}`,
+    '--proto',
+    '=https',
+    '--proto-redir',
+    '=https',
+    '--fail-with-body',
+    '-w',
+    '\n%{http_code}',
+    '--connect-timeout',
+    '10',
+    '--max-time',
+    String(Math.floor(KERNEL_HTTP_TIMEOUT / 1000)),
+    '-H',
+    `User-Agent: mihomo-cli/${VERSION}`,
+    url,
+  ];
+}
+
+/**
+ * 拆解 curl 输出：`-w '\n%{http_code}'` 把状态码追加在响应体末尾。
+ * 输出无状态码行（早期失败/被截断）或状态码 000（未收到 HTTP 响应）时 statusCode 为 null。
+ */
+export function parseCurlStatusOutput(stdout: string): { body: string; statusCode: number | null } {
+  const newlineIdx = stdout.lastIndexOf('\n');
+  if (newlineIdx === -1) return { body: stdout, statusCode: null };
+  const code = Number.parseInt(stdout.slice(newlineIdx + 1).trim(), 10);
+  return { body: stdout.slice(0, newlineIdx), statusCode: Number.isFinite(code) && code > 0 ? code : null };
+}
+
+/**
+ * 把 release API 查询的 curl 子进程失败翻译为用户可读错误。纯函数
+ * （execFile 的 rejection 形态由调用方/测试构造，见 getLatestRelease）：
+ * - 退出码 22（`--fail-with-body` 的 HTTP 错误）且 stdout 带回状态码 ≥400：组装成与
+ *   直连路径（http.ts 的 createHttpError）完全同形的错误——message `HTTP <status>` +
+ *   response.data（GitHub 错误体的 message/documentation_url），命令层据此渲染
+ *   「原因/文档」，两条路径的诊断等价
+ * - 进程级失败（ENOENT / 超时被终止 / 网络错误退出码）沿用既有口径
+ */
+export function translateReleaseApiCurlError(e: unknown): Error {
+  const err = e as { code?: number | string | null; killed?: boolean; signal?: string | null; stdout?: string; stderr?: string; message?: string };
+  if (typeof err.code === 'string') {
+    // spawn 失败（curl 不存在等）。ENOENT 单独给安装提示，其余给原始 message
+    if (err.code === 'ENOENT') {
+      return new Error('未找到 curl 命令，请先安装 curl 后重试');
+    }
+    return new Error(`版本查询失败: ${err.message ?? err.code}`);
+  }
+  const { body, statusCode } = parseCurlStatusOutput(typeof err.stdout === 'string' ? err.stdout : '');
+  if (statusCode !== null && statusCode >= 400) {
+    return createHttpError(statusCode, body);
+  }
+  if (err.killed) {
+    // execFile 的 timeout 兜底（curl 自身 --max-time 120s 先到，一般走不到这）
+    return new Error(`版本查询失败: curl ${Math.floor((KERNEL_HTTP_TIMEOUT + 10_000) / 1000)}s 未完成，已终止${err.signal ? `（${err.signal}）` : ''}`);
+  }
+  // 错误行形如「curl: (7) Failed to connect to ...」，剥前缀取末行更可读（口径同 proxy-probe）
+  const stderr = (err.stderr || '').trim();
+  const lastLine = stderr
+    ? stderr
+        .split('\n')
+        .pop()
+        ?.replace(/^curl: \(\d+\)\s*/, '')
+    : undefined;
+  return new Error(`版本查询失败 (curl 退出码 ${err.code ?? '?'}${lastLine ? `: ${lastLine}` : ''})`);
+}
+
+/**
  * 拉取 release 列表。**绝不经过镜像**：镜像只作用于产物下载，API 若走镜像，
  * `browser_download_url` 就完全由镜像说了算（见 assertTrustedAssetUrl 的说明）。
  * 代理开着时经本机混合端口转发——本地代理只是传输层，TLS 端到端，响应仍来自 GitHub。
@@ -165,46 +248,28 @@ async function getLatestRelease(repo: string, proxyPort?: number | null): Promis
   const url = `https://api.github.com/repos/${repo}/releases`;
 
   if (proxyPort) {
-    const result = spawnSync(
-      'curl',
-      [
-        '-s',
-        '-x',
-        `http://127.0.0.1:${proxyPort}`,
-        '--proto',
-        '=https',
-        '--proto-redir',
-        '=https',
-        '--connect-timeout',
-        '10',
-        '--max-time',
-        String(Math.floor(KERNEL_HTTP_TIMEOUT / 1000)),
-        '-H',
-        `User-Agent: mihomo-cli/${VERSION}`,
-        url,
-      ],
-      { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024, timeout: KERNEL_HTTP_TIMEOUT + 10_000 },
-    );
-    if (result.error) {
-      if ((result.error as NodeJS.ErrnoException).code === 'ENOENT') {
-        throw new Error('未找到 curl 命令，请先安装 curl 后重试');
-      }
-      throw new Error(`版本查询失败: ${result.error.message}`);
+    // 异步执行（execFile 而非 spawnSync）：本查询在 withSpinner 内进行，同步等待最长
+    // 130s 会冻结 spinner 动画与计时，SIGINT 也得不到处理
+    let stdout: string;
+    try {
+      const result = await execFileAsync('curl', buildReleaseApiCurlArgs(proxyPort, url), {
+        encoding: 'utf8',
+        maxBuffer: 50 * 1024 * 1024,
+        timeout: KERNEL_HTTP_TIMEOUT + 10_000,
+      });
+      stdout = result.stdout;
+    } catch (e) {
+      throw translateReleaseApiCurlError(e);
     }
-    if (result.status !== 0) {
-      // 错误行形如「curl: (7) Failed to connect to ...」，剥前缀取末行更可读（口径同 proxy-probe）
-      const stderr = (result.stderr || '').trim();
-      const lastLine = stderr
-        ? stderr
-            .split('\n')
-            .pop()
-            ?.replace(/^curl: \(\d+\)\s*/, '')
-        : undefined;
-      throw new Error(`版本查询失败 (curl 退出码 ${result.status}${lastLine ? `: ${lastLine}` : ''})`);
+    // --fail-with-body 使 4xx/5xx 走上面的错误分支；退出码 0 时仍按 -w 带回的状态码
+    // 复核（3xx 不跟随重定向时 curl 退出码也是 0），非 2xx 与直连路径的 !response.ok 同判
+    const { body, statusCode } = parseCurlStatusOutput(stdout);
+    if (statusCode !== null && (statusCode < 200 || statusCode >= 300)) {
+      throw createHttpError(statusCode, body);
     }
     let releases: GitHubRelease[];
     try {
-      releases = JSON.parse(result.stdout) as GitHubRelease[];
+      releases = JSON.parse(body) as GitHubRelease[];
     } catch {
       throw new Error('版本查询失败: 响应不是合法 JSON（代理可能返回了错误页面）');
     }

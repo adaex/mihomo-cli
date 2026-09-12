@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { isSubscriptionStale, parseUserInfo } from './subscription.js';
+import { isSubscriptionStale, isValidHttpUrl, parseUserInfo } from './subscription.js';
 
 describe('parseUserInfo：只收有限非负数，其余按缺失处理', () => {
   it('正常头全字段解析', () => {
@@ -74,5 +74,25 @@ describe('isSubscriptionStale：新鲜度判断（status 与 doctor 共用口径
     assert.equal(isSubscriptionStale({}, NOW), false);
     assert.equal(isSubscriptionStale({ updated_at: 'garbage' }, NOW), false);
     assert.equal(isSubscriptionStale({ updated_at: new Date(NOW + 3_600_000).toISOString() }, NOW), false);
+  });
+});
+
+describe('isValidHttpUrl：URL 解析 + 协议白名单（scheme 大小写不绕过）', () => {
+  it('http/https 均合法，scheme 大小写不敏感（URL 解析会规范化为小写）', () => {
+    assert.equal(isValidHttpUrl('https://example.com/sub'), true);
+    assert.equal(isValidHttpUrl('HTTPS://example.com/sub'), true);
+    assert.equal(isValidHttpUrl('http://example.com/sub'), true);
+    assert.equal(isValidHttpUrl('HTTP://example.com/sub'), true);
+  });
+
+  it('非 http(s) scheme 拒绝', () => {
+    assert.equal(isValidHttpUrl('httpfoo://example.com'), false);
+    assert.equal(isValidHttpUrl('ftp://example.com'), false);
+  });
+
+  it('非法 URL 拒绝（含首尾空白的容忍由 trim 保证）', () => {
+    assert.equal(isValidHttpUrl('not a url'), false);
+    assert.equal(isValidHttpUrl(''), false);
+    assert.equal(isValidHttpUrl('  https://example.com/sub  '), true);
   });
 });
