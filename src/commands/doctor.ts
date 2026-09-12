@@ -43,6 +43,21 @@ async function collectChecks(): Promise<Check[]> {
     checks.push({ name, status, detail, fix, notes });
   };
 
+  // npm registry 查询**先发起、最后 await**：它是纯网络往返（实测约 780ms），而 doctor
+  // 其余全部本地检查加起来才约 75ms（无内核）到约 300ms（装了内核，含 `-t` 原生校验）——
+  // 串在末尾就是让这段网络等待白占墙钟时间。它不依赖任何前面的结果（只与 VERSION 常量
+  // 比对），故可与本地检查重叠。实测装了内核时 1070ms → 837ms（省 22%）；没装内核时
+  // 本地部分太短，只省约 47ms，此时耗时下界就是 npm 查询本身。
+  //
+  // 尾随的 `.catch` 是**纵深防御，当前不承载行为**：promise 提前创建、await 推迟到函数
+  // 末尾，中间任一 push 路径若抛错（如订阅名非法时 readSubscriptionRawConfig 抛 CliError），
+  // 这个 promise 就没人 await 了——真 reject 的话会被 index.ts 的 unhandledRejection
+  // 处理器捕获、以退出码 1 终止，体检在报出真正的问题之前先崩掉。实测目前不会发生：
+  // getLatestNpmVersion 自身 try/catch 吞掉一切并返回 null，摘掉这个 catch 行为不变
+  // （已反向验证）。留着是因为一旦它的契约改成抛错，缺这层就会退化成「doctor 偶发崩溃」，
+  // 而那种失败只在「另有检查项先抛错」时出现，极难复现。
+  const latestVersionPromise = getLatestNpmVersion(4_000).catch(() => null);
+
   // === 内核 ===
   if (!hasKernel()) {
     push('内核', 'fail', '未安装', 'mihomo kernel');
@@ -198,9 +213,10 @@ async function collectChecks(): Promise<Check[]> {
   }
 
   // === CLI 版本 ===
+  // 查询在本函数开头就已发起（与本地检查重叠），这里只取结果。
   // 短超时 + 失败 skip：registry 不可达很常见（国内网络），体检不该因此多红一项；
   // 用 compareVersions 判方向，本地比 latest 新（dev 链接/beta）不告警
-  const latest = await getLatestNpmVersion(4_000);
+  const latest = await latestVersionPromise;
   if (latest === null) {
     push('CLI 版本', 'skip', 'npm registry 不可达，跳过检查');
   } else if (compareVersions(latest, VERSION) > 0) {
