@@ -121,8 +121,13 @@ export function rmrf(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-/** 锁等待上限：超过即判定持锁者已死（正常持锁只有几毫秒的同步读-改-写）。 */
-const LOCK_STALE_MS = 10_000;
+/**
+ * 锁等待上限：超过即判定持锁者已死（正常持锁只有几毫秒的同步读-改-写）。
+ *
+ * 导出仅供测试：service-concurrency.spec 断言「stop 锁内临界区最坏持锁低于该阈值」，
+ * 用真实常量而非抄一个 10_000，两边漂移（有人调阈值、有人改锁内预算）时测试当场红。
+ */
+export const LOCK_STALE_MS = 10_000;
 const LOCK_RETRY_MS = 20;
 
 /**

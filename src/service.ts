@@ -71,6 +71,32 @@ const SERVICE_HEALTH_GRACE_MS = 1800;
 const LOG_ROTATE_MAX_BYTES = 10 * 1024 * 1024;
 /** launchctl 查询超时：只读探测卡住时按「查不到」处理 */
 const LAUNCHCTL_TIMEOUT_MS = 5000;
+/**
+ * stop/uninstall **锁内** launchctl 调用的单次超时。
+ *
+ * 为什么比默认 5s 短：stop 侧锁体含**三次** launchctl（bootout、disable、print-disabled
+ * 复核），按默认超时最坏持锁 15s，超出 `LOCK_STALE_MS`（10s，paths.ts）——并发 start
+ * 等锁超过 10s 会按「持锁者已死」强夺进入，两进程同处临界区，停止计数判据被整体
+ * 绕过（判据的全部意义就是防这个交错）。3s × 3 = 9s，收回阈值内；start 侧锁内
+ * 两次调用（enable + bootstrap）维持默认 5s、合计恰等于阈值，是既有基线，不动。
+ *
+ * 为什么不能用「缩到两次调用」修——三个环节谁也挪不出锁：
+ * - 复核必须在递增**之前**：位没真生效就不该记「停止过」，否则一次失败的 disable
+ *   会让并发 start 白白中止（下方 disableServiceAutoStart「放在确认之后」防的事）
+ * - 递增必须在锁内、紧随 disable：挪到锁外的话，并发 start 会在「disable 完成」与
+ *   「递增落地」之间拿到锁，读不到计数变化，enable + bootstrap 照常覆盖这次停止
+ * - bootout 必须与 disable 同锁：bootout 挪到锁前，并发 start 的 bootstrap 能滑进
+ *   两者之间，stop 收尾时服务仍是 loaded + KeepAlive，杀掉的内核约 10s 后被拉回
+ * 故只能压单次超时。
+ *
+ * 3s 的余量论证：锁内三次都是本机 XPC 往返——print/print-disabled 实测 3ms（见
+ * getServiceStatus），disable 是同类的本地写；仓库里唯一实测会阻塞数秒的 launchctl
+ * 是 kickstart -k（阻塞等进程死亡，故单独 60s 且刻意留在锁外），bootout 发出卸载
+ * 请求即返回、不等进程死透（waitUntilUnloaded 的轮询正为此存在）。launchctl 慢到
+ * 3s 不够说明系统已病态，此时快速失败（bootout/disable 抛 CliError）比持锁超时更
+ * 安全：后者会静默拆掉整条并发防线。
+ */
+const SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS = 3_000;
 
 // === 服务目标 ===
 
@@ -196,9 +222,12 @@ function assertLaunchctlQueryOk(status: number | null, what: string): void {
 /**
  * 单独查询 disable 位。 getServiceStatus 走不通：它在「未安装且未装载」时提前返回，
  * 不查 disabled 表——而「服务从未装过、起 TUN 前关自启」恰恰是这个形态。
+ *
+ * @param timeoutMs stop/uninstall 在 serviceLock 内调用时传 SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS
+ *   （持锁预算见该常量注释）；锁外调用保持默认 5s
  */
-function isServiceDisabledInLaunchd(): boolean {
-  const out = runLaunchctl(['print-disabled', bootstrapDomain()]);
+function isServiceDisabledInLaunchd(timeoutMs: number = LAUNCHCTL_TIMEOUT_MS): boolean {
+  const out = runLaunchctl(['print-disabled', bootstrapDomain()], timeoutMs);
   assertLaunchctlQueryOk(out.status, 'print-disabled');
   return out.status === 0 ? parseDisabledList(out.stdout, SERVICE_LABEL) : false;
 }
@@ -419,8 +448,8 @@ export function ensureServiceSymlink(): void {
  * launchctl 失败时把 stderr 收进 hint——它的报错文本（如 "Bootstrap failed: 5: I/O error"）
  * 是排查的主要线索；旧脚本经 stdio:'inherit' 直接漏给终端，错误消息里反而没有。
  */
-function runLaunchctlOrThrow(args: string[], what: string): void {
-  const result = runLaunchctl(args);
+function runLaunchctlOrThrow(args: string[], what: string, timeoutMs: number = LAUNCHCTL_TIMEOUT_MS): void {
+  const result = runLaunchctl(args, timeoutMs);
   if (result.status === 0) return;
   const detail = result.stderr.trim();
   throw new CliError(`${what}失败（launchctl 退出码 ${result.status ?? '执行失败'}）`, {
@@ -434,8 +463,8 @@ function runLaunchctlOrThrow(args: string[], what: string): void {
  * 再靠 waitUntilUnloaded 判定。这里把「未装载」与「查询失败」分开：
  * 112/125 域错误等其他退出码直接抛，不伪装成「无事发生」。
  */
-function bootoutService(): void {
-  const result = runLaunchctl(['bootout', serviceTarget()]);
+function bootoutService(timeoutMs: number = LAUNCHCTL_TIMEOUT_MS): void {
+  const result = runLaunchctl(['bootout', serviceTarget()], timeoutMs);
   if (result.status === 0 || result.status === 3 || result.status === LAUNCHCTL_NOT_LOADED) return;
   const detail = result.stderr.trim();
   throw new CliError(`卸载旧服务实例失败（launchctl bootout 退出码 ${result.status ?? '执行失败'}）`, {
@@ -683,11 +712,17 @@ export async function installService(wasRunning: boolean, stopEpochBefore: numbe
 }
 
 /**
- * 「服务被要求停止」的单调计数。**只在持 `serviceLock` 时读写**（调用点都在锁内）。
+ * 「服务被要求停止」的单调计数。
  *
  * 存在的理由见 `PATHS.serviceStopEpoch` 的注释：launchd 的 disable 位是持久状态、
  * 没有写入时间，「上次 stop 留下的」与「刚刚并发置的」完全同形，光比对位的前后快照
  * 在「上次也 stop 过」时区分不出来。计数只增不减，值变了就一定有人 stop 过。
+ *
+ * **递增（读-改-写）与启动侧锁内的比对都在 `serviceLock` 内进行**，这是判据可靠的
+ * 前提（写与 check-then-act 必须和对方的临界区互斥）。另有两处**事后复核的只读**
+ * 刻意在锁外：launchOrRestart 健康确认失败后（v4.8.0）、restartService 热重载成功后
+ * （concludeHotReload）——它们只消费结论、不与递增竞争写，atomicWrite 的 rename
+ * 也保证读到的不会是半截值。
  *
  * 读失败一律返回 0（文件不存在是首次运行的正常形态；内容损坏时宁可退回
  * 「按无并发处理」也不能让 start 抛错——start 是用户显式意图，不该被一个辅助计数挡住）。
@@ -898,16 +933,22 @@ export async function startService(stopEpochBefore: number): Promise<{ started: 
  * 「让服务别自启」，任何一处漏 bump 都会让并发判据在那条路径上失效——而「防线只铺一条
  * 路径」正是本仓反复栽的坑，也正是 `recordServiceStopped` 那几条路径此前的处境。
  * 走这个出口的新增调用点自动获得正确行为。
+ *
+ * @param timeoutMs stop/uninstall 在 serviceLock 内调用时必须传
+ *   SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS：本函数含 disable + print-disabled 复核两次
+ *   launchctl，加上锁体里的 bootout 共三次，是持锁预算的大头（见该常量注释）。
+ *   锁外调用（install 首装、cmdStart 的 TUN 分支、uninstall 的锁外复核）不持锁，
+ *   保持默认 5s
  */
-export function disableServiceAutoStart(): void {
+export function disableServiceAutoStart(timeoutMs: number = LAUNCHCTL_TIMEOUT_MS): void {
   assertServiceLabelSafe();
 
-  runLaunchctlOrThrow(['disable', serviceTarget()], '关闭服务自启');
+  runLaunchctlOrThrow(['disable', serviceTarget()], '关闭服务自启', timeoutMs);
 
   // 事后确认：命令成功 ≠ 位生效。这是 TUN 防线的第一层，而开机自启路径不经过 CLI
   // （登录时 launchd 直接扫 plist），第二层「startService 拒绝 TUN 配置」在那条路径上
   // 不生效——失败必须让用户看见，否则重启后就是「代理不通、日志刷爆」且无任何线索
-  if (!isServiceDisabledInLaunchd()) {
+  if (!isServiceDisabledInLaunchd(timeoutMs)) {
     throw new CliError('关闭服务自启失败：disable 位未生效', {
       hint: [`手动确认: launchctl print-disabled ${bootstrapDomain()}`, '', '不关闭自启的话，重启后服务会拿 TUN 配置反复拉起必然失败的内核。'],
     });
@@ -933,9 +974,13 @@ export async function stopService(): Promise<void> {
   // 跨进程锁：与 startService 的 enable/bootstrap 串行化，
   // 防止慢速 start（订阅更新 ~10s）期间 stop 的 bootout/disable 被 start 随后的 enable 覆盖
   // 不加 await：withFileLock 是同步的，且要求 fn 同步（持锁期间让出事件循环等于没锁）
+  //
+  // 锁内三次 launchctl 全部走 SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS（bootout + disable +
+  // print-disabled 复核，最坏 9s < LOCK_STALE_MS）：按默认 5s 最坏持锁 15s，会被并发
+  // start 判锁陈旧强夺，两进程同处临界区、epoch 判据被整体绕过。预算论证见该常量注释
   withFileLock(PATHS.serviceLock, () => {
-    bootoutService();
-    disableServiceAutoStart();
+    bootoutService(SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS);
+    disableServiceAutoStart(SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS);
   });
 
   await waitUntilUnloaded();
@@ -958,10 +1003,11 @@ export async function stopService(): Promise<void> {
 export async function uninstallService(): Promise<void> {
   assertServiceLabelSafe();
 
-  // 跨进程锁：与 startService 的 enable/bootstrap 串行化（withFileLock 同步，见 stopService）
+  // 跨进程锁：与 startService 的 enable/bootstrap 串行化（withFileLock 同步，见 stopService）。
+  // 锁内三次 launchctl 同样走 SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS，预算论证见该常量注释
   withFileLock(PATHS.serviceLock, () => {
-    bootoutService();
-    disableServiceAutoStart();
+    bootoutService(SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS);
+    disableServiceAutoStart(SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS);
   });
 
   await waitUntilUnloaded();
@@ -1123,6 +1169,30 @@ async function tryHotReload(): Promise<boolean> {
 }
 
 /**
+ * 热重载成功后给 restartService 的返回值下结论：先复读停止计数，变了就按并发停止处理。
+ *
+ * 热重载是唯一没有健康确认的「生效」路径（内核没重启，PUT 204 即接受），v4.8.0 给
+ * kickstart 路径补「健康确认失败后复读计数」防线时，这条成功路径没有等价收口：
+ * tryHotReload 从状态探测到 PUT 返回最坏二十多秒（前置两次 launchctl 查询、/version
+ * 探测、lsof、PUT 各带 5s 超时），期间并发的 stop 已完成 bootout + disable + 递增——
+ * 内核确实吃进了新配置，但随即被停掉。不查就照常返回 started=true 的话，调用方报
+ * 「已启动」，终态与用户最后一条命令相反，与 v4.7.5→4.7.7 连修六条的缺口同族同形。
+ *
+ * `hotReloaded` 恒为 true（配置确实被内核接受，如实反映）；要不要报成功由 `started`
+ * 说了算——它与 kickstart 回退分支的 `started` 同名同义，started=false 经
+ * launchOrRestart 既有的「启动已取消」出口报错，文案不另起一份。
+ *
+ * 判据复用唯一那份 `shouldAbortStartOnDisable`，这里只是消费点，不写第二套比较；
+ * 复读用 `readStopEpoch` 原样调（读失败返回 0 是它既有的 fail-open 契约，不在此再包
+ * 一层降级或吞错）。抽成纯函数是为了可测：热重载路径依赖真实 launchd 状态与
+ * external-controller，自动化测试起不了真服务（真实 launchctl 写操作不进测试），
+ * 决策逻辑单独锁定；消费点另有端到端用例（fake launchctl + 桩 controller）。
+ */
+export function concludeHotReload(stopEpochBefore: number, stopEpochNow: number): { hotReloaded: boolean; started: boolean } {
+  return { hotReloaded: true, started: !shouldAbortStartOnDisable(stopEpochBefore, stopEpochNow) };
+}
+
+/**
  * 重启托管内核使配置变更生效。优先热重载（PUT /configs，免 sudo、免 launchctl）；
  * 失败才回退 kickstart。kickstart -k 是命令式重启，不与 KeepAlive 冲突；
  * 若任务未装载（plist 在但被手动 bootout）则 bootstrap 自愈。
@@ -1137,20 +1207,26 @@ async function tryHotReload(): Promise<boolean> {
  * 轮转发生在下方判据之前，故被取消的重启可能已经轮转过一次日志：copy 在 truncate 之前，
  * 数据不丢，**刻意不为此再加一个判据消费点**——一个函数一个消费点比这点整洁更值。
  *
- * 返回 `started=false` 表示 kickstart 失败后的 enable+bootstrap 回退被**并发的 stop**
- * 取消（与 `startService` 的 `started` 同名同义）。此时 `hotReloaded` 无意义，
+ * 返回 `started=false` 表示启动性动作被**并发的 stop** 取消——kickstart 失败后的
+ * enable+bootstrap 回退（锁内判据），或热重载成功后的复读（concludeHotReload）——
+ * 与 `startService` 的 `started` 同名同义。此时 `hotReloaded` 无意义，
  * 调用方必须先判 `started`，不能继续报「已启动」。
  *
- * @param stopEpochBefore 命令开始时的停止计数快照。回退分支的 `enable` + `bootstrap`
- *   与 `startService` 是同一动作，需要同一道防线：热重载探测加 kickstart 最长可达 60s，
- *   期间的并发 stop 会被这个回退覆盖掉
+ * @param stopEpochBefore 命令开始时的停止计数快照。两条出口都消费它：热重载成功后经
+ *   concludeHotReload 复读（热重载探测最坏二十多秒），kickstart 失败的 enable+bootstrap
+ *   回退在锁内复读（热重载探测加 kickstart 最长可达 60s）——期间的并发 stop 会被
+ *   这两条出口覆盖掉
  */
 export async function restartService(stopEpochBefore: number): Promise<{ hotReloaded: boolean; started: boolean }> {
   if (!isServiceInstalled()) {
     throw new CliError('服务未安装，无法重启', { hint: '安装服务: mihomo install' });
   }
 
-  if (!logOversized() && (await tryHotReload())) return { hotReloaded: true, started: true };
+  // 热重载成功也要复读停止计数再下结论：防线此前只铺在 kickstart 的失败分支，
+  // 这条成功路径同样有并发窗口（决策与理由见 concludeHotReload 的注释）
+  if (!logOversized() && (await tryHotReload())) {
+    return concludeHotReload(stopEpochBefore, readStopEpoch());
+  }
 
   // 日志超阈值时跳过热重载、强制 kickstart 顺便轮转：运行中不能 rename 轮转——
   // launchd 的 StandardOutPath fd 指向旧 inode，rename 后日志会继续写进归档文件。

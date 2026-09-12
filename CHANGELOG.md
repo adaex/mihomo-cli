@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+服务层两处并发缺陷（热重载成功路径漏了 v4.8.0 那道「复读停止计数」防线、stop 锁内临界区最坏持锁超出强夺阈值）、命令层与配置层一批一致性缺陷（选项校验按子命令收口、紧贴值选项统一判定、豁免命令副作用、warnings 出口、覆写嵌套键字面化）。单测 542（+202）。
+
 ### 修复
 
 - **`sub` 的选项校验按子命令收口，不再全组放行**。校验原本挂在子命令分发之前，白名单是 `use` 的重启透传选项与 `remove` 的 `-y` 的并集、对全部子命令生效：`sub add <url> <name> -y` 被接受但 add 根本不读 -y（纯静默忽略），`sub update -u 5000` 被接受却仍按默认超时跑，`sub remove foo -s` 被接受无任何效果——正是 `assertKnownFlags` 文档注释要防的「用户以为选项生效了，实际行为完全没变」。白名单下沉到 `SUBCOMMANDS` 表：分发命中后先按该子命令真正消费的选项校验再执行——add/update 不消费任何选项（白名单为空），use 放行重启透传集合（从 flags.ts 的 `START_RESTART_FLAGS` 派生，与 `extractStartOptions` 单表同源），remove 放行 `-y`/`--yes`；错误提示同样只列该子命令的可用选项与用法，不再报全组清单。选项出现在子命令位置（如 `sub -q`）按未知选项报错。
@@ -13,6 +15,8 @@
   - `mihomo sub use foo -u30000`：白名单放行、重启透传却丢掉选项，重启走默认 10s 超时——正是 `flags.ts` 文件头宣称已结构性消灭的「`sub use foo -s` 丢选项」形态
 
   「这个 token 是不是带值选项的某种形式（exact / attached-short / long-eq，属于哪个 spec）」收成 `flags.ts` 的 `matchValueFlagToken`，三套解析共用一个判定：attached 后缀非纯数字走与空格形式同一条报错路径；attached 是自包含 token，透传整个 token、不吞下一个；白名单的非 exact 形式额外要求基础形式在该命令的白名单内（`logs` 认 `-n200` 但不认 `-u30000`，按命令隔离而非全局放行）。`-u=3000`（短选项带等号）明确报错而非支持：等号形式只认长选项，后缀 `=3000` 非纯整数，不留「白名单接受但解析器吞掉」的空洞。`log.ts` 的 `hasLinesFlag` 是同一判据的第四份本地拷贝，一并改走登记表。
+- **热重载成功后不复读停止计数，并发的 stop 被 start 报成「已启动」**。v4.8.0 给 kickstart 路径补「健康确认失败后复读计数」时只铺了失败分支：`tryHotReload` 从状态探测到 PUT 返回最坏二十多秒（两次 launchctl 查询、/version、lsof、PUT 各带 5s 超时），期间并发的 stop 已完成 bootout+disable+递增——内核确实吃进了新配置但随即被停掉，`restartService` 却照常返回成功。现在热重载成功先经 `concludeHotReload`（纯函数，判据复用唯一那份 `shouldAbortStartOnDisable`）复读计数再下结论，变了就走 `launchOrRestart` 既有的「启动已取消」出口，文案不另起一份
+- **stop/uninstall 锁内临界区最坏 15s，超出锁的 10s 强夺阈值**。锁体含三次 launchctl（bootout、disable、print-disabled 复核），默认单次 5s——launchctl 慢时并发的 start 会在 10s 判锁陈旧强夺进入，两进程同处临界区，epoch 判据被整体绕过。曾评估把调用缩到两次（复核挪锁外/调顺序），但三个环节谁也挪不出锁：复核必须先于递增（位没生效不能记「停止过」）、递增必须在锁内（否则并发 start 滑进 disable 与递增之间，判据检不出）、bootout 必须与 disable 同锁（否则 start 的 bootstrap 滑进两者之间，KeepAlive 把杀掉的内核拉回）。改为锁内单次 `SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS`（3s，合计 9s < 10s）：三次都是本机 XPC 往返（print 实测 3ms），唯一会阻塞数秒的 kickstart -k 本就刻意留在锁外；launchctl 慢到 3s 不够说明系统已病态，快速失败好过持锁超时拆掉并发防线
 
 ### 验证
 
@@ -20,6 +24,9 @@
 - **不变量测试**：遍历 `FLAGS` 登记表，对每个带值选项的 exact / attached / 等号三种形式断言「白名单接受 ⟹ `parseIntArg` 解析出正确值（不静默回退默认）」，`START_RESTART_FLAGS` 成员另断言三种形式重启透传都不丢、attached 不吞下一个 token——任何人改三套解析器之一破坏一致性，当场转红
 - **反向验证过**：把 `extractStartOptions` 临时改回丢弃 attached 形式，不变量用例与回归用例精确转红（`-u：三种形式重启透传都不丢`、`attached 短选项整体透传`），恢复后全绿
 - `parseIntArg` 逐例锁定：`-u30000` 解析 30000；`-u5s` / `-u=3000` / `-n5s` / `-nfoo` 走同一报错路径；白名单负向：未知 attached（`-z5`）与跨命令形式（`logs` 的 `-u30000`）仍拒绝，布尔 attached（`-sx`）不透传
+- `concludeHotReload` 收口成纯函数后锁行为语义（计数未变频照常成功、基线非 0 时又 stop 必须检出、epoch 回退同样视为变更、被取消时 hotReloaded 如实为 true）
+- 新增 `service-concurrency.spec`：PATH 前置桩 launchctl + 子进程跑真实模块（launchd 一点不被碰，enable/disable 不留永久记录）。热重载场景配桩 controller（/version 自报 mihomo、PUT 返回 204，PUT 到达那一刻用真实 `recordServiceStopped` 递增计数）端到端验证 `launchOrRestart` 的用户可见后果，含无并发停止的负向对照；stop 场景测锁文件出现到消失的持锁时长，慢而成功（三次各 2.5s）与超预算（4s）两个形态都断言低于 `LOCK_STALE_MS`（经 paths.ts 导出的真实常量）
+- **反向验证过**：撤掉热重载复读、或把 stop 锁内超时还原为默认 5s，各恰好一条对应用例转红（后者实测持锁约 12s 超阈值，即原缺陷复现）
 
 ## [4.8.1] - 2026-09-12
 

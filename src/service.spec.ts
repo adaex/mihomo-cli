@@ -11,6 +11,7 @@ import {
   buildLegacyCleanupScript,
   buildPlist,
   buildRootResidueCleanupError,
+  concludeHotReload,
   describeAbnormalExit,
   describeExitCause,
   parseDisabledList,
@@ -380,6 +381,38 @@ describe('shouldAbortStartOnDisable：判据是停止计数的变化，不是 di
   // 若基线是 7、现值是 0，那也意味着期间发生过状态变更，保守起见同样中止
   it('计数回退（文件被删后重置为 0）→ 同样视为发生过变更', () => {
     assert.equal(shouldAbortStartOnDisable(7, 0), true);
+  });
+});
+
+/**
+ * 热重载成功后的收口决策（restartService 的热重载出口唯一经过这里）。
+ * v4.8.0 给 kickstart 路径补「健康确认失败后复读计数」时漏了这条成功路径：
+ * tryHotReload 最坏二十多秒，期间并发的 stop 已 bootout+disable+递增，
+ * 不复读就照常报「已启动」，终态与用户最后一条命令相反。
+ *
+ * 判据本体 shouldAbortStartOnDisable 已有整组用例，这里锁的是消费语义：
+ * 「热重载成功了」≠「可以报已启动」，且 hotReloaded 如实反映内核确实接受了配置。
+ * 消费点的端到端行为（fake launchctl + 桩 controller）在 service-concurrency.spec。
+ */
+describe('concludeHotReload：热重载成功后复读计数再下结论', () => {
+  it('计数未变 → 照常报成功', () => {
+    assert.deepEqual(concludeHotReload(5, 5), { hotReloaded: true, started: true });
+  });
+
+  // 上次也 stop 过（基线非 0）+ 期间又有人 stop：v4.7.6 的位快照判据在此隐形，
+  // 计数判据必须检出——热重载路径此前完全没有这道防线
+  it('热重载期间有人 stop（基线非 0）→ started=false，不报已启动', () => {
+    assert.deepEqual(concludeHotReload(3, 4), { hotReloaded: true, started: false });
+  });
+
+  it('计数回退（epoch 文件被删后重置为 0）→ 同样视为有人 stop', () => {
+    assert.deepEqual(concludeHotReload(7, 0), { hotReloaded: true, started: false });
+  });
+
+  // started=false 时 hotReloaded 仍为 true：内核确实吃进了新配置，这是事实不是谎报；
+  // 调用方契约是先判 started（restartService 的 docstring），但值本身不该被抹掉
+  it('被取消时 hotReloaded 仍如实为 true（started 才是调用方先判的）', () => {
+    assert.equal(concludeHotReload(1, 2).hotReloaded, true);
   });
 });
 

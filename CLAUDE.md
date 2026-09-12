@@ -133,10 +133,11 @@ npm run build
 
 - bootstrap 成功只代表装载，启动需观察完整健康窗口；窗口之后的崩溃由 status/doctor 诊断
 - disabled 状态下 bootstrap 硬失败，必须先 enable；disabled 位持久化在 plist 之外，uninstall 保留它
-- 并发 start/stop 以 service-stop-epoch 的变化判断；快照由命令层取（不晚于本命令赖以决策的第一次观察），经参数透传，startService/restartService/installService 在 service.lock 内复读，健康确认失败后再复读一次
+- 并发 start/stop 以 service-stop-epoch 的变化判断；快照由命令层取（不晚于本命令赖以决策的第一次观察），经参数透传，startService/restartService/installService 在 service.lock 内复读，热重载成功后（concludeHotReload）与健康确认失败后各复读一次
 - 当前 disable 位无法表示停止事件：上次 stop 和本次并发 stop 都可能是 true；递增只在「已确认不会自启且无内核在跑」之后，证据可以是复核过的 disable，也可以是读到的状态本身（`recordServiceStopped`），两者强度相同，都必须放在该路径最后一道失败检查之后
 - 同步 service.lock 临界区不跨异步等待，bootout 后通过 waitUntilUnloaded 轮询确认；kickstart 的 60s 超时远超锁的 10s 强夺阈值，必须留在锁外
-- 并发防线的消费点不止锁内：bootstrap 到健康确认有 1.2–3s 完全在锁外，那里也要判一次。递增点同理——「有 disable 动作」的收口盖不住「没 disable 可做但已确认停止」的路径（v4.7.5→4.7.7 连修三版仍留六处缺口，每次都只补了当时那条）。透传快照的参数一律必填，可选默认值会让新调用方静默退化
+- service.lock 内的 launchctl 调用有持锁预算：最坏总时长必须低于 LOCK_STALE_MS（10s）。start 侧锁内 enable+bootstrap 两次默认 5s、合计恰等于阈值是既有基线；stop 侧锁内 bootout+disable+print-disabled 复核共三次，单次用 SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS（3s，合计 9s）。别再往任何锁内加 launchctl 调用，加之前先算总预算；锁内三个环节（复核、递增、bootout 与 disable 的同锁）谁也挪不出锁，理由见该常量注释
+- 并发防线的消费点不止锁内：bootstrap 到健康确认有 1.2–3s 完全在锁外，那里也要判一次；热重载的成功返回（tryHotReload 最坏二十多秒）同样要判，别只补失败分支。递增点同理——「有 disable 动作」的收口盖不住「没 disable 可做但已确认停止」的路径（v4.7.5→4.7.7 连修三版仍留六处缺口，每次都只补了当时那条）。透传快照的参数一律必填，可选默认值会让新调用方静默退化
 - launchctl print 仅 113 表示未装载，112/125 是查询失败；bootout 对未装载目标返回 3
 - 退出码与 terminating signal 互斥；统一用 describeExitCause，status/doctor/启动失败共享判据
 - launchctl print 顶层字段以单 tab 开头，嵌套字段双 tab，解析锚定行首
