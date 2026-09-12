@@ -10,7 +10,7 @@ argument-hint: [版本号]
 - [ ] `npm run typecheck`、`npm test`、`npm run check` 全绿；worktree 下显式 `npx biome check src/`，检查数量不能为 0
 - [ ] 所有新增功能已在 `README.md` 中说明
 - [ ] 命令列表与 `src/commands/registry.ts` 实际注册一致
-- [ ] `CHANGELOG.md` 顶部已添加新版本记录
+- [ ] `CHANGELOG.md` 顶部已添加新版本记录，且每条控制在 1–3 句（见「CHANGELOG 写多长」）
 - [ ] 若本轮改了 `CODE_REVIEW.md` 涉及的代码，同步更新该文档（验证范围、结果与未处理项）
 - [ ] 版本号定得对：有新命令或新选项走 minor，纯修复走 patch
 - [ ] `git log vX.Y.Z(上一个)..main` 过一遍——**发布区间可能含上轮遗留的未发布提交**，CHANGELOG 要覆盖它们，不只是本次会话做的事
@@ -29,7 +29,7 @@ for (const c of COMMANDS) console.log([c.name, ...c.aliases].join(', ').padEnd(4
 ## 步骤
 
 1. 更新 `package.json` 中的 `version`；`npm install --package-lock-only` 让 lock 的 version 跟上（长期漂移过一次：lock 停在 4.7.1 而 package.json 已是 4.7.7）
-2. `CHANGELOG.md` 顶部添加新版本记录（格式参照既有条目：新增/变更/修复/安全 分组）
+2. `CHANGELOG.md` 顶部添加新版本记录（格式参照既有条目：新增/变更/修复/安全 分组），**每条 1–3 句**，见下方「CHANGELOG 写多长」
 3. 检查并更新 `README.md`（新增功能、命令变更、示例）
 4. `npm run build`（`prepublishOnly` 已兜底，此步为提前验证）
 5. 提交：`git add . && git commit -m "chore: 发布 vX.Y.Z"`
@@ -52,6 +52,22 @@ gh release create vX.Y.Z --title vX.Y.Z --notes-file /tmp/rel.md
 ```
 
 **第 7、8 步不能省。** v4.8.0 之前 78 个 npm 版本一个 tag 都没有——外部无法定位任何版本的源码，`git diff` 做不到，CHANGELOG 的记录指不到代码。补录时才发现「取该版本最后一个提交」这种想当然的规则会让 10 个 tag 指向发布之后才写的代码（当时 main 上已有未发布的重构），只能靠 npm 的 publish 时间戳反推落点。**发布时顺手打 tag 是一秒钟的事，事后补是考古。**
+
+## CHANGELOG 写多长
+
+**每个条目 1–3 句：改了什么、用户会看到什么变化、必要时一句根因。** 深度论证不写在这里。
+
+CHANGELOG 的读者是「想知道升级后有什么不一样」的人，不是要复核决策的人。三份文档已有明确分工，同一段论证不该出现在两处：
+
+| 内容 | 去处 |
+| --- | --- |
+| 用户可见的变化、影响面 | CHANGELOG |
+| 验证方法、实测数据、反向验证结论、未覆盖项 | CODE_REVIEW |
+| 稳定约束、判据收口点、「别退回哪一边」的告诫 | CLAUDE + 代码注释 |
+
+v4.11.0 时本文件已 186 KB——是 README 的 4.7 倍、源码（不含测试）的两倍多，单条动辄数百字含实测耗时与差分测试组数。这些内容有价值，但它们的读者在 CODE_REVIEW；留在这里既挤掉了「这版到底改了什么」，又会随每次发布无上限增长。
+
+写完自检：**条目里出现「实测 N 秒」「反向验证 N 条转红」「30 万组差分」这类字样，就该挪进 CODE_REVIEW，只在 CHANGELOG 留结论。**
 
 ## 发布结果核实
 

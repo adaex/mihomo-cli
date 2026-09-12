@@ -23,17 +23,18 @@ export const SAFE_YAML_LOAD_OPTIONS: yaml.LoadOptions = { maxAliases: 200 };
  * 系统锁定的入站/控制面键：只允许来自 settings 或系统约束，订阅与覆写显式提供时
  * 一律剥除（buildConfig）。新增入站/控制器键时加在这里——redir/tproxy、
  * external-controller-tls/-unix/-cors、tuic-server、external-doh-server、
- * ss-config/vmess-config 都曾是漏网之鱼。对应上游 mihomo `config/config.go` 的
- * General 段（端口家族 + ExternalController* + ExternalUI* + Secret +
- * ExternalDohServer + TuicServer + ShadowSocksConfig/VmessConfig）。
+ * ss-config/vmess-config、listeners/tunnels 都曾是漏网之鱼。对应上游 mihomo
+ * `config/config.go` 的 General 段（端口家族 + ExternalController* + ExternalUI* +
+ * Secret + ExternalDohServer + TuicServer + ShadowSocksConfig/VmessConfig）
+ * 与 RawConfig 的 Listeners/Tunnels。
  *
  * 核对方法不是按键名眼熟程度挑，而是看上游 `config.Inbound` 结构体的字段全集与
  * `hub/executor.updateListeners()` 里逐个 ReCreate* 的入参——凡进得去那份名单的
- * 都能开监听。tuic-server/ss-config/vmess-config 是该结构体里并列的三个字段。
+ * 都能开监听。tuic-server/ss-config/vmess-config 是该结构体里并列的三个字段，
+ * listeners/tunnels 则由同一个 updateListeners() 的 PatchInboundListeners /
+ * ReCreateTunnels 消费。
  *
- * 刻意不在内的入站面：
- * - `listeners` / `tunnels`：通用入站声明，是否允许订阅投递属未定的产品决策，
- *   两者须一起评估（见 CODE_REVIEW），不随单点修复静默收口
+ * 刻意不在内的：
  * - `iptables`：Linux 专用的系统集成开关，非监听、darwin 内核无该路径
  */
 export const LOCKED_CONFIG_KEYS = [
@@ -63,6 +64,16 @@ export const LOCKED_CONFIG_KEYS = [
   // 即订阅里一行 `ss-config: ss://aes-128-gcm:pass@0.0.0.0:8388` 就是全网卡开放代理
   'ss-config',
   'vmess-config',
+  // 通用入站声明：`listeners` 每个元素自带 type + listen，一条
+  // `{type: socks, listen: 0.0.0.0, port: 18080}` 即在全网卡开出无鉴权 SOCKS 入站；
+  // `tunnels` 声明本地端口到目标地址的直通转发，同样自带监听地址。两者与上面三个
+  // 入站服务端满足完全相同的判据（订阅可指定监听地址、不经 genAddr、allow-lan 管不到），
+  // 只因在上游是 RawConfig 顶层字段而非 Inbound 结构体成员，此前被记成「未定的产品决策」
+  // 挂了三个版本——而「待定」在实现上等于放行：实测订阅里写 listeners 会原样进运行配置，
+  // 与 README「入站默认关闭 / 入站与控制面由本工具独占」的承诺直接冲突。
+  // 需要额外入站的用户改由本机另起实例，不接受远端订阅投递
+  'listeners',
+  'tunnels',
 ] as const;
 
 /** 统一入口:带别名上限的 yaml.load,替代裸 yaml.load。 */
@@ -234,7 +245,7 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   // 「控制器仅监听本机回环、入站由 mixed/tun 托管」的信任边界（上游 config.go 逐个核对）。
   // -pipe 仅 Windows 内核识别，一并剥除保持跨平台输出一致。
   // allow-lan 不锁定——订阅/覆写显式提供时按其值（见入站需求），未提供时由上面的 BASE_CONFIG 循环兜底为 false。
-  // listeners/tunnels 不在本清单：通用入站声明是否允许订阅投递属未定的产品决策（见 LOCKED_CONFIG_KEYS 注释）。
+  // listeners/tunnels 已随 v4.12.0 进入本清单：它们自带监听地址、不经 genAddr，与 ss/vmess/tuic 同判据。
   // 剥除对订阅与覆写一视同仁（都不进终态）；但告警只对**生效的覆写文件**——
   // 机场订阅几乎必带 mixed-port/port 等端口段，系统约束接管订阅入站是核心设计、
   // 用户没有行动手段，逐条告警只会刷屏；亲手写覆写文件的高级用户才会以为这些键

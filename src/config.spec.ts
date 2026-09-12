@@ -240,19 +240,38 @@ describe('系统锁定项：订阅自带的端口与控制面字段不进运行�
     assert.equal('ss-config' in config, false);
   });
 
-  // listeners/tunnels 是通用入站声明，是否允许订阅投递属未定产品决策，两者须一起评估
-  // （CODE_REVIEW 有记录）；iptables 是 Linux 专用、darwin 无此路径——现状是原样保留，
-  // 这条用例把现状锁死，决策改变时会明确失败而不是悄悄漂移
-  it('listeners/tunnels/iptables 当前原样保留（待定入站面，非本次锁定范围）', () => {
+  // listeners/tunnels 是通用入站声明，与 ss/vmess/tuic 满足完全相同的判据：
+  // 订阅可指定监听地址、不经 genAddr、allow-lan 管不到。v4.12.0 前它们被记成
+  // 「未定的产品决策」挂了三个版本，而「待定」在实现上等于放行——实测订阅里写
+  // listeners 会原样进运行配置，与 README「入站默认关闭」的承诺冲突。
+  // iptables 是 Linux 专用、darwin 无此路径，继续保留
+  for (const mode of ['mixed', 'tun'] as const) {
+    it(`${mode}: 订阅的 listeners/tunnels 入站声明不进运行配置`, () => {
+      const sub = dumpYaml({
+        ...BASE,
+        listeners: [{ name: 'x', type: 'socks', listen: '0.0.0.0', port: 18080 }],
+        tunnels: ['tcp,0.0.0.0:4444,1.2.3.4:443,DIRECT'],
+      });
+      const { config } = buildConfig(sub, mode);
+      assert.equal('listeners' in config, false, 'listeners 一条即可开出无鉴权入站，必须剥除');
+      assert.equal('tunnels' in config, false, 'tunnels 自带本地监听地址，必须剥除');
+    });
+  }
+
+  it('allow-lan 关闭也拦不住 listeners：与 ss-config 同理，剥除不能依赖 allow-lan', () => {
     const sub = dumpYaml({
       ...BASE,
-      listeners: [{ name: 'x', type: 'mixed', listen: '0.0.0.0:7777' }],
-      tunnels: ['tcp,0.0.0.0:4444,1.2.3.4:443,DIRECT'],
-      iptables: { enable: true },
+      'allow-lan': false,
+      listeners: [{ name: 'x', type: 'socks', listen: '0.0.0.0', port: 18080 }],
     });
     const { config } = buildConfig(sub, 'mixed');
-    assert.ok(Array.isArray(config.listeners));
-    assert.ok(Array.isArray(config.tunnels));
+    assert.equal(config['allow-lan'], false);
+    assert.equal('listeners' in config, false);
+  });
+
+  it('iptables 仍原样保留：Linux 专用的系统集成开关，非监听、darwin 无该路径', () => {
+    const sub = dumpYaml({ ...BASE, iptables: { enable: true } });
+    const { config } = buildConfig(sub, 'mixed');
     assert.deepEqual(config.iptables, { enable: true });
   });
 

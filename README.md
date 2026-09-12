@@ -688,7 +688,7 @@ sudo pkill -9 mihomo
 - **URL 脱敏**：订阅 URL 中的 token、key、password 等敏感参数（含 query、userinfo 及路径型令牌）自动替换为 `***`。按整条 URL 处理、不按逗号切分——逗号在 query 中合法，切开会让 `?nodes=us,hk&token=xxx` 的 token 参数识别不出而明文输出
 - **文件权限**：配置文件使用 `0o600` 权限（仅所有者可读可写），目录使用 `0o700` 权限
 - **入站默认关闭**：订阅/覆写未指定时 `allow-lan` 默认 `false`；如需局域网设备连入代理端口，可在订阅或覆写中显式开启
-- **入站与控制面由本工具独占**：订阅与覆写里的入站端口（`mixed-port`/`port`/`socks-port`/`redir-port`/`tproxy-port`）、独立入站服务端（`tuic-server`/`ss-config`/`vmess-config`）、外部控制器全家桶（`external-controller*`、`external-doh-server`、`secret`、`external-ui*`）与控制器证书段（`tls`）一律剥除，不进运行配置。这些键自带监听地址、不受 `allow-lan` 约束，远端订阅若能投递即可在全网卡开出无鉴权控制器或开放代理；端口与密钥只认 `settings.json`。覆写文件里写了会有提示，订阅侧静默剥除
+- **入站与控制面由本工具独占**：订阅与覆写里的入站端口（`mixed-port`/`port`/`socks-port`/`redir-port`/`tproxy-port`）、独立入站服务端（`tuic-server`/`ss-config`/`vmess-config`）、通用入站声明（`listeners`/`tunnels`）、外部控制器全家桶（`external-controller*`、`external-doh-server`、`secret`、`external-ui*`）与控制器证书段（`tls`）一律剥除，不进运行配置。这些键自带监听地址、不受 `allow-lan` 约束，远端订阅若能投递即可在全网卡开出无鉴权控制器或开放代理；端口与密钥只认 `settings.json`。覆写文件里写了会有提示，订阅侧静默剥除。确需额外入站的场景请在本机另起一个 mihomo 实例，不通过订阅投递
 - **信号处理**：优雅处理 SIGINT/SIGTERM 信号
 - **异常捕获**：全局 uncaughtException 和 unhandledRejection 处理
 

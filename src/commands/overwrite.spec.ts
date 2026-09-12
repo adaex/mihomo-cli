@@ -214,3 +214,40 @@ describe('status 覆写行按 match 区分是否适用当前订阅', () => {
     });
   });
 });
+
+/**
+ * 主文件在 status 覆写行里的显示名。
+ *
+ * `overwrite.yaml` 是最常见的配置形态（多数用户只有这一个文件），而剥前缀与剥扩展名
+ * 的顺序一旦写反，它就显示成 `yaml`——既不是文件名也不是任何有意义的标识，`|| '主文件'`
+ * 的兜底还永不触发。整块展示此前无任何用例，故单列一组按文件名形态锁死。
+ */
+describe('status 覆写行的文件显示名', () => {
+  it('主文件显示为「主文件」，不是扩展名 yaml', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'overwrite.yaml'), 'log-level: debug\n');
+      const out = run(['status', '--no-probe']).stdout;
+      assert.match(out, /覆写:.*已启用 \(主文件\)$/m);
+      assert.ok(!/\(yaml\)/.test(out), '主文件不得显示成扩展名 yaml');
+    });
+  });
+
+  it('主文件与扩展文件并列时各自可辨', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'overwrite.yaml'), 'log-level: debug\n');
+      fs.writeFileSync(path.join(dataDir, 'overwrite.dns.yaml'), 'log-level: info\n');
+      // 主文件恒排在最前（loadOverwriteFile 的排序约定）
+      assert.match(run(['status', '--no-probe']).stdout, /覆写:.*已启用 \(主文件, dns\)$/m);
+    });
+  });
+
+  it('.yml 扩展文件与不适用补充行同样按显示名规则', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'overwrite.yaml'), 'match:\n  name: mini*\nlog-level: debug\n');
+      fs.writeFileSync(path.join(dataDir, 'overwrite.dns.yml'), 'log-level: info\n');
+      const out = run(['status', '--no-probe']).stdout;
+      assert.match(out, /覆写:.*已启用 \(dns，1 个不适用\)/);
+      assert.match(out, /主文件 不适用于当前订阅 edu1（作用域 name=mini\*）/);
+    });
+  });
+});

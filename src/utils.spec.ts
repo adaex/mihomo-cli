@@ -153,6 +153,28 @@ describe('parseMirrorArg', () => {
     assert.deepEqual(parseMirrorArg(['kernel', '--mirror', 'direct']), { mirror: null, isOverride: true });
   });
 
+  it('重复的 --mirror 报错，hint 直接给出可用镜像而非指向不存在的命令级 --help', () => {
+    // 提示里若写「见 mihomo kernel --help」，用户照做会撞上 assertKnownFlags 的
+    // 「未知的选项: --help」——`--help` 只是顶层 help 的别名，命令级并不接受它。
+    // 把人指向一个必定报错的命令比不给提示更糟，故断言镜像清单真的列了出来
+    for (const args of [
+      ['kernel', '--mirror', 'cdn', '--mirror', 'v4'],
+      ['kernel', '--mirror=cdn', '--mirror=v4'],
+    ]) {
+      assert.throws(
+        () => parseMirrorArg(args),
+        (e: unknown) => {
+          if (!(e instanceof CliError)) return false;
+          assert.match(e.message, /只能指定一次/);
+          const hint = e.hint.join('\n');
+          assert.ok(!hint.includes('--help'), `hint 不得指向命令级 --help: ${hint}`);
+          for (const host of AVAILABLE_MIRRORS) assert.ok(hint.includes(host), `hint 应列出镜像 ${host}`);
+          return true;
+        },
+      );
+    }
+  });
+
   it('未支持的选项走通用错误', () => {
     assert.throws(
       () => parseMirrorArg(['kernel', '--no-mirror']),

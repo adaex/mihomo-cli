@@ -1,6 +1,6 @@
 import os from 'node:os';
 
-import { DEFAULT_AUTO_UPDATE_TIMEOUT, MIRROR_ALIASES, MIRROR_BARE } from './constants.js';
+import { AVAILABLE_MIRRORS, DEFAULT_AUTO_UPDATE_TIMEOUT, MIRROR_ALIASES, MIRROR_BARE } from './constants.js';
 import { CliError } from './errors.js';
 import { matchValueFlagToken, START_RESTART_FLAGS, VALUE_FLAGS } from './flags.js';
 import type { MirrorArg, SubscriptionUrgency } from './types.js';
@@ -459,7 +459,10 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
   if (mirrorCount > 1) {
     throw new CliError('--mirror 只能指定一次', {
       label: '参数错误',
-      hint: ['用法: mihomo kernel [--mirror [镜像]]', '可用镜像见: mihomo kernel --help'],
+      // 直接列出镜像，不说「见 mihomo kernel --help」：命令级 `--help` 并不存在
+      // （`--help` 只是顶层 help 的别名，`kernel --help` 会撞 assertKnownFlags 报
+      // 「未知的选项」），把用户指向一个必定报错的命令比不给提示更糟
+      hint: ['用法: mihomo kernel [--mirror [镜像]]', `可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`, '不使用镜像: mihomo kernel --mirror direct'],
     });
   }
 

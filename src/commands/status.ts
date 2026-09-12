@@ -252,9 +252,16 @@ export async function printStatus(args: string[] = []): Promise<void> {
   console.log('');
 }
 
-/** 覆写文件名去掉 `overwrite.` 前缀与扩展名，主文件（去完为空）显示「主文件」 */
+/**
+ * 覆写文件名去掉 `overwrite.` 前缀与扩展名，主文件（去完为空）显示「主文件」。
+ *
+ * **先剥扩展名再剥前缀，顺序不能换**：反过来时 `overwrite.yaml` 的前缀正则
+ * `^overwrite\.?` 会把那个点一起吃掉，剩下的 `yaml` 非空、`|| '主文件'` 永不触发——
+ * 主文件被显示成 `yaml`（实测），既不是文件名也不是任何有意义的标识，多文件时
+ * 还与扩展文件并列成 `(yaml, dns)`，看不出谁是主文件。
+ */
 function shortOverwriteName(name: string): string {
-  return name.replace(/^overwrite\.?/, '').replace(/\.ya?ml$/, '') || '主文件';
+  return name.replace(/\.ya?ml$/, '').replace(/^overwrite\.?/, '') || '主文件';
 }
 
 /**
