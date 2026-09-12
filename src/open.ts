@@ -54,8 +54,9 @@ export function viewLogWithTail(logPath: string, options?: { follow?: boolean; l
 
   // 透传 tail 的退出码：日志文件不存在时 tail 退 1 并往 stderr 报错，
   // 若恒退 0，脚本里 `mihomo logs 0 > out` 会把「文件不存在的空结果」当成功。
-  // 信号退出（follow 模式的 Ctrl+C）算正常收尾，退 0。
-  tail.on('close', (code, signal) => process.exit(signal ? 0 : (code ?? 0)));
+  // Ctrl+C 走不到这里：index.ts 的全局 SIGINT 处理器同步 process.exit(130)，
+  // 永远先于 tail 的 close 事件（follow 模式实测退出码恒 130，符合 Unix 惯例，刻意如此）。
+  tail.on('close', code => process.exit(code ?? 0));
   tail.on('error', e => {
     console.error(`无法读取日志: ${e.message}`);
     process.exit(1);

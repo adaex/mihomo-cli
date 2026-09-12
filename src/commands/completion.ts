@@ -3,22 +3,27 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { colors } from '../colors.js';
+import { MIRROR_ALIASES, UI_URLS } from '../constants.js';
 import { CliError } from '../errors.js';
+import { DIRECTORY_TARGETS } from '../paths.js';
 import { assertKnownFlags, suggestSimilar } from '../utils.js';
 import { SUBCOMMANDS as DIRECTORY_SUBCOMMANDS } from './directory.js';
 import { SUBCOMMANDS as OVERWRITE_SUBCOMMANDS } from './overwrite.js';
 import type { Command } from './registry.js';
+import { RESET_TARGETS } from './reset.js';
 import type { SubCommand } from './shared.js';
 import { SUBCOMMANDS as SUBSCRIPTION_SUBCOMMANDS } from './subscription.js';
 
 /**
  * Shell 补全脚本生成。词表**从命令注册表派生**（cmdCompletion 传入 COMMANDS），
- * 子命令词表从各命令模块导出的 SUBCOMMANDS 派生（含别名展开）——
- * 不再手写第二份词表，新增命令/子命令自动出现在补全里。
- * 三个 shell 的脚本结构各自手写，词表同源。
+ * 子命令词表从各命令模块导出的 SUBCOMMANDS 派生（含别名展开），
+ * 目录目标/UI 名单/镜像别名/reset 目标分别派生自 DIRECTORY_TARGETS/UI_URLS/
+ * MIRROR_ALIASES/RESET_TARGETS——不手写第二份词表，新增命令/子命令/目标/别名
+ * 自动出现在补全里。三个 shell 的脚本结构各自手写，词表同源。
  *
  * completion.ts 不 import registry 的运行时（registry import 本模块的 cmdCompletion，
- * 反向 import 会成环）；Command 仅作类型导入。
+ * 反向 import 会成环）；Command 仅作类型导入。reset.ts 的依赖链不经过 commands/
+ * 目录（核心模块不反向 import），故 import RESET_TARGETS 不成环。
  */
 
 interface CompletionWord {
@@ -54,8 +59,12 @@ function subGroups(commands: Command[]): SubGroup[] {
   return [groupOf('subscription', SUBSCRIPTION_SUBCOMMANDS), groupOf('overwrite', OVERWRITE_SUBCOMMANDS), groupOf('directory', DIRECTORY_SUBCOMMANDS)];
 }
 
-const DIR_TARGETS = ['root', 'subs', 'logs', 'data', 'runtime', 'kernel'];
-const UI_NAMES = ['zash', 'dash', 'yacd'];
+// 以下词表全部从单一真相源派生（此前是四份硬编码副本：paths/constants/reset
+// 加条目时 `dir open`/`--mirror`/`reset` 认、补全静默不提示，且无测试兜底）
+const DIR_TARGETS = Object.keys(DIRECTORY_TARGETS);
+const UI_NAMES = Object.keys(UI_URLS);
+const MIRROR_NAMES = Object.keys(MIRROR_ALIASES);
+const RESET_TARGET_NAMES = RESET_TARGETS.map(t => t.id);
 const SHELLS = ['zsh', 'bash', 'fish'] as const;
 
 function buildZsh(commands: Command[], groups: SubGroup[]): string {
@@ -112,10 +121,10 @@ function buildZsh(commands: Command[], groups: SubGroup[]): string {
     `          _values 'ui' ${UI_NAMES.join(' ')}`,
     '          ;;',
     '        kernel)',
-    "          _arguments '--mirror[走镜像下载]:镜像:(cdn v4 v6 axisnow)'",
+    `          _arguments '--mirror[走镜像下载]:镜像:(${MIRROR_NAMES.join(' ')})'`,
     '          ;;',
     '        reset)',
-    `          _values 'target' subs logs data runtime settings kernel overwrites service`,
+    `          _values 'target' ${RESET_TARGET_NAMES.join(' ')}`,
     "          _arguments '-y[跳过确认]' '--full[删全部]'",
     '          ;;',
     '        completion)',
@@ -184,10 +193,14 @@ ${subCase}
       COMPREPLY=( $(compgen -W "${UI_NAMES.join(' ')}" -- "\${cur}") )
       ;;
     kernel)
-      COMPREPLY=( $(compgen -W "--mirror" -- "\${cur}") )
+      if [[ "\${prev}" == "--mirror" ]]; then
+        COMPREPLY=( $(compgen -W "${MIRROR_NAMES.join(' ')}" -- "\${cur}") )
+      else
+        COMPREPLY=( $(compgen -W "--mirror" -- "\${cur}") )
+      fi
       ;;
     reset)
-      COMPREPLY=( $(compgen -W "subs logs data runtime settings kernel overwrites service --full -y" -- "\${cur}") )
+      COMPREPLY=( $(compgen -W "${RESET_TARGET_NAMES.join(' ')} --full -y" -- "\${cur}") )
       ;;
     completion)
       if [[ \${COMP_CWORD} -eq 2 ]]; then
@@ -213,15 +226,24 @@ function buildFish(commands: Command[], groups: SubGroup[]): string {
   }
   for (const group of groups) {
     const seen = group.tokens.join(' ');
+    // directory 组的子命令行加 not-gating：`dir open <TAB>` 后不再重复提供 open，
+    // 对齐 bash/zsh 的「第二位置参数为空才补子命令」语义
+    const condition = group.tokens.includes('directory') ? `${seen}; and not __fish_seen_subcommand_from open` : seen;
     for (const s of group.words) {
-      lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from ${seen}" -a '${s.word}' -d '${s.desc.replace(/'/g, "\\'")}'`);
+      lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from ${condition}" -a '${s.word}' -d '${s.desc.replace(/'/g, "\\'")}'`);
     }
   }
-  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from directory dir dirs directories open" -a '${DIR_TARGETS.join(' ')}'`);
-  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from ui" -a '${UI_NAMES.join(' ')}'`);
+  // 目录目标只在 open 已被敲下之后提供（bash 查 COMP_WORDS[2]、zsh 查 words[2]）；
+  // 此前 seen 名单含 open，`dir <TAB>` 时 dir 已被 seen，目标与 open 一起挤进只有 open 合法的位置
+  lines.push(
+    `    complete -c $cmd -n "__fish_seen_subcommand_from directory dir dirs directories; and __fish_seen_subcommand_from open" -a '${DIR_TARGETS.join(' ')}'`,
+  );
+  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from ui; and not __fish_seen_subcommand_from ${UI_NAMES.join(' ')}" -a '${UI_NAMES.join(' ')}'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion" -a 'install uninstall ${SHELLS.join(' ')}' -d '安装/卸载补全'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion; and __fish_seen_subcommand_from install uninstall" -a '${SHELLS.join(' ')}'`);
-  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from kernel" -a '\\--mirror' -d '走镜像下载'`);
+  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from kernel" -l mirror -d '走镜像下载' -a '${MIRROR_NAMES.join(' ')}'`);
+  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from reset" -a '${RESET_TARGET_NAMES.join(' ')}'`);
+  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from reset" -s y -l full -d '跳过确认 / 删全部'`);
   lines.push('end');
   return lines.join('\n');
 }
