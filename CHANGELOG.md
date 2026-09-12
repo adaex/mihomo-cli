@@ -1,10 +1,22 @@
 # Changelog
 
-## [Unreleased]
+## [4.9.0] - 2026-09-12
 
-服务层两处并发缺陷（热重载成功路径漏了 v4.8.0 那道「复读停止计数」防线、stop 锁内临界区最坏持锁超出强夺阈值）、命令层与配置层一批一致性缺陷（选项校验按子命令收口、紧贴值选项统一判定、豁免命令副作用、warnings 出口、覆写嵌套键字面化）。单测 542（+202）。
+对全仓做一次分模块深审（launchd 与进程、数据锁与下载、配置构建与覆写、命令层与横切），修掉 16 条：三条实测复现的并发缺陷（文件锁 deadline 删新鲜锁、TUN 运行中配置变更被切回 Mixed、热重载成功不复读停止计数）、覆写嵌套键语义统一为字面（行为变更）、以及一批「承诺写在注释、机制没盖到」的一致性缺陷。单测 550（+210）。
 
 ### 修复
+
+- **端口单侧覆盖可撞上另一侧默认值，产出无法启动的配置**。`getPorts` 的「不能相同」校验只在两侧都显式配置时执行：`{"ports": {"mixed": 9090}}` 会得到 mixed 与 controller 都是 9090 而不报错，内核 `-t` 只做解析照样通过，真正启动时第二个监听 bind 失败——doctor 的端口项还会显示「9090 空闲 ok」把排查方向带偏。校验改为在合并默认值**之后**执行，撞默认值时的报错会指明撞的是配置值与哪一侧默认
+- **订阅自带的 `redir-port`/`tproxy-port` 泄漏进运行配置**。删除清单此前只有 `port`/`socks-port`：订阅写 `redir-port: 7893` 时内核会多开一个透明代理入站监听，与「入站端口是系统锁定项」矛盾。两个端口进删除清单（Mixed/TUN 共用同一张表）；`listeners` 是否同删属未定产品决策，本版未动。`validateConfigWithKernel` 的 `overwriteSummaries` 参数同时去掉可选默认值——透传快照一律必填是 v4.8.0 六条并发缺陷的教训
+- **TUN 运行中执行 `sub use` / `ow` 切换会静默切回 Mixed 并弹 sudo**。`restartToApply` 的「要不要重启」看实际运行状态（含 TUN），「按哪种模式重启」却只看服务是否已装——而「stop → start tun」是文档明示的正常流程。后果：切个订阅，实际发生的是盘上配置先被覆写成 Mixed、随后弹 sudo 要杀 root TUN 内核，输密码则全局路由静默消失。新增 `restartModeFor`/`restartModeOnChange`：模式取实际在跑的东西（TUN 在跑即 tun），真实桩内核 + pid 文件端到端锁死；更新后的提示文案同步按模式给 `start` 或 `start tun`
+- **`config --json` 与 doctor 丢弃 buildConfig 的 warnings**。`~?` 补丁因分组拼错全部被跳过时，JSON 消费者毫无感知、doctor 照样报「配置 ok」——恰是最需要提示的一刻。warnings 现作为顶层字段进 JSON 输出（空时为数组），doctor 把它挂到配置检查项的 notes（检查仍算通过，计入警告不计入异常）
+- **补全脚本四份词表脱离单一真相源**。completion.ts 头注释宣称「不再手写第二份词表」，但目录目标、UI 名单、镜像别名、reset 目标是硬编码副本——给登记表加一个别名，命令认、补全不提示，且无测试比对。四份全部改为从 `DIRECTORY_TARGETS`/`UI_URLS`/`MIRROR_ALIASES`/`RESET_TARGETS` import 派生，配「接线测试」（期望值也从同一 import 派生，锁接线不锁快照）。顺带：fish 补全在 `dir <TAB>` 位置就提供目录目标（bash/zsh 有 gating，fish 没有）已对齐；bash/fish 缺失的镜像别名与 reset 目标提示补齐；`logs -f` 的 close 处理器里不可达的 signal 死分支（全局 SIGINT 恒先 exit 130）删除、注释改为与真实行为一致
+- **`withFileLock` 的 deadline 兜底会删新鲜锁，破坏等待者互斥**。等待超 10s 的兜底分支不查锁龄直接 rmSync 任意锁、且 continue 后不睡眠——三进程实测（A 持锁 12s，B、C 排队）：B 按陈旧路径正常强夺，C 过线后无条件删掉 B 刚建的锁，B/C 临界区重叠 1.24s。真实触发面是 service.lock：慢速 start 期间另一终端 stop + 第三个终端操作，两个等待者同入 launchd 临界区。deadline 路径改为只强夺陈旧锁（与正常路径同一锁龄判据），新鲜锁继续睡眠重试——活性由锁龄保证，任何锁持有超 10s 必然变陈旧可强夺。三进程编排测试锁死「双等待者临界区不重叠」
+- **sudo 路径三处收口**：`killAllMihomo` 的 sudo 分支超时 15s（`sudo.ts` 自己声明的统一上限是 60s）——密码输慢了被杀后误报「部分进程未终止」，改为引用 `SUDO_TIMEOUT_MS`；legacy 清理脚本用 `exit 1` 报真实失败被渲染成「已取消或密码错误」（1 留给 sudo 鉴权、脚本内部失败用 ≥2 是仓内约定），改 `exit 3` 并登记准确文案；`cleanupRootResidue` 的普通 Error 从 stop/uninstall/reset 裸露、带完整堆栈按未预期错误渲染（同族已有 `cleanupLegacyInstallOrThrow` 包装范式），四个消费点统一走 `cleanupRootResidueOrThrow`，报错说清「主体动作已成功、root 残留仍在、如何重试」
+- **内核版本查询的网络路径三处**：代理分支 curl 未加 `--fail`——api.github.com 限流 403 时退出码 0、报笼统的「无法获取版本信息」并把排查方向指向镜像（直连路径会正确显示 HTTP 403 与原因），加 `--fail-with-body` 并复核状态码（3xx 不跟随时退出码也是 0）；同一查询用 `spawnSync` 阻塞事件循环最长 130s、spinner 冻结 SIGINT 延迟，改异步；https 判定 `url.startsWith('https://')` 可被大写 scheme 绕过降级守卫，改 `new URL().protocol` 判定。真实 CONNECT 隧道代理端到端验证过取到真实版本号
+- **归档名分配是跨进程 TOCTOU，并发轮转静默覆盖归档**。`existsSync`-then-`rename` 只防同进程同秒两次轮转；双终端同时 start（或 start + tun）时都判否、选同一归档名，后到的静默覆盖先到的——一份历史日志无提示丢失。改为 `openSync('wx')` 原子占名（与文件锁同范式），EEXIST 即换序号，service 三个消费点零改动；并发输家路径的裸 ENOENT 顺带收口。fake-ip 默认 sniffer 注入（11 行硬编码）全仓零测试一并补上，含 `sniffer: null` 边界口径（内核把 null 解码为零值，不注入是正确行为）
+- **命令层杂项五处**：多余位置参数静默忽略（`start mixed garbage` 照常执行），与「未知输入统一报错」的边界不对称——全部消费点校验位置参数个数，25 拒 19 放行用例锁死；`NO_COLOR=` 空串也关色（no-color.org 规范是存在且非空才关）；CliError 渲染走 stderr 却按 stdout 的 TTY 判定设色（`mihomo status | grep x` 时错误输出被剥色）；`uncaughtException` 假定 Error、非 Error 渲染成「未捕获的异常: undefined」（与 unhandledRejection 口径不一致）；`dispatchSubcommand` 的子命令表无重复 token 防护（registry 有、它没有——撞别名静默取先注册者）。`clearProxyEnv` 的副作用（企业 env 代理网络下 `mihomo update` 会直连失败）补进 CLAUDE.md
+- **覆写操作符只在文件顶层生效，嵌套键一律字面（行为变更）**。此前嵌套映射的内层键「目标有同名键→继续按 DSL 解析、没有→整棵字面移植」——同一份覆写在不同订阅上行为不同：mihomo 原生通配键（`nameserver-policy` 里的 `+.corp.example.com`）在递归路径被静默剥掉 `+`（`-t` 照样过、通配匹配悄悄失效），README 文档化的 `<+.google.cn>` 转义在最常见路径（订阅无 hosts）下尖括号连字面进配置、永不匹配——没有任何一种写法在两条路径下都正确。统一为：操作符只在顶层解析，嵌套键（含 `~key` 元素补丁的字段）一律字面，`+.域名` 通配键两条路径都安全；形似操作符的嵌套键（`~x`/`x!`/`x+`/`<...>`）经 warnings 每文件每键提示一次「已按字面处理」（`+.` 开头的原生通配不提示）。追加嵌套数组改写成全量值。顶层转义组合 `~<key>`/`~?<key>` 补全，`overwrite.yml` 近失文件名在加载/列表入口提示一行。反向验证：恢复内层 DSL 解析后九条用例转红
 
 - **`sub` 的选项校验按子命令收口，不再全组放行**。校验原本挂在子命令分发之前，白名单是 `use` 的重启透传选项与 `remove` 的 `-y` 的并集、对全部子命令生效：`sub add <url> <name> -y` 被接受但 add 根本不读 -y（纯静默忽略），`sub update -u 5000` 被接受却仍按默认超时跑，`sub remove foo -s` 被接受无任何效果——正是 `assertKnownFlags` 文档注释要防的「用户以为选项生效了，实际行为完全没变」。白名单下沉到 `SUBCOMMANDS` 表：分发命中后先按该子命令真正消费的选项校验再执行——add/update 不消费任何选项（白名单为空），use 放行重启透传集合（从 flags.ts 的 `START_RESTART_FLAGS` 派生，与 `extractStartOptions` 单表同源），remove 放行 `-y`/`--yes`；错误提示同样只列该子命令的可用选项与用法，不再报全组清单。选项出现在子命令位置（如 `sub -q`）按未知选项报错。
 - **`help` / `version` 在豁免场景下不再创建数据目录**。三个守卫（Node 版本/平台/root）对纯信息命令提前放行，但 `ensureDirs()` 无条件执行——实测伪造 root 跑 `sudo mihomo version` 正常退出，却在 root 的 HOME（sudo 下可能是 `/var/root`）建出全套 `data/kernel/logs/runtime/subscriptions`；非 macOS 上的 `mihomo help` 同理。豁免语义此前只免了「拒绝」没免「副作用」，与 index.ts 两处注释（「纯信息命令不碰服务、目录与提权」「root 下会在那里建一套用户永远看不到的数据目录」）直接矛盾。豁免名单（`GUARD_EXEMPT_COMMANDS`）现在同时决定是否跳过 `ensureDirs`，按 `command.name` 匹配，别名（`-h`/`-v`/`--help`/`--version`）经 `findCommand` 解析后自动覆盖；非豁免命令的守卫顺序、目录创建行为均不变。
@@ -21,6 +33,7 @@
 ### 验证
 
 - 新增 `commands/subscription.spec`（13 条）：四个子命令各拒外来选项，断言退出码、错误信息与该子命令自己的用法/可用选项提示，并核对 settings 未被改动；use 的 `-s` 与 `-u <ms>` 空格形式、remove 的 `-y`（含写在名称之前、非交互下跳过模糊匹配确认）走真实 CLI 断言最终数据状态；分发回归（裸 sub 列表、未知子命令、子命令位置的选项、未知 flag）。选项用空格形式，紧贴值形式的解析由另一分支统一处理
+- 新增 `service-concurrency.spec`：PATH 前置桩 launchctl + 桩 controller 驱动真实模块（真实 launchd 零接触、无永久记录）——热重载成功后计数已变则报「启动已取消」；stop 锁内慢 launchctl 的实测持锁时长断言低于 `LOCK_STALE_MS`（反向验证：还原 5s 超时实测持锁约 12s 超阈值，原缺陷复现）。paths.spec 三进程编排锁死「双等待者临界区不重叠」（反向验证：还原无条件 rmSync 以正确原因转红）；log-files.spec 双进程同时轮转恰一份归档（反向验证：换回 existsSync-then-rename 两次运行稳定复现覆盖）；runtime.spec 真实桩内核端到端锁死 TUN 模式判据
 - **不变量测试**：遍历 `FLAGS` 登记表，对每个带值选项的 exact / attached / 等号三种形式断言「白名单接受 ⟹ `parseIntArg` 解析出正确值（不静默回退默认）」，`START_RESTART_FLAGS` 成员另断言三种形式重启透传都不丢、attached 不吞下一个 token——任何人改三套解析器之一破坏一致性，当场转红
 - **反向验证过**：把 `extractStartOptions` 临时改回丢弃 attached 形式，不变量用例与回归用例精确转红（`-u：三种形式重启透传都不丢`、`attached 短选项整体透传`），恢复后全绿
 - `parseIntArg` 逐例锁定：`-u30000` 解析 30000；`-u5s` / `-u=3000` / `-n5s` / `-nfoo` 走同一报错路径；白名单负向：未知 attached（`-z5`）与跨命令形式（`logs` 的 `-u30000`）仍拒绝，布尔 attached（`-sx`）不透传
