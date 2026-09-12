@@ -98,6 +98,8 @@ export interface OverwriteFileEntry {
   path: string;
   config: Record<string, unknown>;
   match?: OverwriteMatch;
+  /** 文件内 `enabled:` 元数据键的规整值；缺省即 true。false 表示不参与合并 */
+  enabled?: boolean;
 }
 
 export interface OverwriteFileInfo {
@@ -105,6 +107,8 @@ export interface OverwriteFileInfo {
   path: string;
   keys: string[];
   scope?: string;
+  /** 该文件自身是否启用（文件内 `enabled` 键）；与 OverwriteListResult.enabled 的全局开关是两层 */
+  enabled: boolean;
 }
 
 // === Process ===
@@ -245,10 +249,21 @@ export interface OperatorShapedKey {
 
 /** 覆写文件作用域限定：所列条件需同时满足（AND），条件值为数组时其内部为 OR。 */
 export interface OverwriteMatch {
-  /** 按订阅名精确匹配 */
+  /**
+   * 按订阅名匹配，支持 `*`（任意多字符）/ `?`（单字符）通配，全串匹配、大小写不敏感；
+   * 无通配字符时即精确匹配。用户写的 `name` 与 `subscription` 同义，加载时**归一到本字段**，
+   * 判据（matchesScope）只读这一个键。
+   */
   subscription?: string | string[];
   /** 按订阅 URL 的 hostname 后缀匹配 */
   'url-domain'?: string | string[];
+  /**
+   * 非条件字段：用户实际书写的订阅名键（`name` 或 `subscription`），仅供展示回显。
+   * 判据统一读 `subscription`，但 `ow list` 与内核拒绝提示按原键名显示——展示是给人
+   * 按图索骥用的，回显一个在文件里搜不到的键名会让人找不到源头。
+   * 新增条件键时记得同步 summarizeMatch 的跳过判断。
+   */
+  subscriptionKey?: 'name' | 'subscription';
 }
 
 /** 构建配置时的订阅上下文，用于按 match 过滤覆写文件 */

@@ -299,12 +299,23 @@ function isOverwriteFilenameTypo(filename: string): boolean {
   return lower === 'overwrite.yml' || lower === 'overwrite.yaml' || /^overwrite\..+\.ya?ml$/.test(lower);
 }
 
-/** match 块支持的匹配键（作用域限定）。 */
-const MATCH_KEYS = new Set(['subscription', 'url-domain']);
+/**
+ * match 块支持的匹配键（作用域限定）。
+ * `name` 与 `subscription` 同义（前者是推荐写法），加载时归一到 `subscription`。
+ */
+const MATCH_KEYS = new Set(['name', 'subscription', 'url-domain']);
+
+/** 订阅名键的两个同义写法；两者同时出现时报错，不静默取其一。 */
+const SUBSCRIPTION_KEYS = ['name', 'subscription'] as const;
 
 /**
  * 校验并规整 match 块。仅接受对象；每个键值收敛为 string[]。
  * 返回 undefined 表示无 match 块（默认全局生效）。
+ *
+ * `name` 与 `subscription` 是同义键，归一到 `subscription` 单一字段——判据
+ * （matchesScope）因此只有一处，不必在两个键上各写一遍匹配逻辑。用户写的原键名
+ * 存进 `subscriptionKey` 供展示回显。两者同时出现直接报错（本仓一贯：矛盾输入
+ * 不静默按优先级取其一，同 assertValidParsedKey）。
  *
  * **fail closed**：match 块存在（哪怕写错）而解析不出任何有效条件时抛错，
  * 不能静默降级成「全局生效」——用户写了 match 显然想限定作用域，键名打错
@@ -315,12 +326,21 @@ const MATCH_KEYS = new Set(['subscription', 'url-domain']);
 export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch | undefined {
   if (raw == null) return undefined;
   if (typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new CliError(`覆写文件 "${fileName}" 的 match 必须是对象（subscription / url-domain）`, { label: '覆写配置错误' });
+    throw new CliError(`覆写文件 "${fileName}" 的 match 必须是对象（name / url-domain）`, { label: '覆写配置错误' });
+  }
+
+  const rawEntries = raw as Record<string, unknown>;
+  const writtenSubscriptionKeys = SUBSCRIPTION_KEYS.filter(k => k in rawEntries);
+  if (writtenSubscriptionKeys.length > 1) {
+    throw new CliError(`覆写文件 "${fileName}" 的 match 同时写了 name 与 subscription（两者同义）`, {
+      label: '覆写配置错误',
+      hint: ['两个键含义相同，同时出现无法判断以哪个为准，请只保留一个。', '推荐用 name，如 match: {name: edu*}。'],
+    });
   }
 
   const result: OverwriteMatch = {};
   const problems: string[] = [];
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(rawEntries)) {
     if (!MATCH_KEYS.has(key)) {
       problems.push(`未知键 "${key}"`);
       continue;
@@ -328,6 +348,12 @@ export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch |
     const arr = (Array.isArray(value) ? value : [value]).filter(v => typeof v === 'string' && v.length > 0) as string[];
     if (arr.length === 0) {
       problems.push(`键 "${key}" 的值为空或无有效字符串`);
+      continue;
+    }
+    // name → subscription 归一；原键名留给展示层
+    if (key === 'name' || key === 'subscription') {
+      result.subscription = arr;
+      result.subscriptionKey = key;
       continue;
     }
     (result as Record<string, string[]>)[key] = arr;
@@ -338,8 +364,8 @@ export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch |
       label: '覆写配置错误',
       hint: [
         'match 写错时该文件不会限定作用域、而是对所有订阅生效，故直接报错而非忽略。',
-        `可用键: ${[...MATCH_KEYS].join(', ')}`,
-        '示例: match: {subscription: work} 或 match: {url-domain: [corp.com, github.com]}',
+        `可用键: ${[...MATCH_KEYS].join(', ')}（name 与 subscription 同义）`,
+        '示例: match: {name: edu*} 或 match: {url-domain: [corp.com, github.com]}',
       ],
     });
   }
@@ -348,20 +374,26 @@ export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch |
     // 空 match 块：matchesScope 对空条件恒真（= 全局生效），同样必须挡下
     throw new CliError(`覆写文件 "${fileName}" 的 match 为空（没有任何条件）`, {
       label: '覆写配置错误',
-      hint: [`可用键: ${[...MATCH_KEYS].join(', ')}`, '示例: match: {subscription: work}'],
+      hint: [`可用键: ${[...MATCH_KEYS].join(', ')}（name 与 subscription 同义）`, '示例: match: {name: work}'],
     });
   }
 
   return result;
 }
 
-/** 一行摘要 match 作用域，供 `ow list` 展示；无限定返回 undefined。 */
+/**
+ * 一行摘要 match 作用域，供 `ow list` 展示；无限定返回 undefined。
+ * 订阅名条件按用户写的原键名回显（`subscriptionKey`），`subscriptionKey` 自身是
+ * 展示元数据、不是条件，不参与输出。
+ */
 function summarizeMatch(match?: OverwriteMatch): string | undefined {
   if (!match) return undefined;
   const parts: string[] = [];
   for (const [key, value] of Object.entries(match)) {
+    if (key === 'subscriptionKey') continue;
+    const displayKey = key === 'subscription' ? (match.subscriptionKey ?? 'subscription') : key;
     const vals = Array.isArray(value) ? value : [value];
-    parts.push(`${key}=${vals.join('/')}`);
+    parts.push(`${displayKey}=${vals.join('/')}`);
   }
   return parts.length > 0 ? parts.join(', ') : undefined;
 }
@@ -384,6 +416,32 @@ function hostMatchesDomain(host: string, domain: string): boolean {
 }
 
 /**
+ * 订阅名 glob 匹配：`*` 任意多字符、`?` 单字符，其余字符字面。
+ *
+ * - **全串匹配**（`^...$`）：`edu*` 不命中 `xedu1`。前缀式半匹配会让作用域悄悄放宽。
+ * - **无通配字符时退化为精确比对**：老写法 `subscription: home` 行为完全不变（向后兼容），
+ *   且省掉构造正则。
+ * - 大小写不敏感，与 findSubscriptionFuzzy（`sub use` 口径）及此前的精确比对一致；
+ *   用双 toLowerCase 而非正则 `i` flag，避免 Unicode 大小写折叠与订阅名白名单
+ *   （SAFE_NAME_RE 含中文）产生口径差异。
+ * - 转义与通配替换必须在**同一次 replace** 内完成：先整体转义再把 `\*` 换回通配，
+ *   会把用户本意为字面的 `\*` 一并放开。
+ * - 无 ReDoS 面：`*` 先折叠（`a**b` → `a*b`），不会产生 `[\s\S]*[\s\S]*` 这类嵌套回溯，
+ *   且订阅名受 SAFE_NAME_RE 限制最长 64 字符。
+ */
+function nameMatchesPattern(name: string, pattern: string): boolean {
+  const n = name.toLowerCase();
+  const p = pattern.toLowerCase();
+  if (!/[*?]/.test(p)) return n === p;
+  const body = p.replace(/\*+/g, '*').replace(/[.*+?^${}()|[\]\\]/g, ch => {
+    if (ch === '*') return '[\\s\\S]*';
+    if (ch === '?') return '[\\s\\S]';
+    return `\\${ch}`;
+  });
+  return new RegExp(`^${body}$`).test(n);
+}
+
+/**
  * 判断单个覆写文件在给定作用域下是否应用。
  * - 无 match → 默认全局应用。
  * - 有 match → 所列条件全部满足（AND）；条件值数组内为 OR。
@@ -394,12 +452,13 @@ function matchesScope(match: OverwriteMatch | undefined, scope?: OverwriteScope)
 
   if (match.subscription) {
     const names = Array.isArray(match.subscription) ? match.subscription : [match.subscription];
-    // 大小写不敏感：与 findSubscriptionFuzzy（sub use/test/... 的解析口径）一致。
+    // 大小写不敏感 + glob：与 findSubscriptionFuzzy（sub use/test/... 的解析口径）一致。
     // 订阅名允许大写（SAFE_NAME_RE 含 \w），此前精确比对会让 `match: {subscription: home}`
-    // 匹配不上订阅 Home，而 `sub use home` 却能切过去——同一名称两套规则，是配置陷阱
+    // 匹配不上订阅 Home，而 `sub use home` 却能切过去——同一名称两套规则，是配置陷阱。
+    // 用户写 name 还是 subscription 都归一到本字段，故通配对两种写法同样生效
     if (!scope?.subName) return false;
-    const subName = scope.subName.toLowerCase();
-    if (!names.some(n => n.toLowerCase() === subName)) return false;
+    const subName = scope.subName;
+    if (!names.some(n => nameMatchesPattern(subName, n))) return false;
   }
 
   if (match['url-domain']) {
@@ -417,9 +476,67 @@ function matchesScope(match: OverwriteMatch | undefined, scope?: OverwriteScope)
   return true;
 }
 
-/** 按订阅作用域过滤覆写文件：保留 match 命中（或无 match）的文件。 */
-export function filterOverwriteFilesByScope(files: OverwriteFileEntry[], scope?: OverwriteScope): OverwriteFileEntry[] {
-  return files.filter(f => matchesScope(f.match, scope));
+/**
+ * 挑出「本次真正参与合并」的覆写文件：文件自身未被 `enabled: false` 停用，且 match
+ * 命中当前订阅作用域（无 match 即全局）。
+ *
+ * 两道过滤**刻意合在一个出口**，不拆成并列的两个导出函数：调用方只要漏调其中一个，
+ * 被停用的文件就会照常合并进配置、还会出现在「当前生效的覆写文件」清单里，而这种
+ * 缺口在本仓的并发防线上反复出现过（见 CLAUDE.md launchd 段：消费点不止一处，
+ * 连修三版仍留缺口）。新增筛选维度请继续加在本函数内。
+ */
+export function selectActiveOverwriteFiles(files: OverwriteFileEntry[], scope?: OverwriteScope): OverwriteFileEntry[] {
+  return files.filter(f => f.enabled !== false && matchesScope(f.match, scope));
+}
+
+/** 元数据键：在合并前被剥离，绝不进入最终 mihomo 配置。 */
+const METADATA_KEYS = new Set(['match', 'enabled']);
+
+/**
+ * 元数据键不接受操作符修饰。
+ *
+ * 剥离发生在解构（早于 mergeConfigLevel 的操作符解析），所以 `enabled!: false`
+ * 既不会停用文件，又会被 parseOverrideKey 规范成键 `enabled` 落进最终配置——
+ * 正是本功能要消灭的「以为停用了其实生效」。`match!` 同理（存量洞，一并堵上）。
+ * 真想要名为 `enabled` 的**配置**键（mihomo 顶层目前没有）仍可用 `<enabled>` 转义：
+ * 那条路径解析后键名等于原始 token 之外的形态，不在此拦截范围。
+ */
+function assertNoOperatorOnMetadataKeys(config: Record<string, unknown>, fileName: string): void {
+  for (const rawKey of Object.keys(config)) {
+    const parsed = parseOverrideKey(rawKey).key;
+    if (parsed !== rawKey && METADATA_KEYS.has(parsed)) {
+      throw new CliError(`覆写文件 "${fileName}" 的元数据键 "${rawKey}" 不支持操作符`, {
+        label: '覆写配置错误',
+        hint: [
+          `match 与 enabled 是本 CLI 的元数据键，在合并前就被剥离，带操作符写法（如 ${rawKey}）不会生效，反而会把 ${parsed} 当普通配置键写进运行配置。`,
+          `请直接写 ${parsed}: <值>。`,
+        ],
+      });
+    }
+  }
+}
+
+/**
+ * 规整文件内的 `enabled` 元数据键：缺省（未写）即启用。
+ *
+ * **只认真布尔**：YAML 1.2 core schema 里 `no` / `off` 解析成**字符串**而非布尔
+ * （实测 js-yaml 5.3.0：`enabled: no` → `"no"`、`enabled:` → null、`enabled: 0` → 0），
+ * 按 truthy 判断会让 `enabled: no` 悄悄保持启用——用户以为停用了、配置却照常生效，
+ * 是本功能最容易踩的坑，故非布尔一律报错并指明要写 `false`。
+ */
+function normalizeEnabled(raw: unknown, fileName: string): boolean {
+  if (raw === undefined) return true;
+  if (typeof raw === 'boolean') return raw;
+  throw new CliError(
+    `覆写文件 "${fileName}" 的 enabled 必须是布尔值（true / false），当前是 ${raw === null ? 'null（空值）' : `${typeof raw}（${JSON.stringify(raw)}）`}`,
+    {
+      label: '覆写配置错误',
+      hint: [
+        'YAML 中 no / off / "false" 都不是布尔值（前两者被解析为字符串），按真值处理会让本该停用的文件继续生效。',
+        '停用该文件请写 enabled: false，启用可写 enabled: true 或直接删掉这一行。',
+      ],
+    },
+  );
 }
 
 export function loadOverwriteFile(): OverwriteFileEntry[] {
@@ -453,18 +570,26 @@ export function loadOverwriteFile(): OverwriteFileEntry[] {
       const parsed = yaml.load(content, { maxAliases: 200 }) as Record<string, unknown> | null;
       // 顶层数组/标量不是合法覆写文件（解构会得到数字键），直接跳过并告警
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        // match 是元数据键：抽成结构化字段并从 config 剥离，确保它永不进入最终 mihomo 配置。
-        const { match, ...config } = parsed;
-        results.push({ name: file, path: filePath, config, match: normalizeMatch(match, file) });
+        // match / enabled 是元数据键：抽成结构化字段并从 config 剥离，确保它们永不进入
+        // 最终 mihomo 配置（内核对未知顶层键宽松、`-t` 不会替我们拦下，剥离是本 CLI 的责任）。
+        // 被停用的文件同样完整加载并校验 match：`ow` 列表要显示它的作用域，且避免
+        // 「停用期间藏着错误、一启用就炸」
+        const { match, enabled, ...config } = parsed;
+        assertNoOperatorOnMetadataKeys(config, file);
+        results.push({ name: file, path: filePath, config, match: normalizeMatch(match, file), enabled: normalizeEnabled(enabled, file) });
       } else if (parsed !== null) {
         console.warn(`警告: 覆写文件 "${file}" 顶层必须是对象，已跳过`);
       }
     } catch (e) {
-      // normalizeMatch 抛的 CliError 必须上抛到 main().catch 统一渲染：
-      // 吞成 warn + 跳过文件虽然也是 fail-closed，但用户只看到一行「解析失败」，
-      // 看不见哪个键错了、该怎么改
+      // normalizeMatch / normalizeEnabled / assertNoOperatorOnMetadataKeys 抛的 CliError
+      // 必须上抛到 main().catch 统一渲染：吞成 warn + 跳过文件虽然也是 fail-closed，
+      // 但用户只看到一行「解析失败」，看不见哪个键错了、该怎么改
       if (e instanceof CliError) throw e;
-      console.warn(`警告: 覆写文件 "${file}" 解析失败: ${(e as Error).message}`);
+      const message = (e as Error).message;
+      // YAML 里 `*` 开头的标量是**别名语法**，`name: *edu` 会解析失败、整个文件被静默跳过。
+      // 推广订阅名 glob 后前缀通配是很自然的写法，光说「解析失败」用户想不到是引号问题
+      const aliasHint = /alias/i.test(message) ? '；若是以 * 开头的通配值（如 name: *edu），YAML 会把它当别名语法，请加引号写成 name: "*edu"' : '';
+      console.warn(`警告: 覆写文件 "${file}" 解析失败: ${message}${aliasHint}`);
     }
   }
 
@@ -508,6 +633,7 @@ export function listOverwriteFile(): OverwriteListResult {
       path: f.path,
       keys: Object.keys(f.config || {}),
       scope: summarizeMatch(f.match),
+      enabled: f.enabled !== false,
     })),
   };
 }

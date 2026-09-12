@@ -2,6 +2,8 @@
 
 当前审查：2026-09-12，v4.9.2（v4.9.1 的锁定清单复核：补 `ss-config`/`vmess-config`）
 
+**待发布改动**（Unreleased，尚未进版本号）：覆写 match 的 `name` 通配与文件内 `enabled` 开关，连带堵上元数据键操作符绕过与 `*` 开头值的静默跳过。单测 643（+40），验证结论见下方「覆写作用域与单文件开关」一行。
+
 本轮起因是复核 v4.9.1 的 CODE_REVIEW 声明本身：文档称锁定键「逐个回上游 General 段核对」，照着上游 `RawConfig`/`config.Inbound` 重新对表时发现 `ss-config`、`vmess-config` 两个入站服务端从未被任何文档、清单或测试提及——不是待定决策，是纯遗漏。它们与已锁的 `tuic-server` 是同一个 `Inbound` 结构体的并列字段，同由 `executor.updateListeners()` 起监听，只因形态是一行 URL 而非映射而被漏看。修 1 项（安全边界），并修正 v4.9.1 文档里两处与事实不符的记述（「待发布」、测试数 596）。单测 603（+4）
 
 上一轮（v4.9.1）在 v4.9.0 发布当天复审：一人通读并发状态机全线（service/runtime/paths/start/stop/reset/install 命令层），三个分模块深审（覆写与配置、命令层、进程下载），重要线索逐条实测或回上游源码核实；收尾时回上游 General 段逐键复查又补出 `tuic-server`/`external-doh-server` 两个入站面，并修正了锁定告警对真实订阅刷屏的自引入回归。修 15 项：入站/控制面安全边界、一条热重载自愈缺口，其余为一致性收口。两条子审查报的缺陷经对照实验排除（pkill 自匹配、见下）。launchd 的真实启停与 TUN 提权流程仍未做真机端到端复测
@@ -56,7 +58,8 @@
 | config 命令 | commands/config.spec 全部在没有 runtime/config.yaml 的目录里跑（锁住「重新推导」这一性质）；输出经 js-yaml 实际解析确认是合法 YAML，secret 已脱敏，`--json` 同样脱敏且携带 `warnings`（空时为数组） |
 | 补全脚本语法 | 生成的 zsh/bash 脚本经 `zsh -n`/`bash -n` 校验；fish 未装，未校验 |
 | 配置构建 | config/config-dns/overwrite 测试验证 JSON/YAML、形态错误、覆写 DSL、作用域与 TUN DNS；节点、分组和规则不再被隐式修复；`~?key` 未命中即跳过并告警（反向验证：短路成追加后精确三条转红）；覆写操作符只在顶层生效、嵌套键一律字面（反向验证：恢复内层 DSL 解析后通配键/告警用例共九条转红），校验失败提示的覆写清单按作用域过滤、文案逐行锁定；订阅自带 port/socks-port/redir-port/tproxy-port/secret/external-ui 被剥掉、生效值取 settings；fake-ip 注入 sniffer 的判据是合并后 dns 的 enhanced-mode（mixed + 订阅 fake-ip 也注入），`sniffer: null` 不注入（内核把 null 解码为零值，-t 不拒） |
-| 原生配置校验 | mihomo v1.19.30 在临时目录执行 -t：Mixed/TUN 合法配置通过；缺失节点、规则目标、重复节点名和缺失 provider 被拒绝；拒绝后旧 config.yaml 保留、候选文件清理 |
+| 覆写作用域与单文件开关 | match 的 `name`/`subscription` 同义归一、订阅名 glob 全串匹配与元字符字面化（反向验证：去掉 `^$` 锚定 3 条转红、元字符不转义 1 条转红——注意无通配的 pattern 走精确比对快路径，转义只有在「元字符 + 通配」同时出现时才被考验，用例必须含 `a.c*` 这类形态）；文件内 `enabled` 只认真布尔（`no`/`off` 是 YAML 字符串，实测 js-yaml 5.3.0）、被停用文件仍加载并校验 match；两道过滤合一于 `selectActiveOverwriteFiles`（反向验证：去掉 enabled 过滤 2 条转红）；元数据键的操作符形式被拒（`enabled!`/`match!` 此前可绕过剥离、两头落空）。展示层由 commands/overwrite.spec 真跑 CLI 锁住「停用文件仍列出并标注」（反向验证：改成加载时丢弃 4 条转红）——纯单元层面测不出这条，因为丢弃后筛选结果同样为空 |
+| 原生配置校验 | mihomo v1.19.30 在临时目录执行 -t：Mixed/TUN 合法配置通过；缺失节点、规则目标、重复节点名和缺失 provider 被拒绝；拒绝后旧 config.yaml 保留、候选文件清理；顶层未知键（如元数据键 `enabled`）内核**不拒**，实测 `enabled: false` 照常通过——剥离元数据键完全是 CLI 的责任，没有内核兜底 |
 | 配置提交协议 | subscription-prepare.spec 用隔离桩内核验证 -t/-d/-f、并发临时文件、拒绝时保持旧配置、提交只写最终配置，并验证拒绝提示带出生效的覆写文件与作用域（无覆写生效时不出现该段） |
 | 设置 | settings.spec 用真实子进程验证每次读盘、mutator 失败不写入，以及 4 进程并发更新设置和订阅缓存不丢条目；端口校验在合并默认值之后执行，单侧配置撞另一侧默认报错 |
 | reset | commands/reset.spec 用临时数据目录和独立服务 label 跑真实 CLI，检查全量/部分/不同目标顺序、不重建设置、默认覆写开关与下载残留清理 |
@@ -94,6 +97,9 @@
 - **锁定清单的完整性靠人肉对表，没有机制保证**：`LOCKED_CONFIG_KEYS` 与上游 `config.Inbound` 字段集之间没有自动比对（要做得解析 Go 源码或钉住上游版本），漏键只能靠复核发现——redir/tproxy（4.9.0）、-tls/-unix/-doh 与 tuic-server（4.9.1）、ss-config/vmess-config（4.9.2）三轮各漏一批，每轮都以为「这次逐个核对过了」。下次核对别按键名眼熟程度挑，照 `Inbound` 结构体字段 + `updateListeners()` 的 ReCreate* 入参逐个对；上游新增入站类型时本清单必然滞后
 - `listeners` 与 `tunnels` 都是通用入站声明、订阅可指定监听地址，当前原样进运行配置（与 4.9.0 对 listeners 的决定一致，两个键须一起评估）；`iptables` 是 Linux 专用、darwin 内核无该路径，同样保留。若产品上决定锁定，三者的测试在 config.spec「待定入站面」用例会立即失败提示
 - 锁定告警只对覆写文件：覆写经操作符设置锁定键（如 `+secret`）已覆盖，但覆写文件内 `match:` 块之后、且文件解析失败被 warn 跳过时不会有告警（文件整体没生效，合理）
+- 订阅名 glob 的输入面受控但不是「无回溯」：`*` 折叠只消掉相邻星号，`*a*a*b` 这类多星模式仍会回溯。可接受的依据是两条外部约束——pattern 来自用户自己的本地覆写文件（不是远端订阅内容），被测串是订阅名、受 `SAFE_NAME_RE` 限长 64。手改 settings.json 塞超长订阅名可绕过长度限制，属自伤。若将来允许 glob 匹配远端可控的字符串，这条依据即失效
+- 单个覆写文件的 `enabled` 写错会让 `mihomo status`、`ow` 整体失败（经 `listOverwriteFile` → `loadOverwriteFile` 抛 CliError）。与 `match` 写错的现有行为一致、不是新退化，可接受的前提是错误消息带文件名（已有用例锁住）
+- 元数据键的操作符拦截覆盖 `parseOverrideKey` 能识别的全部形态，**含尖括号转义**：`<enabled>` 同样报错（实测）。代价是失去了「写一个真名为 `enabled` 的配置键」的逃生口——mihomo 顶层目前没有这个键，故暂无影响；若上游将来新增，需要在 `assertNoOperatorOnMetadataKeys` 里为尖括号形态开一个口子
 - `kickstart -k` 超时 60s 远超锁的 10s 强夺阈值，必须留在锁外，故它与并发 bootout 的交错无法用锁串行化；现在只保证「不再 re-enable/re-bootstrap」与「不再把用户的 stop 报成内核故障」，不是把这个交错消掉了
 - 锁内 launchctl 调用有持锁预算（最坏总时长 < `LOCK_STALE_MS`）：start 侧 enable+bootstrap 两次默认 5s、恰好等于阈值，是既有基线（startService/installService 本就如此），不因本轮变化；stop 侧 bootout+disable+复核共三次，单次 `SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS`（3s，合计 9s），别再往任何锁内加东西。锁内三环节（复核先于递增、递增在锁内、bootout 与 disable 同锁）谁也挪不出锁，缩减调用次数的路走不通，理由见 service.ts 该常量注释
 - 停止计数是多写者读-改-写且刻意不加锁：极端交错下可能用较小值覆盖较大值，使某条后续命令偶发判为「变了」而中止。判据是 `!==` 本就偏保守，接受之

@@ -399,6 +399,44 @@ describe('buildConfig 带出本次生效的覆写清单', () => {
     assert.deepEqual(buildConfig(SUB, 'mixed').overwriteSummaries, []);
   });
 
+  it('name 通配命中时进入清单，摘要回显用户写的原键名', () => {
+    // 用 debug 而非 warning 作探针：BASE_CONFIG 的默认 log-level 就是 warning，
+    // 拿它断言「未生效」永远为真、测不出东西
+    fs.writeFileSync(path.join(tmpDir, OW_SCOPED), 'match:\n  name: edu*\nlog-level: debug\n');
+    try {
+      const hit = buildConfig(SUB, 'mixed', { subName: 'edu2', subUrl: 'https://update.glados-config.com/x' });
+      assert.deepEqual(hit.overwriteSummaries, [`${OW_SCOPED} (name=edu*)`]);
+      assert.equal(hit.config['log-level'], 'debug');
+
+      const miss = buildConfig(SUB, 'mixed', { subName: 'mini1', subUrl: 'https://update.glados-config.com/x' });
+      assert.deepEqual(miss.overwriteSummaries, []);
+      assert.equal(miss.config['log-level'], 'warning', '未命中时应回落到系统默认');
+    } finally {
+      fs.rmSync(path.join(tmpDir, OW_SCOPED));
+    }
+  });
+
+  it('enabled: false 的文件不合并、不进清单、不产生告警', () => {
+    // 三者都消费同一份筛选结果，故一并验证：停用的文件里即便写了锁定键与 ~?key 补丁，
+    // 也不该冒出「系统锁定项已忽略」或「未匹配到同名元素」的告警
+    fs.writeFileSync(path.join(tmpDir, OW_MAIN), 'log-level: info\n');
+    fs.writeFileSync(
+      path.join(tmpDir, OW_SCOPED),
+      'enabled: false\nsecret: leaked\nlog-level: debug\n~?proxy-groups:\n  - {name: NoSuchGroup, default-selected: X}\n',
+    );
+    try {
+      const r = buildConfig(SUB, 'mixed', { subName: 'edu1', subUrl: 'https://update.glados-config.com/x' });
+      assert.deepEqual(r.overwriteSummaries, [`${OW_MAIN} (全局)`]);
+      assert.equal(r.config['log-level'], 'info', '停用文件的 log-level 不应生效');
+      assert.deepEqual(r.warnings, []);
+      // 元数据键不得落进最终配置
+      assert.ok(!('enabled' in r.config), 'enabled 不得出现在运行配置中');
+    } finally {
+      fs.rmSync(path.join(tmpDir, OW_MAIN));
+      fs.rmSync(path.join(tmpDir, OW_SCOPED));
+    }
+  });
+
   // 与上一条同一个现场：订阅里没有 Developer 分组。~key 追加出残缺分组交给内核拒绝，
   // ~?key 则跳过并告警——用户不必为此改 match 作用域
   it('~?key 未命中时跳过并产生告警，配置仍可用', () => {

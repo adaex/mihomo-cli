@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import * as yaml from 'js-yaml';
 import { BASE_CONFIG, TUN_CONFIG } from './constants.js';
 import { CliError } from './errors.js';
-import { applyOverwrite, describeOverwriteScope, filterOverwriteFilesByScope, loadOverwriteFile, parseOverrideKey } from './overwrite.js';
+import { applyOverwrite, describeOverwriteScope, loadOverwriteFile, parseOverrideKey, selectActiveOverwriteFiles } from './overwrite.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
 import { getPorts, readSettings } from './settings.js';
 import type { BuildConfigResult, ConfigInfo, OverwriteScope } from './types.js';
@@ -198,7 +198,7 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
 
   const settings = readSettings();
   const allFiles = settings.overwrite_enabled !== false ? loadOverwriteFile() : [];
-  const overwriteFiles = filterOverwriteFilesByScope(allFiles, scope);
+  const overwriteFiles = selectActiveOverwriteFiles(allFiles, scope);
   const { config: withOverwrites, skipped: skippedMerges, operatorShapedKeys } = applyOverwrite(subscriptionConfig, overwriteFiles);
   const overwriteSummaries = overwriteFiles.map(describeOverwriteScope);
 

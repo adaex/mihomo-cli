@@ -18,11 +18,17 @@ function printOverwriteList(): void {
     console.log(`         或        ${path.join(info.dir, 'overwrite.dns.yaml')}`);
     console.log('');
   } else {
-    console.log(`${colors.cyan('覆写文件')} (${info.files.length} 个，按顺序加载):`);
+    // 计数说「未禁用」而非「生效」：本列表看不到当前活跃订阅，无从判断 match 是否命中，
+    // 真·生效清单在内核拒绝提示里（已按 match 过滤）。两处用不同措辞免得对不上
+    const disabledCount = info.files.filter(f => !f.enabled).length;
+    const countText =
+      disabledCount > 0 ? `${info.files.length} 个，${info.files.length - disabledCount} 个未禁用，按顺序加载` : `${info.files.length} 个，按顺序加载`;
+    console.log(`${colors.cyan('覆写文件')} (${countText}):`);
     console.log('');
     info.files.forEach((f, i) => {
       const num = i < 10 ? ` ${i}` : `${i}`;
-      console.log(`  ${num}. ${f.name}`);
+      const mark = f.enabled ? '' : ` ${colors.yellow('[已禁用]')}`;
+      console.log(`  ${num}. ${f.name}${mark}`);
       if (f.scope) {
         console.log(`    ${colors.gray('作用域: ')}${f.scope}`);
       }
@@ -34,6 +40,8 @@ function printOverwriteList(): void {
   }
   console.log('启用覆写: mihomo ow on');
   console.log('禁用覆写: mihomo ow off');
+  // 看到 [已禁用] 标记却不知道怎么改回来，是这个功能最直接的死路
+  console.log('停用单个文件: 在该文件顶部写 enabled: false');
   console.log('');
 }
 

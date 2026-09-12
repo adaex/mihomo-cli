@@ -139,7 +139,9 @@ export async function printStatus(args: string[] = []): Promise<void> {
           activeSub,
           cached,
           overwriteEnabled,
-          overwriteFiles: overwriteFiles.map(f => f.name),
+          // 只报启用的文件：字段语义是「当前生效的覆写」，脚本据此判断实际配置来源；
+          // 契约仍是 string[]，被 enabled: false 停用的不在其中
+          overwriteFiles: overwriteFiles.filter(f => f.enabled).map(f => f.name),
           service,
           legacy,
         }),
@@ -235,11 +237,16 @@ export async function printStatus(args: string[] = []): Promise<void> {
     console.log(`${colors.gray('订阅: ')}未配置 ${colors.gray('(添加: mihomo sub add <url>)')}`);
   }
 
-  if (overwriteEnabled && overwriteFiles.length > 0) {
-    const names = overwriteFiles.map(f => f.name.replace(/^overwrite\.?/, '').replace(/\.ya?ml$/, '') || '主文件').join(', ');
-    console.log(`${colors.gray('覆写: ')}${colors.green('已启用')} (${names})`);
+  // 只列启用的文件；被 enabled: false 停用的折成一句计数（列出来会让人以为它们在生效，
+  // 完全不提又看不出「我停用过东西」）。全部被停用时走 activeNames 为空的分支
+  const activeOverwriteFiles = overwriteFiles.filter(f => f.enabled);
+  const disabledOverwriteCount = overwriteFiles.length - activeOverwriteFiles.length;
+  const disabledSuffix = disabledOverwriteCount > 0 ? `，${disabledOverwriteCount} 个已禁用` : '';
+  if (overwriteEnabled && activeOverwriteFiles.length > 0) {
+    const names = activeOverwriteFiles.map(f => f.name.replace(/^overwrite\.?/, '').replace(/\.ya?ml$/, '') || '主文件').join(', ');
+    console.log(`${colors.gray('覆写: ')}${colors.green('已启用')} (${names}${disabledSuffix})`);
   } else if (overwriteEnabled) {
-    console.log(`${colors.gray('覆写: ')}${colors.green('已启用')} (无文件)`);
+    console.log(`${colors.gray('覆写: ')}${colors.green('已启用')} (${disabledOverwriteCount > 0 ? `无生效文件${disabledSuffix}` : '无文件'})`);
   } else {
     console.log(`${colors.gray('覆写: ')}${colors.yellow('已禁用')}`);
   }
