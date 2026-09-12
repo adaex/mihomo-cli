@@ -629,20 +629,25 @@ describe('match name 别名与订阅名 glob', () => {
     assert.equal(hits(fromYaml({ name: '*edu*' }), 'xedu1'), true);
   });
 
-  it('正则元字符按字面处理，不当通配', () => {
-    // 无通配字符的模式走精确比对快路径，碰不到正则；元字符转义只有在
-    // 「元字符 + 通配」同时出现时才被真正考验，故两种形态都要覆盖
+  it('除 * 与 ? 外的字符一律字面，不当通配或正则', () => {
+    // 无通配字符的模式走精确比对快路径；含通配时走匹配器主循环，
+    // 两条路径都要覆盖。实现换成双指针后这些字符不再有特殊含义，
+    // 本组用例同时锁住「不许有人图省事换回正则拼接」
     assert.equal(hits(fromYaml({ name: 'a.c' }), 'abc'), false);
     assert.equal(hits(fromYaml({ name: 'a.c' }), 'a.c'), true);
-    // 带通配 → 走正则路径：未转义时 . 会匹配任意字符、+ 会变成重复量词
     assert.equal(hits(fromYaml({ name: 'a.c*' }), 'abcd'), false);
     assert.equal(hits(fromYaml({ name: 'a.c*' }), 'a.cd'), true);
     assert.equal(hits(fromYaml({ name: 'a+b*' }), 'aab'), false);
     assert.equal(hits(fromYaml({ name: 'a+b*' }), 'a+bc'), true);
     assert.equal(hits(fromYaml({ name: 'x(y)*' }), 'xy'), false);
     assert.equal(hits(fromYaml({ name: 'x(y)*' }), 'x(y)z'), true);
-    // 反斜杠不得让正则构造失败
+    // 这些形态在正则实现里会让 new RegExp 抛未捕获异常（而非 CliError）
+    for (const pattern of ['[*', '(*', '*)', '{*', '|*', '[a-*', '(?*', 'a\\*']) {
+      assert.doesNotThrow(() => hits(fromYaml({ name: pattern }), 'edu1'), `pattern ${pattern} 不得抛异常`);
+    }
     assert.equal(hits(fromYaml({ name: 'a\\b*' }), 'a\\bc'), true);
+    assert.equal(hits(fromYaml({ name: '[x]*' }), '[x]y'), true);
+    assert.equal(hits(fromYaml({ name: '[x]*' }), 'x'), false);
   });
 
   it('glob 大小写不敏感（与 sub use 口径一致）', () => {
@@ -662,9 +667,38 @@ describe('match name 别名与订阅名 glob', () => {
     assert.equal(hits(fromYaml({ subscription: 'edu*' }), 'edu2'), true);
   });
 
-  it('连续 * 等价于单个 *（折叠后不产生嵌套回溯）', () => {
+  it('连续 * 等价于单个 *', () => {
     assert.equal(hits(fromYaml({ name: 'e**1' }), 'edu1'), true);
     assert.equal(hits(fromYaml({ name: '**' }), 'anything'), true);
+  });
+
+  it('多星 pattern 不产生灾难性回溯（合法长度内即可挂死 CLI）', () => {
+    // 回归：最初用「转义成正则再 test」，这组输入实测跑 70 秒——64 正是 SAFE_NAME_RE
+    // 的长度上限，即完全合法的订阅名就能触发。现用双指针贪心回溯，O(n×m) 上界
+    const evil = { name: `${'*a'.repeat(20)}*b` };
+    const longName = 'a'.repeat(64);
+    const started = Date.now();
+    assert.equal(hits(fromYaml(evil), longName), false);
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 1000, `多星匹配应在毫秒级完成，实际 ${elapsed}ms`);
+  });
+
+  it('贪心回溯的正确性：* 需要回退让后续字面段命中', () => {
+    // 双指针实现的关键路径——第一个 * 贪心吃太多时必须能回退
+    assert.equal(hits(fromYaml({ name: '*b' }), 'abcb'), true);
+    assert.equal(hits(fromYaml({ name: '*b*c' }), 'abxc'), true);
+    assert.equal(hits(fromYaml({ name: 'a*b*c' }), 'axbyc'), true);
+    assert.equal(hits(fromYaml({ name: 'a*b*c' }), 'axbyd'), false);
+    assert.equal(hits(fromYaml({ name: '*a*a*b' }), 'aab'), true);
+    assert.equal(hits(fromYaml({ name: '*a*a*b' }), 'ab'), false);
+  });
+
+  it('? 与 * 混用及尾部通配的边界', () => {
+    assert.equal(hits(fromYaml({ name: '?*' }), 'a'), true);
+    assert.equal(hits(fromYaml({ name: '?*' }), ''), false);
+    assert.equal(hits(fromYaml({ name: '*?' }), 'ab'), true);
+    assert.equal(hits(fromYaml({ name: 'a*' }), 'a'), true, '* 可匹配空串');
+    assert.equal(hits(fromYaml({ name: 'a?' }), 'a'), false, '? 必须吃掉一个字符');
   });
 
   it('中文订阅名可用通配（SAFE_NAME_RE 允许中文）', () => {
