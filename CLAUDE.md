@@ -74,6 +74,8 @@ npm run build
 - detached/事件回调不得抛 CliError；信号处理与 tail 事件回调是直接 exit 的例外
 - Node 版本、平台与非 root 三个守卫都在 ensureDirs 之前执行，共用同一份 help/version 豁免名单；Node 下限取自 package.json 的 `engines.node`（只认 `>=x.y.z`，解析不出就跳过检查，不能挡死所有命令）；开发逃生阀为 `MIHOMO_CLI_ALLOW_ANY_PLATFORM=1`
 - 报告成功应有独立的结果依据：配置提交查写入结果，服务启动查健康，停止查卸载/残留，下载查大小与可执行性
+- 内核校验失败的提示附带本次生效的覆写文件与作用域；文案收口在 `buildKernelRejectHint`，空清单时不加该段，调用点不散写文案
+- doctor 的失败项透传 `CliError.hint`（`Check.notes`），只取 message 首行会丢掉唯一的排查线索
 - `openUrl` 是 detached、返回 void，调用方始终显示地址/路径，供打开失败时手动使用
 - 破坏性操作需要确认时，非 TTY 且无显式跳过选项应报错退出 1；交互拒绝才显示已取消
 - 改共享判据时检查全部消费者，不能只修第一条路径
@@ -100,6 +102,9 @@ npm run build
 - CLI 只做形态检查、显式覆写与系统约束；节点重名、分组/provider 引用和规则语义交给已安装的 mihomo `-t`
 - 原生校验用独立 runtime/check-* 临时目录，`-d` 与实际运行使用同一 data 目录；成功和失败都清理候选文件
 - 校验失败不得替换现有 config.yaml；doctor 复用准备与校验路径
+- 生效的覆写清单随 `BuildConfigResult.overwriteSummaries` 带出并传给内核校验；校验函数内不得自行 `loadOverwriteFile`——那拿不到 scope 会列出未生效的文件，且 match 校验会在错误路径上再抛一条错误盖掉内核原文
+- `~key` 未命中即追加是文档与 ssh 出口场景承诺的行为，不能改；「只改已有、不新增」用 `~?key` 表达，跳过时经 warnings 告警（静默跳过与分组名拼错无法区分）
+- 不在 CLI 补分组必填字段校验（字段集随内核漂移），残缺元素仍由 mihomo `-t` 拒绝
 - 不自动删除节点、分组或规则，不为覆写节点注入 exclude-filter；include-all 和用户写的过滤条件按 mihomo 原生语义生效
 - 只持久化最终运行配置；原始订阅保存在 subscriptions，覆写保存在数据根目录
 - mixed-port 与 external-controller 由 settings.ports 决定（默认 7890/9090）；端口需为不同的 1–65535 整数
@@ -107,7 +112,7 @@ npm run build
 - Mixed 清除 tun 字段；TUN 使用系统 tun 配置并强制 dns.enable=true，显式冲突要提示，其他 DNS 字段尊重用户配置
 - DNS 必须是映射，Mixed 与 TUN 共用形态检查；fake-ip 模式未显式配置 sniffer 时补默认嗅探配置
 - 覆写主文件先加载，扩展文件按名称排序；match 的 subscription/url-domain 为 AND 条件，订阅名匹配不区分大小写，无 match 全局应用，非法或空 match 报错
-- `key!` 整体覆盖，`+key`/`key+` 数组插入，`~key` 按 name 合并，`<+key>` 转义；数组操作遇到已存在的非数组值应报错
+- `key!` 整体覆盖，`+key`/`key+` 数组插入，`~key` 按 name 合并（未命中追加）、`~?key` 按 name 合并但未命中忽略，`<+key>` 转义；数组操作遇到已存在的非数组值应报错
 - 覆写默认开启；applyOverwrite 只接收调用方已筛选的文件，不自行读设置或加载文件
 
 ## reset

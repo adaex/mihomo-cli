@@ -51,11 +51,42 @@ describe('配置经内核校验后再提交', () => {
     const previous = fs.readFileSync(PATHS.configFile, 'utf8');
     fs.writeFileSync(`${PATHS.mihomoBinary}.reject`, '');
     try {
-      await assert.rejects(prepareConfigForStart('mixed', 'x'), e => e instanceof CliError && e.hint.join(' ').includes('native rejected candidate'));
+      await assert.rejects(prepareConfigForStart('mixed', 'x'), e => {
+        assert.ok(e instanceof CliError);
+        const hint = e.hint.join('\n');
+        assert.match(hint, /native rejected candidate/);
+        // 无覆写生效时不得出现该段——防有人日后把 loadOverwriteFile 塞回校验函数内部，
+        // 那会列出本次并未生效的文件
+        assert.ok(!hint.includes('当前生效的覆写文件'), '无覆写生效时不应出现覆写清单');
+        return true;
+      });
       assert.equal(fs.readFileSync(PATHS.configFile, 'utf8'), previous);
       assert.deepEqual(fs.readdirSync(DIRS.runtime), ['config.yaml']);
     } finally {
       fs.rmSync(`${PATHS.mihomoBinary}.reject`);
+    }
+  });
+
+  // 纯函数测试测不到「调用点忘传覆写清单」：这条锁 buildConfig → prepareConfigForStart
+  // → validateConfigWithKernel 的接线真的通了
+  it('内核拒绝时提示附带生效的覆写文件（透传链路接通）', async () => {
+    const owPath = path.join(tmpDir, 'overwrite.probe.yaml');
+    // 刻意用无 match 的文件：本 spec 的订阅不在 settings 里，subUrl 为 undefined，
+    // 带 url-domain 的文件会 fail-closed 不生效（作用域过滤本身由 config.spec 覆盖）
+    fs.writeFileSync(owPath, 'log-level: warning\n');
+    fs.writeFileSync(`${PATHS.mihomoBinary}.reject`, '');
+    try {
+      await assert.rejects(prepareConfigForStart('mixed', 'x'), e => {
+        assert.ok(e instanceof CliError);
+        const hint = e.hint.join('\n');
+        assert.match(hint, /native rejected candidate/);
+        assert.match(hint, /当前生效的覆写文件/);
+        assert.match(hint, /overwrite\.probe\.yaml \(全局\)/);
+        return true;
+      });
+    } finally {
+      fs.rmSync(`${PATHS.mihomoBinary}.reject`);
+      fs.rmSync(owPath);
     }
   });
 

@@ -70,6 +70,15 @@ export interface UserInfo {
 export interface BuildConfigResult {
   config: Record<string, unknown>;
   warnings: string[];
+  /**
+   * 本次构建实际生效的覆写文件展示摘要（已按开关与 match 作用域筛选），
+   * 形如 `overwrite.glados.yaml (url-domain=glados-config.com)`、`overwrite.seal.yaml (全局)`。
+   * 仅供内核校验失败时附在错误里定位根因——`~key` 未命中同名元素会追加新元素，
+   * 补丁落到不含该元素的订阅上就会造出缺必需字段的残缺项，而内核只报「哪个键坏了」，
+   * 不会说「它是覆写加进来的」。存摘要而非 OverwriteFileEntry：错误路径只需展示，
+   * 不该把整份覆写 config 拖进类型。
+   */
+  overwriteSummaries: string[];
 }
 
 /** 配置规模摘要，用于启动时的一行提示（`Mixed · default · 12 组, 340 节点`） */
@@ -203,6 +212,22 @@ export interface ParsedOverrideKey {
   arrayPrepend: boolean;
   arrayAppend: boolean;
   arrayMergeByName: boolean;
+  /**
+   * `~?key`：只改已有元素，按 name 匹配不到就**忽略该补丁**（`~key` 则追加）。
+   * 用于「订阅下发了这个分组我才改它」——补丁往往只带 name + 一两个字段，
+   * 被追加进去就是个缺 type 的残缺分组，内核直接拒绝加载整份配置。
+   */
+  arrayMergeOnly: boolean;
+}
+
+/** `~?key` 匹配不到同名元素而被跳过的补丁，供启动时告警 */
+export interface SkippedMerge {
+  /** 目标键，如 proxy-groups */
+  key: string;
+  /** 补丁的 name（无 name 时为占位串） */
+  name: string;
+  /** 来源覆写文件名，由 applyOverwrite 补上 */
+  file?: string;
 }
 
 /** 覆写文件作用域限定：所列条件需同时满足（AND），条件值为数组时其内部为 OR。 */

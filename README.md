@@ -438,12 +438,16 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 | `key!`   | 强制覆盖整个对象（不深度合并）            | `dns!`: { ... }      |
 | `+key`   | 数组前置插入                              | `+proxies`: [...]    |
 | `key+`   | 数组追加                                  | `rules+`: [...]      |
-| `~key`   | 按 `name` 就地合并数组中的单个元素        | `~proxy-groups`: [...] |
+| `~key`   | 按 `name` 就地合并数组元素，**找不到则追加** | `~proxies`: [...]  |
+| `~?key`  | 按 `name` 就地合并，**找不到则忽略**（不新增） | `~?proxy-groups`: [...] |
 | `<+key>` | 键名以 `+`/`~` 等符号开头时转义           | `<+.google.cn>`: ... |
 
-`~key` 用于**只修改数组里某一个元素的部分字段**，而不动其余元素、也不必复制整个元素。以 `name` 为主键匹配：命中同名元素则深度合并该元素，找不到则追加。典型用途：修改订阅下发的某个 `proxy-group` 的字段（如默认选中的节点），订阅更新后依然生效。
+`~key` 与 `~?key` 都用于**只修改数组里某一个元素的部分字段**，而不动其余元素、也不必复制整个元素，以 `name` 为主键匹配。两者只在「找不到同名元素」时不同：
 
-> `~key` / `+key` / `key+` 都是**数组语义**：若目标键已存在且不是数组（如 `~dns` 作用于映射、`log-level+` 作用于字符串），会直接报错而非静默包成单元素数组——后者会丢掉原有字段并生成 mihomo 无法解析的配置。要覆盖非数组值请用 `key!`（强制覆盖）或直接写 `key`（深度合并）。
+- **`~key` 追加**——补丁本身就是个完整元素时用它，比如下文 ssh 出口那节用 `~proxies` 新增一个 socks5 节点。
+- **`~?key` 忽略**——补丁只带 `name` 和一两个要改的字段时用它，表达「订阅下发了这个元素我才改它」。典型场景：同一机场的多条订阅套餐不同，`Developer` 分组只在其中一条里有；用 `~key` 会把补丁追加成一个缺 `type` 的残缺分组，内核直接拒绝加载整份配置（`ProxyGroup Developer: '' has unset fields: type`），用 `~?key` 则在没有该分组的订阅上自动跳过。被跳过时会打印一行提示，避免与「分组名拼错」混淆。
+
+> `~key` / `~?key` / `+key` / `key+` 都是**数组语义**：若目标键已存在且不是数组（如 `~dns` 作用于映射、`log-level+` 作用于字符串），会直接报错而非静默包成单元素数组——后者会丢掉原有字段并生成 mihomo 无法解析的配置。要覆盖非数组值请用 `key!`（强制覆盖）或直接写 `key`（深度合并）。
 
 ### 作用域限定（match）
 
@@ -455,6 +459,8 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 | `url-domain`   | 按订阅 URL 的 hostname 后缀匹配（大小写不敏感） |
 
 `match` 块**写错会直接报错**（键名拼错、值为空、空块），而不是静默忽略后对所有订阅生效——写了 `match` 显然是想限定作用域，悄悄放宽比报错危险得多。
+
+> `url-domain` 命中该域名下的**所有**订阅。同一机场的多条订阅（如 `edu1`、`mini1`）URL 往往同域名，用 `url-domain` 会一并生效。若只是担心某条订阅没有要改的分组，用 `~?key` 就够了（它会自动跳过），不必为此改作用域；`match` 应当按「这份覆写在语义上属于哪些订阅」来写。
 
 ### 示例
 
@@ -474,12 +480,15 @@ dns!:
 ```
 
 ```yaml
-# ~/.mihomo-cli/overwrite.edu1.yaml
-# 只对 edu1 订阅生效：把订阅下发的 Developer 分组默认选中改为 TW Fixed IP
+# ~/.mihomo-cli/overwrite.glados.yaml
+# 对该机场的所有订阅生效：把订阅下发的 Developer 分组默认选中改为 TW Fixed IP
 match:
-  subscription: edu1          # 或 url-domain: glados-config.com
+  url-domain: glados-config.com
 
-~proxy-groups:
+# 用 ~? 而非 ~：该机场的精简套餐没有 Developer 分组，
+# ~ 会把这段补丁追加成一个缺 type 的残缺分组、导致内核拒绝加载；
+# ~? 在没有该分组的订阅上自动跳过（并打印一行提示）
+~?proxy-groups:
   - name: Developer
     default-selected: TW Fixed IP
 ```
@@ -514,7 +523,7 @@ proxy-providers:
   - 'DOMAIN-SUFFIX,corp.example.com,SecondAirport'
 ```
 
-provider 节点与订阅节点同池参与分组选择；节点延迟与手动切换在 Web UI（`mihomo ui`）里操作。若想让订阅里已有的某个分组也纳入第二机场的节点，用 `~proxy-groups` 按 name 就地 patch 该分组、加 `use` 字段
+provider 节点与订阅节点同池参与分组选择；节点延迟与手动切换在 Web UI（`mihomo ui`）里操作。若想让订阅里已有的某个分组也纳入第二机场的节点，用 `~?proxy-groups` 按 name 就地 patch 该分组、加 `use` 字段（用 `~?` 而非 `~`：这是「改已有分组」，订阅里没有该分组时应跳过而不是新建一个残缺分组）
 
 ### 用 ssh -D 做节点
 
@@ -553,6 +562,23 @@ mihomo doctor
 ### 启动失败
 
 `mihomo start` 先用内核检查候选配置，错误会直接显示并保留现有运行配置。CLI 不再自动修复重名节点或失效引用，需要修改订阅或覆写后重试
+
+内核只报「哪个键不合法」，说不出「这个键是覆写加进来的」，所以提示里会附上本次实际生效的覆写文件与作用域：
+
+```
+配置错误: 内核拒绝加载配置
+
+  ProxyGroup Developer: '' has unset fields: type
+
+  当前生效的覆写文件:
+    overwrite.glados.yaml (url-domain=glados-config.com)
+    overwrite.seal.yaml (全局)
+  若报错的元素来自覆写追加（~key 未匹配到同名元素时会新增），改用 ~?key 可在缺少该元素的订阅上跳过。
+
+  请修正订阅或覆写；当前运行时配置未改动。
+```
+
+清单已按 `ow` 开关与 `match` 过滤，即**本次真正参与合并**的文件；`(全局)` 表示该文件没有 `match`、对所有订阅生效。没有覆写生效时不显示这一段（问题就在订阅本身）。`mihomo doctor` 给出同样的信息，`mihomo ow list` 可看全部覆写文件
 
 校验通过后仍需确认内核已运行：端口占用、系统权限等启动问题会报错并附日志尾部，退出码非 0。异常退出原因与 `status` 使用同一口径（`退出码 N` 或 `被信号终止（Killed: 9）`）
 

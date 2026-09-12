@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import * as yaml from 'js-yaml';
 import { BASE_CONFIG, TUN_CONFIG } from './constants.js';
 import { CliError } from './errors.js';
-import { applyOverwrite, filterOverwriteFilesByScope, loadOverwriteFile } from './overwrite.js';
+import { applyOverwrite, describeOverwriteScope, filterOverwriteFilesByScope, loadOverwriteFile } from './overwrite.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
 import { getPorts, readSettings } from './settings.js';
 import type { BuildConfigResult, ConfigInfo, OverwriteScope } from './types.js';
@@ -153,11 +153,16 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   const settings = readSettings();
   const allFiles = settings.overwrite_enabled !== false ? loadOverwriteFile() : [];
   const overwriteFiles = filterOverwriteFilesByScope(allFiles, scope);
-  const withOverwrites = applyOverwrite(subscriptionConfig, overwriteFiles);
+  const { config: withOverwrites, skipped: skippedMerges } = applyOverwrite(subscriptionConfig, overwriteFiles);
+  const overwriteSummaries = overwriteFiles.map(describeOverwriteScope);
 
   const systemConfig: Record<string, unknown> = {};
   // 系统约束覆盖显式设置时告警，节点与分流规则保持用户给出的内容
   const lockedWarnings: string[] = [];
+  // `~?key` 跳过的补丁：静默跳过与「分组名拼错」无法区分，用户会以为覆写生效了
+  for (const s of skippedMerges) {
+    lockedWarnings.push(`覆写 ~?${s.key} 的补丁 "${s.name}" 未匹配到当前订阅中的同名元素，已跳过${s.file ? `（${s.file}）` : ''}`);
+  }
   for (const [key, value] of Object.entries(BASE_CONFIG)) {
     if (!(key in withOverwrites)) {
       systemConfig[key] = value;
@@ -228,7 +233,7 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   }
 
   assertConfigShape(merged);
-  return { config: merged, warnings: lockedWarnings };
+  return { config: merged, warnings: lockedWarnings, overwriteSummaries };
 }
 
 export function writeMihomoConfig(configObj: Record<string, unknown>): void {
@@ -237,11 +242,42 @@ export function writeMihomoConfig(configObj: Record<string, unknown>): void {
   atomicWriteFileSync(PATHS.configFile, content, { mode: 0o600 });
 }
 
+/** hint 行原样打印（index 的 main().catch 不加工），缩进得自己带 */
+const HINT_INDENT = '  ';
+
+/**
+ * 拼装内核拒绝配置时的 hint。抽成纯函数便于逐行断言文案（同 shouldAbortStartOnDisable
+ * 那类判据收口的用法）——留在 catch 块里就只能靠跑真实/桩内核间接验证。
+ *
+ * 覆写清单只在**非空**时附加：没有覆写文件、`ow off`、本次订阅没命中任何 match，
+ * 三种情况下问题都必在订阅本身，多打一段「当前生效的覆写文件: 无」是纯噪音，
+ * 还会把排查方向引偏。反之也不做「未命中即告警」：ssh -D 那类靠 `~proxies`
+ * 追加节点的正常用法每次 start 都会刷屏，而它并没有出错。
+ */
+export function buildKernelRejectHint(detail: string, overwriteSummaries: string[]): string[] {
+  // 内核可能一次报多条（每个不合法的键一行）；空行保持空行，不缩出尾随空格
+  const hint = ['', ...detail.split('\n').map(line => (line.trim() ? `${HINT_INDENT}${line}` : ''))];
+
+  if (overwriteSummaries.length > 0) {
+    hint.push('', `${HINT_INDENT}当前生效的覆写文件:`);
+    // 文件名与 match 值都来自用户文件，同内核输出一样消毒，防 ESC 序列污染终端
+    for (const summary of overwriteSummaries) hint.push(sanitizeTerminal(`${HINT_INDENT.repeat(2)}${summary}`));
+    hint.push(`${HINT_INDENT}若报错的元素来自覆写追加（~key 未匹配到同名元素时会新增），改用 ~?key 可在缺少该元素的订阅上跳过。`);
+  }
+
+  hint.push('', `${HINT_INDENT}请修正订阅或覆写；当前运行时配置未改动。`);
+  return hint;
+}
+
 /**
  * 由内核检查节点、分组引用与规则语义，不在 CLI 中维护另一份配置修复器
  * 临时配置只用于 -t，成功后调用方才替换运行时配置；成功或失败都会清理临时文件
+ *
+ * overwriteSummaries 由调用方从 buildConfig 的结果透传（见 BuildConfigResult）：
+ * 本函数不自行 loadOverwriteFile——它拿不到 scope 无从按作用域过滤，且违反
+ * 「覆写的加载与筛选由调用方完成」的分工。省略该参数时行为与此前完全一致。
  */
-export async function validateConfigWithKernel(config: Record<string, unknown>): Promise<void> {
+export async function validateConfigWithKernel(config: Record<string, unknown>, overwriteSummaries: string[] = []): Promise<void> {
   if (!hasKernel()) throw new CliError('未找到内核', { hint: '下载内核: mihomo kernel' });
   ensureDirs();
   const stageDir = fs.mkdtempSync(path.join(DIRS.runtime, 'check-'));
@@ -257,9 +293,16 @@ export async function validateConfigWithKernel(config: Record<string, unknown>):
     } catch (e) {
       const error = e as Error & { stdout?: string; stderr?: string; killed?: boolean };
       const detail = sanitizeTerminal(`${error.stdout || ''}\n${error.stderr || ''}`).trim();
-      throw new CliError(error.killed ? '内核配置校验超时' : '内核拒绝加载配置', {
+      // 超时与配置内容无关（内核没在 30s 内给出结论），列覆写只会误导，故只有拒绝分支附清单
+      if (error.killed) {
+        throw new CliError('内核配置校验超时', {
+          label: '配置错误',
+          hint: buildKernelRejectHint(detail || error.message, []),
+        });
+      }
+      throw new CliError('内核拒绝加载配置', {
         label: '配置错误',
-        hint: [detail || error.message, '', '请修正订阅或覆写；当前运行时配置未改动。'],
+        hint: buildKernelRejectHint(detail || error.message, overwriteSummaries),
       });
     }
   } finally {

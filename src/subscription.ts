@@ -296,7 +296,8 @@ export async function prepareConfigForStart(mode: string, subName = 'default'): 
 
   const subUrl = getSubscriptions().find(s => s.name === subName)?.url;
   const buildResult = buildConfig(rawContent, mode, { subName, subUrl });
-  await validateConfigWithKernel(buildResult.config);
+  // 透传生效的覆写清单：内核只说「哪个键坏了」，说不出「它是覆写追加进来的」
+  await validateConfigWithKernel(buildResult.config, buildResult.overwriteSummaries);
 
   const proxies = buildResult.config.proxies as unknown[] | undefined;
   const proxyGroups = buildResult.config['proxy-groups'] as unknown[] | undefined;

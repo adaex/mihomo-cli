@@ -23,6 +23,8 @@ interface Check {
   status: CheckStatus;
   detail: string;
   fix?: string;
+  /** 失败详情（如内核原文与本次生效的覆写清单）。行自带缩进，原样打印即挂在该项之下 */
+  notes?: string[];
 }
 
 /** 端口是否有进程在监听（lsof；查不到/无 lsof 都按「未监听」处理，不夸大也不吓人） */
@@ -37,8 +39,8 @@ function isPortListening(port: number): boolean {
 
 async function collectChecks(): Promise<Check[]> {
   const checks: Check[] = [];
-  const push = (name: string, status: CheckStatus, detail: string, fix?: string): void => {
-    checks.push({ name, status, detail, fix });
+  const push = (name: string, status: CheckStatus, detail: string, fix?: string, notes?: string[]): void => {
+    checks.push({ name, status, detail, fix, notes });
   };
 
   // === 内核 ===
@@ -160,7 +162,10 @@ async function collectChecks(): Promise<Check[]> {
       await prepareConfigForStart(mode, active.name);
       push('配置构建', 'ok', `当前订阅通过内核校验（${mode}）`);
     } catch (e) {
-      push('配置构建', 'fail', (e as Error).message.split('\n')[0], '修正订阅或覆写后 mihomo start');
+      // hint 带着内核原文与本次生效的覆写清单；只取 message 首行会把唯一有用的线索丢掉
+      // （体检是紧凑列表，滤掉纯排版空行）
+      const notes = e instanceof CliError ? e.hint.filter(l => l.trim().length > 0) : undefined;
+      push('配置构建', 'fail', (e as Error).message.split('\n')[0], '修正订阅或覆写后 mihomo start', notes);
     }
   } else {
     push('配置构建', 'skip', active ? '未安装内核，跳过校验' : '无订阅，跳过');
@@ -201,8 +206,9 @@ export async function cmdDoctor(args: string[] = []): Promise<void> {
   for (const c of checks) {
     const mark = c.status === 'ok' ? colors.green('✓') : c.status === 'warn' ? colors.yellow('!') : c.status === 'fail' ? colors.red('✗') : colors.gray('·');
     console.log(`${mark} ${colors.bold(c.name)}: ${c.detail}`);
-    if (c.status !== 'ok' && c.status !== 'skip' && c.fix) {
-      console.log(colors.gray(`  修复: ${c.fix}`));
+    if (c.status !== 'ok' && c.status !== 'skip') {
+      for (const line of c.notes ?? []) console.log(colors.gray(line));
+      if (c.fix) console.log(colors.gray(`  修复: ${c.fix}`));
     }
   }
 

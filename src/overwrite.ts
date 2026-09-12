@@ -5,7 +5,7 @@ import * as yaml from 'js-yaml';
 import { CliError } from './errors.js';
 import { USER_DATA_DIR } from './paths.js';
 import { readSettings, writeSettings } from './settings.js';
-import type { OverwriteFileEntry, OverwriteListResult, OverwriteMatch, OverwriteScope, ParsedOverrideKey } from './types.js';
+import type { OverwriteFileEntry, OverwriteListResult, OverwriteMatch, OverwriteScope, ParsedOverrideKey, SkippedMerge } from './types.js';
 
 export function parseOverrideKey(key: string): ParsedOverrideKey {
   let actualKey = key;
@@ -13,6 +13,7 @@ export function parseOverrideKey(key: string): ParsedOverrideKey {
   let arrayPrepend = false;
   let arrayAppend = false;
   let arrayMergeByName = false;
+  let arrayMergeOnly = false;
 
   const lastChar = key[key.length - 1];
   const openAngleCount = (key.match(/</g) || []).length;
@@ -41,6 +42,12 @@ export function parseOverrideKey(key: string): ParsedOverrideKey {
   } else if (actualKey.startsWith('~')) {
     arrayMergeByName = true;
     actualKey = actualKey.slice(1);
+    // `~?key`：匹配不到同名元素就忽略该补丁，不追加。放在剥掉 `~` 之后判断，
+    // 故真以 `?` 开头的键名仍可用 `<~?key>` 转义（走上面的尖括号分支，不进这里）
+    if (actualKey.startsWith('?')) {
+      arrayMergeOnly = true;
+      actualKey = actualKey.slice(1);
+    }
   } else {
     if (actualKey.startsWith('+')) {
       arrayPrepend = true;
@@ -52,10 +59,17 @@ export function parseOverrideKey(key: string): ParsedOverrideKey {
     }
   }
 
-  return { key: actualKey, forceOverwrite, arrayPrepend, arrayAppend, arrayMergeByName };
+  return { key: actualKey, forceOverwrite, arrayPrepend, arrayAppend, arrayMergeByName, arrayMergeOnly };
 }
 
-export function deepMergeWithOverrides(target: unknown, override: unknown): Record<string, unknown> {
+/**
+ * 深度合并覆写到目标配置。
+ *
+ * `skipped` 是可选的收集器：`~?key` 匹配不到同名元素时把跳过的项记进去，由调用方
+ * （applyOverwrite → buildConfig）汇总成告警。用出参而非改返回类型——本函数递归调用
+ * 自身合并嵌套映射，改成返回 `{result, skipped}` 会让每个递归点都得拆包再合并。
+ */
+export function deepMergeWithOverrides(target: unknown, override: unknown, skipped?: SkippedMerge[]): Record<string, unknown> {
   let t = target as Record<string, unknown>;
   if (t === null || t === undefined) {
     t = Array.isArray(override) ? ([] as unknown as Record<string, unknown>) : {};
@@ -76,7 +90,7 @@ export function deepMergeWithOverrides(target: unknown, override: unknown): Reco
   const result = { ...t };
 
   for (const [rawKey, value] of Object.entries(override as Record<string, unknown>)) {
-    const { key, forceOverwrite, arrayPrepend, arrayAppend, arrayMergeByName } = parseOverrideKey(rawKey);
+    const { key, forceOverwrite, arrayPrepend, arrayAppend, arrayMergeByName, arrayMergeOnly } = parseOverrideKey(rawKey);
 
     const existingValue = result[key];
 
@@ -97,8 +111,9 @@ export function deepMergeWithOverrides(target: unknown, override: unknown): Reco
           },
         );
       }
-      // 按 name 就地 patch：在已有数组里找同名元素只合并其字段（保留其余字段与其余元素），
-      // 找不到同名则追加。必须复制数组，禁止原地改写 target（否则会污染 subscriptionConfig）。
+      // 按 name 就地 patch：在已有数组里找同名元素只合并其字段（保留其余字段与其余元素）。
+      // 找不到同名时：`~key` 追加（ssh 出口靠它新增节点），`~?key` 跳过并告警。
+      // 必须复制数组，禁止原地改写 target（否则会污染 subscriptionConfig）。
       const existingArr = Array.isArray(existingValue) ? existingValue : [];
       const overrideArr = Array.isArray(value) ? value : [value];
       const merged = [...existingArr];
@@ -106,7 +121,10 @@ export function deepMergeWithOverrides(target: unknown, override: unknown): Reco
         const name = item && typeof item === 'object' && !Array.isArray(item) ? (item as { name?: unknown }).name : undefined;
         const idx = name != null ? merged.findIndex(e => e && typeof e === 'object' && (e as { name?: unknown }).name === name) : -1;
         if (idx >= 0) {
-          merged[idx] = deepMergeWithOverrides(merged[idx], item);
+          merged[idx] = deepMergeWithOverrides(merged[idx], item, skipped);
+        } else if (arrayMergeOnly) {
+          // 静默跳过会变成「写了覆写却没生效」，与分组名拼错难以区分，故记一条供调用方告警
+          skipped?.push({ key, name: name == null ? '(无 name)' : String(name) });
         } else {
           merged.push(item);
         }
@@ -151,7 +169,7 @@ export function deepMergeWithOverrides(target: unknown, override: unknown): Reco
       typeof existingValue === 'object' &&
       !Array.isArray(existingValue)
     ) {
-      result[key] = deepMergeWithOverrides(existingValue as Record<string, unknown>, value);
+      result[key] = deepMergeWithOverrides(existingValue as Record<string, unknown>, value, skipped);
       continue;
     }
 
@@ -242,6 +260,16 @@ function summarizeMatch(match?: OverwriteMatch): string | undefined {
   return parts.length > 0 ? parts.join(', ') : undefined;
 }
 
+/**
+ * 一行描述某个覆写文件「叫什么、管哪些订阅」，供内核校验失败时列出生效覆写。
+ * 无 match 显式写成「全局」而非留空：这里是错误诊断，读者要判断「这个文件为什么会
+ * 作用到当前订阅」，`ow list` 那种「没作用域就不打印该行」的省略在此会让人以为漏了信息。
+ * 「全局」与 CLAUDE.md「无 match 全局应用」同一措辞。
+ */
+export function describeOverwriteScope(file: OverwriteFileEntry): string {
+  return `${file.name} (${summarizeMatch(file.match) ?? '全局'})`;
+}
+
 /** hostname 后缀匹配：host 完全等于 domain，或为其子域（.domain 结尾）。 */
 function hostMatchesDomain(host: string, domain: string): boolean {
   const h = host.toLowerCase();
@@ -330,11 +358,21 @@ export function loadOverwriteFile(): OverwriteFileEntry[] {
   return results;
 }
 
-/** 应用已按开关与作用域筛选的覆写；不额外读取设置或改变节点池 */
-export function applyOverwrite(baseConfig: Record<string, unknown>, files: OverwriteFileEntry[]): Record<string, unknown> {
+/**
+ * 应用已按开关与作用域筛选的覆写；不额外读取设置或改变节点池。
+ *
+ * 返回 `~?key` 因匹配不到同名元素而跳过的补丁（带文件名），供调用方告警——
+ * 静默跳过与「分组名拼错」无法区分，用户会以为覆写生效了。
+ */
+export function applyOverwrite(baseConfig: Record<string, unknown>, files: OverwriteFileEntry[]): { config: Record<string, unknown>; skipped: SkippedMerge[] } {
   let result = { ...baseConfig };
-  for (const file of files) result = deepMergeWithOverrides(result, file.config);
-  return result;
+  const skipped: SkippedMerge[] = [];
+  for (const file of files) {
+    const fileSkipped: SkippedMerge[] = [];
+    result = deepMergeWithOverrides(result, file.config, fileSkipped);
+    for (const s of fileSkipped) skipped.push({ ...s, file: file.name });
+  }
+  return { config: result, skipped };
 }
 
 export function listOverwriteFile(): OverwriteListResult {

@@ -6,7 +6,7 @@ import { after, describe, it } from 'node:test';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-config-build-'));
 process.env.MIHOMO_CLI_DIR = tmpDir;
-const { assertConfigShape, buildConfig, dumpYaml, parseConfigContent } = await import('./config.js');
+const { assertConfigShape, buildConfig, buildKernelRejectHint, dumpYaml, parseConfigContent } = await import('./config.js');
 const { CliError } = await import('./errors.js');
 after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
@@ -122,5 +122,99 @@ describe('配置构建保留用户的节点和分流语义', () => {
     const groups = [{ name: 'G', proxies: 'DIRECT', use: ['missing-provider'] }];
     const { config } = buildConfig(dumpYaml({ 'proxy-groups': groups }), 'mixed');
     assert.deepEqual(config['proxy-groups'], groups);
+  });
+});
+
+describe('buildKernelRejectHint：内核拒绝配置时的排查线索', () => {
+  it('目标文案逐行一致（含覆写清单与作用域）', () => {
+    const hint = buildKernelRejectHint("ProxyGroup Developer: '' has unset fields: type", [
+      'overwrite.glados.yaml (url-domain=glados-config.com)',
+      'overwrite.seal.yaml (全局)',
+    ]);
+    assert.deepEqual(hint, [
+      '',
+      "  ProxyGroup Developer: '' has unset fields: type",
+      '',
+      '  当前生效的覆写文件:',
+      '    overwrite.glados.yaml (url-domain=glados-config.com)',
+      '    overwrite.seal.yaml (全局)',
+      '  若报错的元素来自覆写追加（~key 未匹配到同名元素时会新增），改用 ~?key 可在缺少该元素的订阅上跳过。',
+      '',
+      '  请修正订阅或覆写；当前运行时配置未改动。',
+    ]);
+  });
+
+  // 空清单的三种来源（无覆写文件、ow off、没命中 match）都不该出现这段：
+  // 问题必在订阅本身，多打一段只会把排查方向引偏
+  it('覆写清单为空时完全不含该段', () => {
+    assert.deepEqual(buildKernelRejectHint('boom', []), ['', '  boom', '', '  请修正订阅或覆写；当前运行时配置未改动。']);
+  });
+
+  it('内核多行输出逐行缩进，空行仍是空行（不缩出尾随空格）', () => {
+    const hint = buildKernelRejectHint('line1\n\nline2', []);
+    assert.deepEqual(hint, ['', '  line1', '', '  line2', '', '  请修正订阅或覆写；当前运行时配置未改动。']);
+  });
+
+  it('覆写摘要经终端消毒，ESC 序列不进输出', () => {
+    const hint = buildKernelRejectHint('boom', ['\x1b[31moverwrite.red.yaml\x1b[0m (全局)']);
+    assert.ok(!hint.join('\n').includes('\x1b'), 'hint 不应残留 ESC 字符');
+    assert.ok(hint.includes('    overwrite.red.yaml (全局)'));
+  });
+});
+
+describe('buildConfig 带出本次生效的覆写清单', () => {
+  const OW_MAIN = 'overwrite.yaml';
+  const OW_SCOPED = 'overwrite.glados.yaml';
+  const SUB = dumpYaml({ 'proxy-groups': [{ name: 'PROXY', type: 'select', proxies: ['DIRECT'] }], rules: ['MATCH,PROXY'] });
+
+  it('按 match 作用域过滤，顺序即合并顺序；未命中的订阅不列该文件', () => {
+    fs.writeFileSync(path.join(tmpDir, OW_MAIN), 'log-level: warning\n');
+    fs.writeFileSync(path.join(tmpDir, OW_SCOPED), 'match:\n  url-domain: glados-config.com\n~proxy-groups:\n  - {name: Developer, default-selected: TW}\n');
+    try {
+      const hit = buildConfig(SUB, 'mixed', { subName: 'mini1', subUrl: 'https://update.glados-config.com/mihomo/x/y/z/glados.yaml' });
+      assert.deepEqual(hit.overwriteSummaries, [`${OW_MAIN} (全局)`, `${OW_SCOPED} (url-domain=glados-config.com)`]);
+
+      // 追加语义有意保留：mini1 没有 Developer 分组，补丁被追加成缺 type 的分组，
+      // 由内核拒绝——提示里的覆写清单正是为这一幕准备的
+      assert.deepEqual((hit.config['proxy-groups'] as unknown[])[1], { name: 'Developer', 'default-selected': 'TW' });
+
+      const miss = buildConfig(SUB, 'mixed', { subName: 'other', subUrl: 'https://other.example.com/sub' });
+      assert.deepEqual(miss.overwriteSummaries, [`${OW_MAIN} (全局)`]);
+    } finally {
+      fs.rmSync(path.join(tmpDir, OW_MAIN));
+      fs.rmSync(path.join(tmpDir, OW_SCOPED));
+    }
+  });
+
+  it('没有覆写文件时为空数组', () => {
+    assert.deepEqual(buildConfig(SUB, 'mixed').overwriteSummaries, []);
+  });
+
+  // 与上一条同一个现场：订阅里没有 Developer 分组。~key 追加出残缺分组交给内核拒绝，
+  // ~?key 则跳过并告警——用户不必为此改 match 作用域
+  it('~?key 未命中时跳过并产生告警，配置仍可用', () => {
+    fs.writeFileSync(path.join(tmpDir, OW_SCOPED), '~?proxy-groups:\n  - {name: Developer, default-selected: TW}\n');
+    try {
+      const { config, warnings } = buildConfig(SUB, 'mixed', { subName: 'mini1', subUrl: 'https://update.glados-config.com/x/glados.yaml' });
+      // 订阅原有分组不受影响，也没有多出缺 type 的残缺分组
+      assert.deepEqual(config['proxy-groups'], [{ name: 'PROXY', type: 'select', proxies: ['DIRECT'] }]);
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0], /Developer/);
+      assert.match(warnings[0], /已跳过/);
+      assert.match(warnings[0], new RegExp(OW_SCOPED.replace('.', '\\.')));
+    } finally {
+      fs.rmSync(path.join(tmpDir, OW_SCOPED));
+    }
+  });
+
+  it('~?key 命中时正常合并且不告警', () => {
+    fs.writeFileSync(path.join(tmpDir, OW_SCOPED), '~?proxy-groups:\n  - {name: PROXY, default-selected: DIRECT}\n');
+    try {
+      const { config, warnings } = buildConfig(SUB, 'mixed');
+      assert.deepEqual(config['proxy-groups'], [{ name: 'PROXY', type: 'select', proxies: ['DIRECT'], 'default-selected': 'DIRECT' }]);
+      assert.deepEqual(warnings, []);
+    } finally {
+      fs.rmSync(path.join(tmpDir, OW_SCOPED));
+    }
   });
 });

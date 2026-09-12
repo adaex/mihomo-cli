@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 
 import { CliError } from './errors.js';
 import { deepMergeWithOverrides, filterOverwriteFilesByScope, normalizeMatch, parseOverrideKey } from './overwrite.js';
-import type { OverwriteFileEntry, OverwriteMatch } from './types.js';
+import type { OverwriteFileEntry, OverwriteMatch, SkippedMerge } from './types.js';
 
 describe('parseOverrideKey', () => {
   it('普通键无任何修饰', () => {
@@ -13,6 +13,7 @@ describe('parseOverrideKey', () => {
       arrayPrepend: false,
       arrayAppend: false,
       arrayMergeByName: false,
+      arrayMergeOnly: false,
     });
   });
 
@@ -40,6 +41,21 @@ describe('parseOverrideKey', () => {
     const r = parseOverrideKey('~proxies');
     assert.equal(r.key, 'proxies');
     assert.equal(r.arrayMergeByName, true);
+    assert.equal(r.arrayMergeOnly, false);
+  });
+
+  it('~?key 按 name 合并且不新增', () => {
+    const r = parseOverrideKey('~?proxy-groups');
+    assert.equal(r.key, 'proxy-groups');
+    assert.equal(r.arrayMergeByName, true);
+    assert.equal(r.arrayMergeOnly, true);
+  });
+
+  it('<~?key> 转义：键名本身以 ~? 开头', () => {
+    const r = parseOverrideKey('<~?weird>');
+    assert.equal(r.key, '~?weird');
+    assert.equal(r.arrayMergeByName, false);
+    assert.equal(r.arrayMergeOnly, false);
   });
 
   it('<+key> 转义：键名本身以 + 开头', () => {
@@ -124,6 +140,37 @@ describe('deepMergeWithOverrides', () => {
     deepMergeWithOverrides(target, { '~proxies': [{ name: 'a', port: 2 }] });
     // 原数组元素必须保持不变
     assert.deepEqual(original, [{ name: 'a', port: 1 }]);
+  });
+
+  // ~?key：只改已有、不新增。真实事故：机场的两条订阅 URL 同域名，覆写按 url-domain 生效，
+  // 其中一条没有 Developer 分组，~proxy-groups 的补丁被追加成缺 type 的残缺分组，
+  // 内核拒绝加载整份配置。用 ~? 表达「订阅下发了我才改」
+  it('~?key 命中同名元素时与 ~key 行为一致', () => {
+    const target = { 'proxy-groups': [{ name: 'Developer', type: 'select', proxies: ['A'] }] };
+    const r = deepMergeWithOverrides(target, { '~?proxy-groups': [{ name: 'Developer', 'default-selected': 'TW' }] });
+    assert.deepEqual(r['proxy-groups'], [{ name: 'Developer', type: 'select', proxies: ['A'], 'default-selected': 'TW' }]);
+  });
+
+  it('~?key 未命中同名元素时跳过，不追加残缺元素', () => {
+    const target = { 'proxy-groups': [{ name: 'Auto', type: 'url-test' }] };
+    const skipped: SkippedMerge[] = [];
+    const r = deepMergeWithOverrides(target, { '~?proxy-groups': [{ name: 'Developer', 'default-selected': 'TW' }] }, skipped);
+    assert.deepEqual(r['proxy-groups'], [{ name: 'Auto', type: 'url-test' }]);
+    assert.deepEqual(skipped, [{ key: 'proxy-groups', name: 'Developer' }]);
+  });
+
+  it('~?key 的目标键整体不存在时也跳过（不凭空造出数组）', () => {
+    const skipped: SkippedMerge[] = [];
+    const r = deepMergeWithOverrides({}, { '~?proxy-groups': [{ name: 'Developer' }] }, skipped);
+    assert.deepEqual(r['proxy-groups'], []);
+    assert.equal(skipped.length, 1);
+  });
+
+  it('~key 未命中仍追加（ssh 出口靠它新增节点，语义不受 ~? 影响）', () => {
+    const skipped: SkippedMerge[] = [];
+    const r = deepMergeWithOverrides({ proxies: [] }, { '~proxies': [{ name: 'SSH-work', type: 'socks5' }] }, skipped);
+    assert.deepEqual(r.proxies, [{ name: 'SSH-work', type: 'socks5' }]);
+    assert.deepEqual(skipped, []);
   });
 
   it('标量覆盖', () => {
