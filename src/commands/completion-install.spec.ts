@@ -156,3 +156,92 @@ describe('completion install/uninstall 的落盘行为', () => {
     assert.match(output, /zsh/, '拼错应给 did-you-mean');
   });
 });
+
+/**
+ * install 侧的覆盖闸门（与 uninstall 的守卫是同一条判据）。
+ *
+ * uninstall 早就不肯删「不像我们产物」的文件，install 却曾无条件 writeFileSync——
+ * 用户手写的 `_mihomo` 被静默销毁，而销毁之后 uninstall 反倒删得干干净净
+ * （那时它确实已经是我们的产物了）。一边守得严、一边直接覆盖，守的那道就没有意义。
+ */
+describe('completion install 不覆盖非本工具产物', () => {
+  it('zsh：已存在的手写补全拒绝覆盖，原内容一字不动', () => {
+    const target = path.join(home, '.zsh', 'completions', '_mihomo');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const mine = '#compdef mihomo\n# 我自己写的补全，攒了很久\ncompdef _my_custom mihomo\n';
+    fs.writeFileSync(target, mine);
+
+    const { status, output } = run(['completion', 'install', 'zsh']);
+    assert.notEqual(status, 0, '不是自己的产物时必须失败退出，不能静默覆盖');
+    assert.match(output, /不像是 mihomo-cli 生成的/);
+    assert.equal(fs.readFileSync(target, 'utf8'), mine, '用户文件必须一字未动');
+  });
+
+  it('fish：同理拒绝覆盖手写补全', () => {
+    const target = path.join(home, '.config', 'fish', 'completions', 'mihomo.fish');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const mine = 'for cmd in mihomo\n    complete -c $cmd -a "x"\nend\n';
+    fs.writeFileSync(target, mine);
+
+    const { status, output } = run(['completion', 'install', 'fish']);
+    assert.notEqual(status, 0, output);
+    assert.match(output, /不像是 mihomo-cli 生成的/);
+    assert.equal(fs.readFileSync(target, 'utf8'), mine);
+  });
+
+  it('已是本工具产物时照常覆盖：那才是真正的幂等，升级后重装要能更新脚本', () => {
+    const target = path.join(home, '.zsh', 'completions', '_mihomo');
+    assert.equal(run(['completion', 'install', 'zsh']).status, 0);
+    const first = fs.readFileSync(target, 'utf8');
+    // 篡改一行模拟「旧版本装的脚本」，重装应把它刷新掉
+    fs.writeFileSync(target, `${first}\n# 旧版本残留行\n`);
+    assert.equal(run(['completion', 'install', 'zsh']).status, 0, '自己的产物必须能被覆盖');
+    const second = fs.readFileSync(target, 'utf8');
+    assert.equal(second, first, '重装应回到当前版本的脚本内容');
+    assert.ok(!second.includes('旧版本残留行'));
+  });
+
+  it('目标不存在时正常安装（守卫只拦已存在且非本工具的文件）', () => {
+    const target = path.join(home, '.zsh', 'completions', '_mihomo');
+    assert.ok(!fs.existsSync(target));
+    assert.equal(run(['completion', 'install', 'zsh']).status, 0);
+    assert.match(fs.readFileSync(target, 'utf8'), /^#compdef mihomo mhm mh mihomo-cli/);
+  });
+});
+
+/**
+ * bash 半截标记块（起始标记在、结束标记缺）不得让两条命令互相甩锅。
+ *
+ * 只看起始标记做幂等判据时：install 报「已安装过，跳过」、uninstall 报「未找到标记，
+ * 未做改动」，双双退出 0 且都不碰文件——用户没有任何 CLI 路径能修好它。
+ * 成因是用户手工编辑删了后半段，或上次写入中途失败。
+ */
+describe('bash 半截标记块可自愈', () => {
+  const START = '# >>> mihomo-cli completion (append)';
+
+  it('只有起始标记时，install 照常追加完整块而非「跳过」', () => {
+    const target = path.join(home, '.bash_completion');
+    fs.writeFileSync(target, `# 用户自己的补全\nalias foo=bar\n\n${START}\n_mihomo_completions() { :; }\n`);
+
+    const { status, output } = run(['completion', 'install', 'bash']);
+    assert.equal(status, 0, output);
+    assert.ok(!output.includes('已安装过'), '半截块不算「已安装」，否则用户无路可走');
+    const after = fs.readFileSync(target, 'utf8');
+    assert.ok(after.includes(START.replace('>>>', '<<<')), '应补上完整的结束标记');
+    assert.ok(after.includes('alias foo=bar'), '用户原有内容必须保留');
+  });
+
+  it('自愈后 uninstall 能正常剥离，用户内容仍在', () => {
+    const target = path.join(home, '.bash_completion');
+    fs.writeFileSync(target, `# 用户自己的补全\nalias foo=bar\n\n${START}\n_mihomo_completions() { :; }\n`);
+    run(['completion', 'install', 'bash']);
+
+    const { status, output } = run(['completion', 'uninstall', 'bash']);
+    assert.equal(status, 0, output);
+    const after = fs.readFileSync(target, 'utf8');
+    assert.ok(after.includes('alias foo=bar'), '用户内容必须原样保留');
+    // 半截块的残骸（孤立起始标记）不属于成对块，剥离只动完整块——这是刻意的：
+    // 不确定边界的内容宁可留着让用户自己看，也不猜着删
+    assert.ok(!after.includes(START.replace('>>>', '<<<')), '完整块应被移除');
+  });
+});

@@ -100,42 +100,47 @@ describe('doctor：体检透传配置构建的 warnings', () => {
  * npm registry 查询与本地检查重叠执行。
  *
  * 该查询是纯网络往返（真机实测约 780ms），而 doctor 其余全部检查加起来约 75ms——
- * 串在末尾就是让用户白等近一秒。这条用例锁的是**并发结构**而非某次耗时：
- * 桩 npm 与桩内核各睡 SLEEP_MS，串行需 2×，重叠只需 1×，判据取两者中间。
+ * 串在末尾就是让用户白等近一秒。
  *
- * 桩 npm 经 PATH 前置注入（同 service-concurrency.spec 的手法，不碰真实 npm）；
- * 内核 `-t` 的 sleep 让「本地慢检查」有确定时长，否则本地部分太快、重叠省下的
- * 时间淹没在进程启动噪音里，断言就失去区分力。
+ * **判据是两段区间真的交叠，不是总耗时低于某个阈值。** 先写的是墙钟版
+ * （桩各睡 N 秒、断言总耗时 < 1.75N），连调两次阈值仍在整套并行跑时误红：
+ * 实测单独跑 2.44s、与其他 suite 并行 2.93s、套件变大后又涨到 3.27–3.94s——
+ * 墙钟同时受机器负载、`node --test` 的 suite 并发和 tsx 转译影响，阈值再怎么放宽
+ * 都只是把误红概率往后推，而误红的表现是「并发结构坏了」这种指向完全错误的失败。
  *
- * SLEEP_MS 取 2s 而非 1s：两条路径并非同时起跑（npm 先发，内核校验排在若干本地
- * 检查之后，实测错开约 0.4s），加上 tsx 转译与 Node 启动约 0.3s，1s 时实测落在
- * 1.46–1.49s、离 1.6s 阈值只剩 7% 余量，CI 上必然偶发误红。2s 时固定开销占比减半，
- * 实测约 2.5s vs 串行下界 4s，余量足够。代价是这条用例本身要跑 2.5s
+ * 现在让两个桩各自把进入/退出时刻写进日志，直接断言 `npm` 的区间与内核 `-t` 的区间
+ * 有交集。这与被测性质（两件事同时在跑）一一对应，且对机器快慢完全免疫：
+ * 串行实现下两段必然首尾相接、交集为空，无论机器多慢都红。
  */
 describe('doctor：npm 查询与本地检查并行', () => {
-  const SLEEP_MS = 2_000;
+  /** 桩的睡眠时长：只需长到让两段区间的交叠可辨，不参与任何阈值判断 */
+  const SLEEP_MS = 1_000;
 
-  it('npm 查询与内核校验重叠，总耗时接近单个而非两者之和', () => {
+  it('npm 查询与内核校验的执行区间真的交叠', () => {
     const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-doctor-bin-'));
+    const timeline = path.join(binDir, 'timeline.log');
     try {
-      // 桩 npm：只认 `view`，睡够时长后吐一个版本号；其余子命令不该被 doctor 调用
-      fs.writeFileSync(path.join(binDir, 'npm'), ['#!/bin/sh', `[ "$1" = "view" ] || exit 9`, `sleep ${SLEEP_MS / 1000}`, 'echo 0.0.1', ''].join('\n'), {
-        mode: 0o755,
-      });
-      // 桩内核的 -t 也睡同样时长，制造一个时长确定的本地慢检查
+      // 两个桩用同一份记录格式：`<who> <start|end> <epoch 毫秒>`。
+      // 用 date +%s%3N 不可靠（macOS 的 date 不支持 %3N），改用 python3 取毫秒
+      const stamp = (who: string, phase: string) => `python3 -c "import time;print('${who} ${phase} %d' % (time.time()*1000))" >> ${JSON.stringify(timeline)}`;
+
+      fs.writeFileSync(
+        path.join(binDir, 'npm'),
+        ['#!/bin/sh', '[ "$1" = "view" ] || exit 9', stamp('npm', 'start'), `sleep ${SLEEP_MS / 1000}`, stamp('npm', 'end'), 'echo 0.0.1', ''].join('\n'),
+        { mode: 0o755 },
+      );
       fs.writeFileSync(
         path.join(dataDir, 'kernel', 'mihomo'),
         [
           '#!/bin/sh',
           '[ "$1" = "-v" ] && { echo "Mihomo Meta v1.19.13 darwin arm64"; exit 0; }',
-          `[ "$1" = "-t" ] && { sleep ${SLEEP_MS / 1000}; [ -s "$5" ] && exit 0; exit 7; }`,
+          `[ "$1" = "-t" ] && { ${stamp('kernel', 'start')}; sleep ${SLEEP_MS / 1000}; ${stamp('kernel', 'end')}; [ -s "$5" ] && exit 0; exit 7; }`,
           'exit 7',
           '',
         ].join('\n'),
         { mode: 0o755 },
       );
 
-      const started = Date.now();
       const r = spawnSync(process.execPath, ['--import', 'tsx', ENTRY, 'doctor'], {
         encoding: 'utf8',
         env: {
@@ -147,21 +152,25 @@ describe('doctor：npm 查询与本地检查并行', () => {
         },
         timeout: 60_000,
       });
-      const elapsed = Date.now() - started;
       const output = `${r.stdout || ''}${r.stderr || ''}`;
 
-      // 先确认两个桩都真的被调用了——否则「跑得快」只是因为压根没执行，是假阳性
+      // 先确认两个桩都真的被调用了——否则「区间为空」也可能只是因为压根没执行，是假阳性
       assert.match(r.stdout || '', /配置构建: 当前订阅通过内核校验/, `内核校验未执行: ${output}`);
       assert.match(r.stdout || '', /CLI 版本/, `版本检查未执行: ${output}`);
       assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
 
-      // 串行为 2×SLEEP_MS + 固定开销（实测约 450ms：Node/tsx 启动、两条路径错开起跑、
-      // 其余本地检查），即下界约 4.45s；并行实测 2.44–2.47s 单独跑、2.93s 与其他 suite
-      // 并行跑（node --test 会并发执行 describe）。取 1.75×（3.5s）卡在两者中间：
-      // 距并行上沿 19%、距串行下界 21%，两侧余量对称。别再往下压——2.4s 的实测值配
-      // 1.5×（3s）阈值只剩 2% 余量，CI 负载稍高就会误红，而误红的表现是「并发结构坏了」
-      // 这种指向完全错误的失败
-      assert.ok(elapsed < SLEEP_MS * 1.75, `npm 查询未与本地检查重叠：耗时 ${elapsed}ms，串行下界约 ${SLEEP_MS * 2}ms`);
+      const marks = new Map<string, number>();
+      for (const line of fs.readFileSync(timeline, 'utf8').split('\n').filter(Boolean)) {
+        const [who, phase, ms] = line.trim().split(/\s+/);
+        marks.set(`${who}.${phase}`, Number(ms));
+      }
+      for (const key of ['npm.start', 'npm.end', 'kernel.start', 'kernel.end']) {
+        assert.ok(Number.isFinite(marks.get(key)), `时间线缺少 ${key}：${fs.readFileSync(timeline, 'utf8')}`);
+      }
+
+      // 交集 = min(两个 end) - max(两个 start)，> 0 即两段同时在跑
+      const overlapMs = Math.min(marks.get('npm.end')!, marks.get('kernel.end')!) - Math.max(marks.get('npm.start')!, marks.get('kernel.start')!);
+      assert.ok(overlapMs > 0, `npm 查询与内核校验未同时运行（交集 ${overlapMs}ms）：串行实现下两段首尾相接，交集必然 <= 0`);
     } finally {
       fs.rmSync(binDir, { recursive: true, force: true });
     }

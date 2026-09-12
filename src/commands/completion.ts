@@ -69,6 +69,24 @@ const MIRROR_NAMES = Object.keys(MIRROR_ALIASES);
 const RESET_TARGET_NAMES = [...new Set(RESET_TARGETS.flatMap(t => t.aliases))];
 const SHELLS = ['zsh', 'bash', 'fish'] as const;
 
+/**
+ * 转义要放进 zsh **单引号**字符串的文本。
+ *
+ * 必须是 `'\''`（闭合 → 转义的字面撇号 → 重开），**不能用 `''`**：后者只在
+ * `RC_QUOTES` 选项开启时才是转义，而该选项**默认关闭**。默认下 `'it''s'` 是两个
+ * 相邻单引号串的拼接，撇号被静默吃掉——实测 `print -r -- 'it''s a test'` 输出
+ * `its a test`（开 RC_QUOTES 才是 `it's a test`）。
+ *
+ * 后果不是语法错误而是**描述文本损坏**：`_describe` 拿到的说明少了撇号，用户看到
+ * 的补全提示是错的，且没有任何报错。fish 分支两个函数之外用的是 `\'`（在 fish 里
+ * 正确），两处写法不同更容易让人以为 zsh 这边也是对的。
+ *
+ * 当前注册表里没有带撇号的描述，故这是给下一个写描述的人排的雷，不是现存可触发的 bug。
+ */
+function zshSingleQuote(s: string): string {
+  return s.replace(/'/g, "'\\''");
+}
+
 function buildZsh(commands: Command[], groups: SubGroup[]): string {
   const lines: string[] = [
     '#compdef mihomo mhm mh mihomo-cli',
@@ -78,7 +96,7 @@ function buildZsh(commands: Command[], groups: SubGroup[]): string {
     '_mihomo() {',
     '  local -a commands subcmds',
     '  commands=(',
-    ...commandWords(commands).map(c => `    '${c.word}:${c.desc.replace(/'/g, "''")}'`),
+    ...commandWords(commands).map(c => `    '${c.word}:${zshSingleQuote(c.desc)}'`),
     '  )',
     '',
     '  _arguments -C \\',
@@ -97,7 +115,7 @@ function buildZsh(commands: Command[], groups: SubGroup[]): string {
     const isDirectory = group.tokens.includes('directory');
     lines.push(`        ${aliases})`);
     lines.push('          subcmds=(');
-    for (const s of group.words) lines.push(`            '${s.word}:${s.desc.replace(/'/g, "''")}'`);
+    for (const s of group.words) lines.push(`            '${s.word}:${zshSingleQuote(s.desc)}'`);
     lines.push('          )');
     lines.push('          if (( CURRENT == 2 )); then');
     lines.push("            _describe 'subcommand' subcmds");
@@ -144,7 +162,19 @@ function buildZsh(commands: Command[], groups: SubGroup[]): string {
     '  esac',
     '}',
     '',
-    '_mihomo "$@"',
+    // 结尾必须是 compdef 注册，**不能是裸调用 `_mihomo "$@"`**。
+    //
+    // 两条安装路径对结尾行的要求不同，而裸调用只满足其中一条：
+    // - 放进 fpath（`completion install zsh`）：compinit 按 `#compdef` 首行自动注册，
+    //   函数体被 autoload，结尾写什么都行——两种写法实测都能注册全部四个别名
+    // - `eval "$(mihomo completion zsh)"`（README 与下方 CLI 提示都推荐）：`#compdef`
+    //   只是条注释、不起作用，而裸调用会在补全上下文之外执行 `_arguments`，实测报
+    //   `_arguments:comparguments:327: can only be called from completion function`，
+    //   且 `_comps[mihomo]` 前后都是 0 —— 补全完全没注册，eval 却返回 0。
+    //   用户照文档做了、看到没报错（错误在 stderr 一闪而过）、补全就是不工作。
+    //
+    // compdef 同时满足两条：实测 eval 后四个别名 `_comps` 全部为 1，fpath 安装不受影响。
+    'compdef _mihomo mihomo mhm mh mihomo-cli',
   );
   return lines.join('\n');
 }
@@ -158,9 +188,12 @@ function buildBash(commands: Command[], groups: SubGroup[]): string {
       const aliases = group.tokens.join('|');
       const words = group.words.map(w => w.word).join(' ');
       if (group.tokens[0] === 'directory') {
+        // 子命令词表用 `words`（派生自 DIRECTORY_SUBCOMMANDS），不硬编码 "open"：
+        // 此前这里写死了 open，而同函数的通用分支（下方）用的是派生词表——`dir` 新增
+        // 子命令时通用分支自动跟上、这条不会，正是本模块头部注释声称不存在的第二份词表
         return `    ${aliases})
       if [[ \${COMP_CWORD} -eq 2 ]]; then
-        COMPREPLY=( $(compgen -W "open" -- "\${cur}") )
+        COMPREPLY=( $(compgen -W "${words}" -- "\${cur}") )
       elif [[ "\${COMP_WORDS[2]}" == "open" ]]; then
         COMPREPLY=( $(compgen -W "${DIR_TARGETS.join(' ')}" -- "\${cur}") )
       fi
@@ -217,6 +250,22 @@ complete -F _mihomo_completions mihomo mhm mh mihomo-cli
 `;
 }
 
+/**
+ * 转义要放进 fish **单引号**字符串的文本。
+ *
+ * fish 的单引号里只有两个转义序列：`\'` 与 `\\`。故**反斜杠必须先转义**，否则以
+ * 反斜杠结尾的描述会生成 `-d 'desc\'`——末尾的 `\'` 被读作转义撇号，字符串不闭合，
+ * 整份补全语法错误（实测生成形态确认）。先替换 `\` 再替换 `'`，顺序不能反：
+ * 反过来会把刚插入的转义反斜杠再转义一次。
+ *
+ * 与 zshSingleQuote 是同族但规则不同的两个函数，刻意不合并：两个 shell 的引号
+ * 语义本就不同（zsh 单引号内无任何转义序列，只能靠闭合-重开），合并成一个「通用
+ * 转义」必然要在里面再分支，反而更容易写错。
+ */
+function fishSingleQuote(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
 function buildFish(commands: Command[], groups: SubGroup[]): string {
   const lines: string[] = [
     '# mihomo-cli fish 补全（mihomo completion fish 生成；安装: mihomo completion install fish，或 mihomo completion fish | source）',
@@ -224,7 +273,7 @@ function buildFish(commands: Command[], groups: SubGroup[]): string {
     'for cmd in mihomo mhm mh mihomo-cli',
   ];
   for (const c of commandWords(commands)) {
-    lines.push(`    complete -c $cmd -f -a '${c.word}' -d '${c.desc.replace(/'/g, "\\'")}'`);
+    lines.push(`    complete -c $cmd -f -a '${c.word}' -d '${fishSingleQuote(c.desc)}'`);
   }
   for (const group of groups) {
     const seen = group.tokens.join(' ');
@@ -232,14 +281,15 @@ function buildFish(commands: Command[], groups: SubGroup[]): string {
     // 对齐 bash/zsh 的「第二位置参数为空才补子命令」语义
     const condition = group.tokens.includes('directory') ? `${seen}; and not __fish_seen_subcommand_from open` : seen;
     for (const s of group.words) {
-      lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from ${condition}" -a '${s.word}' -d '${s.desc.replace(/'/g, "\\'")}'`);
+      lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from ${condition}" -a '${s.word}' -d '${fishSingleQuote(s.desc)}'`);
     }
   }
   // 目录目标只在 open 已被敲下之后提供（bash 查 COMP_WORDS[2]、zsh 查 words[2]）；
-  // 此前 seen 名单含 open，`dir <TAB>` 时 dir 已被 seen，目标与 open 一起挤进只有 open 合法的位置
-  lines.push(
-    `    complete -c $cmd -n "__fish_seen_subcommand_from directory dir dirs directories; and __fish_seen_subcommand_from open" -a '${DIR_TARGETS.join(' ')}'`,
-  );
+  // 此前 seen 名单含 open，`dir <TAB>` 时 dir 已被 seen，目标与 open 一起挤进只有 open 合法的位置。
+  // 触发 token 取自 groups（注册表派生），不硬编码四个别名——给 directory 加/改别名时
+  // 子命令行会跟上而这行不会，两边就此分叉（实测注入一个新别名可复现）
+  const directoryTokens = groups.find(g => g.tokens.includes('directory'))?.tokens.join(' ') ?? 'directory';
+  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from ${directoryTokens}; and __fish_seen_subcommand_from open" -a '${DIR_TARGETS.join(' ')}'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from ui; and not __fish_seen_subcommand_from ${UI_NAMES.join(' ')}" -a '${UI_NAMES.join(' ')}'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion" -a 'install uninstall ${SHELLS.join(' ')}' -d '安装/卸载补全'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion; and __fish_seen_subcommand_from install uninstall" -a '${SHELLS.join(' ')}'`);
@@ -275,6 +325,40 @@ export function buildCompletionScript(shell: string, commands: Command[]): strin
 
 /** bash 追加安装的幂等标记：~/.bash_completion 是共享文件，不能覆盖用户自己的内容 */
 const BASH_MARKER = '# >>> mihomo-cli completion (append)';
+/** 结束标记，与起始标记成对；uninstall 按这一对切出自己那段 */
+const BASH_END_MARKER = BASH_MARKER.replace('>>>', '<<<');
+
+/**
+ * 文件里是否有**成对且顺序正确**的标记块。
+ *
+ * install 的幂等判据与 uninstall 的切割判据必须是同一条：只看起始标记的话，
+ * 半截块（用户手工编辑删掉了后半段，或上次写入中途失败）会让两条命令互相甩锅——
+ * install 说「已安装过，跳过」、uninstall 说「未找到标记，未做改动」，双双退出 0
+ * 且都不碰文件，用户没有任何 CLI 路径能修好它（实测复现）。
+ * 判成「无完整块」后 install 会照常追加一段完好的，uninstall 随后也能正常剥离。
+ */
+function hasBashMarkerBlock(content: string): boolean {
+  const start = content.indexOf(BASH_MARKER);
+  const end = content.indexOf(BASH_END_MARKER);
+  return start !== -1 && end !== -1 && end > start;
+}
+
+/**
+ * zsh/fish 产物的指纹：**本工具独有的完整行**，install 与 uninstall 共用同一判据。
+ *
+ * 不能取行业约定的公共前缀——zsh 任何 `_mihomo` 补全（用户手写或第三方分发）首行
+ * 都必须是 `#compdef mihomo`，只比对前缀会把别人的文件认成自己的。fish 同理取完整
+ * 的四别名循环行。与 buildCompletionScript 的产物逐字对齐。
+ *
+ * 收口成一处而非两边各写一份：install 的覆盖闸门与 uninstall 的删除闸门必须是同一
+ * 条判据，否则会出现「uninstall 拒绝删的文件，install 照样覆盖」这种自相矛盾
+ * （v4.12.0 前就是如此，见 installCompletion 的注释）。
+ */
+function productFingerprint(shell: string): string | null {
+  if (shell === 'zsh') return '#compdef mihomo mhm mh mihomo-cli';
+  if (shell === 'fish') return 'for cmd in mihomo mhm mh mihomo-cli';
+  return null;
+}
 
 /** 各 shell 的补全落盘位置：独占文件名的 shell（zsh/fish）直接覆盖写，天然幂等 */
 function completionInstallPath(shell: string): string | null {
@@ -310,19 +394,47 @@ function installCompletion(shell: string | undefined, commands: Command[]): void
 
   try {
     if (shell === 'bash') {
-      // ~/.bash_completion 可能已有用户自己的补全：含标记则幂等跳过，否则追加
+      // ~/.bash_completion 可能已有用户自己的补全：含**完整**标记块则幂等跳过，否则追加。
+      // 判据要求成对标记（hasBashMarkerBlock）：只看起始标记会让半截块变成死锁——
+      // install 说「已装过」、uninstall 说「没找到标记」，两边都不动手
       const existing = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
-      if (existing.includes(BASH_MARKER)) {
+      if (hasBashMarkerBlock(existing)) {
         console.log('已安装过（~/.bash_completion 已包含 mihomo 补全），跳过');
         return;
       }
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.appendFileSync(target, `\n${BASH_MARKER}\n${script}${BASH_MARKER.replace('>>>', '<<<')}\n`);
+      fs.appendFileSync(target, `\n${BASH_MARKER}\n${script}${BASH_END_MARKER}\n`);
       console.log(colors.green('已追加到 ~/.bash_completion（重新打开终端生效）'));
       return;
     }
 
-    // zsh: #compdef 必须是文件首行（compinit 的约定），标记无处放——独占文件名直接覆盖
+    // zsh: #compdef 必须是文件首行（compinit 的约定），标记无处放——故用整文件指纹把关。
+    //
+    // **覆盖前必须确认这个文件是我们自己的**，判据与 uninstall 完全相同
+    // （productFingerprint）。此前这里是无条件 writeFileSync，理由写的是「独占文件名，
+    // 直接覆盖天然幂等」——但「文件名归我们」正是 uninstall 明确拒绝做的假设：
+    // 用户手写或第三方分发的 `~/.zsh/completions/_mihomo` 会被 install 静默销毁，
+    // 而销毁之后 uninstall 反而删得干干净净（那时它确实已经是我们的产物了）。
+    // 一边守得严、一边直接覆盖，守的那道就没有意义（实测可复现）。
+    // 已是本工具产物时照常覆盖——那才是真正的幂等，也让升级后重装能更新脚本内容。
+    const fingerprint = productFingerprint(shell);
+    if (fingerprint && fs.existsSync(target)) {
+      const existing = fs.readFileSync(target, 'utf8');
+      if (!existing.includes(fingerprint)) {
+        throw new CliError(`${target} 已存在且不像是 mihomo-cli 生成的补全，已跳过安装`, {
+          label: '安装中止',
+          hint: [
+            '该文件可能是你自己或其他工具写的，覆盖会造成不可恢复的丢失。',
+            '确认无用后先手动删除，再重新安装:',
+            `  rm ${target}`,
+            `  mihomo completion install ${shell}`,
+            '',
+            '或改为手动输出到别处:',
+            `  mihomo completion ${shell} > <你选择的路径>`,
+          ],
+        });
+      }
+    }
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, script, { mode: 0o644 });
     console.log(colors.green('已写入（重新打开终端生效）'));
@@ -372,7 +484,7 @@ function uninstallCompletion(shell: string | undefined, commands: Command[]): vo
   try {
     if (shell === 'bash') {
       const existing = fs.readFileSync(target, 'utf8');
-      const endMarker = BASH_MARKER.replace('>>>', '<<<');
+      const endMarker = BASH_END_MARKER;
       const start = existing.indexOf(BASH_MARKER);
       const end = existing.indexOf(endMarker);
       if (start === -1 || end === -1 || end < start) {
@@ -396,12 +508,11 @@ function uninstallCompletion(shell: string | undefined, commands: Command[]): vo
     }
 
     // zsh/fish：独占文件名，但删之前必须确认是本工具生成的。
-    // 指纹取**本工具独有的完整行**，不能取行业约定的公共前缀——zsh 任何 _mihomo 补全
-    // （用户手写或第三方分发）首行都必须是 `#compdef mihomo`，只比对前缀会误删别人的文件。
-    // fish 同理取完整的四别名循环行。与 buildCompletionScript 的产物逐字对齐
+    // 判据收口在 productFingerprint，与 installCompletion 的覆盖闸门是同一条——
+    // 两边各写一份迟早漂移，而漂移的形态就是「一边守、一边不守」
     const existing = fs.readFileSync(target, 'utf8');
-    const fingerprint = shell === 'zsh' ? '#compdef mihomo mhm mh mihomo-cli' : 'for cmd in mihomo mhm mh mihomo-cli';
-    if (!existing.includes(fingerprint)) {
+    const fingerprint = productFingerprint(shell);
+    if (!fingerprint || !existing.includes(fingerprint)) {
       throw new CliError(`${target} 不像是 mihomo-cli 生成的补全，已跳过删除`, {
         label: '卸载中止',
         hint: ['该文件可能是你自己或其他工具写的。确认无用后手动删除:', `  rm ${target}`],
