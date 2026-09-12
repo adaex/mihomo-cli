@@ -6,6 +6,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { LOCK_STALE_MS } from './paths.js';
+import { SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS } from './service.js';
 
 /**
  * 服务层两条并发防线的消费点验证。
@@ -322,15 +323,29 @@ esac
     );
   });
 
-  // 场景 B（最坏形态）：launchctl 慢但在预算内（2.5s < 3s），锁内三次调用全部走完
+  // 场景 B（最坏形态）：launchctl 慢但在预算内（2.0s < 3s），锁内三次调用全部走完
   // （bootout、disable、print-disabled 复核、递增），这是「慢而成功」的真实最坏持锁。
-  // 有人往锁内加第 4 次 launchctl 调用（约 +2.6s）或调大单次预算时，此断言转红
+  // 桩 sleep 取 2.0s 而非贴近预算的 2.9s：实测持锁 = 三次 sleep + 子进程调用开销，
+  // 开销在并行负载下可膨胀数倍，sleep 贴边会让「持锁 < 强夺阈值」的断言在高负载下
+  // 假失败（发布验证时实测过一次）；「调大单次预算 / 往锁内加第 4 次调用」的护栏由
+  // 下面的常量关系断言承担，时序断言只兜「预算内的慢仍不破阈值」这一端
   it('慢而成功的 launchctl 走完全程，最坏持锁仍低于强夺阈值', async () => {
-    const result = await runStopScenario(2.5);
+    const result = await runStopScenario(2.0);
 
     assert.equal(result.status, 0, `预算内的慢调用应全部成功，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
     assert.match(result.stdout, /RESULT:ok/, `stop 应成功，stdout: ${result.stdout}`);
     assert.match(result.stdout, /EPOCH:1/, '锁体完整执行：disable 复核通过后停止计数已递增');
     assert.ok(result.lockHoldMs < LOCK_STALE_MS, `最坏持锁必须低于强夺阈值 ${LOCK_STALE_MS}ms（实测 ${result.lockHoldMs}ms）`);
+  });
+
+  // 锁内 launchctl 调用次数 × 单次预算必须低于强夺阈值——「别再往锁内加东西」的
+  // 机器可查形式。乘数 3 = 锁内三个环节（bootout、disable、print-disabled 复核）；
+  // 往锁内加第 4 次调用时必须同步改乘数（3→4 即转红），逼着加之前先算总预算
+  it('锁内预算的常量关系：调用次数 × 单次预算 < 强夺阈值', () => {
+    const LOCK_INNER_LAUNCHCTL_CALLS = 3;
+    assert.ok(
+      LOCK_INNER_LAUNCHCTL_CALLS * SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS < LOCK_STALE_MS,
+      `锁内 ${LOCK_INNER_LAUNCHCTL_CALLS} 次 launchctl × 单次 ${SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS}ms 已达/超 LOCK_STALE_MS(${LOCK_STALE_MS}ms)，并发 start 会在持锁期间强夺进入——加锁内调用或调大预算前先算总预算（并同步本断言的乘数）`,
+    );
   });
 });

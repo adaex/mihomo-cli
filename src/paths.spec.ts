@@ -206,10 +206,12 @@ describe('withFileLock', () => {
     );
 
     // 修复正确时两个子进程 ~600ms 内自行退出；超时说明互相死等（等价于把 CLI
-    // 锁死），杀掉并判失败，避免回归成挂起时拖死整个测试套件
+    // 锁死），杀掉并判失败，避免回归成挂起时拖死整个测试套件。
+    // 20s 是防挂起守护而非时序断言：并行负载下三个 node+tsx 子进程的启动可被
+    // 拖慢一个量级，守护收太紧会把「慢」误判成「死等」
     let timeoutHandle: NodeJS.Timeout | undefined;
     const timedOut = new Promise<null>(resolve => {
-      timeoutHandle = setTimeout(() => resolve(null), 8000);
+      timeoutHandle = setTimeout(() => resolve(null), 20_000);
     });
     let codes: (number | null)[] | null;
     try {
@@ -219,7 +221,7 @@ describe('withFileLock', () => {
     }
     if (codes === null) {
       for (const child of children) child.kill();
-      assert.fail('等待者子进程未在 8s 内退出（可能互相死等或死循环）');
+      assert.fail('等待者子进程未在 20s 内退出（可能互相死等或死循环）');
     }
     for (const code of codes) {
       assert.equal(code, 0, '等待者子进程应正常退出');

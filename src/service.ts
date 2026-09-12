@@ -96,7 +96,8 @@ const LAUNCHCTL_TIMEOUT_MS = 5000;
  * 3s 不够说明系统已病态，此时快速失败（bootout/disable 抛 CliError）比持锁超时更
  * 安全：后者会静默拆掉整条并发防线。
  */
-const SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS = 3_000;
+// 导出供 service-concurrency.spec 的常量关系断言（调用次数 × 单次预算 < 强夺阈值）消费
+export const SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS = 3_000;
 
 // === 服务目标 ===
 
