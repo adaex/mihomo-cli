@@ -73,6 +73,7 @@ function validatePort(value: unknown, key: string): number | undefined {
  * 端口解析的唯一入口（config 构建、热重载、ui 文案、doctor 共用）：
  * settings.ports 覆盖默认 7890/9090，非法值直接抛错而非静默回退——
  * 端口突降回默认会让 controller 调用与热重载连到错误地址，且用户毫无线索。
+ * 相等校验在合并默认值之后执行：单侧配置撞另一侧默认（如 mixed=9090）同样拒绝。
  */
 export function getPorts(settings: Settings = readSettings()): { mixed: number; controller: number } {
   const ports = settings.ports;
@@ -80,15 +81,22 @@ export function getPorts(settings: Settings = readSettings()): { mixed: number; 
   if (ports === null || typeof ports !== 'object' || Array.isArray(ports)) {
     throw new CliError('settings.json 的 ports 需为对象，如 { "mixed": 17890, "controller": 19090 }', { label: '配置错误' });
   }
-  const mixed = validatePort(ports.mixed, 'ports.mixed');
-  const controller = validatePort(ports.controller, 'ports.controller');
-  if (mixed !== undefined && controller !== undefined && mixed === controller) {
-    throw new CliError(`ports.mixed 与 ports.controller 不能相同（当前均为 ${mixed}）`, {
+  const configuredMixed = validatePort(ports.mixed, 'ports.mixed');
+  const configuredController = validatePort(ports.controller, 'ports.controller');
+  // 先并默认值再比相等：只配 mixed=9090 时若跳过校验，mixed-port 与 external-controller
+  // 会同端口——内核 -t 只做解析照样通过，真正启动时第二个监听 bind 失败，doctor 还误报端口空闲
+  const mixed = configuredMixed ?? DEFAULT_MIXED_PORT;
+  const controller = configuredController ?? CONTROLLER_PORT;
+  if (mixed === controller) {
+    // 撞默认值时指明哪一侧来自默认：用户只配了一个键，光说「均为 X」看不出另一侧从哪来
+    const defaultedKey = configuredMixed === undefined ? 'ports.mixed' : configuredController === undefined ? 'ports.controller' : null;
+    const source = defaultedKey ? `：${defaultedKey} 未配置，取默认 ${mixed}` : '';
+    throw new CliError(`ports.mixed 与 ports.controller 不能相同（当前均为 ${mixed}${source}）`, {
       label: '配置错误',
       hint: ['混合端口与控制器端口各需独立端口，相同会导致内核启动失败'],
     });
   }
-  return { mixed: mixed ?? DEFAULT_MIXED_PORT, controller: controller ?? CONTROLLER_PORT };
+  return { mixed, controller };
 }
 
 /** 遮蔽单条 URL 里的敏感信息（query token / userinfo / 路径型令牌）。 */
