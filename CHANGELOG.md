@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### 修复
+
+- **`help` / `version` 在豁免场景下不再创建数据目录**。三个守卫（Node 版本/平台/root）对纯信息命令提前放行，但 `ensureDirs()` 无条件执行——实测伪造 root 跑 `sudo mihomo version` 正常退出，却在 root 的 HOME（sudo 下可能是 `/var/root`）建出全套 `data/kernel/logs/runtime/subscriptions`；非 macOS 上的 `mihomo help` 同理。豁免语义此前只免了「拒绝」没免「副作用」，与 index.ts 两处注释（「纯信息命令不碰服务、目录与提权」「root 下会在那里建一套用户永远看不到的数据目录」）直接矛盾。豁免名单（`GUARD_EXEMPT_COMMANDS`）现在同时决定是否跳过 `ensureDirs`，按 `command.name` 匹配，别名（`-h`/`-v`/`--help`/`--version`）经 `findCommand` 解析后自动覆盖；非豁免命令的守卫顺序、目录创建行为均不变。
+
 ## [4.8.1] - 2026-09-12
 
 用户实测：同机场两条订阅只有一条有某个分组，覆写补丁把另一条的配置搞成内核拒绝加载。新增 `~?key` 表达「只改已有、不新增」，并补上「报错指不出覆写」的可诊断性缺口。单测 340（+15）。

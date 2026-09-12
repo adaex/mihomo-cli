@@ -67,6 +67,10 @@ function clearProxyEnv(): void {
 /**
  * 守卫豁免命令：纯信息命令不碰服务、目录与提权，root 与非 macOS 下都安全。
  * （root 守卫与平台守卫共用同一份豁免名单——两者的豁免语义完全一致，没必要维护两张表）
+ *
+ * 名单同时决定 main() 是否跳过 ensureDirs：豁免免掉的是**副作用面**而不只是「拒绝」，
+ * 否则 sudo mihomo version 会在 /var/root、非 macOS 上的 mihomo help 会在用户家目录
+ * 建出一套用户永远看不到的数据目录。
  */
 const GUARD_EXEMPT_COMMANDS = new Set(['help', 'version']);
 
@@ -163,7 +167,13 @@ async function main(): Promise<void> {
   assertSupportedNodeVersion(command.name);
   assertSupportedPlatform(command.name);
   assertNotRoot(command.name);
-  ensureDirs();
+
+  // 豁免命令连 ensureDirs 一起跳过：help/version 的读写都不经过数据目录
+  //（printHelp 只读注册表与路径字符串，printVersion 只探测内核二进制），按名匹配
+  // 已覆盖别名 token 与改写命令（改写只动 argv，不动豁免判定）
+  if (!GUARD_EXEMPT_COMMANDS.has(command.name)) {
+    ensureDirs();
+  }
 
   if (command.group === 'meta') assertKnownFlags(args.slice(1), [], command.name);
 

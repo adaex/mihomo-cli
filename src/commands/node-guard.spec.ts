@@ -72,6 +72,9 @@ describe('Node 版本守卫', () => {
       const { status } = runAsNodeVersion('20.0.0', [cmd]);
       assert.equal(status, 0, `${cmd} 不应被 Node 版本守卫拦下`);
     }
+    // 豁免连副作用一起免：旧 Node 上跑 version 不该顺手建出数据目录
+    //（守卫放行 ≠ 可以 ensureDirs，那与 root/非 macOS 下的是同一族缺陷）
+    assert.equal(fs.existsSync(path.join(tmpDir, 'data')), false, '豁免命令不得创建数据目录');
   });
 
   it('守卫先于 ensureDirs：被拒时不留下数据目录', () => {
