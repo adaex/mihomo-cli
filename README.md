@@ -18,7 +18,8 @@
 - 🩺 **体检诊断** - `mihomo doctor` 一键检查内核/服务/端口/订阅/配置/连通性/CLI 版本并给修复指引
 - 🔌 **端口逃生口** - 默认 7890/9090 可经 `settings.json` 的 `ports` 覆盖，与其他代理工具并存
 - 🔌 **连通性探测** - 启动与状态展示独立确认「代理真的通」，不通时归因到订阅过期/流量用尽/节点失效
-- ⌨️ **Shell 补全** - `mihomo completion zsh|bash|fish` 生成补全脚本
+- ⌨️ **Shell 补全** - `mihomo completion zsh|bash|fish` 生成补全脚本，可一键安装与卸载
+- 🔎 **查看生效配置** - `mihomo config [--json]` 展示由订阅与覆写推导出的运行配置，停止状态下同样可用
 - 📝 **日志管理** - 每次启动归档上一次日志，保留 7 天，支持列表/跟随/编号查看
 - 🎨 **Web UI** - 一键打开 Web 控制面板 (zash/metacubexd/yacd)
 - 🔄 **内核更新** - 自动检查更新，支持 GitHub 镜像加速

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [4.8.0] - 2026-09-12
+
+清掉 `CODE_REVIEW` 挂着的三条服务并发缺陷（并顺着同族形态又找出三处），补齐三处用户侧缺口，并把发布可追溯性补上——此前 78 个 npm 版本一个 tag 都没有。单测 325（+24）。
+
 ### 新增
 
 - **`mihomo config [--json]`**：查看当前生效的运行配置。**重新推导而非读 `runtime/config.yaml`**——那个文件在 `stop` 时被 `clearRuntime()` 整个删掉，而「停着的时候看看配置对不对」恰是最需要它的场景；改完订阅或覆写想确认结果，也不必先把服务跑起来。推导走 `buildConfig`（与 `start` 同一条路径，故看到的就是启动会写进去的内容），刻意不调 `prepareConfigForStart`——那会执行内核原生校验，而这是只读展示命令，校验归 `doctor` 和 `start`。`secret` 脱敏后展示。
@@ -11,6 +15,13 @@
 ### 文档
 
 - 补上彻底卸载的**顺序**陷阱：先 `npm uninstall -g` 会留下带 `KeepAlive` 的 LaunchAgent plist 与已装的补全，而能清理它们的命令已经没了。给出反了之后的手动补救步骤（已逐条核对 label、域与路径）。
+
+### 仓库
+
+- **补录 78 个历史 tag**：此前仓库一个 tag 都没有，78 个 npm 版本无法定位源码，CHANGELOG 的记录也指不到代码。落点取「该版本号在 package.json 中存活、且提交时间不晚于 npm publish 时刻」的最后一个提交——直接取「该版本最后一个提交」会让 10 个 tag 指向发布之后才写的代码。规则唯一确定 74 个，4 个早期版本（先发后推，提交晚于 publish 2–7 分钟）回退取首个提交并在 tag message 注明；`1.5.2` 已被 unpublish，不打。
+- 为 v4.x 建 19 个 GitHub Release，正文取自 CHANGELOG 对应小节；v4.2.2 当时未留记录，改用提交主题成文并标注该缺口。
+- 新增 `SECURITY.md`（支持范围、私密上报渠道，以及内核下载校验、controller 鉴权、订阅凭据存放、提权范围这几条信任边界的实际实现）与 dependabot 配置（npm + github-actions，weekly）。
+- 修掉 `package-lock.json` 长期停留在 4.7.1 的版本号漂移。
 
 ### 修复
 
