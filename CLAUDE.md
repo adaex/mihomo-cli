@@ -116,7 +116,7 @@ npm run build
 - match 的 `name` 与 `subscription` 是同义键，加载时归一到内部 `subscription` 字段，判据（matchesScope）只此一处；两者同时出现报错（同义键无法判断以谁为准），原键名存 `subscriptionKey` 仅供展示——`ow list` 与内核拒绝提示回显用户写的键名，显示一个文件里搜不到的键名会让人找不到源头。订阅名支持 `*`/`?` glob：全串匹配（`edu*` 不命中 `xedu1`）、无通配字符时退化为精确比对（老写法行为不变）、其余字符字面
 - glob **不用正则实现**，走双指针贪心回溯（`nameMatchesPattern`）。「转义成正则再 test」的写法有灾难性回溯：`*a`×20 的 pattern 配 64 个 `a` 的订阅名实测 **70 秒**，而 64 正是 SAFE_NAME_RE 的上限——合法输入就能挂死 CLI，不是理论风险。改实现前先跑 spec 里那条带耗时断言的用例；`?` 逐 UTF-16 码元比较，放开星平面字符（emoji）时要重新评估
 - 覆写文件顶层 `enabled` 与 `match` 同为元数据键，加载时剥离、绝不进最终配置（内核对未知顶层键宽松，实测 `-t` 放行 `enabled: false`，拦不住要靠自己）；只认真布尔，`no`/`off` 在 YAML 里是**字符串**、按 truthy 会让停用静默失效，故非布尔报错并提示写 `false`。被停用的文件仍完整加载并校验 match：`ow` 列表要显示它与它的作用域，且避免停用期间藏错、一启用就炸
-- 元数据键不接受操作符（`enabled!`/`+match` 报错）：剥离在解构、早于操作符解析，`enabled!: false` 既不停用文件又会把 `enabled` 当普通键写进运行配置，正是本功能要消灭的静默失效；`match!` 是同族存量洞，一并堵上。判据是 `parseOverrideKey(k).key` 落在 METADATA_KEYS 且与原 token 不同，新增元数据键只改那张表
+- 元数据键（`match`/`enabled`）的两类近失都报错，判据都在 `assertNoMetadataKeyLookalikes`，新增元数据键只改 `METADATA_KEYS` 那张表：① **操作符形态**（`enabled!`/`+match`/`<enabled>`）——剥离在解构、早于操作符解析，`enabled!: false` 既不停用文件又会把 `enabled` 当普通键写进运行配置；`match!` 是同族存量洞。判据为 `parseOverrideKey(k).key` 落在表内且与原 token 不同。② **大小写/空白变体**（`Enabled`/`MATCH`/`enabled `）——剥离用精确键名，这类键同样两头落空，且 mihomo 顶层没有这些键、必然是笔误。判据为小写去空白后落在表内且原样不等于。两类失效都零反馈（内核对未知顶层键不报错），必须在加载期拦
 - YAML 里 `*` 开头的标量是别名语法：`name: *edu` 解析失败、整个文件被静默跳过，故解析失败的 warn 在错误含 alias 时追加「加引号」提示；推广订阅名 glob 后前缀通配是自然写法，光说「解析失败」用户想不到是引号问题
 - `selectActiveOverwriteFiles` 是「本次参与合并的文件」唯一出口，`enabled` 与 match 两道过滤合在其中，不拆成并列函数——漏调一个就会让停用文件照常合并；新增筛选维度继续加在该函数内。`listOverwriteFile` 是**有意的旁路**（列表要显示全部文件，含被停用的）
 - `ow` 列表的计数措辞是「N 个未禁用」而非「N 个生效」：该列表看不到当前活跃订阅、无从判断 match 是否命中，真·生效清单在内核拒绝提示里（已按 match 过滤），两处措辞不同是为了不互相打架

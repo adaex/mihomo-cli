@@ -848,7 +848,7 @@ describe('覆写文件 enabled 开关', () => {
   it('元数据键带操作符报错，不得绕过剥离落进配置', () => {
     // 剥离发生在解构、早于操作符解析：enabled!: false 既不停用文件，
     // 又会被规范成键 enabled 写进最终配置——正是本功能要消灭的静默失效
-    for (const key of ['enabled!', 'match!', '+enabled', 'match+']) {
+    for (const key of ['enabled!', 'match!', '+enabled', 'match+', '<enabled>', '~enabled']) {
       write('overwrite.op.yaml', `${key}: false\nlog-level: debug\n`);
       try {
         assert.throws(
@@ -864,6 +864,41 @@ describe('覆写文件 enabled 开关', () => {
       } finally {
         cleanup('overwrite.op.yaml');
       }
+    }
+  });
+
+  it('元数据键的大小写/空白近失报错，不静默当普通配置键', () => {
+    // YAML 键大小写敏感：`Enabled: false` 既不停用文件（剥离用精确键名），
+    // 又会原样写进运行配置，而内核对未知顶层键不报错——用户零反馈。
+    // 与操作符形态是同一种静默失效，只是走大小写这条路
+    for (const key of ['Enabled', 'ENABLED', 'Match', 'MATCH', 'enabled ', ' enabled']) {
+      write('overwrite.cap.yaml', `"${key}": false\nlog-level: debug\n`);
+      try {
+        assert.throws(
+          () => loadOverwriteFile(),
+          (e: unknown) => {
+            assert.ok(e instanceof CliError, `${key} 应抛 CliError`);
+            assert.equal((e as CliError).label, '覆写配置错误');
+            assert.match((e as Error).message, /疑似想写元数据键/);
+            return true;
+          },
+          `"${key}" 应被拒绝`,
+        );
+      } finally {
+        cleanup('overwrite.cap.yaml');
+      }
+    }
+  });
+
+  it('与元数据键无关的键不被误伤（含形近但语义无关的）', () => {
+    // 误报零容忍：只认「小写去空白后完全等于元数据键」，不做模糊猜测
+    write('overwrite.ok.yaml', 'enabled-by: me\nmatcher: x\nmatches: [a]\nlog-level: debug\n');
+    try {
+      const files = loadOverwriteFile();
+      assert.deepEqual(Object.keys(files[0].config).sort(), ['enabled-by', 'log-level', 'matcher', 'matches']);
+      assert.equal(files[0].enabled, true);
+    } finally {
+      cleanup('overwrite.ok.yaml');
     }
   });
 

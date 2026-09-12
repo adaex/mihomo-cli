@@ -519,15 +519,21 @@ export function selectActiveOverwriteFiles(files: OverwriteFileEntry[], scope?: 
 const METADATA_KEYS = new Set(['match', 'enabled']);
 
 /**
- * 元数据键不接受操作符修饰。
+ * 元数据键不接受操作符修饰，也不接受大小写/空白变体。
  *
- * 剥离发生在解构（早于 mergeConfigLevel 的操作符解析），所以 `enabled!: false`
- * 既不会停用文件，又会被 parseOverrideKey 规范成键 `enabled` 落进最终配置——
- * 正是本功能要消灭的「以为停用了其实生效」。`match!` 同理（存量洞，一并堵上）。
- * 真想要名为 `enabled` 的**配置**键（mihomo 顶层目前没有）仍可用 `<enabled>` 转义：
- * 那条路径解析后键名等于原始 token 之外的形态，不在此拦截范围。
+ * 两类都会造成同一种静默失效——文件没被停用，键还被当普通配置写进运行配置，
+ * 而内核对未知顶层键宽松、`-t` 不会替我们拦下，用户零反馈：
+ *
+ * - **操作符**：剥离发生在解构（早于 mergeConfigLevel 的操作符解析），`enabled!: false`
+ *   会被 parseOverrideKey 规范成键 `enabled` 落进最终配置。`match!` 同理（存量洞，一并堵上）。
+ *   尖括号转义 `<enabled>` 同样被拦（解析后键名也等于 `enabled`）：代价是没有「写一个
+ *   真名为 enabled 的配置键」的逃生口，但 mihomo 顶层没有这个键，暂无实际影响。
+ * - **大小写/空白**：YAML 键大小写敏感，`Enabled: false` 既不是元数据键（不停用文件）
+ *   又不是任何 mihomo 原生键（纯噪音）。判据是「小写去空白后等于元数据键、但原样不等于」——
+ *   与 isOverwriteFilenameTypo 同一思路（只认整体近失，不做模糊猜测）。mihomo 顶层
+ *   不存在 Enabled/Match 之类的键，故这种写法必然是笔误，报错不会误伤。
  */
-function assertNoOperatorOnMetadataKeys(config: Record<string, unknown>, fileName: string): void {
+function assertNoMetadataKeyLookalikes(config: Record<string, unknown>, fileName: string): void {
   for (const rawKey of Object.keys(config)) {
     const parsed = parseOverrideKey(rawKey).key;
     if (parsed !== rawKey && METADATA_KEYS.has(parsed)) {
@@ -536,6 +542,17 @@ function assertNoOperatorOnMetadataKeys(config: Record<string, unknown>, fileNam
         hint: [
           `match 与 enabled 是本 CLI 的元数据键，在合并前就被剥离，带操作符写法（如 ${rawKey}）不会生效，反而会把 ${parsed} 当普通配置键写进运行配置。`,
           `请直接写 ${parsed}: <值>。`,
+        ],
+      });
+    }
+    // 大小写/空白近失：剥离用的是精确键名，`Enabled:` 既不停用文件也不是 mihomo 原生键
+    const normalized = rawKey.trim().toLowerCase();
+    if (normalized !== rawKey && METADATA_KEYS.has(normalized)) {
+      throw new CliError(`覆写文件 "${fileName}" 的 "${rawKey}" 疑似想写元数据键 ${normalized}`, {
+        label: '覆写配置错误',
+        hint: [
+          `YAML 键区分大小写与空白，"${rawKey}" 不会被识别为 ${normalized}——文件不会被停用/限定作用域，该键反而会当普通配置写进运行配置（内核对未知顶层键不报错，不会有任何提示）。`,
+          `请写成 ${normalized}: <值>。`,
         ],
       });
     }
@@ -601,13 +618,13 @@ export function loadOverwriteFile(): OverwriteFileEntry[] {
         // 被停用的文件同样完整加载并校验 match：`ow` 列表要显示它的作用域，且避免
         // 「停用期间藏着错误、一启用就炸」
         const { match, enabled, ...config } = parsed;
-        assertNoOperatorOnMetadataKeys(config, file);
+        assertNoMetadataKeyLookalikes(config, file);
         results.push({ name: file, path: filePath, config, match: normalizeMatch(match, file), enabled: normalizeEnabled(enabled, file) });
       } else if (parsed !== null) {
         console.warn(`警告: 覆写文件 "${file}" 顶层必须是对象，已跳过`);
       }
     } catch (e) {
-      // normalizeMatch / normalizeEnabled / assertNoOperatorOnMetadataKeys 抛的 CliError
+      // normalizeMatch / normalizeEnabled / assertNoMetadataKeyLookalikes 抛的 CliError
       // 必须上抛到 main().catch 统一渲染：吞成 warn + 跳过文件虽然也是 fail-closed，
       // 但用户只看到一行「解析失败」，看不见哪个键错了、该怎么改
       if (e instanceof CliError) throw e;
