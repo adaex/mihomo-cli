@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [4.10.0] - 2026-09-13
 
 覆写作用域与单文件开关两项增强，并堵上三个相邻的静默失效。单测 649（+46）。
 
@@ -22,7 +22,7 @@
 
 ### 测试
 
-- 新增 `src/commands/overwrite.spec.ts`（CLI 级，7 条）：`ow` 列表与 `status` 的展示此前完全无覆盖，而「被停用的文件仍要列出并标注」是产品承诺——若日后改成加载时直接丢弃，纯单元层面 `selectActiveOverwriteFiles` 照样为空、测不出来。反向验证：改成丢弃后 4 条转红
+- 新增 `src/commands/overwrite.spec.ts`（CLI 级，8 条）：`ow` 列表与 `status` 的展示此前完全无覆盖，而「被停用的文件仍要列出并标注」是产品承诺——若日后改成加载时直接丢弃，纯单元层面 `selectActiveOverwriteFiles` 照样为空、测不出来。反向验证：改成丢弃后 4 条转红
 
 ## [4.9.2] - 2026-09-12
 
