@@ -11,8 +11,9 @@ function openDirectory(args: string[]): void {
   const target = args[2];
 
   // 路径无条件打印：openUrl 是 detached spawn，检不出失败（见 open.ts），
-  // 打出来用户即便没弹出 Finder 也能自己点开
-  if (!target || target === 'root') {
+  // 打出来用户即便没弹出 Finder 也能自己点开。
+  // 只有未传参才默认 root：空串（`dir open ""`，变量展开为空的笔误）此前也打开根目录
+  if (target === undefined || target === 'root') {
     console.log(`正在打开: 根目录 (${USER_DATA_DIR})`);
     openUrl(USER_DATA_DIR);
     return;
@@ -65,6 +66,13 @@ export async function cmdDirectory(args: string[]): Promise<void> {
   await dispatchSubcommand(args, SUBCOMMANDS, {
     fallback: printDirectoryInfo,
     onUnknown: action => {
+      // 选项出现在子命令位置：裸 dir 只展示目录信息（选项由分发前的白名单统一拦）
+      if (action.startsWith('-')) {
+        throw new CliError(`未知的选项: ${action}`, {
+          label: '参数错误',
+          hint: ['裸 dir 只展示目录信息，不接受选项', '', '用法: mihomo dir open [root|subs|logs|data|runtime|kernel]'],
+        });
+      }
       const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
       const suggestion = suggestSimilar(action, names);
       throw new CliError(`未知的目录子命令: ${action}`, {

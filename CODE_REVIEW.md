@@ -1,12 +1,34 @@
 # 代码审查：验证结论与边界
 
-当前审查：2026-09-12，待发布（基于 v4.8.1 之上的 16 项修复）
+当前审查：2026-09-12，待发布（基于 v4.9.0 之上的 13 项复审修复）
 
-本轮对全仓做了一次分模块深审（launchd 与进程、数据锁与下载、配置构建与覆写、命令层与横切），产出 28 条发现并修掉 16 条：三条实测复现的并发缺陷（锁 deadline 删新鲜锁、TUN 运行中配置变更被切回 Mixed、热重载成功不复读停止计数）、覆写嵌套键语义统一为字面（用户拍板）、以及一批「承诺写在注释、机制没盖到」的一致性缺陷（紧贴值选项三套解析器、sub 白名单全组放行、补全四份词表、豁免命令副作用、warnings 出口）。剩余 12 条多为待真机验证或低危，见「未覆盖与待复核」。launchd 的真实启停与 TUN 提权流程未做端到端复测
+本轮在 v4.9.0 发布当天复审：一人通读并发状态机全线（service/runtime/paths/start/stop/reset/install 命令层），三个分模块深审（覆写与配置、命令层、进程下载），重要线索逐条实测或回上游源码核实。修 13 项：一条控制面安全边界遗漏（订阅可开第二个无鉴权控制器）、一条热重载自愈缺口，其余为一致性收口。两条子审查报的缺陷经对照实验排除（pkill 自匹配、见下）。launchd 的真实启停与 TUN 提权流程仍未做真机端到端复测。单测 596（+45），全部反向验证过的新用例在恢复缺陷时转红
 
 规则见 CLAUDE，修复历史见 CHANGELOG；本文保留验证方法、仍有效的实测事实与未覆盖风险，改相关代码时同步更新
 
-## 本轮验证
+## 本轮验证（v4.9.0 复审）
+
+| 范围 | 验证方式与结论 |
+| --- | --- |
+| 控制面锁定 | 实测 `buildConfig`：订阅带 `external-controller-tls/-unix/-pipe/-cors/-routing-mark` 与顶层 `tls` 段时全部剥除、且产生锁定项 warning；键名逐个回上游 `MetaCubeX/mihomo` `config/config.go`（General 段）与 `hub/route/server.go`（TLS 需证书、unix 无前提、CORS 作用于主控制器）核对。反向验证：恢复旧删除清单两条用例即红 |
+| 热重载查询失败回退 | PATH 前置计数桩 launchctl（入口 print 成功→热重载 print 退 112→kickstart→健康窗恢复 running）+ 子进程真实模块：查询失败走 kickstart 并健康确认，不再整体失败。反向验证：getServiceStatus 移回 try 外用例即红 |
+| 补全指纹 | 临时 HOME 跑真实 CLI：仅含 `#compdef mihomo` 行业首行的第三方补全、fish 只循环 mihomo 的手写文件均拒绝删除；本工具完整指纹正常装卸；XDG_CONFIG_HOME 下安装/卸载同位置。反向验证：恢复弱指纹两条用例即红。zsh/bash 生成脚本经 `zsh -n`/`bash -n`，fish 仍未装 |
+| 覆写矛盾操作符 | `+x+`/`~x!`/`~?x!`/`<x>+!`/`~<x>!` 抛 CliError；裸 `+`/`~`/`!`/`~?` 报空键名；`~?key`、`<+key>!`、`+<+key>` 等合法单一操作符不误伤 |
+| secret 类型 | 非字符串 controller_secret 在 buildConfig 报「配置错误」；字符串 secret 两个展示出口脱敏；`config --json` 信封 `{config,warnings}` 下用户配置自带的 `warnings` 键不被顶替 |
+| 内核下载 | `--fail-with-body` 在 buildKernelCurlArgs 纯函数用例锁定；`parseTarEntrySize` 对 bsdtar（第 5 列）与 GNU tar（owner/group 第 3 列）两种 `-tv` 布局取大小，目录行计 0，超 512MB 上限被调用方拒绝 |
+| 命令层口径 | 真实 CLI（隔离目录 + 隔离 label）：`ui ""`/`dir open ""`/`sub update ""` 报错；`ow on -u`/`sub use x -u5s` 未运行也报错；重复 `--mirror` 报错；`ow -s`/`dir -x` 给未知选项文案；resolveUiName 纯函数测大小写归一 |
+| 损坏备份 | 子进程真实模块连写两次损坏内容：settings.json 与 cache.json 的 `.bak` 都只保留第一份原件 |
+| 既有防线回归 | typecheck/596 测试/Biome/build 全绿；4.9.0 的锁三进程编排、热重载计数复读、TUN 模式重启、sub 白名单等用例全部仍通过 |
+
+**复审实测排除的疑似缺陷**：
+
+- 「`sudo pkill -f <PATTERN>` 匹配自己命令行、杀掉 sudo 父进程」：对照实验证明**不成立**——`escapeRegExp` 把点转义成 `config\.yaml`，进程命令行里出现的是带反斜杠的正则源码、正则却要匹配字面点，恰好坏掉自匹配；把 `\.` 换回 `.` 的对照组立刻自匹配。三个 root 脚本同此结论，当前不加行首锚（未来若改用未转义拼接必须重验）
+- 「detached 孙进程可作端到端到达标记」：`spawnSync` 子进程退出过快时，其 detached 的孙进程（如 `open`）可能来不及执行，PATH 桩收不到调用——openUrl 本就是 fire-and-forget（见 open.ts 注释），这类断言要抽纯函数测，不要靠桩文件
+- 文件锁 stat→unlink 不复核 inode：仅在等待者被冻结（合盖/换出）叠加系统时钟前跳时可利用，微秒级窗口，接受为已知理论缺口
+
+---
+
+## v4.9.0 深审验证（历史，结论仍有效）
 
 类型检查、551 项测试（+211）、Biome（实际检查 79 个文件）与构建通过；registry 产物拉回实跑（version、紧贴值报错）确认 tarball 完整。**时序用例的负载敏感性已收口**：发布验证时一次与 build 并行的 `npm test` 假失败（持锁时长断言的桩 sleep 贴预算上限，开销在并行负载下膨胀即破阈值）。修法是护栏分工——时序断言只兜「预算内的慢不破阈值」（桩 sleep 2.5s→2.0s，余量 3.8s），「调大单次预算/往锁内加调用」改由常量关系断言承担（调用次数 × 单次预算 < 强夺阈值，反向验证：预算调 4s 精确转红）；并行 build+test 三轮压测全过
 
@@ -45,7 +67,7 @@
 - root-guard.spec 验证入口在创建数据目录前拒绝 root；用户态 LaunchAgent 无权创建 TUN
 - launchd 的 terminating signal 与 last exit code 两字段互斥；需要 describeExitCause 同时覆盖
 - disabled label 的 bootstrap 硬失败，enable 必须在前；bootstrap 返回 0 不表示内核已健康，TUN 的 kill -0 也不能排除僵尸进程
-- 内核四种下载通道曾各自下载真实产物；kernel.spec 覆盖通道选择、标准资产选择、HTTPS 与归档路径/类型检查
+- 内核四种下载通道曾各自下载真实产物；kernel.spec 覆盖通道选择、标准资产选择、curl/gh 参数纯函数、tar 列表大小解析（`parseTarEntrySize`）。tar 的路径穿越（-tzf）与类型（-tvzf）两道守卫逻辑内联在 downloadKernel，无直接用例，改动时需补
 - 上游 mihomo v1.19.30 的已查资产未提供 checksums；来源约束、大小比对和执行自检应保留，不能写成已验证哈希
 - HTTP 超时覆盖响应体，错误体读取限量；订阅 URL 按完整 URL 脱敏，不能按合法逗号拆开
 - 归档列表与清理使用相同判据，同秒多次轮转的序号后缀可被列出（log-files.spec）
@@ -54,7 +76,8 @@
 ## 未覆盖与待复核
 
 - 健康观察窗只覆盖启动初期，之后的 OOM/panic 由 status/doctor 展示异常退出；延长 start 到无限观察不在目标内
-- install 恢复分支与 restart 回退的并发只能手工双终端复现（需真装了内核的机器）：自动化要么得真跑 launchctl enable/disable（留永久记录），要么退化成对实现清单的断言。已修；热重载成功分支已用「PATH 前置桩 launchctl + 桩 controller」自动化（service-concurrency.spec，不碰真实 launchd），回退与 install 恢复分支仍只能手工复现
+- install 恢复分支的并发只能手工双终端复现（需真装了内核的机器）：自动化要么得真跑 launchctl enable/disable（留永久记录），要么退化成对实现清单的断言。已修；热重载成功分支（PATH 前置桩 launchctl + 桩 controller）与查询失败回退分支（计数桩 launchctl）均已自动化（service-concurrency.spec，不碰真实 launchd），install 恢复分支仍只能手工复现
+- 控制器家族锁定（external-controller-tls/-unix/-cors、tls 段）只回上游源码核对了键名与启动前提、用 buildConfig 实测了剥除，没用真内核验证过额外监听真的开不出来；unix socket 文件创建等内核侧行为同理
 - `kickstart -k` 超时 60s 远超锁的 10s 强夺阈值，必须留在锁外，故它与并发 bootout 的交错无法用锁串行化；现在只保证「不再 re-enable/re-bootstrap」与「不再把用户的 stop 报成内核故障」，不是把这个交错消掉了
 - 锁内 launchctl 调用有持锁预算（最坏总时长 < `LOCK_STALE_MS`）：start 侧 enable+bootstrap 两次默认 5s、恰好等于阈值，是既有基线（startService/installService 本就如此），不因本轮变化；stop 侧 bootout+disable+复核共三次，单次 `SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS`（3s，合计 9s），别再往任何锁内加东西。锁内三环节（复核先于递增、递增在锁内、bootout 与 disable 同锁）谁也挪不出锁，缩减调用次数的路走不通，理由见 service.ts 该常量注释
 - 停止计数是多写者读-改-写且刻意不加锁：极端交错下可能用较小值覆盖较大值，使某条后续命令偶发判为「变了」而中止。判据是 `!==` 本就偏保守，接受之
@@ -66,7 +89,8 @@
 - `restartService` 的 copy-truncate 路径中 `allocateArchivePath()` 在 best-effort try 之外：同秒已存在 1001 个归档（序号耗尽）时 CliError 会穿出而非被吞。病态场景，接受之；动这段时别顺手「修」进 try——归档名拿不到时轮转整体跳过是更合理的语义
 - `listeners` 是否进删除清单属未定产品决策（订阅以 listeners 投递入站是否合法）：本批未动，订阅自带 listeners 仍原样进运行配置
 - TUN 运行中 `sub use`/`ow` 的按原模式重启与更新提示（`start tun`）已修，但真实 TUN 提权流程的端到端（sudo 弹窗、路由切换、恢复）未复测，仅经 runtime.spec 的桩内核路径验证决策
-- 本轮深审其余未修的低危项：`unhandledRejection`/`uncaughtException` 已统一口径但渲染函数本身不可注入测试；补全 install 的「已含标记块幂等跳过」无用例；`NO_COLOR`/stderr 设色经 pty 手工验证、无自动化；clearProxyEnv 对企业 env 代理网络的影响已文档化（CLAUDE）但无提示机制
+- 本轮深审其余未修的低危项：`unhandledRejection`/`uncaughtException` 已统一口径但渲染函数本身不可注入测试；补全 install 的「已含标记块幂等跳过」无用例；`NO_COLOR`/stderr 设色经 pty 手工验证、无自动化；clearProxyEnv 对企业 env 代理网络的影响已文档化（CLAUDE）但无提示机制。`npm_config_proxy` 等 npm 专属代理变量未清——npm 读 npmrc 不依赖该 env、gh/curl 不识别，不构成下载死锁，保持现状
+- 4.9.0 复审记录但未修（判定接受或不可自动化）：`FORCE_COLOR` 不支持、`TERM=dumb` 仍出色；无 `--` 结束选项约定（当前无需要它的入口，订阅名已禁止 `-` 开头）；tar 穿越/类型两道守卫仍内联无直接测试；gh 资产名未拦前导 `-`（仅 GitHub API 被篡改时可达）；代理探测 curl 未加 `--proto =https`（只看 204 无机密）；findBinaryInDir 同目录多匹配时不保证精确名优先（有 -v + 版本对账两道门）
 
 ## 已评估未采纳
 

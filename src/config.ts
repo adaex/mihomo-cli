@@ -19,6 +19,31 @@ import { sanitizeTerminal } from './utils.js';
  */
 export const SAFE_YAML_LOAD_OPTIONS: yaml.LoadOptions = { maxAliases: 200 };
 
+/**
+ * 系统锁定的入站/控制面键：只允许来自 settings 或系统约束，订阅与覆写显式提供时
+ * 剥除并告警（buildConfig）。新增入站/控制器键时加在这里——redir/tproxy 与
+ * external-controller-tls/-unix/-cors 都曾是漏网之鱼。
+ * 对应上游 mihomo `config/config.go` 的 General 段（端口家族 + ExternalController* +
+ * ExternalUI* + Secret）；listeners 刻意不在内（产品决策未定）。
+ */
+export const LOCKED_CONFIG_KEYS = [
+  'mixed-port',
+  'port',
+  'socks-port',
+  'redir-port',
+  'tproxy-port',
+  'external-controller',
+  'external-controller-tls',
+  'external-controller-unix',
+  'external-controller-pipe',
+  'external-controller-cors',
+  'external-controller-routing-mark',
+  'external-ui',
+  'external-ui-name',
+  'external-ui-url',
+  'secret',
+] as const;
+
 /** 统一入口:带别名上限的 yaml.load,替代裸 yaml.load。 */
 export function loadYamlSafe(content: string): unknown {
   return yaml.load(content, SAFE_YAML_LOAD_OPTIONS);
@@ -164,10 +189,11 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
     lockedWarnings.push(`覆写 ~?${s.key} 的补丁 "${s.name}" 未匹配到当前订阅中的同名元素，已跳过${s.file ? `（${s.file}）` : ''}`);
   }
   // 嵌套层形似操作符的键：已按字面处理，但用户可能以为操作符会生效（如把 +rules 写进
-  // dns 里）；若是 mihomo 原生键则无碍，文案里说清可忽略
+  // dns 里）；若是 mihomo 原生键则无碍，文案里说清可忽略。不承诺最终保留——后续文件的
+  // key! 整体覆盖可能让它从终态消失（收集发生在逐文件合并期）
   for (const n of operatorShapedKeys) {
     lockedWarnings.push(
-      `覆写${n.file ? `文件 ${n.file} 的` : ''}嵌套键 "${n.key}" 形似操作符，已按字面键名保留；操作符只在覆写文件顶层生效，若这是 mihomo 原生键可忽略本提示`,
+      `覆写${n.file ? `文件 ${n.file} 的` : ''}嵌套键 "${n.key}" 形似操作符，已按字面键名处理；操作符只在覆写文件顶层生效，若这是 mihomo 原生键可忽略本提示`,
     );
   }
   for (const [key, value] of Object.entries(BASE_CONFIG)) {
@@ -176,28 +202,50 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
     }
   }
 
-  // 系统锁定项：controller/端口固定是 UI 与热重载的统一依赖地址（redir/tproxy 透明代理入站
-  // 同属本清单，在 mode 分支之前删除，Mixed 与 TUN 共用）；secret 仅取自用户设置。
-  // 端口经 settings.ports（getPorts）解析——默认 7890/9090，可在 settings.json 覆盖（与其他代理工具共存的逃生口）。
+  // 系统锁定项：入站端口与整个控制面只能来自 settings 与系统约束，订阅/覆写（远端不可信
+  // 内容）显式设置时必须剥除并告警——静默忽略就是「用户以为生效了，实际行为完全没变」。
+  // 端口经 settings.ports（getPorts）解析——默认 7890/9090，可在 settings.json 覆盖
+  // （与其他代理工具共存的逃生口）。
+  //
+  // 控制器家族一个都不能漏：external-controller-tls 可在 0.0.0.0 再开一个控制器（配合顶层
+  // tls 段给证书）、-unix 可在任意路径建 socket 控制器、-cors 直接放宽现有控制器的浏览器
+  // 跨域，而订阅自带的 secret 同在此处被剥除、默认又不设密钥——额外控制器将无鉴权，打破
+  // 「控制器仅监听本机回环」的信任边界（上游 config.go 的 General 键逐个核对过）。
+  // -pipe 仅 Windows 内核识别，一并剥除保持跨平台输出一致。
   // allow-lan 不锁定——订阅/覆写显式提供时按其值（见入站需求），未提供时由上面的 BASE_CONFIG 循环兜底为 false。
+  // listeners 不在本清单：订阅以 listeners 投递入站是否合法属未定的产品决策，不在删除表收口。
+  const ignoredLockedKeys = LOCKED_CONFIG_KEYS.filter(k => k in withOverwrites);
+  if (ignoredLockedKeys.length > 0) {
+    lockedWarnings.push(
+      `订阅/覆写中的系统锁定项已忽略: ${ignoredLockedKeys.join('、')}（入站端口与控制面由 mihomo-cli 管理；端口与 controller secret 在 settings.json 配置）`,
+    );
+  }
+  for (const key of LOCKED_CONFIG_KEYS) {
+    delete withOverwrites[key];
+  }
+  // 顶层 tls 段是 external-controller-tls 的证书/私钥来源（上游 parseTLS 只喂控制器），
+  // 与控制器家族同属控制面、一并锁定，否则剥了监听地址却留下证书配置只会误导排查
+  if ('tls' in withOverwrites) {
+    delete withOverwrites.tls;
+    lockedWarnings.push('订阅/覆写中的 tls 段已忽略: 该段仅用于外部控制器 TLS 证书，控制面由 mihomo-cli 管理');
+  }
+
   const ports = getPorts(settings);
   systemConfig['external-controller'] = `127.0.0.1:${ports.controller}`;
   systemConfig['mixed-port'] = ports.mixed;
-  delete withOverwrites['mixed-port'];
-  delete withOverwrites.port;
-  delete withOverwrites['socks-port'];
-  // redir/tproxy 与 port/socks-port 同族：订阅自带的入站端口不该进入运行配置——泄漏时内核
-  // 会额外开透明代理入站监听，与入站由本工具的 mixed/tun 托管相矛盾。
-  // listeners 不在本清单：订阅以 listeners 投递入站是否合法属未定的产品决策，不在删除表收口
-  delete withOverwrites['redir-port'];
-  delete withOverwrites['tproxy-port'];
-  delete withOverwrites['external-ui'];
-  delete withOverwrites['external-ui-name'];
-  delete withOverwrites['external-ui-url'];
-  delete withOverwrites.secret;
   const controllerSecret = settings.controller_secret;
-  if (controllerSecret) {
-    systemConfig.secret = controllerSecret;
+  if (controllerSecret !== undefined) {
+    // 与 getPorts 同族：手改 settings.json 写成数字/布尔时，内核 -t 可能拒绝也可能强转，
+    // 而 config 展示命令不跑内核校验——在唯一消费点明确报错，脱敏出口也据此可依赖字符串类型
+    if (typeof controllerSecret !== 'string') {
+      throw new CliError('settings.json 的 controller_secret 需为字符串', {
+        label: '配置错误',
+        hint: ['示例: "controller_secret": "your-secret"', '删除该键则不设置访问密钥'],
+      });
+    }
+    if (controllerSecret) {
+      systemConfig.secret = controllerSecret;
+    }
   }
 
   if (mode === 'tun') {
@@ -267,7 +315,11 @@ const HINT_INDENT = '  ';
  * 还会把排查方向引偏。反之也不做「未命中即告警」：ssh -D 那类靠 `~proxies`
  * 追加节点的正常用法每次 start 都会刷屏，而它并没有出错。
  */
-export function buildKernelRejectHint(detail: string, overwriteSummaries: string[]): string[] {
+export function buildKernelRejectHint(detail: string, overwriteSummaries: string[], opts: { timedOut?: boolean } = {}): string[] {
+  // 超时与配置内容无关：无内核输出可展示、不附覆写清单，尾行排查方向单独给
+  if (opts.timedOut) {
+    return ['', `${HINT_INDENT}内核在 30s 内未给出校验结论，可能是内核或系统异常（与配置内容无关）；当前运行时配置未改动。`];
+  }
   // 内核可能一次报多条（每个不合法的键一行）；空行保持空行，不缩出尾随空格
   const hint = ['', ...detail.split('\n').map(line => (line.trim() ? `${HINT_INDENT}${line}` : ''))];
 
@@ -307,11 +359,12 @@ export async function validateConfigWithKernel(config: Record<string, unknown>, 
     } catch (e) {
       const error = e as Error & { stdout?: string; stderr?: string; killed?: boolean };
       const detail = sanitizeTerminal(`${error.stdout || ''}\n${error.stderr || ''}`).trim();
-      // 超时与配置内容无关（内核没在 30s 内给出结论），列覆写只会误导，故只有拒绝分支附清单
+      // 超时与配置内容无关（内核没在 30s 内给出结论）：不列覆写、不引内核输出，
+      // 尾行排查方向也单独给（buildKernelRejectHint 的 timedOut 分支）
       if (error.killed) {
         throw new CliError('内核配置校验超时', {
           label: '配置错误',
-          hint: buildKernelRejectHint(detail || error.message, []),
+          hint: buildKernelRejectHint('', [], { timedOut: true }),
         });
       }
       throw new CliError('内核拒绝加载配置', {

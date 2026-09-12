@@ -1,6 +1,6 @@
 import os from 'node:os';
 
-import { MIRROR_ALIASES, MIRROR_BARE } from './constants.js';
+import { DEFAULT_AUTO_UPDATE_TIMEOUT, MIRROR_ALIASES, MIRROR_BARE } from './constants.js';
 import { CliError } from './errors.js';
 import { matchValueFlagToken, START_RESTART_FLAGS, VALUE_FLAGS } from './flags.js';
 import type { MirrorArg, SubscriptionUrgency } from './types.js';
@@ -310,6 +310,20 @@ export function extractStartOptions(args: string[] | undefined): string[] {
   return out;
 }
 
+/**
+ * 提前校验重启透传选项的值形态（`-u/--update-timeout` 的三种形式）。
+ *
+ * `sub use` / `ow on|off` 的白名单放行 START_RESTART_FLAGS 是为了运行中重启时透传，
+ * 但未运行、不触发重启时这些选项此前无人消费：`ow on -u`（缺值）、`sub use foo -u5s`
+ * （非法值）静默成功，正是「用户以为选项生效了，实际行为完全没变」的形态。
+ * 故与白名单同一步提前校验；解析结果不在这里用，cmdStart 重启时自行再取。
+ * `-s/--no-update` 是布尔选项，无需校验。
+ */
+export function assertRestartOptionValues(args: string[] | undefined): void {
+  if (!args) return;
+  parseIntArg(args, '-u', '--update-timeout', DEFAULT_AUTO_UPDATE_TIMEOUT);
+}
+
 export function getNonFlagArg(args: string[] | undefined, startIdx: number, valueFlags: ReadonlySet<string> = VALUE_FLAGS): string | null {
   if (!args) return null;
   for (let i = startIdx; i < args.length; i++) {
@@ -439,6 +453,15 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
   }
 
   assertKnownFlags(args.slice(1), ['--mirror'], 'kernel [--mirror [镜像]]');
+
+  // 重复的 --mirror 此前静默以第一个为准，显式报错而非让用户以为后者生效
+  const mirrorCount = args.filter(a => a === '--mirror' || a.startsWith('--mirror=')).length;
+  if (mirrorCount > 1) {
+    throw new CliError('--mirror 只能指定一次', {
+      label: '参数错误',
+      hint: ['用法: mihomo kernel [--mirror [镜像]]', '可用镜像见: mihomo kernel --help'],
+    });
+  }
 
   // 同时支持 `--mirror url` 与 `--mirror=url` 两种形式
   const mirrorEq = args.find(a => a.startsWith('--mirror='));

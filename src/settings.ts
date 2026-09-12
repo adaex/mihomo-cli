@@ -12,13 +12,19 @@ export function readSettings(): Settings {
     const parsed: unknown = JSON.parse(fs.readFileSync(PATHS.settingsFile, 'utf8'));
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Settings;
   } catch {
-    // 损坏内容留备份，便于人工恢复
-  }
-  try {
-    fs.copyFileSync(PATHS.settingsFile, `${PATHS.settingsFile}.bak`);
-    console.warn(`警告: settings.json 格式损坏，已备份到 ${PATHS.settingsFile}.bak，使用默认设置`);
-  } catch {
-    console.warn('警告: settings.json 格式损坏，使用默认设置');
+    // 损坏内容留备份，便于人工恢复。备份只保留第一份：之后回退默认并写回，若文件再次
+    // 损坏（外部反复覆写），覆盖 .bak 会用默认内容/新损坏盖掉唯一的用户原件
+    const backup = `${PATHS.settingsFile}.bak`;
+    try {
+      if (fs.existsSync(backup)) {
+        console.warn(`警告: settings.json 格式损坏，使用默认设置（原件已在早前备份: ${backup}，未覆盖）`);
+      } else {
+        fs.copyFileSync(PATHS.settingsFile, backup);
+        console.warn(`警告: settings.json 格式损坏，已备份到 ${backup}，使用默认设置`);
+      }
+    } catch {
+      console.warn('警告: settings.json 格式损坏，使用默认设置');
+    }
   }
   return {};
 }
@@ -179,10 +185,16 @@ export function readSubscriptionCache(): SubscriptionCache {
       // cache['__proto__'] = ... 重新踩回设置原型的坑
       return Object.assign(empty(), parsed);
     } catch {
-      // 与 settings.json 一致：损坏先备份再回退默认，避免下次写入覆盖丢失原始内容
+      // 与 settings.json 一致：损坏先备份再回退默认，避免下次写入覆盖丢失原始内容。
+      // 已有备份时不覆盖：那一份是更早的原件，比当前损坏内容更有恢复价值
+      const cacheBackup = `${PATHS.subscriptionsCacheFile}.bak`;
       try {
-        fs.copyFileSync(PATHS.subscriptionsCacheFile, `${PATHS.subscriptionsCacheFile}.bak`);
-        console.warn(`警告: 订阅缓存格式损坏，已备份到 ${PATHS.subscriptionsCacheFile}.bak`);
+        if (fs.existsSync(cacheBackup)) {
+          console.warn(`警告: 订阅缓存格式损坏，已忽略（早前备份保留在 ${cacheBackup}，未覆盖）`);
+        } else {
+          fs.copyFileSync(PATHS.subscriptionsCacheFile, cacheBackup);
+          console.warn(`警告: 订阅缓存格式损坏，已备份到 ${cacheBackup}`);
+        }
       } catch {
         console.warn('警告: 订阅缓存格式损坏，已忽略');
       }

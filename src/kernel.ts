@@ -341,6 +341,31 @@ function findBinaryInDir(dir: string, maxDepth = 4): string | null {
 }
 
 /**
+ * 解压后总量上限：镜像通道的压缩包只卡了下载字节数（--max-filesize 与 asset.size），
+ * 高压缩比 tar 可在等长压缩体积下膨胀上千倍撑满磁盘。mihomo 二进制约数十 MB，
+ * 512MB 留足余量。.gz 单文件路径另有 gzip maxBuffer 256MB 兜底
+ */
+export const MAX_EXTRACTED_BYTES = 512 * 1024 * 1024;
+
+/**
+ * 解析 `tar -tv` 单行列出的条目字节数。两种 tar 布局都认：
+ * - bsdtar（macOS 自带，产品平台）：`perms links owner group size date ... name`
+ *   `-rwxr-xr-x  0 501  20  34567890 Jan  1  2024 mihomo`
+ * - GNU tar（CI/ Linux 排障）：`perms owner/group size date time name`
+ *   `-rwxr-xr-x root/root 34567890 2024-01-01 00:00 mihomo`
+ * 判据是第二列是否含 `/`（GNU 的属主/组合并列）；无法解析返回 null（条目行由本地
+ * tar 生成，大小列稳定存在，null 仅在布局漂移时发生，调用方跳过不计数）。
+ */
+export function parseTarEntrySize(line: string): number | null {
+  const tokens = line.trim().split(/\s+/);
+  if (tokens.length < 5) return null;
+  const sizeToken = tokens[1].includes('/') ? tokens[2] : tokens[4];
+  if (!/^\d+$/.test(sizeToken)) return null;
+  const size = Number(sizeToken);
+  return Number.isSafeInteger(size) ? size : null;
+}
+
+/**
  * 构造内核下载的 curl 参数。纯函数：`--proto '=https'` 全链路强制 https 是安全防线
  * （curl -L 默认跟随协议降级重定向），参数数组值得单测锁死，防后续改动误删。
  */
@@ -351,6 +376,10 @@ export function buildKernelCurlArgs(args: { url: string; proxyPort: number | nul
     '=https',
     '--proto-redir',
     '=https',
+    // 镜像/CDN 返回 404/500 的 HTML 错误页时，curl 默认退出 0、错误内容落盘，
+    // 最终只报「文件大小与 release 元数据不符」、丢掉真正的 HTTP 原因。
+    // 与 release API 查询路径（buildReleaseApiCurlArgs）同一口径
+    '--fail-with-body',
     '--max-filesize',
     String(args.maxBytes),
     '--progress-bar',
@@ -464,6 +493,11 @@ export async function downloadKernel(
       }
 
       if (curlResult.status !== 0) {
+        // 22 = --fail-with-body：HTTP 状态码 ≥ 400（错误体已写入临时文件，随 finally 删除）。
+        // 错误页经 --progress-bar 已显示在终端，这里点明是 HTTP 错误而非网络/超时
+        if (curlResult.status === 22) {
+          throw new Error('下载失败: 镜像或服务器返回 HTTP 错误（4xx/5xx），请重试或改用其他通道（gh/本机代理/--mirror direct）');
+        }
         throw new Error(`下载失败 (curl 退出码 ${curlResult.status})`);
       }
     }
@@ -505,18 +539,27 @@ export async function downloadKernel(
         }
       }
 
-      // 2) -tvzf 的首列权限串首字符给出条目类型 → 拒绝符号/硬链接成员。
+      // 2) -tvzf 的首列权限串首字符给出条目类型 → 拒绝符号/硬链接成员，
+      // 同时汇总解压后总字节数（tar 炸弹护栏，见 parseTarEntrySize）。
       // 名为 mihomo、linkname 指向任意路径的 symlink 条目名完全合法，能通过上面的路径检查，
       // 后续却会让 chmod 755 沿链接作用到受害文件（findBinaryInDir 的 lstat 是第二道防线）
       const typeResult = spawnSync('tar', ['-tvzf', tempPath], { encoding: 'utf8', timeout: 60_000 });
       if (typeResult.error) throw typeResult.error;
       if (typeResult.status !== 0) throw new Error(`tar 列表退出码 ${typeResult.status}`);
+      let extractedBytes = 0;
       for (const line of (typeResult.stdout || '').split('\n').filter(Boolean)) {
         const typeChar = line[0];
         // - 普通文件、d 目录；l 符号链接、h 硬链接及其余特殊类型一律拒绝
         if (typeChar !== '-' && typeChar !== 'd') {
           throw new Error(`归档含非普通文件条目（类型 "${typeChar}"）: ${line}`);
         }
+        const entrySize = parseTarEntrySize(line);
+        if (entrySize !== null) extractedBytes += entrySize;
+      }
+      if (extractedBytes > MAX_EXTRACTED_BYTES) {
+        throw new Error(
+          `归档解压后总量 ${(extractedBytes / 1024 / 1024).toFixed(1)}MB 超过 ${MAX_EXTRACTED_BYTES / 1024 / 1024}MB 上限，疑似压缩炸弹，已拒绝解压`,
+        );
       }
 
       // --no-same-owner: 即便前面漏判也不让归档改变属主

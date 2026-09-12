@@ -257,6 +257,80 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
   });
 });
 
+describe('热重载探测查询失败时回退 kickstart（不把 launchctl 瞬时故障升级成命令失败）', () => {
+  // 桩按全局调用计数切换：入口状态查询（第 1 次 print）报 running；热重载探测的
+  // getServiceStatus（第 3 次 launchctl 调用 = 第 2 次 print）退 112（查询失败）；
+  // kickstart 成功；其后的健康观察窗恢复 running。
+  // 修复前第 3 次调用的 112 直接冒出 restartService → start 整体失败；修复后
+  // tryHotReload 按契约回退 false、走 kickstart 自愈
+  const FAKE_LAUNCHCTL_QUERY_FAILS = `
+COUNT_FILE="$FAKE_BIN/count"
+n=0
+[ -f "$COUNT_FILE" ] && n=$(cat "$COUNT_FILE")
+n=$((n+1))
+echo "$n" > "$COUNT_FILE"
+case "$1" in
+  print)
+    if [ "$n" -eq 3 ]; then exit 112; fi
+    printf '\\tstate = running\\n\\tpid = %s\\n' "$(cat "$PID_FILE")"
+    exit 0
+    ;;
+  print-disabled)
+    exit 0
+    ;;
+  kickstart)
+    exit 0
+    ;;
+esac
+exit 0
+`;
+
+  function fallbackScript(): string {
+    return `import fs from 'node:fs';
+import path from 'node:path';
+import { PATHS } from ${MODULES.paths};
+import { launchOrRestart } from ${MODULES.runtime};
+
+fs.writeFileSync(process.env.PID_FILE as string, String(process.pid));
+fs.mkdirSync(path.dirname(PATHS.userAgentPlist), { recursive: true });
+fs.writeFileSync(PATHS.userAgentPlist, 'stub');
+fs.writeFileSync(PATHS.settingsFile, JSON.stringify({ ports: { mixed: 17890, controller: 19090 } }));
+
+try {
+  const pid = await launchOrRestart('mixed', 0);
+  console.log('RESULT:pid=' + pid);
+} catch (e) {
+  console.log('RESULT:error=' + (e instanceof Error ? e.message : String(e)));
+  process.exitCode = 1;
+}
+`;
+  }
+
+  it('热重载前的状态查询退 112 → 回退 kickstart 并健康确认成功', async () => {
+    const fixture = makeFixture('mihomo-hotfail');
+    const script = writeScript(fixture.fakeBin, 'hot-fail.mts', fallbackScript());
+    writeFakeLaunchctl(fixture.fakeBin, FAKE_LAUNCHCTL_QUERY_FAILS.replaceAll('$FAKE_BIN', fixture.fakeBin));
+    const env = {
+      ...process.env,
+      MIHOMO_CLI_DIR: fixture.dataDir,
+      MIHOMO_CLI_DAEMON_LABEL: fixture.label,
+      HOME: fixture.fakeHome,
+      PATH: `${fixture.fakeBin}:${process.env.PATH}`,
+      PID_FILE: path.join(fixture.fakeBin, 'server.pid'),
+      MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1',
+      NO_COLOR: '1',
+    };
+    try {
+      const run = spawnScript(script, env);
+      const result = await run.done;
+      assert.equal(result.status, 0, `查询失败应回退而非报错，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      assert.match(result.stdout, /RESULT:pid=\d+/, `应走 kickstart 并通过健康确认，stdout: ${result.stdout}`);
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+});
+
 describe('stop 锁内临界区的持锁预算', () => {
   /**
    * 桩 launchctl（stop 场景）：print 一律 113（未装载）、锁内三个动词（bootout、

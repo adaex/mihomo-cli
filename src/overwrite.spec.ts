@@ -116,6 +116,40 @@ describe('parseOverrideKey', () => {
     assert.equal(r.key, '+dns');
     assert.equal(r.arrayMergeByName, true);
   });
+
+  it('互斥修饰的解析形态（报错在合并层，这里锁住各组合确实置出多个位）', () => {
+    // 这些组合是否报错由 deepMergeWithOverrides 的断言锁；这里确认解析结果本身
+    assert.equal(parseOverrideKey('+rules+').arrayPrepend && parseOverrideKey('+rules+').arrayAppend, true);
+    assert.equal(parseOverrideKey('~dns!').arrayMergeByName && parseOverrideKey('~dns!').forceOverwrite, true);
+  });
+});
+
+describe('互斥操作符与空键：合并层显式报错，不静默按分支优先级取其一', () => {
+  for (const key of ['+rules+', '~dns!', '~?dns!', '<dns>+!', '~<dns>!', 'rules+!']) {
+    it(`"${key}" 含互斥操作符 → CliError`, () => {
+      assert.throws(
+        () => deepMergeWithOverrides({ rules: ['A'], dns: {} }, { [key]: ['x'] }),
+        e => e instanceof CliError && /互斥的操作符/.test(e.message),
+      );
+    });
+  }
+
+  it('合法的单一操作符组合不被误伤（~?、尖括号转义、+<+key> 等）', () => {
+    assert.doesNotThrow(() => deepMergeWithOverrides({}, { '~?proxy-groups': [{ name: 'G' }] }));
+    // ~<dns> 对不存在的目标走「新增数组」，不与既有映射冲突
+    assert.doesNotThrow(() => deepMergeWithOverrides({}, { '~<dns>': [{ name: 'x' }] }));
+    assert.doesNotThrow(() => deepMergeWithOverrides({ rules: [] }, { '+<+rules>': ['x'] }));
+    assert.doesNotThrow(() => deepMergeWithOverrides({ rules: [] }, { '<+rules>!': ['x'] }));
+  });
+
+  for (const key of ['+', '~', '!', '~?']) {
+    it(`裸操作符 "${key}" 解析出空键名 → CliError`, () => {
+      assert.throws(
+        () => deepMergeWithOverrides({}, { [key]: 'x' }),
+        e => e instanceof CliError && /键名不能为空/.test(e.message),
+      );
+    });
+  }
 });
 
 describe('deepMergeWithOverrides', () => {

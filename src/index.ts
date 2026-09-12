@@ -10,8 +10,10 @@ import { ensureDirs } from './paths.js';
 import { assertKnownFlags, assertPositionalCount, suggestSimilar } from './utils.js';
 
 process.on('SIGINT', () => {
+  // 走 stderr：status --json / config --json 探测期间按 Ctrl+C 时，stdout 必须保持
+  // 可被 JSON 消费者整体解析，提示行不能混进正文
   if (!isSilentSigint()) {
-    console.log('\n正在退出...');
+    console.error('\n正在退出...');
   }
   process.exit(130);
 });

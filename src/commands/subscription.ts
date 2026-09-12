@@ -10,6 +10,7 @@ import * as subscription from '../subscription.js';
 import {
   assertKnownFlags,
   assertPositionalCount,
+  assertRestartOptionValues,
   formatDate,
   formatRelativeTime,
   formatTimestamp,
@@ -163,14 +164,20 @@ async function subAdd(args: string[]): Promise<void> {
 async function subUpdate(args: string[]): Promise<void> {
   // 名称至多一个：`sub update foo bar` 此前静默忽略 bar
   assertPositionalCount(args, 1, 2, 'mihomo sub update [name]');
-  const name = getNonFlagArg(args, 2);
+  const nameArg = getNonFlagArg(args, 2);
   const subs = getSubscriptions();
 
   if (subs.length === 0) {
     throw new CliError('没有订阅');
   }
 
-  if (!name) {
+  // 区分「无参数」（更新所有）与「空串参数」（`sub update ""`，变量展开为空的常见笔误），
+  // 后者此前静默更新所有订阅
+  if (nameArg === '') {
+    throw new CliError('请指定订阅名称', { hint: ['更新所有订阅直接执行: mihomo sub update', `更新指定订阅: mihomo sub update <名称>`] });
+  }
+
+  if (nameArg === null) {
     console.log(`更新所有 ${subs.length} 个订阅...`);
     const results = await withSpinner('并行更新中', () => Promise.all(subs.map(sub => subscription.tryUpdateOne(sub))));
     let ok = 0;
@@ -186,7 +193,7 @@ async function subUpdate(args: string[]): Promise<void> {
     return;
   }
 
-  const target = subscription.resolveSubscription(subs, name);
+  const target = subscription.resolveSubscription(subs, nameArg);
 
   console.log(`更新订阅: ${target.name}`);
   const result = await withSpinner('下载订阅', () => subscription.tryUpdateOne(target));
@@ -202,6 +209,8 @@ async function subUpdate(args: string[]): Promise<void> {
 async function subUse(args: string[]): Promise<void> {
   // 名称至多一个：`sub use foo bar` 此前静默忽略 bar；带值选项的值（-u 5000）不算位置参数
   assertPositionalCount(args, 1, 2, 'mihomo sub use <name>');
+  // 即使未在运行、不触发重启，-u 缺值/非法值也在此刻报错，不静默吞掉
+  assertRestartOptionValues(args);
   const name = getNonFlagArg(args, 2);
   const subs = getSubscriptions();
 

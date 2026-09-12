@@ -1128,18 +1128,21 @@ async function tryHotReload(): Promise<boolean> {
   // 只看「服务已装」+ PUT 返回 2xx 是不够的：该端口被其他服务占用（另一个 Clash、
   // 开发服务器）且对该 PUT 返回 2xx 时，CLI 会打印「已启动」而服务内核仍跑旧配置——
   // 配置变更静默未生效，是最难排查的一类失败。
-  const status = getServiceStatus();
-  if (!status.running || status.pid === null) return false;
-
-  // 端口经 settings.ports 解析（默认 9090），与 buildConfig 写进配置的值同源
-  const baseUrl = `http://127.0.0.1:${getPorts().controller}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HOT_RELOAD_TIMEOUT_MS);
-  // 配置了 controller_secret 时必须带 Bearer，否则内核返回 401 → 热重载恒失败回退重启
-  const secret = readSettings().controller_secret;
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (secret) headers.Authorization = `Bearer ${secret}`;
   try {
+    // 状态查询同样可能抛错（launchctl 超时/112/125、settings 端口非法）：探测类失败
+    // 必须按「热重载不可用」处理并回退 kickstart，不能让一次读状态失败直接废掉整个
+    // restartService——launchd 病态时恰恰最需要 kickstart 自愈。契约见函数头注释
+    const status = getServiceStatus();
+    if (!status.running || status.pid === null) return false;
+
+    // 端口经 settings.ports 解析（默认 9090），与 buildConfig 写进配置的值同源
+    const baseUrl = `http://127.0.0.1:${getPorts().controller}`;
+    // 配置了 controller_secret 时必须带 Bearer，否则内核返回 401 → 热重载恒失败回退重启
+    const secret = readSettings().controller_secret;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (secret) headers.Authorization = `Bearer ${secret}`;
     // /version 是 mihomo 特有端点，返回体带 version 字段；用它确认应答方是 mihomo
     // 而非碰巧监听同端口的其他程序（后者极可能对未知路径的 PUT 也返回 2xx）
     const probe = await fetch(`${baseUrl}/version`, { headers, signal: controller.signal });

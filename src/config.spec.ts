@@ -178,6 +178,61 @@ describe('系统锁定项：订阅自带的端口与控制面字段不进运行�
       fs.rmSync(path.join(tmpDir, 'settings.json'));
     }
   });
+
+  // redir/tproxy 曾是漏网之鱼；external-controller-tls/-unix/-cors 与 tls 段同族——
+  // 订阅是远端不可信内容，留着任一个都能开出 CLI 不知道的控制器（无鉴权、可监听全网卡）
+  for (const mode of ['mixed', 'tun'] as const) {
+    it(`${mode}: 控制器家族键与 tls 证书段不进运行配置`, () => {
+      const sub = dumpYaml({
+        ...BASE,
+        'external-controller-tls': '0.0.0.0:19443',
+        'external-controller-unix': '/tmp/evil.sock',
+        'external-controller-pipe': '\\\\.\\pipe\\evil',
+        'external-controller-cors': { 'allow-origins': ['*'], 'allow-private-network': true },
+        'external-controller-routing-mark': 42,
+        tls: { certificate: '/tmp/cert.pem', 'private-key': '/tmp/key.pem' },
+      });
+      const { config } = buildConfig(sub, mode);
+      for (const key of [
+        'external-controller-tls',
+        'external-controller-unix',
+        'external-controller-pipe',
+        'external-controller-cors',
+        'external-controller-routing-mark',
+        'tls',
+      ]) {
+        assert.equal(key in config, false, `${key} 不应进入运行配置`);
+      }
+      // 主控制器仍是回环 + settings 端口，不被同段其他键影响
+      assert.equal(config['external-controller'], '127.0.0.1:9090');
+    });
+  }
+
+  it('订阅/覆写显式设置锁定项时逐条告警，指出被忽略的键名', () => {
+    const sub = dumpYaml({ ...BASE, 'redir-port': 7893, 'external-controller-unix': '/tmp/x.sock' });
+    const { warnings } = buildConfig(sub, 'mixed');
+    const locked = warnings.find(w => w.includes('系统锁定项已忽略'));
+    assert.ok(locked, `应有锁定项告警，实际: ${JSON.stringify(warnings)}`);
+    assert.match(locked, /redir-port/);
+    assert.match(locked, /external-controller-unix/);
+  });
+
+  it('不设置任何锁定项时无锁定告警（普通订阅不被噪音打扰）', () => {
+    const { warnings } = buildConfig(dumpYaml(BASE), 'mixed');
+    assert.deepEqual(warnings, []);
+  });
+
+  it('controller_secret 非字符串时报错，不把数字/布尔送进内核或展示出口', () => {
+    fs.writeFileSync(path.join(tmpDir, 'settings.json'), JSON.stringify({ controller_secret: 123456 }));
+    try {
+      assert.throws(
+        () => buildConfig(dumpYaml(BASE), 'mixed'),
+        e => e instanceof CliError && /controller_secret 需为字符串/.test(e.message),
+      );
+    } finally {
+      fs.rmSync(path.join(tmpDir, 'settings.json'));
+    }
+  });
 });
 
 describe('buildKernelRejectHint：内核拒绝配置时的排查线索', () => {
@@ -214,6 +269,13 @@ describe('buildKernelRejectHint：内核拒绝配置时的排查线索', () => {
     const hint = buildKernelRejectHint('boom', ['\x1b[31moverwrite.red.yaml\x1b[0m (全局)']);
     assert.ok(!hint.join('\n').includes('\x1b'), 'hint 不应残留 ESC 字符');
     assert.ok(hint.includes('    overwrite.red.yaml (全局)'));
+  });
+
+  it('超时分支：不附覆写清单，尾行指向内核/系统异常而非「修正订阅或覆写」', () => {
+    const hint = buildKernelRejectHint('内核输出不该出现', ['overwrite.x.yaml (全局)'], { timedOut: true });
+    assert.deepEqual(hint, ['', '  内核在 30s 内未给出校验结论，可能是内核或系统异常（与配置内容无关）；当前运行时配置未改动。']);
+    assert.ok(!hint.join('\n').includes('overwrite.x.yaml'), '超时与配置无关，不列覆写文件');
+    assert.ok(!hint.join('\n').includes('内核输出不该出现'), '超时不展示内核输出');
   });
 });
 

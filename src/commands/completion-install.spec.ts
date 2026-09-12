@@ -96,6 +96,53 @@ describe('completion install/uninstall 的落盘行为', () => {
     assert.equal(fs.readFileSync(target, 'utf8').includes('我自己写的补全'), true);
   });
 
+  // 回归：#compdef mihomo 是 compinit 对每个 _mihomo 补全要求的固定首行，用户手写或第三方
+  // 分发的同名补全必然以它开头——只比对此前缀会误删。指纹必须是本工具独有的四别名完整行
+  it('zsh：仅含行业约定首行 "#compdef mihomo" 的第三方补全不被误删', () => {
+    const target = path.join(home, '.zsh', 'completions', '_mihomo');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, '#compdef mihomo\n# 第三方手写补全\n_my_mihomo() { ... }\n');
+
+    const { status, output } = run(['completion', 'uninstall', 'zsh']);
+    assert.notEqual(status, 0, output);
+    assert.match(output, /不像是 mihomo-cli 生成的/);
+    assert.ok(fs.existsSync(target), '第三方补全文件不能被删');
+  });
+
+  it('fish：只循环 mihomo 一个命令的手写补全不被弱指纹误删', () => {
+    const target = path.join(home, '.config', 'fish', 'completions', 'mihomo.fish');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, 'for cmd in mihomo\n    complete -c $cmd -a "x"\nend\n');
+
+    const { status, output } = run(['completion', 'uninstall', 'fish']);
+    assert.notEqual(status, 0, output);
+    assert.match(output, /不像是 mihomo-cli 生成的/);
+    assert.ok(fs.existsSync(target));
+  });
+
+  it('fish：设置 XDG_CONFIG_HOME 时装在其下，卸载也认同一位置', () => {
+    const xdg = path.join(home, 'xdg-config');
+    const target = path.join(xdg, 'fish', 'completions', 'mihomo.fish');
+    const runXdg = (args: string[]) =>
+      spawnSync(process.execPath, ['--import', 'tsx', ENTRY, ...args], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          HOME: home,
+          XDG_CONFIG_HOME: xdg,
+          MIHOMO_CLI_DIR: path.join(home, 'data'),
+          MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(home)}`,
+          NO_COLOR: '1',
+        },
+        timeout: 30_000,
+      });
+    assert.equal(runXdg(['completion', 'install', 'fish']).status, 0);
+    assert.ok(fs.existsSync(target), '应落在 $XDG_CONFIG_HOME/fish/completions');
+    assert.equal(fs.existsSync(path.join(home, '.config', 'fish', 'completions', 'mihomo.fish')), false, '不应再写 ~/.config');
+    assert.equal(runXdg(['completion', 'uninstall', 'fish']).status, 0);
+    assert.equal(fs.existsSync(target), false);
+  });
+
   it('未安装时卸载不报错（幂等）', () => {
     const { status, output } = run(['completion', 'uninstall', 'zsh']);
     assert.equal(status, 0, output);

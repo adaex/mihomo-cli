@@ -69,6 +69,34 @@ export function parseOverrideKey(key: string): ParsedOverrideKey {
 }
 
 /**
+ * 校验解析结果：操作符修饰互斥、键名非空。
+ *
+ * 解析器对互斥组合不报错、静默按分支优先级取其一（`~dns!` 按 ~ 合并、显式的 ! 整体覆盖
+ * 被忽略；`+rules+` 按前置处理），用户无法预期结果。本仓一贯原则是矛盾输入显式报错。
+ * `~?` 是 `~` 的一个变体（未命中策略），不算两个操作符。
+ * 另：裸 `+:` / `~:` / `!:` 解析出空键名，不能产出空字符串顶层键（内核静默忽略，笔误零反馈）。
+ */
+function assertValidParsedKey(rawKey: string, parsed: ParsedOverrideKey): void {
+  if (parsed.key === '') {
+    throw new CliError(`覆写键名不能为空: "${rawKey}"`, {
+      label: '覆写配置错误',
+      hint: ['操作符（!、+、~）必须修饰一个真实的键名，如 rules+、~proxy-groups。'],
+    });
+  }
+  const ops: string[] = [];
+  if (parsed.forceOverwrite) ops.push('!（整体覆盖）');
+  if (parsed.arrayMergeByName || parsed.arrayMergeOnly) ops.push('~（按 name 合并）');
+  if (parsed.arrayPrepend) ops.push('+前缀（数组前插）');
+  if (parsed.arrayAppend) ops.push('+后缀（数组追加）');
+  if (ops.length > 1) {
+    throw new CliError(`覆写键 "${rawKey}" 含互斥的操作符: ${ops.join(' 与 ')}`, {
+      label: '覆写配置错误',
+      hint: ['一个键只能使用一种操作符：整体覆盖 key!、数组前插 +key、数组追加 key+、按 name 合并 ~key。'],
+    });
+  }
+}
+
+/**
  * 深度合并覆写到目标配置（顶层入口：DSL 操作符**只在本层解析**）。
  *
  * `skipped` 是可选的收集器：`~?key` 匹配不到同名元素时把跳过的项记进去，由调用方
@@ -124,6 +152,7 @@ function mergeConfigLevel(target: unknown, override: unknown, collectors: MergeC
 
     if (parseOperators) {
       ({ key, forceOverwrite, arrayPrepend, arrayAppend, arrayMergeByName, arrayMergeOnly } = parseOverrideKey(rawKey));
+      assertValidParsedKey(rawKey, { key, forceOverwrite, arrayPrepend, arrayAppend, arrayMergeByName, arrayMergeOnly });
     } else if (isOperatorShapedNestedKey(rawKey)) {
       noteOperatorShapedKey(collectors, rawKey);
     }

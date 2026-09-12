@@ -163,4 +163,31 @@ describe('sub 的选项白名单按子命令校验', () => {
         assert.match(result.stderr, /未知的选项: --bogus-flag/);
       }));
   });
+
+  describe('重启透传选项即使不重启也被校验（未运行时不能静默吞掉）', () => {
+    it('use 的 -u 缺值报错，且不切换订阅', () =>
+      withFixture((dataDir, run) => {
+        const result = run(['sub', 'use', 'beta', '-u']);
+        assert.equal(result.status, 1, result.stderr);
+        assert.match(result.stderr, /选项 -u 缺少值/);
+        assert.equal(readSettings(dataDir).active_subscription, 'alpha');
+      }));
+
+    it('use 的 -u5s（非法值）报错', () =>
+      withFixture((dataDir, run) => {
+        const result = run(['sub', 'use', 'beta', '-u5s']);
+        assert.equal(result.status, 1, result.stderr);
+        assert.match(result.stderr, /需要正整数/);
+        assert.equal(readSettings(dataDir).active_subscription, 'alpha');
+      }));
+  });
+
+  describe('空串参数不当作缺省', () => {
+    it('sub update "" 报「请指定名称」，不静默更新所有订阅（不触网）', () =>
+      withFixture((_dataDir, run) => {
+        const result = run(['sub', 'update', '']);
+        assert.equal(result.status, 1, result.stderr);
+        assert.match(result.stderr, /请指定订阅名称/);
+      }));
+  });
 });

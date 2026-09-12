@@ -109,11 +109,11 @@ npm run build
 - 不自动删除节点、分组或规则，不为覆写节点注入 exclude-filter；include-all 和用户写的过滤条件按 mihomo 原生语义生效
 - 只持久化最终运行配置；原始订阅保存在 subscriptions，覆写保存在数据根目录
 - mixed-port 与 external-controller 由 settings.ports 决定（默认 7890/9090）；端口需为不同的 1–65535 整数
-- secret 只取 settings.controller_secret；订阅的独立入站端口（port/socks-port/redir-port/tproxy-port）和 external-ui 字段不进入运行配置
+- 入站端口与整个控制面是系统锁定项：订阅/覆写显式设置时剥除**并告警**（静默忽略＝用户以为生效）。锁定键以 `config.ts` 的 `LOCKED_CONFIG_KEYS` 为唯一清单：mixed-port/port/socks-port/redir-port/tproxy-port、external-controller 全家桶（-tls/-unix/-pipe/-cors/-routing-mark）、external-ui*、secret；顶层 `tls` 段（-tls 控制器的证书来源）同锁。新增入站/控制器键只改这张表——redir/tproxy 与 -tls/-unix 都曾是漏网之鱼（后者可让订阅开出无鉴权的第二控制器，是信任边界不是配置洁癖，每个键都要回上游 General 段核对）。secret 只取 settings.controller_secret 且必须是字符串（非字符串在 buildConfig fail-closed，同 getPorts）；`listeners` 刻意不锁（产品决策未定）
 - Mixed 清除 tun 字段；TUN 使用系统 tun 配置并强制 dns.enable=true，显式冲突要提示，其他 DNS 字段尊重用户配置
 - DNS 必须是映射，Mixed 与 TUN 共用形态检查；fake-ip 模式未显式配置 sniffer 时补默认嗅探配置——判据是合并后 dns 的 enhanced-mode（与启动模式无关），`sniffer:` 键存在即算显式、值为 null 也不注入（mihomo 把 null 解码为零值即嗅探关闭，内核不拒）
 - 覆写主文件先加载，扩展文件按名称排序；主文件名只认 overwrite.yaml，`overwrite.yml` 这类整体近失（小写比对后与合法形态一致）在加载/列表入口 console.warn 一行，只认整体近失、宁可漏报不误报；match 的 subscription/url-domain 为 AND 条件，订阅名匹配不区分大小写，无 match 全局应用，非法或空 match 报错
-- 覆写操作符只在文件顶层生效：`key!` 整体覆盖，`+key`/`key+` 数组插入，`~key` 按 name 合并（未命中追加）、`~?key` 按 name 合并但未命中忽略，`<+key>` 转义（含 `~<key>`/`~?<key>` 组合）；嵌套键一律字面（含 `~key` 元素补丁的字段），`+.域名` 原生通配键在嵌套层安全，形似操作符的嵌套键按字面保留并经 buildConfig warnings 每文件每键提示一次（`+.` 开头不提示）；数组操作遇到已存在的非数组值应报错
+- 覆写操作符只在文件顶层生效：`key!` 整体覆盖，`+key`/`key+` 数组插入，`~key` 按 name 合并（未命中追加）、`~?key` 按 name 合并但未命中忽略，`<+key>` 转义（含 `~<key>`/`~?<key>` 组合）；嵌套键一律字面（含 `~key` 元素补丁的字段），`+.域名` 原生通配键在嵌套层安全，形似操作符的嵌套键按字面处理并经 buildConfig warnings 每文件每键提示一次（`+.` 开头不提示；措辞只说「处理」不承诺最终保留——后加载文件的 `key!` 可能整体覆盖掉它）；数组操作遇到已存在的非数组值应报错；互斥修饰同时出现（`+x+`/`~x!`/`<x>+!`）与解析后空键名（裸 `+:`/`~:`）显式报错，不静默按分支优先级取其一
 - 覆写默认开启；applyOverwrite 只接收调用方已筛选的文件，不自行读设置或加载文件
 
 ## reset

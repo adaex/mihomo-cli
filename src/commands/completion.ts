@@ -64,7 +64,9 @@ function subGroups(commands: Command[]): SubGroup[] {
 const DIR_TARGETS = Object.keys(DIRECTORY_TARGETS);
 const UI_NAMES = Object.keys(UI_URLS);
 const MIRROR_NAMES = Object.keys(MIRROR_ALIASES);
-const RESET_TARGET_NAMES = RESET_TARGETS.map(t => t.id);
+// reset 认主名也认别名（sub/log/ow/config/core 等），补全词表从同一份别名表派生，
+// 不只给 id——否则「命令认、补全不提示」又是一份漂移副本
+const RESET_TARGET_NAMES = [...new Set(RESET_TARGETS.flatMap(t => t.aliases))];
 const SHELLS = ['zsh', 'bash', 'fish'] as const;
 
 function buildZsh(commands: Command[], groups: SubGroup[]): string {
@@ -125,7 +127,7 @@ function buildZsh(commands: Command[], groups: SubGroup[]): string {
     '          ;;',
     '        reset)',
     `          _values 'target' ${RESET_TARGET_NAMES.join(' ')}`,
-    "          _arguments '-y[跳过确认]' '--full[删全部]'",
+    "          _arguments '-y[跳过确认]' '--yes[跳过确认]' '--full[删全部]'",
     '          ;;',
     '        completion)',
     '          if (( CURRENT == 2 )); then',
@@ -200,7 +202,7 @@ ${subCase}
       fi
       ;;
     reset)
-      COMPREPLY=( $(compgen -W "${RESET_TARGET_NAMES.join(' ')} --full -y" -- "\${cur}") )
+      COMPREPLY=( $(compgen -W "${RESET_TARGET_NAMES.join(' ')} --full -y --yes" -- "\${cur}") )
       ;;
     completion)
       if [[ \${COMP_CWORD} -eq 2 ]]; then
@@ -243,7 +245,10 @@ function buildFish(commands: Command[], groups: SubGroup[]): string {
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from completion; and __fish_seen_subcommand_from install uninstall" -a '${SHELLS.join(' ')}'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from kernel" -l mirror -d '走镜像下载' -a '${MIRROR_NAMES.join(' ')}'`);
   lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from reset" -a '${RESET_TARGET_NAMES.join(' ')}'`);
-  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from reset" -s y -l full -d '跳过确认 / 删全部'`);
+  // -y 与 --full 此前被绑成同一行（-s y -l full = --full 的短写是 y），--yes 完全缺失，
+  // 与 reset 实际接受的选项不符；拆成两个独立选项
+  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from reset" -s y -l yes -d '跳过确认'`);
+  lines.push(`    complete -c $cmd -n "__fish_seen_subcommand_from reset" -l full -d '删全部'`);
   lines.push('end');
   return lines.join('\n');
 }
@@ -279,8 +284,11 @@ function completionInstallPath(shell: string): string | null {
       return path.join(home, '.zsh', 'completions', '_mihomo');
     case 'bash':
       return path.join(home, '.bash_completion');
-    case 'fish':
-      return path.join(home, '.config', 'fish', 'completions', 'mihomo.fish');
+    case 'fish': {
+      // fish 遵循 XDG_CONFIG_HOME：设了就落在 $XDG_CONFIG_HOME/fish，否则 ~/.config/fish
+      const fishConfigDir = process.env.XDG_CONFIG_HOME ? path.join(process.env.XDG_CONFIG_HOME, 'fish') : path.join(home, '.config', 'fish');
+      return path.join(fishConfigDir, 'completions', 'mihomo.fish');
+    }
     default:
       return null;
   }
@@ -388,9 +396,11 @@ function uninstallCompletion(shell: string | undefined, commands: Command[]): vo
     }
 
     // zsh/fish：独占文件名，但删之前必须确认是本工具生成的。
-    // 判据取脚本自身的固定首行/特征串，与 buildCompletionScript 的产物对齐
+    // 指纹取**本工具独有的完整行**，不能取行业约定的公共前缀——zsh 任何 _mihomo 补全
+    // （用户手写或第三方分发）首行都必须是 `#compdef mihomo`，只比对前缀会误删别人的文件。
+    // fish 同理取完整的四别名循环行。与 buildCompletionScript 的产物逐字对齐
     const existing = fs.readFileSync(target, 'utf8');
-    const fingerprint = shell === 'zsh' ? '#compdef mihomo' : 'for cmd in mihomo';
+    const fingerprint = shell === 'zsh' ? '#compdef mihomo mhm mh mihomo-cli' : 'for cmd in mihomo mhm mh mihomo-cli';
     if (!existing.includes(fingerprint)) {
       throw new CliError(`${target} 不像是 mihomo-cli 生成的补全，已跳过删除`, {
         label: '卸载中止',

@@ -50,7 +50,8 @@ describe('buildCompletionScript 的词表接线（单一真相源派生）', () 
   const dirTargets = Object.keys(DIRECTORY_TARGETS).join(' ');
   const uiNames = Object.keys(UI_URLS).join(' ');
   const mirrorAliases = Object.keys(MIRROR_ALIASES).join(' ');
-  const resetTargets = RESET_TARGETS.map(t => t.id).join(' ');
+  // 与生成侧同为 aliases 派生：reset 认的主名与别名都该出现在补全里
+  const resetTargets = [...new Set(RESET_TARGETS.flatMap(t => t.aliases))].join(' ');
 
   it('三个 shell 都包含派生自 DIRECTORY_TARGETS 的完整目录目标清单', () => {
     for (const shell of ['zsh', 'bash', 'fish'] as const) {
@@ -73,11 +74,25 @@ describe('buildCompletionScript 的词表接线（单一真相源派生）', () 
     }
   });
 
-  it('三个 shell 都包含派生自 RESET_TARGETS 的完整 reset 目标清单', () => {
+  it('三个 shell 都包含派生自 RESET_TARGETS 的完整 reset 目标清单（含别名）', () => {
     for (const shell of ['zsh', 'bash', 'fish'] as const) {
       const script = buildCompletionScript(shell, COMMANDS);
       assert.ok(script.includes(resetTargets), `${shell} 缺少 reset 目标清单 "${resetTargets}"（应派生自 RESET_TARGETS）`);
     }
+  });
+
+  it('reset 的 --yes 在 zsh/bash 以 --yes、在 fish 以 -l yes 出现（旧实现漏 --yes）', () => {
+    for (const shell of ['zsh', 'bash'] as const) {
+      assert.ok(buildCompletionScript(shell, COMMANDS).includes('--yes'), `${shell} 应提示 --yes`);
+    }
+    assert.ok(buildCompletionScript('fish', COMMANDS).includes('-l yes'), 'fish 应提示 --yes');
+  });
+
+  it('fish 的 -y/--yes 与 --full 是两个独立选项（旧实现绑成了一行）', () => {
+    const script = buildCompletionScript('fish', COMMANDS);
+    assert.ok(script.includes('-s y -l yes'), '应有独立的 -y/--yes 行');
+    assert.ok(script.includes('-l full'), '应有独立的 --full 行');
+    assert.ok(!script.includes('-s y -l full'), '不得再把 -y 绑成 --full 的短写');
   });
 });
 

@@ -198,3 +198,45 @@ describe('声明个数内的合法形态不触发参数错误', () => {
     assert.match(output, /尚无订阅/);
   });
 });
+
+describe('空串参数不当作缺省（变量展开为空的笔误要有反馈）', () => {
+  it('ui "" 报未知 UI，不静默打开默认面板', () => {
+    const { status, output } = run(['ui', '']);
+    assert.notEqual(status, 0);
+    assert.match(output, /未知的 UI/);
+  });
+
+  it('dir open "" 报未知目标，不静默打开根目录', () => {
+    const { status, output } = run(['directory', 'open', '']);
+    assert.notEqual(status, 0);
+    assert.match(output, /未知的目录目标/);
+  });
+});
+
+describe('重启透传选项即使不重启也被校验', () => {
+  it('ow on -u（缺值）报错，不静默切换开关', () => {
+    const { status, output } = run(['ow', 'on', '-u']);
+    assert.notEqual(status, 0);
+    assert.match(output, /选项 -u 缺少值/);
+  });
+
+  it('ow on -u5s（非法值）报错', () => {
+    const { status, output } = run(['ow', 'on', '-u5s']);
+    assert.notEqual(status, 0);
+    assert.match(output, /需要正整数/);
+  });
+
+  it('裸 ow 的子命令位置给选项：按未知选项报错而非当子命令', () => {
+    const { status, output } = run(['ow', '-s']);
+    assert.notEqual(status, 0);
+    assert.match(output, /未知的选项: -s/);
+  });
+});
+
+describe('kernel --mirror 重复显式报错', () => {
+  it('两个 --mirror 不取第一个静默执行', () => {
+    const { status, output } = run(['kernel', '--mirror', 'cdn', '--mirror', 'direct']);
+    assert.notEqual(status, 0);
+    assert.match(output, /--mirror 只能指定一次/);
+  });
+});

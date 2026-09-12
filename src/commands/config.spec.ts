@@ -92,13 +92,24 @@ describe('config：查看当前生效的运行配置', () => {
     assert.match(output, /secret: '\*\*\*'/);
   });
 
-  it('--json 输出合法 JSON 且同样脱敏', () => {
+  it('--json 输出信封 { config, warnings }：配置在 config 内且脱敏，无警告时 warnings 为空数组', () => {
     const { status, stdout, output } = run(['config', '--json']);
     assert.equal(status, 0, output);
-    const parsed = JSON.parse(stdout) as Record<string, unknown>;
-    assert.equal(parsed.secret, '***');
-    assert.ok(Array.isArray(parsed.proxies));
-    // 无警告时 warnings 也在场且是空数组：字段形状稳定，消费者不必判 undefined
+    const parsed = JSON.parse(stdout) as { config: Record<string, unknown>; warnings: unknown };
+    assert.equal(parsed.config.secret, '***');
+    assert.ok(Array.isArray(parsed.config.proxies));
+    // 字段形状稳定，消费者不必判 undefined
+    assert.deepEqual(parsed.warnings, []);
+  });
+
+  it('--json 的 CLI warnings 不顶替配置自身的同名键（信封与 YAML 出口的配置内容一致）', () => {
+    // mihomo 不识别 warnings 段，但订阅/覆写里写了就该原样出现在 config 里，
+    // 不能被 CLI 提示数组顶掉；CLI 提示是信封上的同级字段
+    fs.writeFileSync(path.join(dataDir, 'subscriptions', 'demo.yaml'), 'proxies: []\nwarnings: user-value\n');
+    const { status, stdout, output } = run(['config', '--json']);
+    assert.equal(status, 0, output);
+    const parsed = JSON.parse(stdout) as { config: Record<string, unknown>; warnings: unknown };
+    assert.equal(parsed.config.warnings, 'user-value');
     assert.deepEqual(parsed.warnings, []);
   });
 

@@ -2,7 +2,7 @@ import path from 'node:path';
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { isOverwriteEnabled, listOverwriteFile, setOverwriteEnabled } from '../overwrite.js';
-import { assertKnownFlags, assertPositionalCount, suggestSimilar } from '../utils.js';
+import { assertKnownFlags, assertPositionalCount, assertRestartOptionValues, suggestSimilar } from '../utils.js';
 import { dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 function printOverwriteList(): void {
@@ -41,6 +41,8 @@ function printOverwriteList(): void {
 async function setOverwrite(enabled: boolean, args: string[]): Promise<void> {
   // on/off 是唯一的位置 token：`ow on garbage` 此前静默忽略 garbage
   assertPositionalCount(args, 0, 2, 'mihomo ow [on|off]');
+  // 即使未在运行、不触发重启，-u 缺值/非法值也在此刻报错，不静默吞掉
+  assertRestartOptionValues(args);
   if (isOverwriteEnabled() === enabled) {
     console.log(`覆写配置已是${enabled ? '启用' : '禁用'}状态`);
     console.log('');
@@ -72,6 +74,13 @@ export async function cmdOverwrite(args: string[]): Promise<void> {
       printOverwriteList();
     },
     onUnknown: action => {
+      // 选项出现在子命令位置：裸 ow 只展示状态，重启透传选项必须跟在 on/off 后
+      if (action.startsWith('-')) {
+        throw new CliError(`未知的选项: ${action}`, {
+          label: '参数错误',
+          hint: ['裸 ow 只查看覆写状态，不接受选项', '', '用法: mihomo ow on|off [-s] [-u ms]'],
+        });
+      }
       const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
       const suggestion = suggestSimilar(action, names);
       throw new CliError(`未知的覆写子命令: ${action}`, {

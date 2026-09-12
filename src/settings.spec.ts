@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
+import { pathToFileURL } from 'node:url';
 
 import { maskUrl } from './settings.js';
 
@@ -61,6 +62,45 @@ describe('maskUrl 逗号：URL 整体处理，不做任何切分', () => {
   it('逗号落在 path 时，其后的长路径段仍按路径型令牌遮蔽', () => {
     const masked = maskUrl('https://a.com/s,https://b.com/sub/abcd1234567890efgh');
     assert.ok(!masked.includes('abcd1234567890efgh'), `路径型令牌应遮蔽: ${masked}`);
+  });
+});
+
+describe('损坏文件的备份只保留第一份原件', () => {
+  // readSettings/readSubscriptionCache 在模块加载时即经 PATHS 固定数据目录，
+  // 故在子进程里用隔离 MIHOMO_CLI_DIR 跑真实模块
+  const settingsModuleUrl = pathToFileURL(path.resolve('src/settings.ts')).href;
+  const pathsModuleUrl = pathToFileURL(path.resolve('src/paths.ts')).href;
+
+  function readBackupAfterTwoCorruptions(kind: 'settings' | 'cache'): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-bak-'));
+    const code = `
+      const fs = await import('node:fs');
+      const nodePath = await import('node:path');
+      const m = await import(${JSON.stringify(settingsModuleUrl)});
+      const { PATHS } = await import(${JSON.stringify(pathsModuleUrl)});
+      const file = ${JSON.stringify(kind)} === 'settings' ? PATHS.settingsFile : PATHS.subscriptionsCacheFile;
+      fs.mkdirSync(nodePath.dirname(file), { recursive: true });
+      fs.writeFileSync(file, 'FIRST-CORRUPT{{');
+      ${JSON.stringify(kind)} === 'settings' ? m.readSettings() : m.readSubscriptionCache();
+      fs.writeFileSync(file, 'SECOND-CORRUPT{{');
+      ${JSON.stringify(kind)} === 'settings' ? m.readSettings() : m.readSubscriptionCache();
+      process.stdout.write(fs.readFileSync(file + '.bak', 'utf8'));
+    `;
+    const r = spawnSync(process.execPath, ['--import', 'tsx', '-e', code], {
+      encoding: 'utf8',
+      env: { ...process.env, MIHOMO_CLI_DIR: dir },
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+    assert.equal(r.status, 0, r.stderr || r.stdout);
+    return r.stdout;
+  }
+
+  it('settings.json：第二次损坏不覆盖第一份原件备份', () => {
+    assert.equal(readBackupAfterTwoCorruptions('settings'), 'FIRST-CORRUPT{{');
+  });
+
+  it('cache.json：同族，已有 .bak 时保留更早的备份', () => {
+    assert.equal(readBackupAfterTwoCorruptions('cache'), 'FIRST-CORRUPT{{');
   });
 });
 

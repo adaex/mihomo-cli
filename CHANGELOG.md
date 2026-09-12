@@ -1,5 +1,37 @@
 # Changelog
 
+## [Unreleased]
+
+4.9.0 发布后的全仓复审（自审并发状态机全线 + 三个分模块深审，重要线索逐条实测或回上游源码核实）。修掉 13 项：一条控制面安全边界遗漏、一条热重载自愈缺口，其余是一致性收口。单测 596（+45）。
+
+### 安全
+
+- **订阅可偷偷开出第二个、无鉴权的 external-controller**。4.9.0 把 `redir-port`/`tproxy-port` 补进锁定删除清单时，漏了控制器家族：上游 `config.go` 的 General 键 `external-controller-tls`（配合顶层 `tls:` 段给证书即可在 `0.0.0.0` 再开一个 TLS 控制器）、`external-controller-unix`（任意路径 unix socket 控制器，无前置条件）、`-pipe`/`-routing-mark`、`external-controller-cors`（直接放宽现有回环控制器的浏览器跨域）。订阅是远端不可信内容，而 CLI 又剥掉订阅自带的 `secret`、默认不设密钥——机场可借此让同网段设备或任意网页直接操作内核，打破 README「控制器仅监听回环」的承诺。锁定项收成 `LOCKED_CONFIG_KEYS` 一张表（含 `tls` 证书段），Mixed/TUN 共用；以后新增入站/控制器键只改这一处，不再零散 delete。每个键已对照上游 `MetaCubeX/mihomo` 源码确认内核识别，行为实测。
+
+### 修复
+
+- **热重载探测的首个状态查询在兜底 try 之外**：`tryHotReload` 里的 `getServiceStatus()`（launchctl print/print-disabled，可能退 112/125 或超时）一旦抛错，不履行函数注释「返回 false 即回退 kickstart」的契约，而是让 `start`/`sub use`/`ow` 整体失败——launchd 病态时恰恰最需要 kickstart 自愈。探测全程（含 `getPorts`）收入 try，桩 launchctl 计数场景（入口查询成功、热重载查询退 112、kickstart 后恢复 running）端到端验证回退并通过健康确认；反向验证：查询移回 try 外用例即红
+- **zsh/fish 补全卸载的身份指纹过弱**：zsh 指纹是 `#compdef mihomo`——这是 compinit 对每个 `_mihomo` 补全要求的固定首行，用户手写或第三方分发的同名补全必然以它开头，`completion uninstall zsh` 会误删别人的文件，与函数注释的保护承诺相反。指纹改为本工具独有的完整行 `#compdef mihomo mhm mh mihomo-cli`；fish 同族收紧到四别名循环行。两条「弱指纹文件拒绝删除」用例锁死，反向验证旧指纹即红
+- **非字符串 `controller_secret` 绕过脱敏**：settings.json 手误写成数字/布尔时，`config` 两个出口的 `typeof === 'string'` 条件都不成立、明文上屏（`config` 不跑内核校验）。`buildConfig` 唯一消费点对齐 `getPorts` 的 fail-closed：非字符串直接报「配置错误」；展示侧脱敏也不再依赖类型判断
+- **系统锁定项被订阅/覆写显式设置时零反馈**：在覆写里写 `mixed-port`/`redir-port`/`secret` 被静默丢弃，正是本仓反复修的「以为生效了其实没有」形态。检测到锁定键即出一条 warning 列出键名，与 TUN 强制 DNS、`~?` 跳过同走 buildConfig 的告警通道；不设锁定项的普通订阅无噪音
+- **内核下载的 curl 没有 `--fail-with-body`**：镜像/CDN 返回 404/500 的 HTML 错误页时退出码 0、错误内容落盘，最终只报「文件大小与 release 元数据不符」，真正的 HTTP 原因丢失（4.9.0 只修了 release API 查询通道）。下载通道对齐；退出码 22 翻译为「镜像或服务器返回 HTTP 错误」
+- **tar 解压无总量上限（压缩炸弹）**：`--max-filesize` 只卡压缩后体积，高压缩比 tar 可解压上千倍撑满磁盘，而镜像通道不可信、产物又以 root 运行。`tar -tvzf` 列表阶段汇总条目字节（`parseTarEntrySize` 同时认 bsdtar/GNU 两种列布局），超 512MB 拒绝解压；`.gz` 单文件路径原有 256MB maxBuffer 兜底
+- **内核校验超时分支的 hint 仍引导「修正订阅或覆写」**：超时与配置内容无关，也不该附覆写清单；`buildKernelRejectHint` 加 `timedOut` 形态，尾行指向内核/系统异常
+- **命令层空串与选项口径不齐**：`ui ""`、`dir open ""`（变量展开为空的笔误）此前静默走默认（打开 zash/根目录），改为未知名称/目标报错；UI 名称统一小写归一（`ui DASH` 等价 dash，抽出 `resolveUiName` 纯函数与 `resolveStartMode` 同范式）；`sub update ""` 此前静默更新**所有**订阅（还可能触网），改为报「请指定名称」与无参区分；`sub use`/`ow on|off` 的 `-u` 即使未运行、不触发重启也先校验（`ow on -u` 缺值不再静默成功，新增 `assertRestartOptionValues`）；`kernel --mirror x --mirror y` 显式报「只能指定一次」而非取第一个；裸 `ow -s`/`dir -x` 在子命令位置给「未知的选项」文案；Ctrl+C 的「正在退出...」改走 stderr，不再污染 `status --json`/`config --json` 的 stdout
+- **settings.json/cache.json 损坏备份只有一份且会被覆盖**：「损坏→备份原件→回退默认写回→再次损坏」会用默认内容/新损坏盖掉唯一的用户原件；`.bak` 已存在时保留更早那份，警告文案说明
+- **补全词表/选项漂移**：reset 补全只给主名不给命令实际接受的别名（`sub`/`log`/`ow`/`config`/`core`），改为从同一别名表派生；三 shell 都漏了 `--yes`；fish 把 `-y` 与 `--full` 错绑成一行（`-s y -l full` 让 --full 的短写变成 y），拆为两个独立选项；fish 安装位置不认 `XDG_CONFIG_HOME`，设了就落在其下的 `fish/completions`
+
+### 行为变更
+
+- **`config --json` 输出改为信封 `{ "config": {...}, "warnings": [...] }`**：4.9.0 把 warnings 铺在顶层，会顶替配置自身的同名顶层键（mihomo 无此键，危害仅限输出与 YAML 出口不一致），且让「JSON 内容 = start 写入内容」少了一半。信封与 YAML 出口的「配置正文 + 提示段」同构；无警告时 `warnings` 仍是空数组。4.9.0 同日发布，预计无下游消费者
+- **矛盾的覆写操作符组合显式报错**：`+rules+`（前插+追加）、`~dns!`（按名合并+整体覆盖，显式 `!` 被静默忽略）、`<x>+!` 等此前按分支优先级静默取其一；裸 `+:`/`~:`/`!:` 产出空字符串顶层键（内核忽略，笔误零反馈），一并报错。`~?` 仍是 `~` 的变体不算组合，`<+key>!` 等合法单一操作符不受影响
+
+### 复审排除项（实测后判定不是缺陷）
+
+- 子审查报「`sudo pkill -f <PATTERN>` 会匹配自己的命令行杀掉 sudo 父进程」：对照实验证明真实 pattern **不**自匹配——`escapeRegExp` 把点转义成 `config\.yaml`，命令行里出现的是带反斜杠的正则源码、正则却要匹配字面点（对照组把 `\.` 换回 `.` 立刻自匹配）。三个 root 脚本同此结论，不加行首锚
+- 文件锁强夺/释放是 stat→unlink 两步、不复核 inode：仅在等待者被冻结（合盖/换出）且系统时钟前跳时可利用，微秒级窗口，记为已知理论缺口，不为此加机制
+- 两个 start 互相并发的「假失败」窗口、矛盾的 `start tun`/`start` 并发：不受支持的并发操作，终态仍由后执行者决定、doctor 可诊断，与已记录的 kickstart 交错同类
+
 ## [4.9.0] - 2026-09-12
 
 对全仓做一次分模块深审（launchd 与进程、数据锁与下载、配置构建与覆写、命令层与横切），修掉 16 条：三条实测复现的并发缺陷（文件锁 deadline 删新鲜锁、TUN 运行中配置变更被切回 Mixed、热重载成功不复读停止计数）、覆写嵌套键语义统一为字面（行为变更）、以及一批「承诺写在注释、机制没盖到」的一致性缺陷。单测 550（+210）。

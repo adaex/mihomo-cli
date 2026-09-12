@@ -39,20 +39,23 @@ export function cmdConfig(args: string[] = []): void {
   const mode = getConfigInfo()?.tun ? 'tun' : 'mixed';
   const { config, warnings } = buildConfig(rawContent, mode, { subName: active.name, subUrl: active.url });
 
-  // secret 是凭据，不能明文打印——展示用的副本改掉，不动 config 本体
+  // secret 是凭据，不能明文打印——展示用的副本改掉，不动 config 本体。
+  // 不判类型：buildConfig 已保证非字符串 secret 直接报错，这里只要键存在就脱敏，
+  // 不把「凭据是否上屏」寄托在类型判断上
   const shown: Record<string, unknown> = { ...config };
-  if (typeof shown.secret === 'string' && shown.secret) shown.secret = '***';
+  if ('secret' in shown) shown.secret = '***';
 
   if (asJson) {
-    // warnings 必须在 JSON 对象内：stdout 得仍是单个可整体解析的 JSON，信号挪去 stderr
-    // 等于让脚本与下游工具永远看不到。无警告时也输出空数组——字段形状稳定，消费者不必判 undefined
-    console.log(JSON.stringify({ ...shown, warnings }, null, 2));
+    // 配置与 CLI 提示分两个键：warnings 若铺在顶层会顶替配置自身的同名键，
+    // 也破坏「config 内容 = start 写入内容」。信封形态与 YAML 出口的「正文 + # 提示段」同构。
+    // stdout 始终是单个可整体解析的 JSON；无警告时输出空数组，字段形状稳定
+    console.log(JSON.stringify({ config: shown, warnings }, null, 2));
     return;
   }
 
   console.log(colors.gray(`# 订阅: ${active.name}  模式: ${mode}`));
   console.log(colors.gray('# 由订阅与覆写推导，与 start 写入 runtime/config.yaml 的内容一致'));
-  if (typeof config.secret === 'string' && config.secret) {
+  if ('secret' in config) {
     console.log(colors.gray('# secret 已脱敏显示'));
   }
   console.log('');
