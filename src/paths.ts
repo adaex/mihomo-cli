@@ -144,6 +144,13 @@ const LOCK_RETRY_MS = 20;
  * 陈旧锁（持有超过 LOCK_STALE_MS，说明持锁进程已崩溃）会被强夺，避免一次崩溃
  * 让后续所有命令永久卡死——宁可退回到无锁时的竞态，也不能把 CLI 锁死。
  *
+ * **强夺的唯一依据是锁龄，没有「等太久也强夺」的旁路**：等待者各自有 deadline，
+ * 但 deadline 只说明「我等超了」，说明不了「锁无人持有」——能等到超时的场景，
+ * 锁多半刚被另一个等待者按陈旧路径强夺，无条件强夺删掉的就是人家几毫秒前才建
+ * 的新鲜锁（实测 B/C 临界区重叠 1.24s，见 withFileLock 内 deadline 分支的注释）。
+ * 活性由锁龄保证：任何锁持有超 LOCK_STALE_MS 必然变陈旧、可被强夺，等待者
+ * 不会无限期卡住。
+ *
  * `fn` 必须是同步的：持锁期间插入 await 会把锁按住整个异步等待，
  * 慢速网络下会让另一个进程等到强夺陈旧锁，等于没锁。
  *
@@ -152,8 +159,17 @@ const LOCK_RETRY_MS = 20;
  * 被强夺 → B 持新锁 → A 释放时误删 → C 进门，B/C 并发 4.6s），发生的正是锁要防的
  * 静默丢数据且双方都拿到成功回执。故锁文件写入 `pid+hrtime` token，内容一致才删。
  */
-export function withFileLock<T>(lockPath: string, fn: () => T): T {
-  const deadline = Date.now() + LOCK_STALE_MS;
+export function withFileLock<T>(
+  lockPath: string,
+  fn: () => T,
+  /**
+   * 仅供测试把时间缩放到毫秒级（deadline 与 LOCK_STALE_MS 都是 10s 常量，真实
+   * 等待太慢）；生产调用方不传，语义与默认常量完全一致。
+   */
+  opts?: { staleMs?: number; deadlineMs?: number },
+): T {
+  const staleMs = opts?.staleMs ?? LOCK_STALE_MS;
+  const deadline = Date.now() + (opts?.deadlineMs ?? LOCK_STALE_MS);
   const token = `${process.pid}-${process.hrtime.bigint()}`;
   let fd: number | null = null;
 
@@ -182,7 +198,7 @@ export function withFileLock<T>(lockPath: string, fn: () => T): T {
       // 锁被占：陈旧则强夺，否则短睡重试
       let stale = false;
       try {
-        stale = Date.now() - fs.statSync(lockPath).mtimeMs > LOCK_STALE_MS;
+        stale = Date.now() - fs.statSync(lockPath).mtimeMs > staleMs;
       } catch {
         // 锁文件刚被持有者释放，下一轮就能拿到
       }
@@ -195,13 +211,31 @@ export function withFileLock<T>(lockPath: string, fn: () => T): T {
         continue;
       }
       if (Date.now() > deadline) {
-        // 兜底：等太久也强夺，绝不无限期卡住用户
+        // 兜底：等太久也只强夺**陈旧**锁，绝不删除新鲜锁。
+        // deadline 只说明「我等超了」，说明不了「锁无人持有」——能等到超时的
+        // 场景，锁多半刚被另一个等待者按陈旧路径强夺，那是一把几毫秒前才建的
+        // 新鲜锁。旧实现在这里无条件 rmSync + continue（还不睡眠），等于谁等得
+        // 久谁有理，破坏的是**等待者之间**的互斥（三进程实测：A 持锁 12s，B 于
+        // 10.24s 走陈旧路径强夺进入，C 于 10.7s 过自己的 deadline、删掉 B 刚建
+        // 的锁并于 11.01s 进入，B/C 临界区重叠 1.24s；真实触发面是 service.lock
+        // 的慢速 start 期间另一终端 stop + 第三个终端 install/stop）。活性不靠
+        // 这条兜底：上面的陈旧检查每轮都在跑，任何锁持有超 staleMs 必然变陈旧、
+        // 可被强夺，等待者不会无限期卡住。过线后重新核对锁龄，锁新鲜就落到下面
+        // 的睡眠重试——持有者是刚获锁的同伴，继续等它释放或变陈旧，绝不热循环。
+        let deadlineStale = false;
         try {
-          fs.rmSync(lockPath, { force: true });
+          deadlineStale = Date.now() - fs.statSync(lockPath).mtimeMs > staleMs;
         } catch {
-          /* ignore */
+          // 锁文件刚被持有者释放，下一轮就能拿到
         }
-        continue;
+        if (deadlineStale) {
+          try {
+            fs.rmSync(lockPath, { force: true });
+          } catch {
+            /* ignore：另一个进程可能同时在强夺 */
+          }
+          continue;
+        }
       }
       sleepSyncMs(LOCK_RETRY_MS);
     }
