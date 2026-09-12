@@ -7,7 +7,7 @@ import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, disableServiceA
 import { getPorts } from '../settings.js';
 import * as subscription from '../subscription.js';
 import type { PreparedConfig } from '../types.js';
-import { assertKnownFlags, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
+import { assertKnownFlags, assertPositionalCount, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
 
 import { printStatus } from './status.js';
 
@@ -28,6 +28,9 @@ export function resolveStartMode(args: string[]): 'tun' | 'mixed' {
 
 export async function cmdStart(args: string[]): Promise<void> {
   assertKnownFlags(args, ['-s', '--no-update', '-u', '--update-timeout'], 'start [tun|mixed]');
+  // 位置参数至多一个（模式）：`start mixed garbage` 此前忽略 garbage 继续执行。
+  // 放在 hasKernel 等状态检查之前——参数错误应在任何环境副作用之前报出
+  assertPositionalCount(args, 1, 1, 'mihomo start [tun|mixed] [-s] [-u ms]');
   const targetMode = resolveStartMode(args);
 
   if (!hasKernel()) {

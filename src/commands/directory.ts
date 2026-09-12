@@ -2,10 +2,12 @@ import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { openUrl } from '../open.js';
 import { DIRECTORY_TARGETS, USER_DATA_DIR } from '../paths.js';
-import { assertKnownFlags, suggestSimilar } from '../utils.js';
+import { assertKnownFlags, assertPositionalCount, suggestSimilar } from '../utils.js';
 import { dispatchSubcommand, type SubCommand } from './shared.js';
 
 function openDirectory(args: string[]): void {
+  // 目标至多一个：`dir open logs extra` 此前静默忽略 extra
+  assertPositionalCount(args, 1, 2, 'mihomo dir open [root|subs|logs|data|runtime|kernel]');
   const target = args[2];
 
   // 路径无条件打印：openUrl 是 detached spawn，检不出失败（见 open.ts），

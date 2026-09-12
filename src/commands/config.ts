@@ -3,7 +3,7 @@ import { buildConfig, dumpYaml, getConfigInfo } from '../config.js';
 import { CliError } from '../errors.js';
 import { readSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription } from '../subscription.js';
-import { assertKnownFlags, hasFlag } from '../utils.js';
+import { assertKnownFlags, assertPositionalCount, hasFlag } from '../utils.js';
 
 /**
  * 展示当前生效的运行配置。只读，不写盘、不校验、不重启。
@@ -21,6 +21,8 @@ import { assertKnownFlags, hasFlag } from '../utils.js';
  */
 export function cmdConfig(args: string[] = []): void {
   assertKnownFlags(args.slice(1), ['-j', '--json'], 'config [--json]');
+  // 不接受位置参数：`config garbage` 此前被静默忽略
+  assertPositionalCount(args, 0, 1, 'mihomo config [--json]');
   const asJson = hasFlag(args, '-j', '--json');
 
   const active = getActiveSubscription();

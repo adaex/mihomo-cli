@@ -1,14 +1,25 @@
 import { colors } from '../colors.js';
 import { AVAILABLE_MIRRORS } from '../constants.js';
 import { CliError } from '../errors.js';
+import { VALUE_FLAGS } from '../flags.js';
 import * as kernel from '../kernel.js';
 import { getRunningState } from '../runtime.js';
 import { getPorts } from '../settings.js';
 import { withSpinner } from '../spinner.js';
-import { parseMirrorArg } from '../utils.js';
+import { assertPositionalCount, parseMirrorArg } from '../utils.js';
+
+/**
+ * kernel 的位置参数口径：`--mirror` 的值（如 `--mirror cdn` 的 cdn）不算位置参数。
+ * `--mirror` 是可选值选项、故意不在 VALUE_FLAGS 里（见 flags.ts 注释），
+ * 故这里单独补一张含 `--mirror` 的表，否则合法的 `kernel --mirror cdn` 会被误判。
+ */
+const KERNEL_VALUE_FLAGS: ReadonlySet<string> = new Set([...VALUE_FLAGS, '--mirror']);
 
 export async function cmdKernel(args: string[]): Promise<void> {
   const mirrorInfo = parseMirrorArg(args);
+  // 不接受位置参数：`kernel garbage` 此前被静默忽略；校验放在 parseMirrorArg 之后
+  // （flag 侧的错误优先报出）、checkUpdate 之前（不碰网络）
+  assertPositionalCount(args, 0, 1, 'mihomo kernel [--mirror [镜像]]', KERNEL_VALUE_FLAGS);
   const effectiveMirror = mirrorInfo.mirror;
 
   // 下载通道：显式 --mirror / --mirror direct 手动覆盖最高优先，默认 gh > 本机代理 > 直连。

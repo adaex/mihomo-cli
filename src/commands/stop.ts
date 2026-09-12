@@ -4,7 +4,7 @@ import { getMihomoPids } from '../process-probe.js';
 import { stop } from '../process-stop.js';
 import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, getServiceStatus, recordServiceStopped, stopService } from '../service.js';
 import type { StopResult } from '../types.js';
-import { assertKnownFlags } from '../utils.js';
+import { assertKnownFlags, assertPositionalCount } from '../utils.js';
 
 /** 检查停止结果：若有进程未终止则报错并退出。 */
 export function handleStopResult(result: StopResult): void {
@@ -21,6 +21,8 @@ export function handleStopResult(result: StopResult): void {
  */
 export async function cmdStop(args: string[]): Promise<void> {
   assertKnownFlags(args.slice(1), [], 'stop');
+  // 不接受位置参数（`stop tun` 之类的写法此前被静默忽略）；校验先于任何服务操作
+  assertPositionalCount(args, 0, 1, 'mihomo stop');
   // 遗留 root daemon 带 KeepAlive：不清理它，下面杀掉的内核约 10s 后就被拉回，
   // 「已停止」即成谎报（与 v4.2.2 修的 gui/0 缺陷同一签名，幽灵换成 legacy daemon）。
   // detectLegacySystemInstall 只查 plist 文件，不要求任务在跑，幂等清理无副作用

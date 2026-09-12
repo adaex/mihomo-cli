@@ -2,7 +2,7 @@ import path from 'node:path';
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { isOverwriteEnabled, listOverwriteFile, setOverwriteEnabled } from '../overwrite.js';
-import { assertKnownFlags, suggestSimilar } from '../utils.js';
+import { assertKnownFlags, assertPositionalCount, suggestSimilar } from '../utils.js';
 import { dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 function printOverwriteList(): void {
@@ -39,6 +39,8 @@ function printOverwriteList(): void {
 
 /** 切换覆写开关：已是目标状态则仅提示；否则写入并（运行中）重启生效。 */
 async function setOverwrite(enabled: boolean, args: string[]): Promise<void> {
+  // on/off 是唯一的位置 token：`ow on garbage` 此前静默忽略 garbage
+  assertPositionalCount(args, 0, 2, 'mihomo ow [on|off]');
   if (isOverwriteEnabled() === enabled) {
     console.log(`覆写配置已是${enabled ? '启用' : '禁用'}状态`);
     console.log('');

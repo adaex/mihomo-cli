@@ -5,7 +5,7 @@ import { CliError } from '../errors.js';
 import { openUrl } from '../open.js';
 import { getRunningState } from '../runtime.js';
 import { getPorts, readSettings } from '../settings.js';
-import { assertKnownFlags } from '../utils.js';
+import { assertKnownFlags, assertPositionalCount } from '../utils.js';
 
 /** 复制到剪贴板（macOS pbcopy）；失败返回 false，调用方回退到手动提示 */
 function copyToClipboard(text: string): boolean {
@@ -18,6 +18,8 @@ function copyToClipboard(text: string): boolean {
 
 export function cmdUI(args: string[]): void {
   assertKnownFlags(args.slice(1), [], 'ui');
+  // 名称至多一个：`ui zash extra` 此前静默忽略 extra；校验先于打开浏览器等副作用
+  assertPositionalCount(args, 1, 1, 'mihomo ui [zash|dash|yacd]');
   const uiName = args[1] || 'zash';
 
   if (!Object.hasOwn(UI_URLS, uiName)) {

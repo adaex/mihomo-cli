@@ -15,7 +15,7 @@ import {
   shouldAbortStartOnDisable,
   uninstallService,
 } from '../service.js';
-import { assertKnownFlags } from '../utils.js';
+import { assertKnownFlags, assertPositionalCount } from '../utils.js';
 
 /**
  * 服务的安装与卸载。启停在 start.ts / stop.ts。
@@ -58,6 +58,7 @@ function printRestoreSkipped(): void {
 
 export async function cmdInstall(args: string[]): Promise<void> {
   assertKnownFlags(args.slice(1), [], 'install');
+  assertPositionalCount(args, 0, 1, 'mihomo install');
   if (!hasKernel()) {
     throw new CliError('未找到内核', { hint: '下载内核: mihomo kernel' });
   }
@@ -119,6 +120,7 @@ export async function cmdInstall(args: string[]): Promise<void> {
 
 export async function cmdUninstall(args: string[]): Promise<void> {
   assertKnownFlags(args.slice(1), [], 'uninstall');
+  assertPositionalCount(args, 0, 1, 'mihomo uninstall');
   const status = getServiceStatus();
   const legacy = detectLegacySystemInstall();
   const residue = getMihomoPids();

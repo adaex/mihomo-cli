@@ -6,7 +6,7 @@ import { colors } from '../colors.js';
 import { MIRROR_ALIASES, UI_URLS } from '../constants.js';
 import { CliError } from '../errors.js';
 import { DIRECTORY_TARGETS } from '../paths.js';
-import { assertKnownFlags, suggestSimilar } from '../utils.js';
+import { assertKnownFlags, assertPositionalCount, suggestSimilar } from '../utils.js';
 import { SUBCOMMANDS as DIRECTORY_SUBCOMMANDS } from './directory.js';
 import { SUBCOMMANDS as OVERWRITE_SUBCOMMANDS } from './overwrite.js';
 import type { Command } from './registry.js';
@@ -411,14 +411,19 @@ function uninstallCompletion(shell: string | undefined, commands: Command[]): vo
 /** completion 命令入口。词表由 registry 传入（避免 import 成环）。 */
 export function cmdCompletion(args: string[], commands: Command[]): void {
   assertKnownFlags(args.slice(1), [], 'completion');
+  // 各形态的位置参数至多一个（install/uninstall 的 shell 在 args[2]，直接输出的 shell 在 args[1]），
+  // `completion install zsh extra` 此前静默忽略 extra；校验先于任何文件写入
   if (args[1] === 'install') {
+    assertPositionalCount(args, 1, 2, `mihomo completion install <${SHELLS.join('|')}>`);
     installCompletion(args[2], commands);
     return;
   }
   if (args[1] === 'uninstall') {
+    assertPositionalCount(args, 1, 2, `mihomo completion uninstall <${SHELLS.join('|')}>`);
     uninstallCompletion(args[2], commands);
     return;
   }
+  assertPositionalCount(args, 1, 1, `mihomo completion <${SHELLS.join('|')}>`);
   const shell = args[1];
   if (!shell) {
     throw new CliError('请指定 shell', {

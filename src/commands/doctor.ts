@@ -13,7 +13,7 @@ import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
 import { getPorts, getSubscriptionsWithCache, isValidSettingsContent, readSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription, isSubscriptionStale, prepareConfigForStart, resolveUpdateInterval } from '../subscription.js';
-import { assertKnownFlags, formatRelativeTime } from '../utils.js';
+import { assertKnownFlags, assertPositionalCount, formatRelativeTime } from '../utils.js';
 import { getLatestNpmVersion } from './update.js';
 
 type CheckStatus = 'ok' | 'warn' | 'fail' | 'skip';
@@ -214,6 +214,8 @@ async function collectChecks(): Promise<Check[]> {
 
 export async function cmdDoctor(args: string[] = []): Promise<void> {
   assertKnownFlags(args.slice(1), [], 'doctor');
+  // 不接受位置参数：校验先于探测/网络等慢速副作用
+  assertPositionalCount(args, 0, 1, 'mihomo doctor');
   const checks = await collectChecks();
 
   console.log('');

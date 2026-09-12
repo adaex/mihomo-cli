@@ -203,6 +203,42 @@ export function assertKnownFlags(args: string[] | undefined, known: readonly str
 }
 
 /**
+ * 校验非 flag 位置参数的个数不超过命令声明的上限（max）。
+ *
+ * 与 assertKnownFlags 配对：flag 侧早已「未知即报错」，位置参数却只认第一个——
+ * `start mixed garbage` 会忽略 garbage 继续执行，与「未知命令、子命令和选项统一报错」
+ * 的产品边界不对称。带值选项的值不算位置参数（与 getNonFlagArg 同一跳值口径），
+ * `sub use name -u 5000`、`logs 3 -f` 这类合法形态不受影响。
+ *
+ * kernel 的 `--mirror` 是可选值选项、不在 VALUE_FLAGS 里（见 flags.ts 注释），
+ * 调用方需经 valueFlags 传入，否则 `kernel --mirror cdn` 的镜像地址会被误计为位置参数。
+ */
+export function assertPositionalCount(
+  args: string[] | undefined,
+  max: number,
+  startIdx: number,
+  usage: string,
+  valueFlags: ReadonlySet<string> = VALUE_FLAGS,
+): void {
+  if (!args) return;
+  let count = 0;
+  for (let i = startIdx; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith('-')) {
+      if (valueFlags.has(a)) i++; // 跳过该带值选项的值
+      continue;
+    }
+    count++;
+    if (count > max) {
+      throw new CliError(`多余的参数: ${a}`, {
+        label: '参数错误',
+        hint: [`用法: ${usage}`],
+      });
+    }
+  }
+}
+
+/**
  * 解析整数选项。全部调用点（-n 行数 / -u 更新超时）语义上都是正整数，
  * 故 <1、非数字、带尾随垃圾（`5s`）一律抛错而非静默取值：
  * `-u 5s` 静默取 5（ms）会让自动更新立刻超时。

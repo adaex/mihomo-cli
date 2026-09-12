@@ -73,6 +73,7 @@ npm run build
 - 再包装错误前先透传已有 CliError，避免标签重复；模块顶层不抛 CliError，环境变量在使用点校验
 - detached/事件回调不得抛 CliError；信号处理与 tail 事件回调是直接 exit 的例外
 - Node 版本、平台与非 root 三个守卫都在 ensureDirs 之前执行，共用同一份 help/version 豁免名单；豁免命令连 ensureDirs 也跳过——豁免免掉的是副作用面（不建目录）而不只是「不被拒绝」，按 `command.name` 匹配已覆盖别名与改写 token；Node 下限取自 package.json 的 `engines.node`（只认 `>=x.y.z`，解析不出就跳过检查，不能挡死所有命令）；开发逃生阀为 `MIHOMO_CLI_ALLOW_ANY_PLATFORM=1`
+- `main()` 开头清除代理环境变量（`http_proxy`/`https_proxy`/`all_proxy` 及大写形式），npm/gh/curl 等派生子进程继承的是清除后的 env——防止系统代理恰好指向本工具自身的 Mixed 端口时下载经自己的代理死锁；代价是企业网络必须靠 env 代理出网时这些子进程会直连失败
 - 报告成功应有独立的结果依据：配置提交查写入结果，服务启动查健康，停止查卸载/残留，下载查大小与可执行性
 - 内核校验失败的提示附带本次生效的覆写文件与作用域；文案收口在 `buildKernelRejectHint`，空清单时不加该段，调用点不散写文案
 - doctor 的失败项透传 `CliError.hint`（`Check.notes`），只取 message 首行会丢掉唯一的排查线索

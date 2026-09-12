@@ -8,7 +8,16 @@ import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } fro
 import { getSubscriptionsWithCache } from '../settings.js';
 import { formatProxySummary, getActiveSubscription, isSubscriptionStale, resolveUpdateInterval } from '../subscription.js';
 import type { ProxyProbeResult, StatusJson, SubscriptionUrgency } from '../types.js';
-import { assertKnownFlags, formatDate, formatRelativeTime, formatTimestamp, formatTraffic, hasFlag, subscriptionUrgency } from '../utils.js';
+import {
+  assertKnownFlags,
+  assertPositionalCount,
+  formatDate,
+  formatRelativeTime,
+  formatTimestamp,
+  formatTraffic,
+  hasFlag,
+  subscriptionUrgency,
+} from '../utils.js';
 
 /** 运行中但代理不通时的归因提示（订阅过期/流量用尽优先，其余归到节点） */
 function connectivityHint(urgency: SubscriptionUrgency): string {
@@ -95,6 +104,8 @@ function buildStatusJson(args: {
 /** 全程免 sudo：launchctl print / print-disabled 均可读，pgrep/ps 亦然。 */
 export async function printStatus(args: string[] = []): Promise<void> {
   assertKnownFlags(args, ['-j', '--json', '--no-probe'], 'status [--json] [--no-probe]');
+  // 不接受位置参数：`status garbage` 此前被静默忽略
+  assertPositionalCount(args, 0, 1, 'mihomo status [-j|--json] [--no-probe]');
   const asJson = hasFlag(args, '-j', '--json');
   const skipProbe = hasFlag(args, '--no-probe');
   // 服务状态只查一次：getRunningState 与 buildStatusJson/printServiceLines 共用，

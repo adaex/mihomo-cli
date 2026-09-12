@@ -7,7 +7,17 @@ import * as runtime from '../runtime.js';
 import { addSubscription, getSubscriptions, getSubscriptionsWithCache, maskUrl, removeSubscription, setDefaultSubscription } from '../settings.js';
 import { withSpinner } from '../spinner.js';
 import * as subscription from '../subscription.js';
-import { assertKnownFlags, formatDate, formatRelativeTime, formatTimestamp, formatTraffic, getNonFlagArg, hasFlag, suggestSimilar } from '../utils.js';
+import {
+  assertKnownFlags,
+  assertPositionalCount,
+  formatDate,
+  formatRelativeTime,
+  formatTimestamp,
+  formatTraffic,
+  getNonFlagArg,
+  hasFlag,
+  suggestSimilar,
+} from '../utils.js';
 import { confirmOrThrow, confirmPrompt, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 /** 订阅内容更新后，运行中的实例仍用旧配置，提示重启生效 */
@@ -93,6 +103,9 @@ function readUrlFromClipboard(): string | null {
 }
 
 async function subAdd(args: string[]): Promise<void> {
+  // url 与可选 name 至多两个：`sub add <url> <name> extra` 此前静默忽略 extra；
+  // 校验先于入库/下载，避免半成品副作用
+  assertPositionalCount(args, 2, 2, 'mihomo sub add <url> [name]');
   let url = args[2]?.trim();
   const name = args[3] || 'default';
 
@@ -144,6 +157,8 @@ async function subAdd(args: string[]): Promise<void> {
 }
 
 async function subUpdate(args: string[]): Promise<void> {
+  // 名称至多一个：`sub update foo bar` 此前静默忽略 bar
+  assertPositionalCount(args, 1, 2, 'mihomo sub update [name]');
   const name = getNonFlagArg(args, 2);
   const subs = getSubscriptions();
 
@@ -181,6 +196,8 @@ async function subUpdate(args: string[]): Promise<void> {
 }
 
 async function subUse(args: string[]): Promise<void> {
+  // 名称至多一个：`sub use foo bar` 此前静默忽略 bar；带值选项的值（-u 5000）不算位置参数
+  assertPositionalCount(args, 1, 2, 'mihomo sub use <name>');
   const name = getNonFlagArg(args, 2);
   const subs = getSubscriptions();
 
@@ -220,6 +237,8 @@ async function subUse(args: string[]): Promise<void> {
 }
 
 async function subRemove(args: string[]): Promise<void> {
+  // 名称至多一个：`sub remove foo bar` 此前静默忽略 bar
+  assertPositionalCount(args, 1, 2, 'mihomo sub remove <name>');
   // 用 getNonFlagArg 而非 args[2]：允许 -y 出现在名称之前（`sub remove -y foo`）
   const name = getNonFlagArg(args, 2);
   const subs = getSubscriptions();

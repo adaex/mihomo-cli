@@ -3,10 +3,12 @@ import { matchValueFlagToken } from '../flags.js';
 import { getLogPath, listLogs } from '../log-files.js';
 import { openLogFile, viewLogWithTail } from '../open.js';
 import type { LogEntry } from '../types.js';
-import { assertKnownFlags, formatBytes, formatDate, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
+import { assertKnownFlags, assertPositionalCount, formatBytes, formatDate, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
 
 export function cmdLogs(args: string[]): void {
   assertKnownFlags(args, ['-f', '--follow', '-n', '--lines', '-o', '--open'], 'logs [-f] [-n N] [编号] [-o]');
+  // 编号至多一个：`logs 1 2` 此前静默忽略 2
+  assertPositionalCount(args, 1, 1, 'mihomo logs [编号] [-f] [-n N] [-o]');
   const lines = parseIntArg(args, '-n', '--lines', 100);
   const openInViewer = hasFlag(args, '-o', '--open');
   const follow = hasFlag(args, '-f', '--follow');

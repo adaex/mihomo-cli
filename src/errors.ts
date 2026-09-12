@@ -33,6 +33,15 @@ export class CliError extends Error {
   }
 }
 
+/**
+ * 任意抛出物的消息文本：Error 取 message，其余（`throw 'str'` / 42 / undefined）
+ * 按 String() 兜底。uncaughtException / unhandledRejection / main().catch 共用同一
+ * 口径——此前各处自行 `as Error`，非 Error 抛出会渲染成「…: undefined」。
+ */
+export function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new TimeoutError()), ms);

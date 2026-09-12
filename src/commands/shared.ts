@@ -19,6 +19,32 @@ export interface SubCommand {
   handler: (args: string[]) => void | Promise<void>;
 }
 
+/** 已通过重复 token 校验的子命令表（按引用记忆，同一张表只在首次分发时校验一次） */
+const validatedTables = new WeakSet<SubCommand[]>();
+
+/**
+ * 子命令表的重复 token 防护，与 registry 的 COMMAND_INDEX 同款判据：
+ * 两个子命令撞主名/别名时，分发用的 `table.find` 静默取先注册者，后者永远不可达
+ * 且无任何提示。表都是模块级常量，首次分发校验一次即可（等价于构建时一次），
+ * 不在每次调用的热路径上重复扫描。
+ *
+ * 抛普通 Error 而非 CliError：表写错是代码 bug，不是用户输入错误（与 COMMAND_INDEX 一致）。
+ */
+function assertUniqueTokens(table: SubCommand[]): void {
+  if (validatedTables.has(table)) return;
+  const owner = new Map<string, string>();
+  for (const cmd of table) {
+    for (const token of [cmd.name, ...(cmd.aliases ?? [])]) {
+      const prev = owner.get(token);
+      if (prev !== undefined) {
+        throw new Error(`子命令表存在重复 token: "${token}"（${prev} 与 ${cmd.name}）`);
+      }
+      owner.set(token, cmd.name);
+    }
+  }
+  validatedTables.add(table);
+}
+
 /**
  * 子命令分发：按 args[1] 在表中匹配主名或别名，命中即调其 handler。
  * 无 action 时走 fallback；未知 action 必须交给 onUnknown 报错。
@@ -28,6 +54,7 @@ export async function dispatchSubcommand(
   table: SubCommand[],
   options: { fallback: (args: string[]) => void | Promise<void>; onUnknown: (action: string) => never },
 ): Promise<void> {
+  assertUniqueTokens(table);
   const action = args[1];
   if (action) {
     const cmd = table.find(c => c.name === action || c.aliases?.includes(action));

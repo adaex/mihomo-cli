@@ -1,13 +1,13 @@
 import { compareVersions } from 'compare-versions';
-import { colors } from './colors.js';
+import { stderrColors } from './colors.js';
 import { printShortHelp } from './commands/help.js';
 import { allCommandTokens, findCommand } from './commands/registry.js';
 import { printStatus } from './commands/status.js';
 import { MIN_NODE_VERSION } from './constants.js';
-import { CliError } from './errors.js';
+import { CliError, errorMessage } from './errors.js';
 import { isSilentSigint } from './lifecycle.js';
 import { ensureDirs } from './paths.js';
-import { assertKnownFlags, suggestSimilar } from './utils.js';
+import { assertKnownFlags, assertPositionalCount, suggestSimilar } from './utils.js';
 
 process.on('SIGINT', () => {
   if (!isSilentSigint()) {
@@ -20,17 +20,17 @@ process.on('SIGTERM', () => {
   process.exit(143);
 });
 
-process.on('uncaughtException', (e: Error) => {
-  console.error(`\n未捕获的异常: ${e.message}`);
-  if (e.stack) {
+process.on('uncaughtException', (e: unknown) => {
+  // 非 Error 抛出（throw 'str' 等）此前渲染成「未捕获的异常: undefined」，与 unhandledRejection 的兜底口径对齐
+  console.error(`\n未捕获的异常: ${errorMessage(e)}`);
+  if (e instanceof Error && e.stack) {
     console.error(e.stack.split('\n').slice(1).join('\n'));
   }
   process.exit(1);
 });
 
 process.on('unhandledRejection', (reason: unknown) => {
-  const msg = reason instanceof Error ? reason.message : String(reason);
-  console.error(`\n未处理的 Promise 拒绝: ${msg}`);
+  console.error(`\n未处理的 Promise 拒绝: ${errorMessage(reason)}`);
   process.exit(1);
 });
 
@@ -175,21 +175,26 @@ async function main(): Promise<void> {
     ensureDirs();
   }
 
-  if (command.group === 'meta') assertKnownFlags(args.slice(1), [], command.name);
+  // meta（help/version）不接受任何位置参数与选项；此前只查 flag，`help extra` 被静默忽略
+  if (command.group === 'meta') {
+    assertKnownFlags(args.slice(1), [], command.name);
+    assertPositionalCount(args, 0, 1, `mihomo ${command.name}`);
+  }
 
   // rewrite 把顶层快捷命令(tun/use)映射为子命令形式;其余命令原样透传。
   await command.handler(command.rewrite ? command.rewrite(args) : args);
 }
 
 main().catch(e => {
+  // 错误渲染走 stderr：设色按 stderr.isTTY 判定（`mihomo status | grep x` 时
+  // stdout 是管道而 stderr 仍是终端，共用 colors 会把错误输出一并剥色）
   if (e instanceof CliError) {
-    console.error(`${colors.red(`${e.label}:`)} ${e.message}`);
+    console.error(`${stderrColors.red(`${e.label}:`)} ${e.message}`);
     for (const line of e.hint) console.error(line);
     process.exit(e.exitCode);
   }
   // 未预期错误 = bug：打印堆栈辅助定位（与 uncaughtException 处理器一致）
-  const err = e as Error;
-  console.error(`${colors.red('错误:')} ${err.message}`);
-  if (err.stack) console.error(err.stack.split('\n').slice(1).join('\n'));
+  console.error(`${stderrColors.red('错误:')} ${errorMessage(e)}`);
+  if (e instanceof Error && e.stack) console.error(e.stack.split('\n').slice(1).join('\n'));
   process.exit(1);
 });
