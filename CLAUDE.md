@@ -120,7 +120,7 @@ npm run build
 - YAML 里 `*` 开头的标量是别名语法：`name: *edu` 解析失败、整个文件被静默跳过，故解析失败的 warn 在错误含 alias 时追加「加引号」提示；推广订阅名 glob 后前缀通配是自然写法，光说「解析失败」用户想不到是引号问题
 - `selectActiveOverwriteFiles` 是「本次参与合并的文件」唯一出口，`enabled` 与 match 两道过滤合在其中，不拆成并列函数——漏调一个就会让停用文件照常合并；新增筛选维度继续加在该函数内。`listOverwriteFile` 是**有意的旁路**（列表要显示全部文件，含被停用的）
 - `ow` 列表的计数措辞是「N 个未禁用」而非「N 个生效」：该列表不绑定某条订阅、无从判断 match 是否命中，故 `listOverwriteFile` 不传 scope 时 `matched` 恒为 undefined（未判定 ≠ 未命中），列表也不得出现「不适用」字样
-- status 反过来知道活跃订阅，故 `listOverwriteFile(scope)` 会给出 `matched`，覆写行按它分三层：主行只列生效文件，未命中的每个展开一行（文件名 + 当前订阅 + 作用域，三者凑齐才看得出为什么没命中），被 `enabled: false` 停用的只折一句计数。两类失效分开计数不合并——原因与改法不同（改 match/切订阅 vs 改文件里的 enabled），混在「已启用 (a, b)」里会让用户拿没生效的文件解释自己看到的行为。`matched` 仅供展示，合并闸门永远只有 `selectActiveOverwriteFiles`；`status --json` 的 `applied` 是生效清单，`files` 保持旧契约（只滤文件级 enabled）
+- status 反过来知道活跃订阅，故 `listOverwriteFile(scope)` 会给出 `matched`，覆写行按它分三层：主行只列生效文件，未命中的每个展开一行（文件名 + 当前订阅 + 作用域，三者凑齐才看得出为什么没命中），被 `enabled: false` 停用的只折一句计数。两类失效分开计数不合并——原因与改法不同（改 match/切订阅 vs 改文件里的 enabled），混在「已启用 (a, b)」里会让用户拿没生效的文件解释自己看到的行为。`matched` 仅供展示，合并闸门永远只有 `selectActiveOverwriteFiles`；`status --json` 的 `applied` 是生效清单，三道过滤与 buildConfig 对齐（全局开关关闭时恒为空——否则同一份 JSON 里 `enabled:false` 却列着生效文件，与人读形态打架），`files` 保持旧契约（只滤文件级 enabled）
 - 覆写操作符只在文件顶层生效：`key!` 整体覆盖，`+key`/`key+` 数组插入，`~key` 按 name 合并（未命中追加）、`~?key` 按 name 合并但未命中忽略，`<+key>` 转义（含 `~<key>`/`~?<key>` 组合）；嵌套键一律字面（含 `~key` 元素补丁的字段），`+.域名` 原生通配键在嵌套层安全，形似操作符的嵌套键按字面处理并经 buildConfig warnings 每文件每键提示一次（`+.` 开头不提示；措辞只说「处理」不承诺最终保留——后加载文件的 `key!` 可能整体覆盖掉它）；数组操作遇到已存在的非数组值应报错；互斥修饰同时出现（`+x+`/`~x!`/`<x>+!`）与解析后空键名（裸 `+:`/`~:`）显式报错，不静默按分支优先级取其一
 - 覆写默认开启；applyOverwrite 只接收调用方已筛选的文件，不自行读设置或加载文件
 

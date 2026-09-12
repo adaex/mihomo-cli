@@ -498,7 +498,7 @@ hosts:
   glados 不适用于当前订阅 mini1（作用域 name=edu*）
 ```
 
-「不适用」指文件本身是启用的，只是 `match` 没命中当前订阅——切到命中的订阅（`sub use`）或改 `match` 才会生效，与 `enabled: false` 的「已禁用」是两回事。`mihomo ow` 列表不做这个判断（它不绑定某条订阅），那里的作用域一栏只说明该文件管哪些订阅。`--json` 形态下 `overwrite.applied` 是生效清单，`overwrite.files` 仍是「未被 `enabled: false` 停用」的全部文件
+「不适用」指文件本身是启用的，只是 `match` 没命中当前订阅——切到命中的订阅（`sub use`）或改 `match` 才会生效，与 `enabled: false` 的「已禁用」是两回事。`mihomo ow` 列表不做这个判断（它不绑定某条订阅），那里的作用域一栏只说明该文件管哪些订阅。`--json` 形态下 `overwrite.applied` 是生效清单（`ow off` 全局关闭时为空数组），`overwrite.files` 仍是「未被 `enabled: false` 停用」的全部文件
 
 ### 单个文件的开关（enabled）
 

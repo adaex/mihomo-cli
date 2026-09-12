@@ -91,7 +91,9 @@ function buildStatusJson(args: {
     overwrite: {
       enabled: args.overwriteEnabled,
       files: args.overwriteFiles.filter(f => f.enabled).map(f => f.name),
-      applied: args.overwriteFiles.filter(f => f.enabled && f.matched !== false).map(f => f.name),
+      // 全局关闭时 buildConfig 不加载任何覆写，applied 必须空——只滤 enabled/match
+      // 会列出「生效文件」，与同一份 JSON 里的 enabled:false 自相矛盾
+      applied: args.overwriteEnabled ? args.overwriteFiles.filter(f => f.enabled && f.matched !== false).map(f => f.name) : [],
     },
     service: {
       installed: args.service.installed,

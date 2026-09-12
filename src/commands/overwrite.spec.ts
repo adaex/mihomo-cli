@@ -191,6 +191,19 @@ describe('status 覆写行按 match 区分是否适用当前订阅', () => {
     });
   });
 
+  it('全局开关关闭时 applied 为空：那时 buildConfig 压根不加载覆写', () => {
+    // 漏这道过滤会让同一份 JSON 自相矛盾——enabled:false 却列着「生效文件」，
+    // 而人读形态此时只说「已禁用」、一个文件都不列，两种形态对不上
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'overwrite.a.yaml'), 'log-level: debug\n');
+      run(['ow', 'off']);
+      const json = JSON.parse(run(['status', '--json', '--no-probe']).stdout);
+      assert.equal(json.overwrite.enabled, false);
+      assert.deepEqual(json.overwrite.applied, [], '全局关闭时没有任何覆写生效');
+      assert.deepEqual(json.overwrite.files, ['overwrite.a.yaml'], 'files 是旧契约，不随全局开关变空');
+    });
+  });
+
   it('`ow` 列表不做 match 判定：它不绑定某条订阅，判不了也不该判', () => {
     withFixture((dataDir, run) => {
       fs.writeFileSync(path.join(dataDir, 'overwrite.miss.yaml'), 'match:\n  name: mini*\nlog-level: info\n');

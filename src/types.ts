@@ -362,9 +362,11 @@ export interface StatusJson {
    * `enabled` 是全局开关（settings.overwrite_enabled）。
    *
    * `files` 是目录里未被 `enabled: false` 停用的覆写文件名——**不等于本次生效的清单**，
-   * 它不按 match 作用域过滤、也不随全局开关变空。`applied` 在 files 基础上再按当前活跃
-   * 订阅的 match 过滤，即本次真正参与合并的文件（全局开关关闭或无活跃订阅时不额外收窄，
-   * 判据见 status 的 matched）。人读形态同源于这两个数组
+   * 它不按 match 作用域过滤、也不随全局开关变空（旧契约，保持不变）。
+   *
+   * `applied` 是本次真正参与合并的文件，三道过滤与 buildConfig 一致：全局开关关闭时
+   * 恒为空数组（那时 buildConfig 压根不加载覆写），再滤掉文件级 `enabled: false`，
+   * 最后按当前活跃订阅的 match 过滤。无活跃订阅时判不了 match，不额外收窄
    */
   overwrite: { enabled: boolean; files: string[]; applied: string[] };
   service: {
