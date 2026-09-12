@@ -1,10 +1,20 @@
 # Changelog
 
-## [未发布]
+## [4.11.0] - 2026-09-13
+
+一处展示层误导的修复：`status` 此前会把「不适用于当前订阅」的覆写文件与真正生效的并排列出。单测 657（+8）。
 
 ### 变更
 
-- **`status` 的覆写行区分「生效」与「不适用」**：此前括号里列的是「目录里没被 `enabled: false` 停用的文件」，不按 `match` 过滤——只对别的订阅生效的文件会和真正生效的混在一行里，长得一模一样。用户拿它解释自己看到的行为（「我明明覆写了」），排查方向整个跑偏。现主行只列本次真正参与合并的文件，未命中的每个展开一行说明原因：`glados 不适用于当前订阅 mini1（作用域 name=edu*）`——文件名、当前订阅、作用域三者凑齐才看得出为什么没命中。两类失效分开计数而不合并成一个数字：「不适用」要改 `match` 或切订阅，「已禁用」要改文件里的 `enabled`，原因与改法都不同。status 判得了 match 是因为它知道当前活跃订阅，而 `mihomo ow` 列表不绑定某条订阅、判不了也不该判，那里维持原样（`listOverwriteFile` 不传 scope 时 `matched` 为 undefined = 未判定，与「未命中」区分）。判据仍是 `matchesScope` 本身，合并闸门也仍只有 `selectActiveOverwriteFiles`——新增的 `matched` 只供展示。`status --json` 相应新增 `overwrite.applied`（生效清单，三道过滤与 buildConfig 对齐：全局开关关闭时恒为空，否则同一份 JSON 里 `enabled:false` 却列着生效文件、与人读形态打架），`overwrite.files` 保持旧契约不变。反向验证：让 status 不传 scope，5 条新用例转红，另 2 条（`ow` 列表不判 match、全命中时无补充行）按设计恒绿
+- **`status` 的覆写行区分「生效」与「不适用」**：此前括号里列的是「目录里没被 `enabled: false` 停用的文件」，不按 `match` 过滤——只对别的订阅生效的文件会和真正生效的混在一行里，长得一模一样。用户拿它解释自己看到的行为（「我明明覆写了」），排查方向整个跑偏。现主行只列本次真正参与合并的文件，未命中的每个展开一行说明原因：`glados 不适用于当前订阅 mini1（作用域 name=edu*）`——文件名、当前订阅、作用域三者凑齐才看得出为什么没命中。两类失效分开计数而不合并成一个数字：「不适用」要改 `match` 或切订阅，「已禁用」要改文件里的 `enabled`，原因与改法都不同。status 判得了 match 是因为它知道当前活跃订阅，而 `mihomo ow` 列表不绑定某条订阅、判不了也不该判，那里维持原样（`listOverwriteFile` 不传 scope 时 `matched` 为 undefined = 未判定，与「未命中」区分）。判据仍是 `matchesScope` 本身，合并闸门也仍只有 `selectActiveOverwriteFiles`——新增的 `matched` 只供展示。反向验证：让 status 不传 scope，5 条新用例转红，另 2 条（`ow` 列表不判 match、全命中时无补充行）按设计恒绿
+
+### 新增
+
+- **`status --json` 新增 `overwrite.applied`**：本次真正参与合并的覆写文件清单，三道过滤与 `buildConfig` 对齐（全局开关 → 文件级 `enabled` → 当前订阅的 `match`）。`overwrite.files` 保持旧契约不变（只滤文件级 `enabled`，不按 match、不随全局开关变空），两者并存以免破坏既有脚本
+
+### 修复
+
+- **`applied` 漏了全局开关这道过滤**：上一条提交自引入，复查时实跑发现。`ow off` 之后同一份 JSON 里 `enabled` 是 `false`、`applied` 却列着文件，而人读形态此时只说「已禁用」、一个文件都不列——两种形态对不上，也与 `buildConfig` 的实际行为不符（全局关闭时它压根不加载任何覆写文件）。根因是契约注释先写错、实现照着错契约写，现三道过滤对齐并补回归用例
 
 ## [4.10.0] - 2026-09-13
 
