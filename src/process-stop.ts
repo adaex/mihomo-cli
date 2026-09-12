@@ -3,6 +3,7 @@ import fs from 'node:fs';
 
 import { DIRS, ensureDirs, PATHS, rmrf } from './paths.js';
 import { getMihomoPids, isPidFileOwnedByRoot, isProcessRoot, MAIN_INSTANCE_PATTERN } from './process-probe.js';
+import { SUDO_TIMEOUT_MS } from './sudo.js';
 import type { CleanupResult, StopResult } from './types.js';
 import { sleep } from './utils.js';
 
@@ -73,7 +74,11 @@ function killProcess(pid: number): boolean {
 function killAllMihomo(forceSudo = false): boolean {
   const pattern = MAIN_INSTANCE_PATTERN;
   const argv: [string, string[]] = forceSudo ? ['sudo', ['pkill', '-9', '-f', pattern]] : ['pkill', ['-9', '-f', pattern]];
-  const options = forceSudo ? { stdio: 'inherit' as const, timeout: 15_000 } : { timeout: 10_000 };
+  // sudo 分支引用 SUDO_TIMEOUT_MS（与 runSudoScript 同一常量）：spawnSync 超时会把密码提示
+  // 连同整个 sudo+pkill 一起杀掉。此前自抄的 15s 意味着密码输得慢的用户被杀掉提示、
+  // pkill 从未执行，stop 随后报「部分进程未终止」——PID 列表属实，原因却是密码没输完。
+  // 免密分支维持 10s（无交互，只受系统负载影响）
+  const options = forceSudo ? { stdio: 'inherit' as const, timeout: SUDO_TIMEOUT_MS } : { timeout: 10_000 };
 
   try {
     const result = spawnSync(argv[0], argv[1], options);

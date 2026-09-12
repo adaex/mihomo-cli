@@ -17,6 +17,7 @@ process.env.MIHOMO_CLI_DIR = tmpDir;
 const { PATHS, DIRS } = await import('./paths.js');
 const { getMihomoPids, isRunning, MAIN_INSTANCE_PATTERN } = await import('./process-probe.js');
 const { cleanupAll, stop, clearPid } = await import('./process-stop.js');
+const { SUDO_TIMEOUT_MS } = await import('./sudo.js');
 
 /**
  * 桩「内核」：一个长睡的 bash 脚本，放在隔离目录的 kernel/mihomo 位置。
@@ -196,5 +197,20 @@ describe('isRunning 的 PID 复用防线', () => {
     fs.writeFileSync(PATHS.pidFile, '999999');
     assert.equal(isRunning(), false);
     clearPid();
+  });
+});
+
+/**
+ * killAllMihomo 的 sudo 分支超时必须引用 SUDO_TIMEOUT_MS（与 runSudoScript 同一常量）。
+ * spawnSync 的 options 在模块私有函数内部构造，测试进程无法拦截参数本身；而该缺陷的
+ * 形态恰是「抄数字」——15s 早于密码输完就把 sudo+pkill 连密码提示一起杀掉，用户被误判成
+ * 「杀进程失败」。故此处锚定「源码引用同一常量」这一事实：引用常量后数值天然与
+ * runSudoScript 同源，不会各自漂移。
+ */
+describe('sudo 分支超时统一', () => {
+  it('killAllMihomo 的 sudo 分支引用 SUDO_TIMEOUT_MS，而非自抄更短的超时', () => {
+    const source = fs.readFileSync(new URL('./process-stop.ts', import.meta.url), 'utf8');
+    assert.match(source, /timeout:\s*SUDO_TIMEOUT_MS/, 'sudo 分支超时必须引用共享常量，不得抄数字');
+    assert.ok(SUDO_TIMEOUT_MS > 15_000, '超时必须覆盖交互输密码的时长（回归值是 15s）');
   });
 });

@@ -6,7 +6,18 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { isValidServiceLabel } from './constants.js';
-import { buildPlist, describeAbnormalExit, describeExitCause, parseDisabledList, parseServicePrint, shouldAbortStartOnDisable } from './service.js';
+import { CliError } from './errors.js';
+import {
+  buildLegacyCleanupScript,
+  buildPlist,
+  buildRootResidueCleanupError,
+  describeAbnormalExit,
+  describeExitCause,
+  parseDisabledList,
+  parseServicePrint,
+  shouldAbortStartOnDisable,
+} from './service.js';
+import { SudoAuthError } from './sudo.js';
 import type { ServiceStatus } from './types.js';
 
 /**
@@ -509,5 +520,75 @@ describe('isValidServiceLabel：全仓唯一挡住 root 任意路径写的校验
     assert.equal(isValidServiceLabel('com.mihomo-cli.daemon'), true);
     assert.equal(isValidServiceLabel('com.mihomo-cli.test_1'), true);
     assert.equal(isValidServiceLabel('A0'), true);
+  });
+});
+
+/**
+ * buildRootResidueCleanupError：root 残留清理失败的统一包装。
+ * 此前 runSudoScript 的普通 Error 从 stop / uninstall / reset 裸露——带完整堆栈按
+ * 「未预期错误」（main().catch 兜底）渲染，而 start 的兜底又包成「启动失败」，
+ * 同一错误在不同命令下两副面孔。这里锁住包装后的关键事实：
+ * 主体动作已完成到哪一步、残留 PID、重试入口，以及 sudo 取消按「已取消」
+ * （用户主动行为）而非「错误」渲染。真实 sudo 路径不自动测试（CODE_REVIEW），
+ * 可测的是这份包装的纯逻辑。
+ */
+describe('buildRootResidueCleanupError', () => {
+  const ctx = { mainOutcome: '服务已停止，登录自启已关闭', retryCommand: 'mihomo stop' };
+
+  it('sudo 取消 → label「已取消」，hint 说清主体动作已完成、残留 PID 与重试入口', () => {
+    const err = buildRootResidueCleanupError(new SudoAuthError(), ctx, [4321, 8765]);
+    assert.ok(err instanceof CliError);
+    assert.equal(err.label, '已取消');
+    assert.equal(err.message, '管理员密码未输入或有误，root 残留未被清理');
+    assert.ok(
+      err.hint.some(l => l.includes('服务已停止，登录自启已关闭')),
+      '必须说清主体动作已完成',
+    );
+    assert.ok(
+      err.hint.some(l => l.includes('PID 4321, 8765')),
+      '残留 PID 应如实列出',
+    );
+    assert.ok(
+      err.hint.some(l => l.includes('mihomo stop')),
+      '必须给出重试入口',
+    );
+    assert.ok(
+      err.hint.some(l => l.includes('sudo pkill -9 mihomo')),
+      '应附手动清理命令',
+    );
+  });
+
+  it('脚本失败（非取消）→ label「清理残留进程失败」，保留 runSudoScript 的原始消息', () => {
+    const err = buildRootResidueCleanupError(new Error('终止残留内核失败（pkill 退出码异常）'), ctx, [4321]);
+    assert.equal(err.label, '清理残留进程失败');
+    assert.equal(err.message, '终止残留内核失败（pkill 退出码异常）');
+    assert.ok(err.hint.some(l => l.includes('PID 4321')));
+  });
+
+  it('无 root 进程（仅 pid 文件）时残留描述与手动命令切换为 pid 文件版', () => {
+    // 仅 pid 文件残留只可能来自 start 路径（killResidualKernels 仅在有 root 进程时提权），
+    // 重试入口对它同样成立，但手动命令不再是 pkill
+    const startCtx = { mainOutcome: '服务尚未启动', retryCommand: 'mihomo start' };
+    const err = buildRootResidueCleanupError(new SudoAuthError(), startCtx, []);
+    assert.equal(err.label, '已取消');
+    assert.ok(err.hint.some(l => l.startsWith('root 属主的 pid 文件未被清理')));
+    assert.ok(
+      err.hint.some(l => l.startsWith('手动清理: sudo rm -f ')),
+      'pid 文件残留的手动命令是 rm 而非 pkill',
+    );
+    assert.ok(err.hint.some(l => l.includes('mihomo start')));
+  });
+});
+
+/**
+ * buildLegacyCleanupScript 的退出码协议。真实失败（bootout 拒绝）只有真机 sudo 能验证，
+ * 能锁住的是协议本身：脚本内部失败用 ≥2（此处 3），1 留给 sudo 鉴权取消/密码错误。
+ * 此前 `exit 1` 报真实失败，被 runSudoScript 映射成「已取消或密码错误」。
+ */
+describe('buildLegacyCleanupScript：sudo 脚本退出码协议', () => {
+  it('bootout 真实失败用 exit 3（≥2），脚本内不出现 exit 1', () => {
+    const script = buildLegacyCleanupScript();
+    assert.ok(script.includes('exit 3'), 'bootout 失败应以 ≥2 的退出码报真实失败');
+    assert.ok(!/\bexit 1\b/.test(script), '脚本内 exit 1 会被 runSudoScript 误报成「已取消或密码错误」');
   });
 });

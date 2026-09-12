@@ -8,7 +8,7 @@ import { allocateArchivePath, cleanupOldLogs, rotateAndCleanupLogs } from './log
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './paths.js';
 import { getMihomoPids, isPidFileOwnedByRoot, isProcessRoot, MAIN_INSTANCE_PATTERN } from './process-probe.js';
 import { getPorts, readSettings } from './settings.js';
-import { runSudoScript } from './sudo.js';
+import { runSudoScript, SudoAuthError } from './sudo.js';
 import type { ServiceStatus } from './types.js';
 import { shellQuote, sleep } from './utils.js';
 
@@ -508,8 +508,72 @@ function cleanupRootResidue(): void {
   runSudoScript(script, { action: '清理残留进程', file: 'cleanup-residue.sh', codeMessages: { 2: '终止残留内核失败（pkill 退出码异常）' } });
 }
 
-/** 终止残留内核。用户态进程直接 kill；有 root 残留才提一次权。 */
-function killResidualKernels(): void {
+/** root 残留清理失败包装的上下文：主体动作进行到哪一步、重试入口，三个调用点各不相同 */
+export interface RootResidueCleanupContext {
+  /** 主体动作的结果描述，如「服务已停止，登录自启已关闭」；start 路径是「服务尚未启动」 */
+  mainOutcome: string;
+  /** 重新尝试清理的命令，如 'mihomo stop' */
+  retryCommand: string;
+}
+
+/**
+ * 把 root 残留清理（经 runSudoScript）抛出的普通 Error 包成 CliError——纯函数，供测试。
+ *
+ * 此前这类 Error 从停止类命令裸露：stop / uninstall / reset 的消费点都没有 try/catch，
+ * 带完整堆栈按「未预期错误」（main().catch 兜底）渲染，而 start 的兜底又包成「启动失败」
+ * ——同一错误在不同命令下渲染完全不同。统一在这里说清三件关键事实：
+ * 主体动作已完成到哪一步、root 残留还在（带 PID）、重试入口。
+ *
+ * sudo 取消（SudoAuthError）是用户主动行为，label 用「已取消」而非「错误」；
+ * 其余失败（脚本退出码 ≥2 / 被信号终止 / 非 TTY）保留 runSudoScript 的原始消息。
+ *
+ * 仅 pid 文件、无 root 进程的失败只可能来自 start 路径（killResidualKernels 仅在
+ * 有 root 进程时才调用清理），pid 文件残留也由 start 的同一入口重试，故重试提示对
+ * 两种形态都成立；stop 对「无进程 + 仅 pid 文件」会走「不在运行」提前返回，清不到它。
+ */
+export function buildRootResidueCleanupError(e: Error, ctx: RootResidueCleanupContext, rootPids: number[]): CliError {
+  const cancelled = e instanceof SudoAuthError;
+  const hasKernelResidue = rootPids.length > 0;
+  const hint = [
+    ctx.mainOutcome,
+    hasKernelResidue ? `root 残留内核仍在运行（PID ${rootPids.join(', ')}），可能继续占用代理端口` : `root 属主的 pid 文件未被清理: ${PATHS.pidFile}`,
+    `重新运行可再次尝试清理: ${ctx.retryCommand}`,
+  ];
+  hint.push(hasKernelResidue ? '手动清理: sudo pkill -9 mihomo' : `手动清理: sudo rm -f ${PATHS.pidFile}`);
+  if (cancelled) {
+    return new CliError('管理员密码未输入或有误，root 残留未被清理', { label: '已取消', hint });
+  }
+  return new CliError(e.message, { label: '清理残留进程失败', hint });
+}
+
+/** 错误处理路径上的残留探测：探测再失败也不能让它替换掉正要渲染的清理失败本身 */
+function currentRootResiduePids(): number[] {
+  try {
+    return getMihomoPids().filter(isProcessRoot);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * cleanupRootResidue 的「失败即 CliError」版本：runSudoScript 的普通 Error 统一经
+ * buildRootResidueCleanupError 包装（同族范式见 cleanupLegacyInstallOrThrow——那里同样
+ * 是为了不让 sudo 取消/非 TTY 带着堆栈按「未预期错误」渲染）。探测已抛 CliError 时透传。
+ */
+function cleanupRootResidueOrThrow(ctx: RootResidueCleanupContext): void {
+  try {
+    cleanupRootResidue();
+  } catch (e) {
+    if (e instanceof CliError) throw e;
+    throw buildRootResidueCleanupError(e as Error, ctx, currentRootResiduePids());
+  }
+}
+
+/**
+ * 终止残留内核。用户态进程直接 kill；有 root 残留才提一次权。
+ * 失败经 ctx 包装成 CliError：说清主体动作已完成、残留还在、如何重试。
+ */
+function killResidualKernels(ctx: RootResidueCleanupContext): void {
   const pids = getMihomoPids();
   if (pids.length === 0) return;
 
@@ -522,7 +586,7 @@ function killResidualKernels(): void {
       /* ignore：可能已自行退出 */
     }
   }
-  if (rootPids.length > 0) cleanupRootResidue();
+  if (rootPids.length > 0) cleanupRootResidueOrThrow(ctx);
 }
 
 /**
@@ -772,8 +836,10 @@ export async function startService(stopEpochBefore: number): Promise<{ started: 
     });
   }
 
-  // tun 残留是 root 属主，会与服务抢端口；有才清（这是唯一可能弹密码的地方），无则免密
-  cleanupRootResidue();
+  // tun 残留是 root 属主，会与服务抢端口；有才清（这是唯一可能弹密码的地方），无则免密。
+  // 失败即 CliError：sudo 取消是用户主动行为，不该带堆栈按「未预期错误」渲染，
+  // 也要说清此时服务尚未启动（清理是启动的前置步骤）
+  cleanupRootResidueOrThrow({ mainOutcome: '服务尚未启动', retryCommand: 'mihomo start' });
 
   // 先 bootout 清旧使重复调用幂等（改过 plist 后 start 一下即按新配置重载，无需 kickstart）
   bootoutService();
@@ -874,8 +940,9 @@ export async function stopService(): Promise<void> {
 
   await waitUntilUnloaded();
 
-  // bootout 通常已终止托管内核；tun 起的 root 内核与手动残留在此收口
-  killResidualKernels();
+  // bootout 通常已终止托管内核；tun 起的 root 内核与手动残留在此收口。
+  // 重跑 stop 即可重试清理：此时服务已停，cmdStop 走「游离内核」路径再次提权
+  killResidualKernels({ mainOutcome: '服务已停止，登录自启已关闭', retryCommand: 'mihomo stop' });
 }
 
 /**
@@ -911,7 +978,9 @@ export async function uninstallService(): Promise<void> {
   // enable 位还开着的话，plist 被别的途径放回（重装、备份恢复）即自启
   disableServiceAutoStart();
 
-  killResidualKernels();
+  // 重试入口是 stop 而非 uninstall：卸载完成后重跑 uninstall 会因「未安装且未装载」
+  // 幂等返回，不会重试残留清理；stop 的游离内核路径（cleanupAll）才会再次提权
+  killResidualKernels({ mainOutcome: '服务已卸载', retryCommand: 'mihomo stop' });
 
   // 符号链是本工具装的，卸载时一并清掉（内核本体保留，那是 kernel 命令的资产）
   try {
@@ -919,6 +988,32 @@ export async function uninstallService(): Promise<void> {
   } catch {
     /* ignore：不存在或已被 reset kernel 带走 */
   }
+}
+
+/**
+ * 生成遗留安装清理脚本的 body（不写盘：写盘 + chmod + sudo + 退出码映射由 runSudoScript 统一完成）。
+ * 导出仅为测试退出码协议：脚本内部失败用 ≥2 的退出码（bootout 真实失败为 3），
+ * 1 留给 sudo 鉴权取消/密码错误——此前用 `exit 1` 报真实失败，被 runSudoScript
+ * 映射成「已取消或密码错误」，用户密码明明输对了。
+ */
+export function buildLegacyCleanupScript(): string {
+  return [
+    '#!/bin/bash',
+    // bootout 退出码分级：113=未装载（daemon 已不在，正常），其余是真实失败。
+    // 此前 || true 吞掉所有错误，daemon 仍在跑却继续 rm plist 并报「已清理」
+    `bootout_code=0`,
+    `launchctl bootout ${shellQuote(`system/${SERVICE_LABEL}`)} 2>/dev/null || bootout_code=$?`,
+    `if [ $bootout_code -ne 0 ] && [ $bootout_code -ne 113 ]; then`,
+    `  echo "launchctl bootout 失败（退出码 $bootout_code）" >&2`,
+    `  exit 3`,
+    `fi`,
+    `rm -f ${shellQuote(PATHS.systemDaemonPlist)}`,
+    `chown "$SUDO_UID:$SUDO_GID" ${shellQuote(PATHS.logFile)} 2>/dev/null || true`,
+    `chown -R "$SUDO_UID:$SUDO_GID" ${shellQuote(DIRS.data)} 2>/dev/null || true`,
+    `rm -f ${shellQuote(PATHS.pidFile)}`,
+    'exit 0',
+    '',
+  ].join('\n');
 }
 
 /**
@@ -931,25 +1026,13 @@ export async function uninstallService(): Promise<void> {
 export function cleanupLegacySystemInstall(): void {
   assertServiceLabelSafe();
 
-  const script = [
-    '#!/bin/bash',
-    // bootout 退出码分级：113=未装载（daemon 已不在，正常），其余是真实失败。
-    // 此前 || true 吞掉所有错误，daemon 仍在跑却继续 rm plist 并报「已清理」
-    `bootout_code=0`,
-    `launchctl bootout ${shellQuote(`system/${SERVICE_LABEL}`)} 2>/dev/null || bootout_code=$?`,
-    `if [ $bootout_code -ne 0 ] && [ $bootout_code -ne 113 ]; then`,
-    `  echo "launchctl bootout 失败（退出码 $bootout_code）" >&2`,
-    `  exit 1`,
-    `fi`,
-    `rm -f ${shellQuote(PATHS.systemDaemonPlist)}`,
-    `chown "$SUDO_UID:$SUDO_GID" ${shellQuote(PATHS.logFile)} 2>/dev/null || true`,
-    `chown -R "$SUDO_UID:$SUDO_GID" ${shellQuote(DIRS.data)} 2>/dev/null || true`,
-    `rm -f ${shellQuote(PATHS.pidFile)}`,
-    'exit 0',
-    '',
-  ].join('\n');
-
-  runSudoScript(script, { action: '清理遗留的系统级服务', file: 'legacy-cleanup.sh' });
+  runSudoScript(buildLegacyCleanupScript(), {
+    action: '清理遗留的系统级服务',
+    file: 'legacy-cleanup.sh',
+    // 3 = 脚本内 bootout 真实失败（见 buildLegacyCleanupScript 的分级）；
+    // 具体退出码已由脚本 echo 到终端，故只指向「上方输出」
+    codeMessages: { 3: 'launchctl bootout 未能卸载旧 daemon（详见上方输出）' },
+  });
 }
 
 /**
