@@ -46,14 +46,20 @@ describe('suggestSimilar', () => {
 });
 
 describe('parseIntArg 范围与格式校验', () => {
-  const T = (args: string[]) => parseIntArg(args, '-t', '--timeout', 2000);
+  // attached / 等号形式的判定走 FLAGS 登记表（matchValueFlagToken），
+  // fixture 必须用已登记的选项；未登记选项的非 exact 形式由白名单统一报错
+  const T = (args: string[]) => parseIntArg(args, '-n', '--lines', 2000);
 
   it('合法正整数（空格形式）', () => {
-    assert.equal(T(['x', '-t', '3000']), 3000);
+    assert.equal(T(['x', '-n', '3000']), 3000);
   });
 
   it('合法正整数（= 形式）', () => {
-    assert.equal(T(['x', '--timeout=3000']), 3000);
+    assert.equal(T(['x', '--lines=3000']), 3000);
+  });
+
+  it('合法正整数（attached 短选项）', () => {
+    assert.equal(T(['x', '-n3000']), 3000);
   });
 
   it('缺省返回默认值', () => {
@@ -68,16 +74,48 @@ describe('parseIntArg 范围与格式校验', () => {
   for (const bad of ['0', '-1', '5s', 'abc', '', '1.5', ' ']) {
     it(`拒绝非法值 ${JSON.stringify(bad)}`, () => {
       assert.throws(
-        () => T(['x', '-t', bad]),
+        () => T(['x', '-n', bad]),
         (e: unknown) => e instanceof CliError,
+      );
+    });
+  }
+
+  // attached 短选项后缀非纯数字：与空格形式同一报错路径，不再静默返回默认值
+  for (const bad of ['-n5s', '-n=3000', '-nfoo']) {
+    it(`attached 形式 ${JSON.stringify(bad)} 报错而非静默取默认`, () => {
+      assert.throws(
+        () => T(['x', bad]),
+        (e: unknown) => e instanceof CliError && /需要正整数/.test((e as CliError).message),
       );
     });
   }
 
   it('缺少值时报错', () => {
     assert.throws(
-      () => T(['x', '-t']),
+      () => T(['x', '-n']),
       (e: unknown) => e instanceof CliError,
+    );
+  });
+});
+
+describe('parseIntArg：-u 更新超时（attached 形式回归）', () => {
+  // 此前 `-u5s` 白名单放行但这里静默回退默认值，`mihomo start -u5s`
+  // 一路走到后面才以「未找到内核」收场；统一为与空格形式同一条报错路径
+  it('-u30000 解析为 30000', () => {
+    assert.equal(parseIntArg(['start', '-u30000'], '-u', '--update-timeout', 10000), 30000);
+  });
+
+  it('-u5s 抛错而非静默回退默认值', () => {
+    assert.throws(
+      () => parseIntArg(['start', '-u5s'], '-u', '--update-timeout', 10000),
+      (e: unknown) => e instanceof CliError && /需要正整数/.test((e as CliError).message),
+    );
+  });
+
+  it('-u=3000 明确报错：短选项等号形式不是合法写法，后缀 "=3000" 非纯整数', () => {
+    assert.throws(
+      () => parseIntArg(['start', '-u=3000'], '-u', '--update-timeout', 10000),
+      (e: unknown) => e instanceof CliError && /需要正整数/.test((e as CliError).message),
     );
   });
 });
@@ -220,6 +258,15 @@ describe('选项白名单只接受当前支持的写法', () => {
   });
   it('带值选项接受等号与短选项紧贴值', () => {
     assert.doesNotThrow(() => assertKnownFlags(['--lines=20', '-n20'], ['-n', '--lines'], 'logs'));
+  });
+  it('未知选项的 attached / 等号形式同样拒绝', () => {
+    for (const arg of ['-z5', '-z=5', '--unknown=1']) {
+      assert.throws(() => assertKnownFlags([arg], ['-n', '--lines'], 'logs'), CliError);
+    }
+  });
+  it('带值选项的非 exact 形式按命令白名单隔离：logs 认 -n200 但不认 -u30000', () => {
+    assert.doesNotThrow(() => assertKnownFlags(['-n200'], ['-n', '--lines'], 'logs'));
+    assert.throws(() => assertKnownFlags(['-u30000'], ['-n', '--lines'], 'logs'), CliError);
   });
 });
 

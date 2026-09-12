@@ -6,10 +6,20 @@
 
 - **`sub` 的选项校验按子命令收口，不再全组放行**。校验原本挂在子命令分发之前，白名单是 `use` 的重启透传选项与 `remove` 的 `-y` 的并集、对全部子命令生效：`sub add <url> <name> -y` 被接受但 add 根本不读 -y（纯静默忽略），`sub update -u 5000` 被接受却仍按默认超时跑，`sub remove foo -s` 被接受无任何效果——正是 `assertKnownFlags` 文档注释要防的「用户以为选项生效了，实际行为完全没变」。白名单下沉到 `SUBCOMMANDS` 表：分发命中后先按该子命令真正消费的选项校验再执行——add/update 不消费任何选项（白名单为空），use 放行重启透传集合（从 flags.ts 的 `START_RESTART_FLAGS` 派生，与 `extractStartOptions` 单表同源），remove 放行 `-y`/`--yes`；错误提示同样只列该子命令的可用选项与用法，不再报全组清单。选项出现在子命令位置（如 `sub -q`）按未知选项报错。
 - **`help` / `version` 在豁免场景下不再创建数据目录**。三个守卫（Node 版本/平台/root）对纯信息命令提前放行，但 `ensureDirs()` 无条件执行——实测伪造 root 跑 `sudo mihomo version` 正常退出，却在 root 的 HOME（sudo 下可能是 `/var/root`）建出全套 `data/kernel/logs/runtime/subscriptions`；非 macOS 上的 `mihomo help` 同理。豁免语义此前只免了「拒绝」没免「副作用」，与 index.ts 两处注释（「纯信息命令不碰服务、目录与提权」「root 下会在那里建一套用户永远看不到的数据目录」）直接矛盾。豁免名单（`GUARD_EXEMPT_COMMANDS`）现在同时决定是否跳过 `ensureDirs`，按 `command.name` 匹配，别名（`-h`/`-v`/`--help`/`--version`）经 `findCommand` 解析后自动覆盖；非豁免命令的守卫顺序、目录创建行为均不变。
+- **带值选项的「短选项紧贴值」形式被三套解析器区别对待**。`-u30000` 这类 token 此前在 `assertKnownFlags`（前缀放行）、`parseIntArg`（后缀非纯数字时静默回退默认值）、`extractStartOptions`（整个 token 静默丢弃）三处各有各的判定，后果全是「不报错但行为不对」：
+
+  - `mihomo start -u5s`：白名单放行、解析器吞掉，一路走到「未找到内核」才炸；而空格形式 `logs -n 5s` 正确报错——`parseIntArg` 自己的注释就写着「宁可报错也不给用户一个看似成功的错误结果」
+  - `logs -n5s`：静默回退默认行数后落进列表分支，打印「暂无日志」
+  - `mihomo sub use foo -u30000`：白名单放行、重启透传却丢掉选项，重启走默认 10s 超时——正是 `flags.ts` 文件头宣称已结构性消灭的「`sub use foo -s` 丢选项」形态
+
+  「这个 token 是不是带值选项的某种形式（exact / attached-short / long-eq，属于哪个 spec）」收成 `flags.ts` 的 `matchValueFlagToken`，三套解析共用一个判定：attached 后缀非纯数字走与空格形式同一条报错路径；attached 是自包含 token，透传整个 token、不吞下一个；白名单的非 exact 形式额外要求基础形式在该命令的白名单内（`logs` 认 `-n200` 但不认 `-u30000`，按命令隔离而非全局放行）。`-u=3000`（短选项带等号）明确报错而非支持：等号形式只认长选项，后缀 `=3000` 非纯整数，不留「白名单接受但解析器吞掉」的空洞。`log.ts` 的 `hasLinesFlag` 是同一判据的第四份本地拷贝，一并改走登记表。
 
 ### 验证
 
 - 新增 `commands/subscription.spec`（13 条）：四个子命令各拒外来选项，断言退出码、错误信息与该子命令自己的用法/可用选项提示，并核对 settings 未被改动；use 的 `-s` 与 `-u <ms>` 空格形式、remove 的 `-y`（含写在名称之前、非交互下跳过模糊匹配确认）走真实 CLI 断言最终数据状态；分发回归（裸 sub 列表、未知子命令、子命令位置的选项、未知 flag）。选项用空格形式，紧贴值形式的解析由另一分支统一处理
+- **不变量测试**：遍历 `FLAGS` 登记表，对每个带值选项的 exact / attached / 等号三种形式断言「白名单接受 ⟹ `parseIntArg` 解析出正确值（不静默回退默认）」，`START_RESTART_FLAGS` 成员另断言三种形式重启透传都不丢、attached 不吞下一个 token——任何人改三套解析器之一破坏一致性，当场转红
+- **反向验证过**：把 `extractStartOptions` 临时改回丢弃 attached 形式，不变量用例与回归用例精确转红（`-u：三种形式重启透传都不丢`、`attached 短选项整体透传`），恢复后全绿
+- `parseIntArg` 逐例锁定：`-u30000` 解析 30000；`-u5s` / `-u=3000` / `-n5s` / `-nfoo` 走同一报错路径；白名单负向：未知 attached（`-z5`）与跨命令形式（`logs` 的 `-u30000`）仍拒绝，布尔 attached（`-sx`）不透传
 
 ## [4.8.1] - 2026-09-12
 

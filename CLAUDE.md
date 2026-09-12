@@ -61,7 +61,7 @@ npm run build
 - 帮助用全称单数（subscription/directory/overwrite），示例与提示用 `mihomo sub` / `dir` / `ow`
 - 内部变量和函数用全称单数，常量用全大写下划线
 - `dir open` 精确匹配 root/subs/logs/data/runtime/kernel
-- `FLAGS` 是带值选项与 start 选项的登记表，派生 `VALUE_FLAGS` 和重启透传集合；普通布尔选项不必登记
+- `FLAGS` 是带值选项与 start 选项的登记表，派生 `VALUE_FLAGS`、重启透传集合与带值选项三种形式（exact / attached / long-eq）的统一判定 `matchValueFlagToken`——白名单、`parseIntArg`、重启透传三处共用，不各自实现；普通布尔选项不必登记
 - `--mirror` 值可选，由 `parseMirrorArg` 单独解析；布尔开关不接受 `=value` 或附加字符
 - `dispatchSubcommand` 必须 await/返回 Promise，无子命令走 fallback，未知子命令走必填的 onUnknown
 - `config` 命令重新推导而非读 runtime/config.yaml（停止时那个文件会被删掉），走 `buildConfig` 不走带内核校验的 `prepareConfigForStart`；展示前脱敏 secret

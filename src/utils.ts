@@ -2,7 +2,7 @@ import os from 'node:os';
 
 import { MIRROR_ALIASES, MIRROR_BARE } from './constants.js';
 import { CliError } from './errors.js';
-import { START_RESTART_FLAGS, VALUE_FLAGS } from './flags.js';
+import { matchValueFlagToken, START_RESTART_FLAGS, VALUE_FLAGS } from './flags.js';
 import type { MirrorArg, SubscriptionUrgency } from './types.js';
 
 /**
@@ -178,8 +178,11 @@ export function hasFlag(args: string[] | undefined, short: string, long?: string
  * 校验 args 中的 flag 是否都在白名单内。拼错的 flag（如 `logs -F`）此前被静默跳过，
  * 用户以为选项生效了，实际行为完全没变。仅 `kernel`/`reset` 有此校验，其余命令靠这里补齐。
  *
- * 白名单同时接受短/长形式（`-n` 与 `--lines`），attached 短选项（`-n200`）按前缀匹配，
- * 等号长选项（`--lines=200`）按前缀匹配。`--mirror` 是可选值选项，由 parseMirrorArg 自己管。
+ * 白名单同时接受短/长形式（`-n` 与 `--lines`）。带值选项的 attached 短选项（`-n200`）与
+ * 等号长选项（`--lines=200`）由登记表的 `matchValueFlagToken` 统一判定，且基础形式必须
+ * 同时在该命令的白名单内（`logs` 认 `-n200` 但不认 `-u30000`）。布尔选项不接受任何
+ * 附加形式（`-s x`、`--no-update=1` 一律报错）。`--mirror` 是可选值选项，不在登记表，
+ * 其等号形式由 parseMirrorArg 调用时的白名单单独放行。
  */
 export function assertKnownFlags(args: string[] | undefined, known: readonly string[], command: string): void {
   if (!args) return;
@@ -187,11 +190,11 @@ export function assertKnownFlags(args: string[] | undefined, known: readonly str
   for (const a of args) {
     if (!a.startsWith('-') || a === '-') continue;
     if (knownSet.has(a)) continue;
-    // --opt=value 形式：按等号前的部分匹配
-    const eqIdx = a.indexOf('=');
-    if (eqIdx > 0 && knownSet.has(a.slice(0, eqIdx)) && (VALUE_FLAGS.has(a.slice(0, eqIdx)) || a.slice(0, eqIdx) === '--mirror')) continue;
-    // -n200 attached 短选项：按前缀匹配已知短选项
-    if (a.length > 2 && a.startsWith('-') && !a.startsWith('--') && knownSet.has(a.slice(0, 2)) && VALUE_FLAGS.has(a.slice(0, 2))) continue;
+    // 带值选项的非 exact 形式（`-n200` / `--lines=200`）：判定收口在 matchValueFlagToken
+    const match = matchValueFlagToken(a);
+    if (match && match.form !== 'exact' && knownSet.has(match.baseForm)) continue;
+    // `--mirror` 故意不登记（见 flags.ts），等号形式仅在其自身白名单内放行
+    if (a.startsWith('--mirror=') && knownSet.has('--mirror')) continue;
     throw new CliError(`未知的选项: ${a}`, {
       label: '参数错误',
       hint: [`可用选项: ${known.join(', ')}`, '', `用法: mihomo ${command}`],
@@ -204,6 +207,11 @@ export function assertKnownFlags(args: string[] | undefined, known: readonly str
  * 故 <1、非数字、带尾随垃圾（`5s`）一律抛错而非静默取值：
  * `-u 5s` 静默取 5（ms）会让自动更新立刻超时。
  * 宁可报错也不给用户一个看似成功的错误结果。
+ *
+ * 三种形式与 assertKnownFlags / extractStartOptions 共用 matchValueFlagToken 的判定：
+ * exact（`-u 30000`）、attached 短选项（`-u30000`）、等号长选项（`--update-timeout=30000`）。
+ * attached 后缀非纯数字（`-u5s`）与短选项带等号（`-u=3000`，后缀 `=3000`）走同一条
+ * 报错路径——此前 attached 不匹配 `/^\d+$/` 时静默返回默认值，与函数自己的注释矛盾。
  */
 export function parseIntArg(args: string[] | undefined, short: string, long: string, defaultValue: number): number {
   if (!args) return defaultValue;
@@ -227,12 +235,10 @@ export function parseIntArg(args: string[] | undefined, short: string, long: str
       }
       throw new CliError(`选项 ${args[i]} 缺少值`, { hint: [`例如: ${args[i]} ${defaultValue}`] });
     }
-    if (args[i].startsWith(`${long}=`)) {
-      return parse(args[i].slice(long.length + 1), long);
-    }
-    // attached 短选项：-n200 / -u5000（字符紧贴选项，无空格）
-    if (args[i].startsWith(short) && args[i].length > short.length && /^\d+$/.test(args[i].slice(short.length))) {
-      return parse(args[i].slice(short.length), short);
+    // attached 短选项 / 等号长选项：形式判定统一走登记表，只有属于本选项的 token 才消费
+    const match = matchValueFlagToken(args[i]);
+    if (match && match.form !== 'exact' && (match.spec.forms.includes(short) || match.spec.forms.includes(long))) {
+      return parse(match.inlineValue ?? '', match.baseForm);
     }
   }
   return defaultValue;
@@ -242,20 +248,27 @@ export function parseIntArg(args: string[] | undefined, short: string, long: str
  * 从任意命令的 argv 中抽取 start 支持的启动选项（含其值），供 sub use / ow on|off 触发的重启透传。
  * 否则 `mihomo sub use foo -s` 里的 -s 等选项会被丢弃，重启仍走默认行为。
  *
- * 选项集合从 flags.ts 的 START_RESTART_FLAGS 派生（单一登记表），不再维护本地 BOOL_FLAGS。
- * `--opt=value` 等号形式按前缀匹配（仅长选项），整体作为一个 token 透传。
+ * 选项集合从 flags.ts 的 START_RESTART_FLAGS 派生（单一登记表）。布尔选项按整 token
+ * 精确匹配；带值选项的三种形式（exact / attached 短选项 / 等号长选项）由 matchValueFlagToken
+ * 统一判定——attached 与等号形式自包含，整个 token 原样透传，不得吞下一个 token 当值。
  */
 export function extractStartOptions(args: string[] | undefined): string[] {
   if (!args) return [];
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    const spec = START_RESTART_FLAGS.find(f => f.forms.includes(a) || f.forms.some(form => form.startsWith('--') && a.startsWith(`${form}=`)));
-    if (!spec) continue;
-    out.push(a);
-    // 带值选项且不是 --opt=value 形式：值是下一个 token，一并透传
-    if (spec.takesValue && !a.includes('=')) {
-      if (i + 1 < args.length) out.push(args[++i]);
+    const token = args[i];
+    // 布尔 start 选项（-s / --no-update）：整 token 精确匹配
+    if (START_RESTART_FLAGS.some(f => !f.takesValue && f.forms.includes(token))) {
+      out.push(token);
+      continue;
+    }
+    // 带值 start 选项：三种形式统一判定，attached（-u30000）不再被静默丢弃
+    const match = matchValueFlagToken(token);
+    if (!match?.spec.passthroughToRestart) continue;
+    out.push(token);
+    // 仅 exact 形式的值在下一个 token；attached / 等号形式自包含，透传整个 token 即可
+    if (match.form === 'exact' && i + 1 < args.length) {
+      out.push(args[++i]);
     }
   }
   return out;
