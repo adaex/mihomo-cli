@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
+import { START_RESTART_FLAGS } from '../flags.js';
 import * as runtime from '../runtime.js';
 import { addSubscription, getSubscriptions, getSubscriptionsWithCache, maskUrl, removeSubscription, setDefaultSubscription } from '../settings.js';
 import { withSpinner } from '../spinner.js';
@@ -259,22 +260,51 @@ async function subRemove(args: string[]): Promise<void> {
   printSubscriptionList();
 }
 
+/** use 放行的选项 = 重启透传集合（restartToApply → extractStartOptions 只认这些），从 flags.ts 单表派生，不手写第二份清单 */
+const USE_FLAGS: readonly string[] = START_RESTART_FLAGS.flatMap(f => f.forms);
+
+/** remove 只消费 -y/--yes：模糊匹配删除时跳过确认 */
+const REMOVE_FLAGS: readonly string[] = ['-y', '--yes'];
+
+/**
+ * 把选项校验包进子命令 handler：分发命中后先按**该子命令**的白名单校验再执行。
+ * 白名单必须只含 handler 真正消费的选项——此前白名单挂在分发前、对全组放行，
+ * `sub add <url> <name> -y` 被接受但 add 根本不读 -y（选项被静默忽略），
+ * 正是 assertKnownFlags 文档注释要防的「用户以为选项生效了，实际行为完全没变」。
+ * add/update 不消费任何选项，白名单为空。
+ */
+function withKnownFlags(usage: string, known: readonly string[], handler: (args: string[]) => void | Promise<void>): (args: string[]) => Promise<void> {
+  return async args => {
+    assertKnownFlags(args, known, usage);
+    await handler(args);
+  };
+}
+
 // list 刻意不注册：裸 `sub` 就是列表（fallback），与 `dir` / `ow` 同口径。
 // v3.11.0 已删掉 `dir list` / `ow list`，若这里保留 `sub list`，同一批命令
 // 一半能敲 list 一半不能，用户只能靠试。
 export const SUBCOMMANDS: SubCommand[] = [
-  { name: 'add', description: '添加订阅', handler: subAdd },
-  { name: 'update', description: '更新订阅', handler: subUpdate },
-  { name: 'use', description: '切换订阅', handler: subUse },
-  { name: 'remove', aliases: ['rm', 'delete'], description: '删除订阅', handler: subRemove },
+  { name: 'add', description: '添加订阅', handler: withKnownFlags('sub add <url> [name]', [], subAdd) },
+  { name: 'update', description: '更新订阅', handler: withKnownFlags('sub update [name]', [], subUpdate) },
+  { name: 'use', description: '切换订阅', handler: withKnownFlags('sub use <name>', USE_FLAGS, subUse) },
+  { name: 'remove', aliases: ['rm', 'delete'], description: '删除订阅', handler: withKnownFlags('sub remove <name>', REMOVE_FLAGS, subRemove) },
 ];
 
 export async function cmdSubscription(args: string[]): Promise<void> {
-  assertKnownFlags(args, ['-y', '--yes', '-s', '--no-update', '-u', '--update-timeout'], 'sub [add|update|use|remove]');
+  // 选项校验已随白名单下沉到各子命令（见 SUBCOMMANDS / withKnownFlags），
+  // 分发后按实际命中的子命令校验，不再分发前对全组放行同一份白名单
   await dispatchSubcommand(args, SUBCOMMANDS, {
     // 无子命令 → 列表；未知子命令 → 报错
     fallback: printSubscriptionList,
     onUnknown: action => {
+      // 选项出现在子命令位置：裸 sub 是只读列表、不消费任何选项，按未知选项报错
+      // （此前由分发前的全组白名单拦下这类输入，白名单下沉后在这里保持同一口径）
+      if (action.startsWith('-')) {
+        throw new CliError(`未知的选项: ${action}`, {
+          label: '参数错误',
+          hint: ['裸 sub 只列出订阅，不接受选项', '', '用法: mihomo sub [use|add|update|remove]（裸 sub 即列表）'],
+        });
+      }
       const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
       const suggestion = suggestSimilar(action, names);
       throw new CliError(`未知的订阅命令: ${action}`, {

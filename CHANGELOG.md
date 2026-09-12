@@ -4,7 +4,12 @@
 
 ### 修复
 
+- **`sub` 的选项校验按子命令收口，不再全组放行**。校验原本挂在子命令分发之前，白名单是 `use` 的重启透传选项与 `remove` 的 `-y` 的并集、对全部子命令生效：`sub add <url> <name> -y` 被接受但 add 根本不读 -y（纯静默忽略），`sub update -u 5000` 被接受却仍按默认超时跑，`sub remove foo -s` 被接受无任何效果——正是 `assertKnownFlags` 文档注释要防的「用户以为选项生效了，实际行为完全没变」。白名单下沉到 `SUBCOMMANDS` 表：分发命中后先按该子命令真正消费的选项校验再执行——add/update 不消费任何选项（白名单为空），use 放行重启透传集合（从 flags.ts 的 `START_RESTART_FLAGS` 派生，与 `extractStartOptions` 单表同源），remove 放行 `-y`/`--yes`；错误提示同样只列该子命令的可用选项与用法，不再报全组清单。选项出现在子命令位置（如 `sub -q`）按未知选项报错。
 - **`help` / `version` 在豁免场景下不再创建数据目录**。三个守卫（Node 版本/平台/root）对纯信息命令提前放行，但 `ensureDirs()` 无条件执行——实测伪造 root 跑 `sudo mihomo version` 正常退出，却在 root 的 HOME（sudo 下可能是 `/var/root`）建出全套 `data/kernel/logs/runtime/subscriptions`；非 macOS 上的 `mihomo help` 同理。豁免语义此前只免了「拒绝」没免「副作用」，与 index.ts 两处注释（「纯信息命令不碰服务、目录与提权」「root 下会在那里建一套用户永远看不到的数据目录」）直接矛盾。豁免名单（`GUARD_EXEMPT_COMMANDS`）现在同时决定是否跳过 `ensureDirs`，按 `command.name` 匹配，别名（`-h`/`-v`/`--help`/`--version`）经 `findCommand` 解析后自动覆盖；非豁免命令的守卫顺序、目录创建行为均不变。
+
+### 验证
+
+- 新增 `commands/subscription.spec`（13 条）：四个子命令各拒外来选项，断言退出码、错误信息与该子命令自己的用法/可用选项提示，并核对 settings 未被改动；use 的 `-s` 与 `-u <ms>` 空格形式、remove 的 `-y`（含写在名称之前、非交互下跳过模糊匹配确认）走真实 CLI 断言最终数据状态；分发回归（裸 sub 列表、未知子命令、子命令位置的选项、未知 flag）。选项用空格形式，紧贴值形式的解析由另一分支统一处理
 
 ## [4.8.1] - 2026-09-12
 

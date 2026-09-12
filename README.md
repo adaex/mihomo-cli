@@ -122,7 +122,7 @@ mihomo ui yacd     # YACD
 | 命令                          | 说明                                   |
 | ----------------------------- | -------------------------------------- |
 | `mihomo sub`                  | 列出所有订阅（含流量、到期时间）       |
-| `mihomo sub use <name>`       | 切换当前订阅（支持模糊匹配，自动重启） |
+| `mihomo sub use <name>`       | 切换当前订阅（支持模糊匹配，自动重启；重启透传 `-s`/`-u` 等启动选项） |
 | `mihomo sub add [url] [name]` | 添加订阅并自动切换（名称不可重复；交互下不带 URL 时自动读剪贴板并确认） |
 | `mihomo sub update`           | 更新所有订阅                           |
 | `mihomo sub update <name>`    | 更新指定订阅（支持模糊匹配）           |
