@@ -491,6 +491,15 @@ hosts:
 
 > `url-domain` 命中该域名下的**所有**订阅。同一机场的多条订阅（如 `edu1`、`mini1`）URL 往往同域名，用 `url-domain` 会一并生效；要在同机场内按套餐区分，用 `name` 通配（如 `name: edu*`）。若只是担心某条订阅没有要改的分组，用 `~?key` 就够了（它会自动跳过），不必为此改作用域；`match` 应当按「这份覆写在语义上属于哪些订阅」来写。
 
+`mihomo status` 会按当前活跃订阅区分「生效」与「不适用」，括号里只列本次真正参与合并的文件：
+
+```text
+覆写: 已启用 (seal，1 个不适用，1 个已禁用)
+  glados 不适用于当前订阅 mini1（作用域 name=edu*）
+```
+
+「不适用」指文件本身是启用的，只是 `match` 没命中当前订阅——切到命中的订阅（`sub use`）或改 `match` 才会生效，与 `enabled: false` 的「已禁用」是两回事。`mihomo ow` 列表不做这个判断（它不绑定某条订阅），那里的作用域一栏只说明该文件管哪些订阅。`--json` 形态下 `overwrite.applied` 是生效清单，`overwrite.files` 仍是「未被 `enabled: false` 停用」的全部文件
+
 ### 单个文件的开关（enabled）
 
 在覆写文件顶部写 `enabled: false`，可**只停用这一个文件**，其余覆写照常生效：

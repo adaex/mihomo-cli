@@ -7,7 +7,7 @@ import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
 import { getSubscriptionsWithCache } from '../settings.js';
 import { formatProxySummary, getActiveSubscription, isSubscriptionStale, resolveUpdateInterval } from '../subscription.js';
-import type { ProxyProbeResult, StatusJson, SubscriptionUrgency } from '../types.js';
+import type { OverwriteFileInfo, ProxyProbeResult, StatusJson, SubscriptionUrgency } from '../types.js';
 import {
   assertKnownFlags,
   assertPositionalCount,
@@ -53,7 +53,7 @@ function buildStatusJson(args: {
   activeSub: ReturnType<typeof getActiveSubscription>;
   cached: ReturnType<typeof getSubscriptionsWithCache>[number] | undefined;
   overwriteEnabled: boolean;
-  overwriteFiles: string[];
+  overwriteFiles: OverwriteFileInfo[];
   service: ReturnType<typeof getServiceStatus>;
   legacy: boolean;
 }): StatusJson {
@@ -88,7 +88,11 @@ function buildStatusJson(args: {
           urgency,
         }
       : null,
-    overwrite: { enabled: args.overwriteEnabled, files: args.overwriteFiles },
+    overwrite: {
+      enabled: args.overwriteEnabled,
+      files: args.overwriteFiles.filter(f => f.enabled).map(f => f.name),
+      applied: args.overwriteFiles.filter(f => f.enabled && f.matched !== false).map(f => f.name),
+    },
     service: {
       installed: args.service.installed,
       loaded: args.service.loaded,
@@ -113,8 +117,10 @@ export async function printStatus(args: string[] = []): Promise<void> {
   const service = getServiceStatus();
   const state = getRunningState(service);
   const info = getConfigInfo();
-  const { enabled: overwriteEnabled, files: overwriteFiles } = listOverwriteFile();
   const activeSub = getActiveSubscription();
+  // 带上活跃订阅的作用域：status 与 `ow` 列表不同，它知道当前订阅是谁，因而能判 match。
+  // 不判的话，只对别的订阅生效的文件会混在「已启用」里，看着像正在生效
+  const { enabled: overwriteEnabled, files: overwriteFiles } = listOverwriteFile(activeSub ? { subName: activeSub.name, subUrl: activeSub.url } : undefined);
   const cached = activeSub ? getSubscriptionsWithCache().find(s => s.name === activeSub.name) : undefined;
   const legacy = detectLegacySystemInstall();
 
@@ -139,11 +145,9 @@ export async function printStatus(args: string[] = []): Promise<void> {
           activeSub,
           cached,
           overwriteEnabled,
-          // 只滤掉被 `enabled: false` 停用的文件。**不是**「当前生效的覆写」——这里拿不到
-          // 活跃订阅的 scope（listOverwriteFile 不做 match 过滤），也不受同级 enabled 字段
-          // （全局开关）影响：全局 off 时本数组照样列出文件。真·生效清单只有 buildConfig
-          // 侧的 overwriteSummaries（已按 match 与全局开关过滤）。契约仍是 string[]
-          overwriteFiles: overwriteFiles.filter(f => f.enabled).map(f => f.name),
+          // 两个数组在 buildStatusJson 里分出来：files 仍是旧契约（只滤文件级 enabled，
+          // 不按 match、不随全局开关变空），applied 才是本次真正参与合并的
+          overwriteFiles,
           service,
           legacy,
         }),
@@ -239,23 +243,59 @@ export async function printStatus(args: string[] = []): Promise<void> {
     console.log(`${colors.gray('订阅: ')}未配置 ${colors.gray('(添加: mihomo sub add <url>)')}`);
   }
 
-  // 只列启用的文件；被 enabled: false 停用的折成一句计数（列出来会让人以为它们在生效，
-  // 完全不提又看不出「我停用过东西」）。全部被停用时走 activeNames 为空的分支
-  const activeOverwriteFiles = overwriteFiles.filter(f => f.enabled);
-  const disabledOverwriteCount = overwriteFiles.length - activeOverwriteFiles.length;
-  const disabledSuffix = disabledOverwriteCount > 0 ? `，${disabledOverwriteCount} 个已禁用` : '';
-  if (overwriteEnabled && activeOverwriteFiles.length > 0) {
-    const names = activeOverwriteFiles.map(f => f.name.replace(/^overwrite\.?/, '').replace(/\.ya?ml$/, '') || '主文件').join(', ');
-    console.log(`${colors.gray('覆写: ')}${colors.green('已启用')} (${names}${disabledSuffix})`);
-  } else if (overwriteEnabled) {
-    console.log(`${colors.gray('覆写: ')}${colors.green('已启用')} (${disabledOverwriteCount > 0 ? `无生效文件${disabledSuffix}` : '无文件'})`);
-  } else {
-    console.log(`${colors.gray('覆写: ')}${colors.yellow('已禁用')}`);
-  }
+  printOverwriteLines(overwriteEnabled, overwriteFiles, activeSub);
 
   printServiceLines(service, legacy);
 
   console.log('');
+}
+
+/** 覆写文件名去掉 `overwrite.` 前缀与扩展名，主文件（去完为空）显示「主文件」 */
+function shortOverwriteName(name: string): string {
+  return name.replace(/^overwrite\.?/, '').replace(/\.ya?ml$/, '') || '主文件';
+}
+
+/**
+ * 覆写展示：主行只列**本次真正生效**的文件，未生效的分两类各折一句。
+ *
+ * 分三层而不是一句「已启用 (a, b)」：文件躺在目录里、没被 enabled:false 停用、
+ * 却因 match 不命中当前订阅而完全没参与合并——这种文件混在主行里，看起来和生效的
+ * 一模一样，用户会拿它解释自己看到的行为（「我明明覆写了」），排查方向整个跑偏。
+ * 两类失效原因不同、操作也不同（停用的要改文件里的 enabled，未命中的要看作用域或
+ * 切订阅），故不合并成一个计数。
+ *
+ * matched 为 undefined（无活跃订阅、没法判 match）时按「未被排除」处理：此时
+ * 连订阅都没有，覆写本就无从谈起，不值得再分一类。
+ */
+function printOverwriteLines(enabled: boolean, files: OverwriteFileInfo[], activeSub: ReturnType<typeof getActiveSubscription>): void {
+  if (!enabled) {
+    console.log(`${colors.gray('覆写: ')}${colors.yellow('已禁用')}`);
+    return;
+  }
+
+  const active = files.filter(f => f.enabled && f.matched !== false);
+  const unmatched = files.filter(f => f.enabled && f.matched === false);
+  const disabledCount = files.filter(f => !f.enabled).length;
+
+  // 两类失效各自成句，都挂在主行的括号里；主行永远只说生效的那些
+  const suffixes: string[] = [];
+  if (unmatched.length > 0) suffixes.push(`${unmatched.length} 个不适用`);
+  if (disabledCount > 0) suffixes.push(`${disabledCount} 个已禁用`);
+  const suffix = suffixes.length > 0 ? `，${suffixes.join('，')}` : '';
+
+  if (active.length > 0) {
+    console.log(`${colors.gray('覆写: ')}${colors.green('已启用')} (${active.map(f => shortOverwriteName(f.name)).join(', ')}${suffix})`);
+  } else {
+    console.log(`${colors.gray('覆写: ')}${colors.green('已启用')} (${files.length > 0 ? `无生效文件${suffix}` : '无文件'})`);
+  }
+
+  // 「不适用」是本次唯一可能让人意外的一类（文件是启用的，却没生效），给出文件名、
+  // 作用域与当前订阅名——三者凑齐才看得出为什么没命中。停用的不展开：那是用户自己
+  // 在文件里写的 enabled: false，改法也写在 `ow` 列表的固定提示里
+  for (const f of unmatched) {
+    const scope = f.scope ? `作用域 ${f.scope}` : '作用域受限';
+    console.log(colors.gray(`  ${shortOverwriteName(f.name)} 不适用于当前订阅${activeSub ? ` ${activeSub.name}` : ''}（${scope}）`));
+  }
 }
 
 function printServiceLines(service: ReturnType<typeof getServiceStatus>, legacy: boolean): void {

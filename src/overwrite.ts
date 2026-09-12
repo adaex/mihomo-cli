@@ -664,7 +664,16 @@ export function applyOverwrite(
   return { config: result, skipped, operatorShapedKeys };
 }
 
-export function listOverwriteFile(): OverwriteListResult {
+/**
+ * 列出目录里的全部覆写文件（含被停用的），供 `ow` 列表与 status 展示。
+ *
+ * 传 `scope` 时每个条目附带 `matched`：该文件的 match 是否命中这个作用域。判据仍是
+ * matchesScope 本身（与 selectActiveOverwriteFiles 同一个函数），**这里只是展示**——
+ * 合并闸门始终是 selectActiveOverwriteFiles，不要拿 matched 去筛要合并的文件。
+ * 不传 scope 则 matched 恒为 undefined（= 未判定），`ow` 列表走这条路径：它不绑定
+ * 某条订阅，判不了也不该判。
+ */
+export function listOverwriteFile(scope?: OverwriteScope): OverwriteListResult {
   const files = loadOverwriteFile();
   const enabled = isOverwriteEnabled();
 
@@ -677,6 +686,7 @@ export function listOverwriteFile(): OverwriteListResult {
       keys: Object.keys(f.config || {}),
       scope: summarizeMatch(f.match),
       enabled: f.enabled !== false,
+      ...(scope ? { matched: matchesScope(f.match, scope) } : {}),
     })),
   };
 }

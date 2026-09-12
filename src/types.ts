@@ -109,6 +109,12 @@ export interface OverwriteFileInfo {
   scope?: string;
   /** 该文件自身是否启用（文件内 `enabled` 键）；与 OverwriteListResult.enabled 的全局开关是两层 */
   enabled: boolean;
+  /**
+   * match 是否命中调用方给的作用域；**仅在 listOverwriteFile 传了 scope 时存在**。
+   * undefined = 未判定（`ow` 列表不绑定某条订阅，判不了），不等于「没命中」。
+   * 展示用，别拿它当合并闸门——那只有 selectActiveOverwriteFiles
+   */
+  matched?: boolean;
 }
 
 // === Process ===
@@ -353,11 +359,14 @@ export interface StatusJson {
     urgency: Exclude<SubscriptionUrgency, null> | null;
   } | null;
   /**
-   * `enabled` 是全局开关（settings.overwrite_enabled）；`files` 是目录里未被
-   * `enabled: false` 停用的覆写文件名——**不等于本次生效的清单**，它不按 match
-   * 作用域过滤、也不随全局开关变空。生效清单见 BuildConfigResult.overwriteSummaries
+   * `enabled` 是全局开关（settings.overwrite_enabled）。
+   *
+   * `files` 是目录里未被 `enabled: false` 停用的覆写文件名——**不等于本次生效的清单**，
+   * 它不按 match 作用域过滤、也不随全局开关变空。`applied` 在 files 基础上再按当前活跃
+   * 订阅的 match 过滤，即本次真正参与合并的文件（全局开关关闭或无活跃订阅时不额外收窄，
+   * 判据见 status 的 matched）。人读形态同源于这两个数组
    */
-  overwrite: { enabled: boolean; files: string[] };
+  overwrite: { enabled: boolean; files: string[]; applied: string[] };
   service: {
     installed: boolean;
     loaded: boolean;

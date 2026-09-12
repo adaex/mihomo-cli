@@ -121,3 +121,83 @@ describe('ow 列表展示文件级开关', () => {
     });
   });
 });
+
+/**
+ * status 的覆写行按 match 分列（fixture 的活跃订阅是 edu1）。
+ *
+ * status 与 `ow` 列表的关键区别：它知道当前活跃订阅是谁，因而判得了 match。不判的话，
+ * 只对别的订阅生效的文件会混在「已启用」主行里，和真正生效的文件长得一模一样——用户
+ * 会拿它解释自己看到的行为，排查方向整个跑偏。断言都走真跑命令：listOverwriteFile
+ * 的 scope 参数若日后被漏传，单测层面 matched 恒为 undefined、照样「通过」。
+ */
+describe('status 覆写行按 match 区分是否适用当前订阅', () => {
+  it('match 不命中的文件移出主行，并说明原因与作用域', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'overwrite.hit.yaml'), 'match:\n  name: edu*\nlog-level: debug\n');
+      fs.writeFileSync(path.join(dataDir, 'overwrite.miss.yaml'), 'match:\n  name: mini*\nlog-level: info\n');
+      const out = run(['status', '--no-probe']).stdout;
+      assert.match(out, /覆写:.*已启用 \(hit，1 个不适用\)/);
+      // 文件名、当前订阅、作用域三者凑齐才看得出为什么没命中
+      assert.match(out, /miss 不适用于当前订阅 edu1（作用域 name=mini\*）/);
+      assert.ok(!/\(hit, miss/.test(out), '不命中的文件不得出现在生效清单里');
+    });
+  });
+
+  it('两类失效分别计数：不适用 ≠ 已禁用（原因与改法都不同）', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'overwrite.a.yaml'), 'log-level: debug\n');
+      fs.writeFileSync(path.join(dataDir, 'overwrite.miss.yaml'), 'match:\n  name: mini*\nlog-level: info\n');
+      fs.writeFileSync(path.join(dataDir, 'overwrite.off.yaml'), 'enabled: false\nlog-level: warning\n');
+      const out = run(['status', '--no-probe']).stdout;
+      assert.match(out, /覆写:.*已启用 \(a，1 个不适用，1 个已禁用\)/);
+    });
+  });
+
+  it('全部文件都不适用时主行说「无生效文件」', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'overwrite.miss.yaml'), 'match:\n  name: mini*\nlog-level: info\n');
+      const out = run(['status', '--no-probe']).stdout;
+      assert.match(out, /无生效文件，1 个不适用/);
+    });
+  });
+
+  it('全部命中时无补充行（常态不加噪音）', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'overwrite.a.yaml'), 'log-level: debug\n');
+      fs.writeFileSync(path.join(dataDir, 'overwrite.hit.yaml'), 'match:\n  name: edu*\nlog-level: info\n');
+      const out = run(['status', '--no-probe']).stdout;
+      assert.match(out, /覆写:.*已启用 \(a, hit\)$/m);
+      assert.ok(!out.includes('不适用'), '没有落选文件时不该出现该措辞');
+    });
+  });
+
+  it('url-domain 作用域同样参与判定（两个条件是 AND，任一不命中即不适用）', () => {
+    withFixture((dataDir, run) => {
+      // fixture 的 edu1 指向 update.glados-config.com，故域名条件命中、名字条件不命中
+      fs.writeFileSync(path.join(dataDir, 'overwrite.dom.yaml'), 'match:\n  url-domain: other.com\nlog-level: debug\n');
+      const out = run(['status', '--no-probe']).stdout;
+      assert.match(out, /dom 不适用于当前订阅 edu1（作用域 url-domain=other\.com）/);
+    });
+  });
+
+  it('status --json 分出 applied：files 保持旧契约，applied 才是本次生效的', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'overwrite.a.yaml'), 'log-level: debug\n');
+      fs.writeFileSync(path.join(dataDir, 'overwrite.miss.yaml'), 'match:\n  name: mini*\nlog-level: info\n');
+      fs.writeFileSync(path.join(dataDir, 'overwrite.off.yaml'), 'enabled: false\nlog-level: warning\n');
+      const json = JSON.parse(run(['status', '--json', '--no-probe']).stdout);
+      assert.deepEqual(json.overwrite.files, ['overwrite.a.yaml', 'overwrite.miss.yaml'], 'files 仍只滤文件级 enabled');
+      assert.deepEqual(json.overwrite.applied, ['overwrite.a.yaml'], 'applied 再按 match 过滤');
+    });
+  });
+
+  it('`ow` 列表不做 match 判定：它不绑定某条订阅，判不了也不该判', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'overwrite.miss.yaml'), 'match:\n  name: mini*\nlog-level: info\n');
+      const out = run(['ow']).stdout;
+      assert.match(out, /overwrite\.miss\.yaml/);
+      assert.match(out, /作用域: name=mini\*/);
+      assert.ok(!out.includes('不适用'), 'ow 列表看不到活跃订阅，不得声称某文件不适用');
+    });
+  });
+});
