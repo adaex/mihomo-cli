@@ -230,13 +230,14 @@ describe('系统锁定项：订阅自带的端口与控制面字段不进运行�
     });
   }
 
-  // allow-lan=false 是 BASE_CONFIG 的默认，但它只作用于 HTTP/Socks/Redir/TProxy/Mixed
-  // （上游 genAddr）；ss/vmess/tuic 入站自带 Listen，不受其约束——别把「默认不开放局域网」
-  // 当成这三个键的兜底，锁定表才是唯一防线
-  it('allow-lan 关闭也拦不住 ss-config：两者是独立机制，剥除不能依赖 allow-lan', () => {
-    const sub = dumpYaml({ ...BASE, 'allow-lan': false, 'ss-config': 'ss://aes-128-gcm:p@0.0.0.0:8388' });
+  // allow-lan 自 v4.13.0 起也是锁定项（订阅写 true 也恒回落 false），但它与 ss-config
+  // 的剥除仍是**两套独立机制**：上游 ParseSSURL 把 URL 的 host 直接当 Listen、不经
+  // genAddr，即便 allow-lan 为假也照样全网卡监听。故这里刻意用 `allow-lan: true` 施压——
+  // 同时证明新锁生效、且 ss-config 的剥除不依赖 allow-lan 的取值
+  it('订阅把 allow-lan 开成 true 也拦不住 ss-config：两者是独立机制，且 allow-lan 自身被锁回 false', () => {
+    const sub = dumpYaml({ ...BASE, 'allow-lan': true, 'ss-config': 'ss://aes-128-gcm:p@0.0.0.0:8388' });
     const { config } = buildConfig(sub, 'mixed');
-    assert.equal(config['allow-lan'], false);
+    assert.equal(config['allow-lan'], false, '订阅的 allow-lan: true 必须被锁回 false');
     assert.equal('ss-config' in config, false);
   });
 
@@ -258,14 +259,14 @@ describe('系统锁定项：订阅自带的端口与控制面字段不进运行�
     });
   }
 
-  it('allow-lan 关闭也拦不住 listeners：与 ss-config 同理，剥除不能依赖 allow-lan', () => {
+  it('订阅把 allow-lan 开成 true 也拦不住 listeners：与 ss-config 同理，且 allow-lan 自身被锁回 false', () => {
     const sub = dumpYaml({
       ...BASE,
-      'allow-lan': false,
+      'allow-lan': true,
       listeners: [{ name: 'x', type: 'socks', listen: '0.0.0.0', port: 18080 }],
     });
     const { config } = buildConfig(sub, 'mixed');
-    assert.equal(config['allow-lan'], false);
+    assert.equal(config['allow-lan'], false, '订阅的 allow-lan: true 必须被锁回 false');
     assert.equal('listeners' in config, false);
   });
 
@@ -273,6 +274,76 @@ describe('系统锁定项：订阅自带的端口与控制面字段不进运行�
     const sub = dumpYaml({ ...BASE, iptables: { enable: true } });
     const { config } = buildConfig(sub, 'mixed');
     assert.deepEqual(config.iptables, { enable: true });
+  });
+
+  // 局域网暴露与入站鉴权家族（v4.13.0 新锁）。上游 config.Inbound 里与 ss-config 等
+  // 并列的字段，只因形态是布尔/字符串而非映射被漏了五轮。实测链条见 LOCKED_CONFIG_KEYS
+  const LAN_AUTH_KEYS = ['bind-address', 'authentication', 'skip-auth-prefixes', 'lan-allowed-ips', 'lan-disallowed-ips'];
+
+  for (const mode of ['mixed', 'tun'] as const) {
+    it(`${mode}: 订阅的局域网暴露与入站鉴权键不进运行配置，allow-lan 锁回 false`, () => {
+      const sub = dumpYaml({
+        ...BASE,
+        'allow-lan': true,
+        'bind-address': '*',
+        authentication: ['attacker:pass'],
+        'skip-auth-prefixes': ['0.0.0.0/0'],
+        'lan-allowed-ips': ['0.0.0.0/0'],
+        'lan-disallowed-ips': ['10.0.0.0/8'],
+      });
+      const { config } = buildConfig(sub, mode);
+      for (const key of LAN_AUTH_KEYS) {
+        assert.equal(key in config, false, `${key} 不应进入运行配置`);
+      }
+      // allow-lan 是锁定项里唯一有恒定值的：不是消失，而是被 systemConfig 写回 false
+      assert.equal(config['allow-lan'], false, 'allow-lan 必须恒为 false，而不是从配置里消失');
+    });
+  }
+
+  // 实测复现过的完整攻击形态：这三行 YAML 曾让远端订阅把 Mixed 端口开到全网卡且无鉴权
+  //（genAddr 在 allow-lan 为真、bind-address 为 "*" 时返回 ":%d"；skip-auth-prefixes
+  // 命中后 http/server.go 把鉴权 store 换成 authStore.Nil）
+  it('组合攻击形态：allow-lan + bind-address + skip-auth-prefixes 三键同时投递也全部失效', () => {
+    const sub = dumpYaml({ ...BASE, 'allow-lan': true, 'bind-address': '*', 'skip-auth-prefixes': ['0.0.0.0/0'] });
+    const { config } = buildConfig(sub, 'mixed');
+    assert.equal(config['allow-lan'], false, 'Mixed 必须留在回环');
+    assert.equal('bind-address' in config, false);
+    assert.equal('skip-auth-prefixes' in config, false, '鉴权绕过键必须剥除');
+    assert.equal(config['mixed-port'], 7890);
+  });
+
+  it('订阅侧的局域网/鉴权键同样静默剥除，不产生锁定 warning', () => {
+    const sub = dumpYaml({ ...BASE, 'allow-lan': true, authentication: ['a:b'], 'skip-auth-prefixes': ['0.0.0.0/0'] });
+    const { warnings } = buildConfig(sub, 'mixed');
+    assert.deepEqual(warnings, [], `订阅侧锁定键不应告警，实际: ${JSON.stringify(warnings)}`);
+  });
+
+  it('覆写里的局域网/鉴权键剥除并告警（含 allow-lan! 与 +authentication 操作符形式）', () => {
+    const owPath = path.join(tmpDir, 'overwrite.yaml');
+    fs.writeFileSync(owPath, ['allow-lan!: true', '+authentication:', '  - "me:pass"', "skip-auth-prefixes: ['0.0.0.0/0']"].join('\n'));
+    try {
+      const { config, warnings } = buildConfig(dumpYaml(BASE), 'mixed');
+      assert.equal(config['allow-lan'], false);
+      assert.equal('authentication' in config, false);
+      assert.equal('skip-auth-prefixes' in config, false);
+      const locked = warnings.find(w => w.includes('系统锁定项已忽略'));
+      assert.ok(locked, `覆写锁定键应告警，实际: ${JSON.stringify(warnings)}`);
+      assert.match(locked, /overwrite\.yaml/);
+      assert.match(locked, /allow-lan/);
+      assert.match(locked, /authentication/);
+      assert.match(locked, /skip-auth-prefixes/);
+    } finally {
+      fs.rmSync(owPath);
+    }
+  });
+
+  // 锁住的是「刻意放行」这个决策，不是它们的正确性：TFO/MPTCP 是传输层 socket 选项，
+  // 不开监听、不改绑定地址、不绕鉴权（信任边界不是配置洁癖）。决策改变时这条会明确失败
+  it('inbound-tfo / inbound-mptcp 仍原样保留：传输层 socket 调优，非监听、不绕鉴权', () => {
+    const sub = dumpYaml({ ...BASE, 'inbound-tfo': true, 'inbound-mptcp': true });
+    const { config } = buildConfig(sub, 'mixed');
+    assert.equal(config['inbound-tfo'], true);
+    assert.equal(config['inbound-mptcp'], true);
   });
 
   it('订阅侧的锁定键静默剥除：机场订阅普遍自带端口段，不产生锁定 warning', () => {

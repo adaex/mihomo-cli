@@ -116,9 +116,10 @@ export const TUN_CONFIG = {
 };
 
 export const BASE_CONFIG: Record<string, unknown> = {
-  // 注意：mixed-port 与 external-controller 不在此表——它们来自 settings.ports（getPorts），
-  // config.ts 单独写入 systemConfig，订阅/覆写恒不可改
-  'allow-lan': false,
+  // 注意：mixed-port、external-controller 与 allow-lan 不在此表——前两个来自
+  // settings.ports（getPorts），allow-lan 恒为 false，三者都由 config.ts 单独写入
+  // systemConfig，订阅/覆写恒不可改。本表的语义是「用户没写时的默认」（可被覆盖），
+  // 锁定项的语义是「恒定此值」，两者不能混在一张表里
   'unified-delay': true,
   'tcp-concurrent': true,
   'geo-auto-update': true,

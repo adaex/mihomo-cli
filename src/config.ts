@@ -23,19 +23,25 @@ export const SAFE_YAML_LOAD_OPTIONS: yaml.LoadOptions = { maxAliases: 200 };
  * 系统锁定的入站/控制面键：只允许来自 settings 或系统约束，订阅与覆写显式提供时
  * 一律剥除（buildConfig）。新增入站/控制器键时加在这里——redir/tproxy、
  * external-controller-tls/-unix/-cors、tuic-server、external-doh-server、
- * ss-config/vmess-config、listeners/tunnels 都曾是漏网之鱼。对应上游 mihomo
- * `config/config.go` 的 General 段（端口家族 + ExternalController* + ExternalUI* +
- * Secret + ExternalDohServer + TuicServer + ShadowSocksConfig/VmessConfig）
+ * ss-config/vmess-config、listeners/tunnels、allow-lan 与鉴权家族
+ * （bind-address/authentication/skip-auth-prefixes/lan-*-ips）都曾是漏网之鱼。
+ * 对应上游 mihomo `config/config.go` 的 General 段（端口家族 + ExternalController* +
+ * ExternalUI* + Secret + ExternalDohServer + TuicServer + ShadowSocksConfig/VmessConfig）
  * 与 RawConfig 的 Listeners/Tunnels。
  *
  * 核对方法不是按键名眼熟程度挑，而是看上游 `config.Inbound` 结构体的字段全集与
  * `hub/executor.updateListeners()` 里逐个 ReCreate* 的入参——凡进得去那份名单的
  * 都能开监听。tuic-server/ss-config/vmess-config 是该结构体里并列的三个字段，
  * listeners/tunnels 则由同一个 updateListeners() 的 PatchInboundListeners /
- * ReCreateTunnels 消费。
+ * ReCreateTunnels 消费。**该字段全集有一份带上游版本号的快照**，与本表的差集必须
+ * 逐项写明理由，见 `config-inbound-snapshot.spec.ts`——漏键从此是测试失败而非复审运气。
  *
- * 刻意不在内的：
+ * 刻意不在内的（每一条都要有理由，「待定」等于放行）：
  * - `iptables`：Linux 专用的系统集成开关，非监听、darwin 内核无该路径
+ * - `inbound-tfo` / `inbound-mptcp`：TCP Fast Open 与 MPTCP 的传输层 socket 选项，
+ *   不开监听、不改绑定地址、不绕鉴权——信任边界不是配置洁癖
+ * - `tun`：不由本表管，而是按启动模式整段接管（tun 模式写 TUN_CONFIG，mixed 模式
+ *   `delete withOverwrites.tun`），订阅同样改不了
  */
 export const LOCKED_CONFIG_KEYS = [
   'mixed-port',
@@ -74,6 +80,31 @@ export const LOCKED_CONFIG_KEYS = [
   // 需要额外入站的用户改由本机另起实例，不接受远端订阅投递
   'listeners',
   'tunnels',
+  // 局域网暴露与入站鉴权：上游 `config.Inbound` 里与上面几个并列的字段，只因形态是
+  // 布尔/字符串而非映射或 URL 被漏看了五轮（与 ss-config 当年被漏的原因一模一样）。
+  // 实测链条（v1.19.30）：
+  // - `listener.genAddr(host, port, allowLan)` 在 allowLan 为真、bind-address 为默认
+  //   `"*"` 时返回 `":%d"`，即**全网卡监听**——订阅一行 `allow-lan: true` 就把 Mixed
+  //   端口挪出回环；bind-address 则直接指定监听地址
+  // - `authentication` 是这种情况下唯一的补偿防线，而 `skip-auth-prefixes` 能把它废掉：
+  //   `listener/http/server.go` 的 accept 循环里
+  //   `if inbound.SkipAuthRemoteAddr(conn.RemoteAddr()) { store = authStore.Nil }`，
+  //   `0.0.0.0/0` 命中所有来源，鉴权 store 被换成空实现
+  // 即远端订阅三行 YAML = 全网卡无鉴权开放代理。lan-allowed-ips/lan-disallowed-ips
+  // 同属这套来源准入判定，一并锁死；bind-address 单看无害（allow-lan 为假时 genAddr
+  // 根本不读它），锁它是为了消除「两个键配合才危险」这种要跨键推理的组合。
+  //
+  // allow-lan 恒为 false 由下方 systemConfig 写入（**不在 BASE_CONFIG**，理由同
+  // mixed-port：锁定项是「恒定此值」，不是「用户没写时的默认」）。需要局域网入站的
+  // 用户请在本机另起一个 mihomo 实例，不通过订阅投递。
+  // 代价：剥除来源盲，故覆写也不能再给 Mixed 端口设 authentication——缓解是
+  // allow-lan 已强制 false、Mixed 只在回环，残余威胁面是同机其他进程（见 CODE_REVIEW）
+  'allow-lan',
+  'bind-address',
+  'authentication',
+  'skip-auth-prefixes',
+  'lan-allowed-ips',
+  'lan-disallowed-ips',
 ] as const;
 
 /** 统一入口:带别名上限的 yaml.load,替代裸 yaml.load。 */
@@ -244,7 +275,10 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   // secret 同在此处被剥除、默认又不设密钥，额外入站将无鉴权或变开放代理，打破
   // 「控制器仅监听本机回环、入站由 mixed/tun 托管」的信任边界（上游 config.go 逐个核对）。
   // -pipe 仅 Windows 内核识别，一并剥除保持跨平台输出一致。
-  // allow-lan 不锁定——订阅/覆写显式提供时按其值（见入站需求），未提供时由上面的 BASE_CONFIG 循环兜底为 false。
+  // allow-lan 与鉴权家族（bind-address/authentication/skip-auth-prefixes/lan-*-ips）
+  // 自 v4.13.0 起同锁：allow-lan 一行即让 genAddr 从回环变成全网卡，而 skip-auth-prefixes
+  // 能把唯一的补偿防线 authentication 整个废掉（见 LOCKED_CONFIG_KEYS 的注释）。
+  // allow-lan 恒为 false，由下方 systemConfig 无条件写入。
   // listeners/tunnels 已随 v4.12.0 进入本清单：它们自带监听地址、不经 genAddr，与 ss/vmess/tuic 同判据。
   // 剥除对订阅与覆写一视同仁（都不进终态）；但告警只对**生效的覆写文件**——
   // 机场订阅几乎必带 mixed-port/port 等端口段，系统约束接管订阅入站是核心设计、
@@ -262,7 +296,7 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
     }
     if (hit.size > 0) {
       lockedWarnings.push(
-        `覆写文件 ${file.name} 中的系统锁定项已忽略: ${[...hit].join('、')}（入站端口、控制面与控制器证书由 mihomo-cli 管理；端口与 controller secret 在 settings.json 配置）`,
+        `覆写文件 ${file.name} 中的系统锁定项已忽略: ${[...hit].join('、')}（入站端口、控制面、控制器证书与局域网/入站鉴权由 mihomo-cli 管理；端口与 controller secret 在 settings.json 配置，入站固定只监听回环，需要局域网入站请在本机另起一个 mihomo 实例）`,
       );
     }
   }
@@ -276,6 +310,11 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   const ports = getPorts(settings);
   systemConfig['external-controller'] = `127.0.0.1:${ports.controller}`;
   systemConfig['mixed-port'] = ports.mixed;
+  // 与端口同族的恒定值：入站只监听回环。写在这里而非 BASE_CONFIG，因为它是锁定项
+  // （恒定此值）而不是默认值（用户没写时才用）——留在 BASE_CONFIG 的话，订阅提供
+  // allow-lan 时填充循环会因 `key in withOverwrites` 跳过默认、随后被剥除循环删掉，
+  // 终态里这个键会整个消失
+  systemConfig['allow-lan'] = false;
   const controllerSecret = settings.controller_secret;
   if (controllerSecret !== undefined) {
     // 与 getPorts 同族：手改 settings.json 写成数字/布尔时，内核 -t 可能拒绝也可能强转，

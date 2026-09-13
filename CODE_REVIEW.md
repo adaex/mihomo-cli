@@ -1,14 +1,28 @@
 # 代码审查：验证结论与边界
 
-当前审查：2026-09-13，v4.12.0（v4.11.0 后的全仓复审，已发布）
+当前审查：2026-09-13，v4.13.0（v4.12.0 后的全仓复审，待发布）
 
-本轮是一次通读式复审，不针对某个功能。修 11 项：`listeners`/`tunnels` 入站锁定与补全安装覆盖（两项安全）、status 主文件显示名、`--mirror` 提示指向不存在的命令、zsh 补全 eval 模式不注册、bash 半截标记块死锁、zsh/fish 描述转义（两项预防性），doctor 的 npm 查询串行（性能）、settings.json 非对象时的静默丢弃、bash 重复标记块需卸两次；另收口两处硬编码词表与三处报错文案、把 CHANGELOG 的篇幅纪律写进发布流程。单测 689（+32）
+本轮是一次通读式复审。修 1 项安全缺口并补 1 项防漏机制：`allow-lan`/`bind-address`/`authentication`/`skip-auth-prefixes`/`lan-allowed-ips`/`lan-disallowed-ips` 六个上游 `config.Inbound` 字段从未进过锁定表，远端订阅三行 YAML 即可开出全网卡无鉴权代理；同时把「锁定清单靠人肉对表」换成带上游版本号的字段快照测试。单测 700（+11）
 
-## 本轮验证（v4.11.0 后复审）
+## 本轮验证（v4.12.0 后复审）
 
 | 范围 | 验证方式与结论 |
 | --- | --- |
-| listeners/tunnels 锁定 | 复审前实跑确认缺陷真实存在：订阅里写 `listeners: [{type: socks, listen: 0.0.0.0, port: 18080}]`，`mihomo config` 输出原样带着它——即远端订阅可在全网卡开出无鉴权 SOCKS 入站，与 README「入站默认关闭 / 入站与控制面由本工具独占」直接冲突。两键进 `LOCKED_CONFIG_KEYS`，config.spec 新增 4 条（mixed/tun 各一、allow-lan 不作兜底一条、iptables 保留一条）。反向验证：摘掉两键恰好 3 条转红、其余 48 条全绿。端到端复跑：订阅侧静默剥除、覆写侧告警带文件名与键名 |
+| 局域网暴露与入站鉴权家族锁定 | 复审前实跑确认缺陷真实存在：隔离数据目录里订阅写 `allow-lan: true` / `bind-address: "*"` / `skip-auth-prefixes: ["0.0.0.0/0"]` 等六键，`mihomo config` 输出原样带着全部六个，**订阅侧与覆写侧都零告警**。上游链条逐处核实（v1.19.30）：`listener/listener.go:genAddr(host, port, allowLan)` 在 allowLan 为真、bindAddress 为默认 `"*"` 时返回 `":%d"`（全网卡，非回环）；`listener/http/server.go` 的 accept 循环里 `if inbound.SkipAuthRemoteAddr(conn.RemoteAddr()) { store = authStore.Nil }`，故 `0.0.0.0/0` 直接把唯一的补偿防线 `authentication` 换成空实现——即远端订阅三行 YAML = 全网卡无鉴权开放代理，与 README「入站默认关闭」直接冲突。六键进 `LOCKED_CONFIG_KEYS`，config.spec 新增 7 条（mixed/tun 各一、组合攻击形态一条、订阅侧静默一条、覆写侧告警一条、inbound-tfo/mptcp 保留一条，另改写两条原 allow-lan 用例）。反向验证：摘掉 `skip-auth-prefixes` 一键即 5 条转红（含快照测试报「未写决定的字段」）。端到端复跑：订阅侧静默剥除、`allow-lan` 回落 false、覆写侧告警带文件名与键名（含 `allow-lan!` / `+authentication` 操作符形式） |
+| allow-lan 的归属（BASE_CONFIG → systemConfig） | 锁定 allow-lan 暴露出一个顺序问题：`BASE_CONFIG` 填充循环（判据 `!(key in withOverwrites)`）跑在剥除循环**之前**，故订阅提供该键时默认值被跳过、随后键被删掉，终态里 `allow-lan` 会整个消失（内核零值仍是 false，不可利用，但输出不一致）。改为移出 BASE_CONFIG、由 systemConfig 无条件写 false，与 mixed-port/external-controller 同构——**不动循环顺序**，零副作用面。反向验证：摘掉 systemConfig 那行赋值 6 条转红 |
+| 两表混放会留下死配置（本轮意外发现） | 按计划应「把 allow-lan 塞回 BASE_CONFIG 即转红」，**实测 700 条全绿**——预测错了。原因：systemConfig 的赋值无条件，BASE_CONFIG 里那份直接成死配置，既不报错也无行为差异。死配置比缺陷更难发现（下一个人会以为它生效），故补一条不变量用例断言两表无交集。反向验证：塞回后该条转红 |
+| 锁定清单防漏机制 | 新增 `config-inbound-snapshot.spec.ts`：冻结一份带上游版本号（v1.19.30）的 `config.Inbound` 字段全集 + RawConfig 控制面键，凡不在锁定表（含 `tls` 这条 config.ts 单独 delete 的旁路）里的字段必须在 `NOT_IN_LOCKED_TABLE` 写明非空理由，否则测试红。另三条守卫：放行理由与已剥除不能同时成立、无快照外的过期条目、锁定表无重复项。**明确抓不住的**：快照是冻结副本，上游新增字段它自己发现不了，仍需人工刷新——该限制写在文件头与 CLAUDE.md，避免下一个人误以为有了完整自动防线 |
+| 既有防线回归 | typecheck / 700 测试 / Biome（`src/` 82 文件，实际检查非 0）/ build 全绿；临时数据目录已清理核实 |
+
+---
+
+## 上一轮验证（v4.12.0 全仓复审，结论仍有效）
+
+修 11 项：`listeners`/`tunnels` 入站锁定与补全安装覆盖（两项安全）、status 主文件显示名、`--mirror` 提示指向不存在的命令、zsh 补全 eval 模式不注册、bash 半截标记块死锁、zsh/fish 描述转义（两项预防性），doctor 的 npm 查询串行（性能）、settings.json 非对象时的静默丢弃、bash 重复标记块需卸两次；另收口两处硬编码词表与三处报错文案。单测 689（+32）
+
+| 范围 | 验证方式与结论 |
+| --- | --- |
+| listeners/tunnels 锁定 | 复审前实跑确认缺陷真实存在：订阅里写 `listeners: [{type: socks, listen: 0.0.0.0, port: 18080}]`，`mihomo config` 输出原样带着它——即远端订阅可在全网卡开出无鉴权 SOCKS 入站，与 README「入站默认关闭 / 入站与控制面由本工具独占」直接冲突。两键进 `LOCKED_CONFIG_KEYS`，config.spec 新增 4 条（mixed/tun 各一、allow-lan 不作兜底一条、iptables 保留一条）。反向验证：摘掉两键恰好 3 条转红、其余 48 条全绿。端到端复跑：订阅侧静默剥除、覆写侧告警带文件名与键名。**注：那一轮「allow-lan 不作兜底」只锁了「别拿它当别的键的兜底」，没锁 allow-lan 自身——v4.13.0 才补上** |
 | status 主文件显示名 | `shortOverwriteName` 先剥前缀 `^overwrite\.?` 会把点一并吃掉，`overwrite.yaml` 剩 `yaml`、非空使 `\|\| '主文件'` 永不触发——最常见的单文件配置显示成 `覆写: 已启用 (yaml)`（实测）。改为先剥扩展名再剥前缀。该展示此前零覆盖，补 3 条（主文件单独、与扩展文件并列、`.yml` 与不适用补充行）。反向验证：还原旧顺序 3 条转红 |
 | `--mirror` 提示自洽 | 重复 `--mirror` 的 hint 写「可用镜像见 `mihomo kernel --help`」，实跑该命令得到「未知的选项: --help」——`--help` 只是顶层 help 的别名，命令级一律走白名单报错。改为直接列 `AVAILABLE_MIRRORS`。新增用例断言 hint 不含 `--help` 且逐个列出镜像，两种写法（空格/等号）各验一次 |
 | 既有防线回归 | typecheck / 689 测试 / Biome（`src/` 81 文件）/ build 全绿；临时数据目录、测试 plist、进程均已清理核实 |
@@ -169,9 +183,10 @@ v4.11.0 改的是展示层一处误导：status 的覆写行此前列「目录�
 
 - 健康观察窗只覆盖启动初期，之后的 OOM/panic 由 status/doctor 展示异常退出；延长 start 到无限观察不在目标内
 - install 恢复分支的并发只能手工双终端复现（需真装了内核的机器）：自动化要么得真跑 launchctl enable/disable（留永久记录），要么退化成对实现清单的断言。已修；热重载成功分支（PATH 前置桩 launchctl + 桩 controller）与查询失败回退分支（计数桩 launchctl）均已自动化（service-concurrency.spec，不碰真实 launchd），install 恢复分支仍只能手工复现
-- 控制器/入站家族锁定（external-controller-tls/-unix/-cors/-doh、tuic-server、ss-config/vmess-config、listeners/tunnels、tls 段）只回上游源码核对了键名与启动前提、用 buildConfig 实测了剥除，没用真内核验证过额外监听真的开不出来；unix socket 文件创建、TUIC/SS/Vmess server bind 等内核侧行为同理
-- **锁定清单的完整性靠人肉对表，没有机制保证**：`LOCKED_CONFIG_KEYS` 与上游 `config.Inbound` 字段集之间没有自动比对（要做得解析 Go 源码或钉住上游版本），漏键只能靠复核发现——redir/tproxy（4.9.0）、-tls/-unix/-doh 与 tuic-server（4.9.1）、ss-config/vmess-config（4.9.2）、listeners/tunnels（4.12.0）四轮各漏一批，每轮都以为「这次逐个核对过了」。下次核对别按键名眼熟程度挑，照 `Inbound` 结构体字段 + `updateListeners()` 的 ReCreate* 入参逐个对；上游新增入站类型时本清单必然滞后
-- `iptables` 仍原样进运行配置：Linux 专用的系统集成开关、非监听，darwin 内核无该路径。config.spec 有用例锁住现状，决策改变时会明确失败而不是悄悄漂移
+- 控制器/入站家族锁定（external-controller-tls/-unix/-cors/-doh、tuic-server、ss-config/vmess-config、listeners/tunnels、tls 段、allow-lan 与鉴权家族）只回上游源码核对了键名与启动前提、用 buildConfig 实测了剥除，没用真内核验证过额外监听真的开不出来；unix socket 文件创建、TUIC/SS/Vmess server bind、`allow-lan: true` 下内核是否真的绑到全网卡等内核侧行为同理
+- **锁定清单的完整性此前靠人肉对表，v4.13.0 起有了半自动兜底**：`config-inbound-snapshot.spec.ts` 冻结了一份带上游版本号的 `config.Inbound` 字段集，差集必须逐项写明放行理由，否则测试红。**但快照发现不了上游新增字段**——上游加了新入站键，这里不会红，照样漏；它只把「凭记忆重新推导整张清单」降级成「拿结构体 diff 一份已存在的清单」。内核大版本升级时必须人工刷新快照（CLAUDE.md 已记）。历史：redir/tproxy（4.9.0）、-tls/-unix/-doh 与 tuic-server（4.9.1）、ss-config/vmess-config（4.9.2）、listeners/tunnels（4.12.0）、allow-lan 与鉴权家族（4.13.0）**五轮各漏一批**，每轮都以为「这次逐个核对过了」——第五轮漏的那批还是「曾被写进注释提醒别当兜底、却始终没锁它自己」的键
+- **锁 `authentication` 的代价（v4.13.0 引入，待观察）**：剥除来源盲，故用户也不能再用覆写给 Mixed 端口设代理鉴权。缓解是 `allow-lan` 已强制 false、Mixed 只监听回环，主要威胁面（局域网）已消失；残余是同机其他进程（含浏览器网页），与控制器默认无鉴权同一量级。控制器侧有 `controller_secret` 逃生口，Mixed 侧暂无——真有人需要再加 settings 键，不提前造开口
+- `iptables`、`inbound-tfo`、`inbound-mptcp` 仍原样进运行配置：前者是 Linux 专用的系统集成开关、非监听，darwin 内核无该路径；后两者是 TFO/MPTCP 传输层 socket 选项，不开监听、不改绑定地址、不绕鉴权。config.spec 有用例锁住现状，决策改变时会明确失败而不是悄悄漂移
 - 锁定告警只对覆写文件：覆写经操作符设置锁定键（如 `+secret`）已覆盖，但覆写文件内 `match:` 块之后、且文件解析失败被 warn 跳过时不会有告警（文件整体没生效，合理）
 - 订阅名 glob 用双指针贪心回溯而非正则，最坏 O(n×m)。**这条是复审时实测推翻前一版结论才改的**：初版「转义成正则再 test」，文档里写的是「`*` 折叠故无嵌套回溯 + 订阅名限长 64，可接受」——实测 `*a`×20 配 64 个 `a` 要跑 70 秒，即长度上限之内的合法输入就能把 CLI 挂死。教训是「输入面受控」不能替代实测：覆写文件确实是用户自己写的，但把自己写挂且毫无提示，与本仓「宁可报错也不静默失效」的取向相悖。新实现与旧正则版做过 30 万组差分测试（name 限 SAFE_NAME_RE 字符集）结果全一致，同一组恶意输入 0ms；spec 里那条用例带耗时断言（<1s），反向验证：换回正则版后整个测试文件跑不完（60s 超时）
 - 单个覆写文件的 `enabled` 写错会让 `mihomo status`、`ow` 整体失败（经 `listOverwriteFile` → `loadOverwriteFile` 抛 CliError）。与 `match` 写错的现有行为一致、不是新退化，可接受的前提是错误消息带文件名（已有用例锁住）
