@@ -196,6 +196,9 @@ mihomo completion fish | source
 mihomo completion uninstall zsh   # bash 只剥掉自己那段，保留 ~/.bash_completion 中你自己的内容
 ```
 
+> zsh/fish 的目标文件名由本工具独占，但**安装前会先确认那是不是自己生成的**：目标已存在且不像本工具的产物时报错退出、不覆盖（你手写或第三方分发的同名补全不会被销毁）。
+> 确认无用后手动 `rm` 再装，或用 `mihomo completion <shell> > <自选路径>` 输出到别处。
+
 > zsh 的 `~/.zsh/completions` 不在默认 `fpath` 里（oh-my-zsh 默认已包含）：
 > 补全不生效时在 `~/.zshrc` 加一行 `fpath=(~/.zsh/completions $fpath)`，重新打开终端。
 
