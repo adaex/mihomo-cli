@@ -121,8 +121,12 @@ describe('doctor：npm 查询与本地检查并行', () => {
     const timeline = path.join(binDir, 'timeline.log');
     try {
       // 两个桩用同一份记录格式：`<who> <start|end> <epoch 毫秒>`。
-      // 用 date +%s%3N 不可靠（macOS 的 date 不支持 %3N），改用 python3 取毫秒
-      const stamp = (who: string, phase: string) => `python3 -c "import time;print('${who} ${phase} %d' % (time.time()*1000))" >> ${JSON.stringify(timeline)}`;
+      // 取毫秒用 **node 自己**（`process.execPath`，跑测试的那个解释器）：
+      // macOS 的 `date` 不支持 `%3N`（只到秒），而引入 python3 就是给测试加一个
+      // 本仓其余用例都不需要的外部依赖——它们只用 macOS 自带的
+      // zsh/bash/launchctl/pgrep 等。node 一定在，且路径确定
+      const stamp = (who: string, phase: string) =>
+        `${JSON.stringify(process.execPath)} -e "console.log('${who} ${phase} ' + Date.now())" >> ${JSON.stringify(timeline)}`;
 
       fs.writeFileSync(
         path.join(binDir, 'npm'),

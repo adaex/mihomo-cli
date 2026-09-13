@@ -13,6 +13,16 @@
 | `--mirror` 提示自洽 | 重复 `--mirror` 的 hint 写「可用镜像见 `mihomo kernel --help`」，实跑该命令得到「未知的选项: --help」——`--help` 只是顶层 help 的别名，命令级一律走白名单报错。改为直接列 `AVAILABLE_MIRRORS`。新增用例断言 hint 不含 `--help` 且逐个列出镜像，两种写法（空格/等号）各验一次 |
 | 既有防线回归 | typecheck / 689 测试 / Biome（`src/` 81 文件）/ build 全绿；临时数据目录、测试 plist、进程均已清理核实 |
 
+### 第四轮复核（构建配置、契约与并发，未改动行为）
+
+读了此前从未看过的 `tsup.config.ts` / `tsconfig.json` / `biome.json` / CI workflow / husky hook，并实测了几类契约，**只发现一处需要动的**（测试的 `python3` 依赖，见「未覆盖与待复核」）。其余结论：
+
+- **JSON 契约稳固**：空环境、settings 损坏告警期间、有 warnings 时，`status --json` 与 `config --json` 的 stdout 始终是可整体解析的 JSON，告警一律走 stderr（三种场景各实测一次）
+- **跨进程锁未丢条目**：6 个进程并发 `addSubscription`（纯设置写入、不经网络，避开「下载失败回滚」把结果抹平）最终 6/6 落盘，与 `paths.ts` 记载的锁语义一致
+- **TUN 模式判定三处一致**：落盘 `runtime/config.yaml` 为 TUN 形态时，`status`（人读与 `--json`）、`config` 推导的模式都是 tun，未出现分叉
+- **README 的命令示例全部存在于注册表**（脚本比对，非肉眼）；`overwrite.applied` / `overwrite.files` 的文字描述与实测输出相符
+- CI 在 macos-latest 用 Node 22.22.1（与 `engines` 下限一致）跑 typecheck/check/test/build，四道全在；husky 的 pre-commit 走 lint-staged。`npm run check` 只在 error 级失败，warn 级不拦——上一轮那 4 条 `noNonNullAssertion` 警告因此没被 CI 挡住，是我自己 `biome check` 时才看见的，**改完代码别只看 `npm run check` 的退出码**
+
 ### 补全模块（本轮新覆盖，此前只有生成侧词表测试）
 
 | 范围 | 验证方式与结论 |
@@ -172,6 +182,7 @@ v4.11.0 改的是展示层一处误导：status 的覆写行此前列「目录�
 - `cmdStop` 路径 (b) 的「记录必须在 handleStopResult 之后」只由代码位置与注释保证：非 root 下无法让 SIGKILL 失败，测不出来
 - settings/cache 写入有锁，但 reset 的跨文件删除不是事务；未承诺与下载、另一次 reset 并行时整个目录原子切换
 - fish 补全脚本未做语法校验：本机未装 fish。zsh/bash 经 `zsh -n`/`bash -n` 校验过（含注入撇号/反引号/`$(...)` 的恶意描述），改动补全生成逻辑时注意 fish 那份只有生成、没有验证（gating、词表派生与转义规则已由 completion.spec 字符串级断言锁住，语法仍无验证）。本轮的 fish 反斜杠转义修复同样只验证了生成形态，未执行确认
+- 测试只依赖 macOS 自带命令（zsh/bash/launchctl/pgrep/pkill/lsof/gh）与 node 自身。doctor 的计时桩一度用 `python3` 取毫秒（`date` 不支持 `%3N`），是全仓唯一的外部依赖孤例，已改用 `process.execPath -e "Date.now()"`——跑测试的解释器必然在，路径也确定。新增测试桩需要取时间/做计算时照此办理，别再引第二个运行时
 - zsh 补全的 eval 路径已修并真机验证，但**只验了注册（`_comps` 为 1）**，没有驱动一次真实补全交互确认候选词正确——那需要 pty 与 `zpty` 编排，成本高于收益。fpath 路径同理
 - `config` 命令不做内核校验，故它能输出「形态合法但内核会拒绝」的配置（例如引用了不存在的节点）。这是刻意的分工——校验归 `doctor` 与 `start`，只读展示不该要求装了内核
 - sudo 三处收口（超时 60s、退出码分工、残留清理 CliError）的完整链路只能真机 sudo 验证：慢密码场景、bootout 真实失败的 exit 3 渲染、四个命令下的实际终端输出；包装决策已纯函数化测试
