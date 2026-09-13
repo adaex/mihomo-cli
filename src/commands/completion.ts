@@ -303,8 +303,14 @@ function buildFish(commands: Command[], groups: SubGroup[]): string {
   return lines.join('\n');
 }
 
-/** 生成指定 shell 的补全脚本；未知 shell 抛 CliError（带 did-you-mean） */
-export function buildCompletionScript(shell: string, commands: Command[]): string {
+/**
+ * 生成指定 shell 的补全脚本；未知 shell 抛 CliError（带 did-you-mean）。
+ *
+ * `usageVerb` 供 install/uninstall 复用本函数的报错时补上自己的动词：它们的用法是
+ * `mihomo completion install <shell>`，若沿用裸 `completion <shell>`，照着提示改的
+ * 用户会丢掉 install 这一步（实测 `completion install ZSH` 的提示就漏了它）。
+ */
+export function buildCompletionScript(shell: string, commands: Command[], usageVerb = ''): string {
   const groups = subGroups(commands);
   switch (shell) {
     case 'zsh':
@@ -315,9 +321,10 @@ export function buildCompletionScript(shell: string, commands: Command[]): strin
       return buildFish(commands, groups);
     default: {
       const suggestion = suggestSimilar(shell, [...SHELLS]);
+      const usage = `用法: mihomo completion ${usageVerb ? `${usageVerb} ` : ''}<${SHELLS.join('|')}>`;
       throw new CliError(`未知的 shell: ${shell}`, {
         label: '参数错误',
-        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), `用法: mihomo completion <${SHELLS.join('|')}>`],
+        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), usage],
       });
     }
   }
@@ -384,8 +391,9 @@ function installCompletion(shell: string | undefined, commands: Command[]): void
   }
   const target = completionInstallPath(shell);
   if (!target) {
-    // 复用 buildCompletionScript 的 did-you-mean 报错（它会因未知 shell 抛错）
-    buildCompletionScript(shell, commands);
+    // 复用 buildCompletionScript 的 did-you-mean 报错（它会因未知 shell 抛错）；
+    // 传动词让用法行带上 install，否则照提示改的用户会丢掉这一步
+    buildCompletionScript(shell, commands, 'install');
     return;
   }
 
@@ -469,8 +477,9 @@ function uninstallCompletion(shell: string | undefined, commands: Command[]): vo
   }
   const target = completionInstallPath(shell);
   if (!target) {
-    // 复用 buildCompletionScript 的 did-you-mean 报错（它会因未知 shell 抛错）
-    buildCompletionScript(shell, commands);
+    // 复用 buildCompletionScript 的 did-you-mean 报错（它会因未知 shell 抛错）；
+    // 传动词让用法行带上 uninstall
+    buildCompletionScript(shell, commands, 'uninstall');
     return;
   }
 
@@ -484,18 +493,26 @@ function uninstallCompletion(shell: string | undefined, commands: Command[]): vo
   try {
     if (shell === 'bash') {
       const existing = fs.readFileSync(target, 'utf8');
-      const endMarker = BASH_END_MARKER;
-      const start = existing.indexOf(BASH_MARKER);
-      const end = existing.indexOf(endMarker);
-      if (start === -1 || end === -1 || end < start) {
+      if (!hasBashMarkerBlock(existing)) {
         console.log(colors.yellow('未找到 mihomo 补全标记，未做改动'));
         console.log(colors.gray(`  若曾手动安装，请自行编辑 ${target}`));
         return;
       }
-      // 连同 install 追加的前导换行与末尾换行一并去掉，避免反复装卸堆积空行
-      const before = existing.slice(0, start).replace(/\n+$/, '\n');
-      const after = existing.slice(end + endMarker.length).replace(/^\n/, '');
-      const rest = `${before}${after}`;
+      // **循环剥离到一个不剩**，不是只切第一对：文件里可能有多份块（用户手工粘贴过、
+      // 或早期版本重复追加过）。只切第一对会留下仍然生效的 `_mihomo_completions` 定义，
+      // 而 CLI 已经打印「已移除」——报告成功但事情没做完（实测两份块时第一次卸载后
+      // 补全照常工作）。循环到 hasBashMarkerBlock 为假，才是「卸载」这个词的语义。
+      let rest = existing;
+      let removed = 0;
+      while (hasBashMarkerBlock(rest)) {
+        const start = rest.indexOf(BASH_MARKER);
+        const end = rest.indexOf(BASH_END_MARKER);
+        // 连同 install 追加的前导换行与末尾换行一并去掉，避免反复装卸堆积空行
+        const before = rest.slice(0, start).replace(/\n+$/, '\n');
+        const after = rest.slice(end + BASH_END_MARKER.length).replace(/^\n/, '');
+        rest = `${before}${after}`;
+        removed++;
+      }
       // 只剩空白说明这个文件本就是我们建的，删掉比留个空文件干净
       if (rest.trim() === '') {
         fs.rmSync(target);
@@ -503,6 +520,9 @@ function uninstallCompletion(shell: string | undefined, commands: Command[]): vo
         return;
       }
       fs.writeFileSync(target, rest);
+      if (removed > 1) {
+        console.log(colors.gray(`  发现并移除了 ${removed} 份重复的补全段`));
+      }
       console.log(colors.green('已移除 mihomo 补全段，保留文件中其余内容（重新打开终端生效）'));
       return;
     }

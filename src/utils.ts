@@ -195,9 +195,14 @@ export function assertKnownFlags(args: string[] | undefined, known: readonly str
     if (match && match.form !== 'exact' && knownSet.has(match.baseForm)) continue;
     // `--mirror` 故意不登记（见 flags.ts），等号形式仅在其自身白名单内放行
     if (a.startsWith('--mirror=') && knownSet.has('--mirror')) continue;
+    // 白名单为空的命令（completion/dir/stop 等不接受任何选项）不打「可用选项: 」——
+    // 那会渲染成空列表，看着像是工具自己没填上。改说「该命令不接受任何选项」。
+    // `-h`/`--help` 单独点一句：它俩是顶层 help 的别名、命令级并不接受，用户很自然会试
+    const isHelpFlag = a === '-h' || a === '--help';
+    const helpNote = isHelpFlag ? ['', `${a} 只在顶层可用，命令用法见: mihomo help`] : [];
     throw new CliError(`未知的选项: ${a}`, {
       label: '参数错误',
-      hint: [`可用选项: ${known.join(', ')}`, '', `用法: mihomo ${command}`],
+      hint: [known.length > 0 ? `可用选项: ${known.join(', ')}` : '该命令不接受任何选项', ...helpNote, '', `用法: mihomo ${command}`],
     });
   }
 }

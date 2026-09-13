@@ -5,28 +5,42 @@ import { CliError } from './errors.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './paths.js';
 import type { Settings, Subscription, SubscriptionCache, SubscriptionCacheEntry, SubscriptionWithCache } from './types.js';
 
+/**
+ * 备份损坏的 settings.json 并告警，返回默认设置。
+ *
+ * 备份只保留第一份：之后回退默认并写回，若文件再次损坏（外部反复覆写），
+ * 覆盖 `.bak` 会用默认内容/新损坏盖掉唯一的用户原件。
+ */
+function backupCorruptSettings(reason: string): Settings {
+  const backup = `${PATHS.settingsFile}.bak`;
+  try {
+    if (fs.existsSync(backup)) {
+      console.warn(`警告: settings.json ${reason}，使用默认设置（原件已在早前备份: ${backup}，未覆盖）`);
+    } else {
+      fs.copyFileSync(PATHS.settingsFile, backup);
+      console.warn(`警告: settings.json ${reason}，已备份到 ${backup}，使用默认设置`);
+    }
+  } catch {
+    console.warn(`警告: settings.json ${reason}，使用默认设置`);
+  }
+  return {};
+}
+
 /** 每次读取磁盘；同一操作需要一致视图时由调用方显式传递这份快照 */
 export function readSettings(): Settings {
   if (!fs.existsSync(PATHS.settingsFile)) return {};
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(PATHS.settingsFile, 'utf8'));
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Settings;
+    // **JSON 合法但不是对象**（`[1,2,3]`、`"str"`、`42`、`null`）同样走备份+告警：
+    // 此前这条路径直接 `return {}`，既不备份也不出声，而下一次 updateSettings 会把
+    // 文件整个覆盖成默认内容——用户的原件无声无息地没了。与下面的解析失败分支
+    // 是同一类「文件不可用」，处置也该一样（doctor 的设置文件检查已能识别这种形态，
+    // 但 doctor 是可选的，读路径自己不能装作没看见）
+    return backupCorruptSettings(`内容不是对象（当前是${Array.isArray(parsed) ? '数组' : parsed === null ? 'null' : typeof parsed}）`);
   } catch {
-    // 损坏内容留备份，便于人工恢复。备份只保留第一份：之后回退默认并写回，若文件再次
-    // 损坏（外部反复覆写），覆盖 .bak 会用默认内容/新损坏盖掉唯一的用户原件
-    const backup = `${PATHS.settingsFile}.bak`;
-    try {
-      if (fs.existsSync(backup)) {
-        console.warn(`警告: settings.json 格式损坏，使用默认设置（原件已在早前备份: ${backup}，未覆盖）`);
-      } else {
-        fs.copyFileSync(PATHS.settingsFile, backup);
-        console.warn(`警告: settings.json 格式损坏，已备份到 ${backup}，使用默认设置`);
-      }
-    } catch {
-      console.warn('警告: settings.json 格式损坏，使用默认设置');
-    }
+    return backupCorruptSettings('格式损坏');
   }
-  return {};
 }
 
 /** 只读诊断使用，不触发备份 */

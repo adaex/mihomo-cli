@@ -245,3 +245,66 @@ describe('bash 半截标记块可自愈', () => {
     assert.ok(!after.includes(START.replace('>>>', '<<<')), '完整块应被移除');
   });
 });
+
+/**
+ * bash 重复标记块：卸载必须一次剥干净。
+ *
+ * 只切第一对时，CLI 打印「已移除」而文件里仍留着一份生效的 `_mihomo_completions`
+ * 定义——报告成功但事情没做完。重复块的来路：用户手工粘贴过，或早期版本重复追加。
+ */
+describe('bash 重复标记块一次卸干净', () => {
+  it('两份块时一次 uninstall 全部移除，不留下仍生效的定义', () => {
+    const target = path.join(home, '.bash_completion');
+    run(['completion', 'install', 'bash']);
+    const once = fs.readFileSync(target, 'utf8');
+    fs.writeFileSync(target, once + once);
+    assert.equal((fs.readFileSync(target, 'utf8').match(/# >>> mihomo-cli completion \(append\)/g) ?? []).length, 2);
+
+    const { status, output } = run(['completion', 'uninstall', 'bash']);
+    assert.equal(status, 0, output);
+    assert.ok(!fs.existsSync(target), '两份块都是我们的，剥完文件为空应一并删除');
+  });
+
+  it('用户内容 + 两份块：块全部移除，用户内容原样保留', () => {
+    const target = path.join(home, '.bash_completion');
+    run(['completion', 'install', 'bash']);
+    const installed = fs.readFileSync(target, 'utf8');
+    fs.writeFileSync(target, `# 用户自己的补全\nalias foo=bar\n${installed}${installed}`);
+
+    const { status, output } = run(['completion', 'uninstall', 'bash']);
+    assert.equal(status, 0, output);
+    const after = fs.readFileSync(target, 'utf8');
+    assert.ok(after.includes('alias foo=bar'), '用户内容必须保留');
+    assert.ok(!after.includes('_mihomo_completions'), '不得残留任何生效的补全定义');
+    assert.match(output, /移除了 2 份重复/, '多份时应如实告知移除了几份');
+  });
+});
+
+/**
+ * 无选项命令的报错文案，以及 install/uninstall 的用法动词。
+ */
+describe('参数错误提示的完整性', () => {
+  it('不接受任何选项的命令不打空的「可用选项: 」', () => {
+    const { output } = run(['completion', '-h']);
+    assert.match(output, /该命令不接受任何选项/);
+    assert.ok(!/可用选项:\s*$/m.test(output), '不得渲染成空列表');
+  });
+
+  it('-h/--help 额外点明它只在顶层可用', () => {
+    // users 会很自然地试 `mihomo <cmd> -h`：它是顶层 help 的别名、命令级并不接受
+    for (const flag of ['-h', '--help']) {
+      assert.match(run(['completion', flag]).output, /只在顶层可用/, `${flag} 应给出指引`);
+    }
+  });
+
+  it('有选项的命令仍照常列出可用选项', () => {
+    assert.match(run(['logs', '-X']).output, /可用选项: -f, --follow, -n, --lines, -o, --open/);
+  });
+
+  it('install/uninstall 的 shell 名报错带上自己的动词', () => {
+    assert.match(run(['completion', 'install', 'ZSH']).output, /用法: mihomo completion install <zsh\|bash\|fish>/);
+    assert.match(run(['completion', 'uninstall', 'FISH']).output, /用法: mihomo completion uninstall <zsh\|bash\|fish>/);
+    // 裸 completion 仍是无动词的形态
+    assert.match(run(['completion', 'ZSH']).output, /用法: mihomo completion <zsh\|bash\|fish>/);
+  });
+});

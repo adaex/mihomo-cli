@@ -44,6 +44,7 @@ npm run build
 - 测试优先验证行为与数据最终状态，不用针对实现清单的断言代替结果验证
 - 能隔离的进程路径用真实系统工具验证；真实 sudo/TUN 与会永久污染 launchd disabled 表的测试不自动执行，理由见 CODE_REVIEW
 - 测试隔离前提必须有断言：进程匹配需绑定临时 `MIHOMO_CLI_DIR`；涉及 reset/服务查询时还需隔离 `MIHOMO_CLI_DAEMON_LABEL`，LaunchAgent plist 位于数据目录之外
+- 补全的落盘位置取自 `os.homedir()`，`MIHOMO_CLI_DIR` 挡不住：跑 `completion install/uninstall`（自动化或手工）一律另设临时 `HOME`，否则会写进开发机真实的 `~/.zsh/completions`、`~/.bash_completion`
 - 删除或更名导出后，搜索整个仓库，包括测试里的内嵌脚本与工作流示例；类型检查看不到字符串中的 import，也不检查 Markdown 示例
 
 ## 产品边界

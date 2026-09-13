@@ -323,3 +323,63 @@ describe('设置读取与更新不依赖进程缓存', () => {
     }
   });
 });
+
+/**
+ * JSON 合法但不是对象的 settings.json（`[1,2,3]` / `"str"` / `42` / `null`）。
+ *
+ * 此前这条路径直接 `return {}`：既不备份也不告警，而下一次 updateSettings 会把文件
+ * 整个覆盖成默认内容——用户原件无声无息地没了。它与「JSON 解析失败」是同一类
+ * 「文件不可用」，处置必须一致。
+ */
+describe('settings.json 为非对象时同样备份并告警', () => {
+  const settingsModuleUrl = pathToFileURL(path.resolve('src/settings.ts')).href;
+  const pathsModuleUrl = pathToFileURL(path.resolve('src/paths.ts')).href;
+
+  function readNonObject(content: string): { warned: string; backup: string | null; result: string } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-nonobj-'));
+    const code = `
+      const fs = await import('node:fs');
+      const nodePath = await import('node:path');
+      const m = await import(${JSON.stringify(settingsModuleUrl)});
+      const { PATHS } = await import(${JSON.stringify(pathsModuleUrl)});
+      fs.mkdirSync(nodePath.dirname(PATHS.settingsFile), { recursive: true });
+      fs.writeFileSync(PATHS.settingsFile, ${JSON.stringify(content)});
+      const got = m.readSettings();
+      const bak = PATHS.settingsFile + '.bak';
+      process.stdout.write(JSON.stringify({
+        result: JSON.stringify(got),
+        backup: fs.existsSync(bak) ? fs.readFileSync(bak, 'utf8') : null,
+      }));
+    `;
+    const r = spawnSync(process.execPath, ['--import', 'tsx', '-e', code], {
+      encoding: 'utf8',
+      env: { ...process.env, MIHOMO_CLI_DIR: dir },
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+    assert.equal(r.status, 0, r.stderr || r.stdout);
+    const parsed = JSON.parse(r.stdout) as { result: string; backup: string | null };
+    return { warned: r.stderr, backup: parsed.backup, result: parsed.result };
+  }
+
+  for (const [content, label] of [
+    ['[1,2,3]', '数组'],
+    ['"a string"', 'string'],
+    ['42', 'number'],
+    ['null', 'null'],
+  ] as const) {
+    it(`${content} → 回退默认设置、备份原件并告警（识别为${label}）`, () => {
+      const { warned, backup, result } = readNonObject(content);
+      assert.equal(result, '{}', '必须回退成默认设置');
+      assert.equal(backup, content, '原件必须完整备份，否则下次写入就把它覆盖没了');
+      assert.match(warned, /settings\.json 内容不是对象/);
+      assert.match(warned, new RegExp(label.replace(/[[\]]/g, '\\$&')));
+    });
+  }
+
+  it('合法对象不触发备份，也不告警', () => {
+    const { warned, backup, result } = readNonObject('{"active_subscription":"home"}');
+    assert.equal(result, '{"active_subscription":"home"}');
+    assert.equal(backup, null, '正常文件不该产生 .bak');
+    assert.equal(warned.trim(), '');
+  });
+});
