@@ -42,6 +42,7 @@ npm run build
 - `.claude/worktrees/` 被 Biome 的默认扫描排除；在 worktree 显式跑 `npx biome check src/`，确认实际检查了文件，不能接受 `Checked 0 files`
 - CI 在 macos-latest 跑 typecheck/check/test/build；package.json 的 darwin 限制会阻止其他平台正常安装
 - 测试优先验证行为与数据最终状态，不用针对实现清单的断言代替结果验证
+- 修完必做反向验证：把修复还原，确认对应用例真的转红。**预测「理应会红」不能代替实跑**——v4.13.0 预测「allow-lan 塞回 BASE_CONFIG 会红」，实测全绿，暴露出那是一处谁都不报错的死配置（锁定项的恒定值由 systemConfig 写入，BASE_CONFIG 那份根本不参与）。预测落空处往往正是认知与实现的偏差点，比预测对更值钱；发现后补不变量用例挡在结构层，别只改当前这一处
 - 能隔离的进程路径用真实系统工具验证；真实 sudo/TUN 与会永久污染 launchd disabled 表的测试不自动执行，理由见 CODE_REVIEW
 - 测试隔离前提必须有断言：进程匹配需绑定临时 `MIHOMO_CLI_DIR`；涉及 reset/服务查询时还需隔离 `MIHOMO_CLI_DAEMON_LABEL`，LaunchAgent plist 位于数据目录之外
 - 补全的落盘位置取自 `os.homedir()`，`MIHOMO_CLI_DIR` 挡不住：跑 `completion install/uninstall`（自动化或手工）一律另设临时 `HOME`，否则会写进开发机真实的 `~/.zsh/completions`、`~/.bash_completion`
