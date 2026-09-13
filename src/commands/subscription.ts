@@ -316,10 +316,10 @@ function withKnownFlags(usage: string, known: readonly string[], handler: (args:
 // v3.11.0 已删掉 `dir list` / `ow list`，若这里保留 `sub list`，同一批命令
 // 一半能敲 list 一半不能，用户只能靠试。
 export const SUBCOMMANDS: SubCommand[] = [
-  { name: 'add', description: '添加订阅', handler: withKnownFlags('sub add <url> [name]', [], subAdd) },
-  { name: 'update', description: '更新订阅', handler: withKnownFlags('sub update [name]', [], subUpdate) },
-  { name: 'use', description: '切换订阅', handler: withKnownFlags('sub use <name>', USE_FLAGS, subUse) },
-  { name: 'remove', aliases: ['rm', 'delete'], description: '删除订阅', handler: withKnownFlags('sub remove <name>', REMOVE_FLAGS, subRemove) },
+  { name: 'add', handler: withKnownFlags('sub add <url> [name]', [], subAdd) },
+  { name: 'update', handler: withKnownFlags('sub update [name]', [], subUpdate) },
+  { name: 'use', handler: withKnownFlags('sub use <name>', USE_FLAGS, subUse) },
+  { name: 'remove', aliases: ['rm', 'delete'], handler: withKnownFlags('sub remove <name>', REMOVE_FLAGS, subRemove) },
 ];
 
 export async function cmdSubscription(args: string[]): Promise<void> {

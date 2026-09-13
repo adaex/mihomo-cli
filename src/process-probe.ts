@@ -14,7 +14,7 @@ import { escapeRegExp } from './utils.js';
 /** ps 查询超时：探测进程存活/属主/命令行的统一上限，卡住时按不存在处理 */
 const PS_TIMEOUT_MS = 5000;
 
-export function isProcessRunning(pid: number): boolean {
+function isProcessRunning(pid: number): boolean {
   if (!pid) return false;
   try {
     const result = spawnSync('ps', ['-p', String(pid), '-o', 'pid='], { encoding: 'utf8', timeout: PS_TIMEOUT_MS });
@@ -29,11 +29,10 @@ export function isProcessRunning(pid: number): boolean {
  * 系统分配给无关进程）。读不到命令行时保守返回 false。
  *
  * 必须带 `-ww`：BSD/macOS 的 ps 即使 stdout 不是终端也会把 command 列截断到 79 列。
- * 当前唯一的 needle 是 binary 路径（偏移 0，截不掉），但偏移靠后的 needle 会越过 79 列
- * → 匹配恒 false → 该停的进程跳过 SIGKILL 却仍删掉 pid 文件，残留进程再无记录可查。
- * 新增调用方时别把 `-ww` 去掉。
+ * needle 是 binary 路径（偏移 0，截不掉），但命令行其余部分越过 79 列就会被截断，
+ * `-ww` 不能去掉。
  */
-export function isProcessCommandMatching(pid: number, needle: string): boolean {
+function isProcessCommandMatching(pid: number, needle: string): boolean {
   if (!pid) return false;
   try {
     const result = spawnSync('ps', ['-ww', '-p', String(pid), '-o', 'command='], { encoding: 'utf8', timeout: PS_TIMEOUT_MS });

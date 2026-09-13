@@ -18,7 +18,6 @@
 - 🩺 **体检诊断** - `mihomo doctor` 一键检查内核/服务/端口/订阅/配置/连通性/CLI 版本并给修复指引
 - 🔌 **端口逃生口** - 默认 7890/9090 可经 `settings.json` 的 `ports` 覆盖，与其他代理工具并存
 - 🔌 **连通性探测** - 启动与状态展示独立确认「代理真的通」，不通时归因到订阅过期/流量用尽/节点失效
-- ⌨️ **Shell 补全** - `mihomo completion zsh|bash|fish` 生成补全脚本，可一键安装与卸载
 - 🔎 **查看生效配置** - `mihomo config [--json]` 展示由订阅与覆写推导出的运行配置，停止状态下同样可用
 - 📝 **日志管理** - 每次启动归档上一次日志，保留 7 天，支持列表/跟随/编号查看
 - 🎨 **Web UI** - 一键打开 Web 控制面板 (zash/metacubexd/yacd)
@@ -153,9 +152,6 @@ mihomo ui yacd     # YACD
 | `mihomo dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `data`, `runtime`, `kernel`）  |
 | `mihomo reset [目标...] [--full] [-y]` | 重置用户数据（可用目标：`subs`, `logs`, `data`, `runtime`, `settings`, `kernel`, `overwrites`, `service`；`--full` 删全部，`-y` 跳过确认） |
 | `mihomo doctor`                   | 体检诊断（内核/服务/端口/订阅/配置/连通性/CLI 版本，有异常退出码 1） |
-| `mihomo completion install <shell>` | 安装 shell 补全到默认位置（`zsh`/`bash`/`fish`）                |
-| `mihomo completion uninstall <shell>` | 移除已安装的补全（bash 只剥掉自己那段，保留你自己的内容）        |
-| `mihomo completion <shell>`       | 输出 shell 补全脚本（重定向或 eval 使用）                           |
 | `mihomo version`                  | 显示版本信息                                                        |
 | `mihomo help`                     | 显示帮助信息                                                        |
 
@@ -179,30 +175,6 @@ mihomo ui yacd     # YACD
 | `mihomo tun`           | `mihomo start tun`         |
 | `mihomo use <name>`    | `mihomo subscription use <name>` |
 | `mihomo restart`       | `mihomo start`（start 本身即重启） |
-
-## Shell 补全
-
-```bash
-# 一键安装到对应 shell 的默认补全位置（推荐）
-mihomo completion install zsh     # → ~/.zsh/completions/_mihomo
-mihomo completion install bash    # → 追加到 ~/.bash_completion（幂等，不覆盖已有内容）
-mihomo completion install fish    # → ~/.config/fish/completions/mihomo.fish
-
-# 或临时启用（不落盘）
-eval "$(mihomo completion zsh)"   # bash 同理
-mihomo completion fish | source
-
-# 卸载
-mihomo completion uninstall zsh   # bash 只剥掉自己那段，保留 ~/.bash_completion 中你自己的内容
-```
-
-> zsh/fish 的目标文件名由本工具独占，但**安装前会先确认那是不是自己生成的**：目标已存在且不像本工具的产物时报错退出、不覆盖（你手写或第三方分发的同名补全不会被销毁）。
-> 确认无用后手动 `rm` 再装，或用 `mihomo completion <shell> > <自选路径>` 输出到别处。
-
-> zsh 的 `~/.zsh/completions` 不在默认 `fpath` 里（oh-my-zsh 默认已包含）：
-> 补全不生效时在 `~/.zshrc` 加一行 `fpath=(~/.zsh/completions $fpath)`，重新打开终端。
-
-覆盖全部命令、订阅/覆写/目录子命令与常用选项（`logs` 的 `-f`/`-n`、`kernel` 的 `--mirror` 等）。
 
 ## 模式说明
 
@@ -248,17 +220,13 @@ mihomo status          # 查看状态
 
 > `uninstall` 只卸服务，订阅/内核/日志仍留在数据目录（重装后可继续用）。要彻底移除 mihomo-cli：`mihomo reset --full` 删全部数据，再 `npm uninstall -g mihomo-cli`——`uninstall` 结束时也会提示这两步。
 >
-> **顺序别反**：先 `npm uninstall -g` 的话，LaunchAgent plist 与已装的 shell 补全会留下来，而能清理它们的命令已经没了（plist 带 `KeepAlive`，仍会尝试拉起一个不存在的内核）。真反了也能救，手动执行：
+> **顺序别反**：先 `npm uninstall -g` 的话，LaunchAgent plist 会留下来，而能清理它的命令已经没了（plist 带 `KeepAlive`，仍会尝试拉起一个不存在的内核）。真反了也能救，手动执行：
 >
 > ```bash
 > launchctl bootout gui/$(id -u)/com.mihomo-cli.daemon 2>/dev/null
 > rm -f ~/Library/LaunchAgents/com.mihomo-cli.daemon.plist
 > rm -rf ~/.mihomo-cli                     # 数据目录
-> rm -f ~/.zsh/completions/_mihomo ~/.config/fish/completions/mihomo.fish
-> # bash 用户另需手动编辑 ~/.bash_completion，删掉 mihomo-cli 标记之间那段
 > ```
->
-> 装过补全的话，卸载前也可先 `mihomo completion uninstall <shell>`。
 
 - **`KeepAlive`** — 内核崩溃或被杀后由 launchd 自动拉起（约 10 秒节流后重启）
 - **`RunAtLoad`** — 登录后自动启动

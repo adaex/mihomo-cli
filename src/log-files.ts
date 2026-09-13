@@ -13,6 +13,9 @@ import { formatLocalTimestamp } from './utils.js';
 
 const DEFAULT_LOG_RETENTION_DAYS = 7;
 
+/** readLogTail 取末尾的最大行数 */
+const LOG_TAIL_LINES = 15;
+
 /**
  * 归档日志文件名的**唯一判据**：`mihomo.<yyyy-MM-dd_HH-mm-ss>[.<序号>].log`。
  *
@@ -34,7 +37,7 @@ export function isArchiveLogFilename(filename: string): boolean {
 
 export function rotateAndCleanupLogs(): void {
   rotateLog();
-  cleanupOldLogs(DEFAULT_LOG_RETENTION_DAYS);
+  cleanupOldLogs();
 }
 
 export function getLogPath(): string {
@@ -48,7 +51,7 @@ export function getLogPath(): string {
  * 服务路径此前什么都不给，只报一句「已启动」——见 waitServiceHealthy）。
  * 只读尾部 64KB：崩溃循环下日志可能很大，全量读入没有必要。
  */
-export function readLogTail(maxLines = 15): string[] {
+export function readLogTail(): string[] {
   const TAIL_BYTES = 64 * 1024;
   let fd: number | null = null;
   try {
@@ -64,7 +67,7 @@ export function readLogTail(maxLines = 15): string[] {
       .split('\n')
       .map(l => l.trimEnd())
       .filter(l => l.length > 0)
-      .slice(-maxLines);
+      .slice(-LOG_TAIL_LINES);
   } catch {
     // 日志不存在/不可读都不是要报的错——调用方本就在报另一个失败
     return [];
@@ -161,13 +164,13 @@ function rotateLog(): string | null {
   return rotatedPath;
 }
 
-export function cleanupOldLogs(maxAgeDays = DEFAULT_LOG_RETENTION_DAYS): { deleted: number; errors: number } {
+export function cleanupOldLogs(): { deleted: number; errors: number } {
   const logsDir = DIRS.logs;
   if (!fs.existsSync(logsDir)) return { deleted: 0, errors: 0 };
 
   const files = fs.readdirSync(logsDir);
   const now = Date.now();
-  const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+  const maxAgeMs = DEFAULT_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
   let deleted = 0;
   let errors = 0;

@@ -99,7 +99,7 @@ export async function cmdStart(args: string[]): Promise<void> {
     });
   }
 
-  const sub = subscription.requireActiveSubscription('没有订阅，请先添加订阅');
+  const sub = subscription.requireActiveSubscription();
 
   if (!skipUpdate) {
     await subscription.autoUpdateStaleSubscription({ timeout: updateTimeout });

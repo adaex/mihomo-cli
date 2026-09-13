@@ -110,9 +110,7 @@ function getArch(): string {
 
 export function findMatchingAsset(assets: GitHubAsset[], platform: string, arch: string): GitHubAsset | null {
   const prefix = `mihomo-${platform}-${arch}`;
-  const matchingAssets = assets.filter(
-    a => (a.name.startsWith(prefix) && a.name.endsWith('.gz')) || (a.name.startsWith(`${prefix}-`) && a.name.endsWith('.gz')),
-  );
+  const matchingAssets = assets.filter(a => a.name.startsWith(prefix) && a.name.endsWith('.gz'));
 
   if (matchingAssets.length === 0) return null;
   if (matchingAssets.length === 1) return matchingAssets[0];
@@ -308,64 +306,6 @@ export async function checkUpdate(proxyPort?: number | null): Promise<KernelUpda
 }
 
 /**
- * 在解压目录里找内核二进制。
- *
- * 用 `lstatSync` 而非 `statSync`：后者**跟随符号链接**。归档里一个名为 `mihomo`、
- * linkname 指向 `/任意/路径` 的 symlink 成员，条目名合法（不含 `..`、非绝对路径）
- * 故能通过解压前的路径穿越守卫，随后被当成二进制返回，最终 `chmodSync(target, 0o755)`
- * 沿链接作用到受害文件——实测把 `chmod 600` 的文件改成了 755。
- * 用 lstat 后 symlink 既不会被当目录递归，也不会被当二进制返回。
- */
-function findBinaryInDir(dir: string, maxDepth = 4): string | null {
-  if (maxDepth <= 0) return null;
-  const files = fs.readdirSync(dir);
-
-  for (const f of files) {
-    const fullPath = path.join(dir, f);
-    const stat = fs.lstatSync(fullPath);
-
-    if (stat.isDirectory()) {
-      const found = findBinaryInDir(fullPath, maxDepth - 1);
-      if (found) return found;
-      continue;
-    }
-
-    // 只认普通文件：symlink / fifo / socket 等一律跳过
-    if (!stat.isFile()) continue;
-
-    if (f === 'mihomo') return fullPath;
-    if (f.includes('mihomo') && !f.endsWith('.gz')) return fullPath;
-  }
-
-  return null;
-}
-
-/**
- * 解压后总量上限：镜像通道的压缩包只卡了下载字节数（--max-filesize 与 asset.size），
- * 高压缩比 tar 可在等长压缩体积下膨胀上千倍撑满磁盘。mihomo 二进制约数十 MB，
- * 512MB 留足余量。.gz 单文件路径另有 gzip maxBuffer 256MB 兜底
- */
-export const MAX_EXTRACTED_BYTES = 512 * 1024 * 1024;
-
-/**
- * 解析 `tar -tv` 单行列出的条目字节数。两种 tar 布局都认：
- * - bsdtar（macOS 自带，产品平台）：`perms links owner group size date ... name`
- *   `-rwxr-xr-x  0 501  20  34567890 Jan  1  2024 mihomo`
- * - GNU tar（CI/ Linux 排障）：`perms owner/group size date time name`
- *   `-rwxr-xr-x root/root 34567890 2024-01-01 00:00 mihomo`
- * 判据是第二列是否含 `/`（GNU 的属主/组合并列）；无法解析返回 null（条目行由本地
- * tar 生成，大小列稳定存在，null 仅在布局漂移时发生，调用方跳过不计数）。
- */
-export function parseTarEntrySize(line: string): number | null {
-  const tokens = line.trim().split(/\s+/);
-  if (tokens.length < 5) return null;
-  const sizeToken = tokens[1].includes('/') ? tokens[2] : tokens[4];
-  if (!/^\d+$/.test(sizeToken)) return null;
-  const size = Number(sizeToken);
-  return Number.isSafeInteger(size) ? size : null;
-}
-
-/**
  * 构造内核下载的 curl 参数。纯函数：`--proto '=https'` 全链路强制 https 是安全防线
  * （curl -L 默认跟随协议降级重定向），参数数组值得单测锁死，防后续改动误删。
  */
@@ -430,8 +370,8 @@ export async function downloadKernel(
 
   // 下载、解压、自检都在临时目录里完成，自检通过后才原子替换旧内核。
   // 此前先删旧内核再自检，自检失败时系统无内核可用（KeepAlive 崩溃循环）；
-  // 且解压直接在 DIRS.kernel 里进行，findBinaryInDir 能选中旧内核造成假「已更新」。
-  // 临时目录建在 DIRS.kernel 内（同文件系统，rename 原子），findBinaryInDir 只搜它。
+  // 且解压直接在 DIRS.kernel 里进行会选中旧内核造成假「已更新」。
+  // 临时目录建在 DIRS.kernel 内（同文件系统，rename 原子），只含本次下载的产物。
   const tempDir = fs.mkdtempSync(path.join(DIRS.kernel, '.tmp-'));
   // basename 剥离 asset.name 里的任何目录成分：API 响应/镜像若被篡改带 ../ 可写出临时目录外
   const tempPath = path.join(tempDir, path.basename(asset.name));
@@ -523,68 +463,19 @@ export async function downloadKernel(
       progressCallback('解压内核...');
     }
 
-    let extractedBinary: string | null = null;
-
-    if (tempPath.endsWith('.tar.gz') || tempPath.endsWith('.tgz')) {
-      // 两道守卫，各用一种列表格式（刻意分开：-tv 的条目名在含空格的文件名下无法可靠切出，
-      // 而 -t 又不带类型信息，硬从 -tv 里解析名字会误判）：
-      //
-      // 1) -tzf 给出干净的条目名（一行一个，无附加列）→ 查路径穿越
-      const listResult = spawnSync('tar', ['-tzf', tempPath], { encoding: 'utf8', timeout: 60_000 });
-      if (listResult.error) throw listResult.error;
-      if (listResult.status !== 0) throw new Error(`tar 列表退出码 ${listResult.status}`);
-      for (const entry of (listResult.stdout || '').split('\n').filter(Boolean)) {
-        if (entry.startsWith('/') || entry.split('/').includes('..')) {
-          throw new Error(`归档含非法路径条目: ${entry}`);
-        }
-      }
-
-      // 2) -tvzf 的首列权限串首字符给出条目类型 → 拒绝符号/硬链接成员，
-      // 同时汇总解压后总字节数（tar 炸弹护栏，见 parseTarEntrySize）。
-      // 名为 mihomo、linkname 指向任意路径的 symlink 条目名完全合法，能通过上面的路径检查，
-      // 后续却会让 chmod 755 沿链接作用到受害文件（findBinaryInDir 的 lstat 是第二道防线）
-      const typeResult = spawnSync('tar', ['-tvzf', tempPath], { encoding: 'utf8', timeout: 60_000 });
-      if (typeResult.error) throw typeResult.error;
-      if (typeResult.status !== 0) throw new Error(`tar 列表退出码 ${typeResult.status}`);
-      let extractedBytes = 0;
-      for (const line of (typeResult.stdout || '').split('\n').filter(Boolean)) {
-        const typeChar = line[0];
-        // - 普通文件、d 目录；l 符号链接、h 硬链接及其余特殊类型一律拒绝
-        if (typeChar !== '-' && typeChar !== 'd') {
-          throw new Error(`归档含非普通文件条目（类型 "${typeChar}"）: ${line}`);
-        }
-        const entrySize = parseTarEntrySize(line);
-        if (entrySize !== null) extractedBytes += entrySize;
-      }
-      if (extractedBytes > MAX_EXTRACTED_BYTES) {
-        throw new Error(
-          `归档解压后总量 ${(extractedBytes / 1024 / 1024).toFixed(1)}MB 超过 ${MAX_EXTRACTED_BYTES / 1024 / 1024}MB 上限，疑似压缩炸弹，已拒绝解压`,
-        );
-      }
-
-      // --no-same-owner: 即便前面漏判也不让归档改变属主
-      const tarResult = spawnSync('tar', ['--no-same-owner', '-xzf', tempPath, '-C', tempDir], {
-        stdio: ['ignore', 'ignore', 'inherit'],
-        timeout: 60_000,
-      });
-      if (tarResult.error) throw tarResult.error;
-      if (tarResult.status !== 0) throw new Error(`tar 退出码 ${tarResult.status}`);
-    } else if (tempPath.endsWith('.gz')) {
-      const baseName = path.basename(tempPath, '.gz');
-      const outputPath = path.join(tempDir, baseName);
-      // gzip -dc 输出到 stdout，捕获为 buffer 后写文件，避免 shell 重定向（注入风险）
-      const gzipResult = spawnSync('gzip', ['-dc', tempPath], { maxBuffer: 256 * 1024 * 1024, timeout: 60_000 });
-      if (gzipResult.error) throw gzipResult.error;
-      if (gzipResult.status !== 0) throw new Error(`gzip 退出码 ${gzipResult.status}`);
-      fs.writeFileSync(outputPath, gzipResult.stdout, { mode: 0o755 });
-      extractedBinary = outputPath;
+    // 上游 darwin 资产统一是单文件 gzip（mihomo-darwin-<arch>-vX.Y.Z.gz，findMatchingAsset
+    // 已按此前缀与 .gz 后缀过滤），直接 gzip 解压；出现其他形态说明上游打包方式变了，
+    // 报错而不是猜解压方式。
+    if (!tempPath.endsWith('.gz')) {
+      throw new Error(`不支持的内核资产格式: ${asset.name}（期望单文件 .gz）`);
     }
-
-    const foundBinary = extractedBinary || findBinaryInDir(tempDir);
-
-    if (!foundBinary) {
-      throw new Error('解压后未找到可执行文件');
-    }
+    const foundBinary = path.join(tempDir, path.basename(tempPath, '.gz'));
+    // gzip -dc 输出到 stdout，捕获为 buffer 后写文件，避免 shell 重定向（注入风险）；
+    // maxBuffer 256MB 同时是解压后体积上限
+    const gzipResult = spawnSync('gzip', ['-dc', tempPath], { maxBuffer: 256 * 1024 * 1024, timeout: 60_000 });
+    if (gzipResult.error) throw gzipResult.error;
+    if (gzipResult.status !== 0) throw new Error(`gzip 退出码 ${gzipResult.status}`);
+    fs.writeFileSync(foundBinary, gzipResult.stdout, { mode: 0o755 });
 
     // 自检在临时位置进行（旧内核尚未被触碰）：跑一次 -v 确认二进制可执行且未损坏/架构匹配
     // （上游 release 不提供 checksums，无法哈希校验）。通过后才原子替换。

@@ -14,24 +14,17 @@ import { cmdStart } from './start.js';
 export interface SubCommand {
   name: string;
   aliases?: string[];
-  /** 一句话说明，供 shell 补全派生（completion.ts）；缺省补全只给词不给说明 */
-  description?: string;
   handler: (args: string[]) => void | Promise<void>;
 }
-
-/** 已通过重复 token 校验的子命令表（按引用记忆，同一张表只在首次分发时校验一次） */
-const validatedTables = new WeakSet<SubCommand[]>();
 
 /**
  * 子命令表的重复 token 防护，与 registry 的 COMMAND_INDEX 同款判据：
  * 两个子命令撞主名/别名时，分发用的 `table.find` 静默取先注册者，后者永远不可达
- * 且无任何提示。表都是模块级常量，首次分发校验一次即可（等价于构建时一次），
- * 不在每次调用的热路径上重复扫描。
+ * 且无任何提示。表只有 1-4 个条目，每次分发直接扫描即可。
  *
  * 抛普通 Error 而非 CliError：表写错是代码 bug，不是用户输入错误（与 COMMAND_INDEX 一致）。
  */
 function assertUniqueTokens(table: SubCommand[]): void {
-  if (validatedTables.has(table)) return;
   const owner = new Map<string, string>();
   for (const cmd of table) {
     for (const token of [cmd.name, ...(cmd.aliases ?? [])]) {
@@ -42,7 +35,6 @@ function assertUniqueTokens(table: SubCommand[]): void {
       owner.set(token, cmd.name);
     }
   }
-  validatedTables.add(table);
 }
 
 /**

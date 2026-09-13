@@ -22,7 +22,7 @@ import { SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS } from './service.js';
  * 隔离三层：MIHOMO_CLI_DIR 指临时数据目录（锁、epoch、settings 都在里面）；
  * MIHOMO_CLI_DAEMON_LABEL 用一次性 label；热重载场景另把 HOME 指向临时目录
  * （userAgentPlist 随 homedir 走，在数据目录之外，只有改 HOME 才能不碰真实
- * ~/Library/LaunchAgents——completion-install.spec 同法）。真实用到的系统工具只有
+ * ~/Library/LaunchAgents）。真实用到的系统工具只有
  * lsof（找桩 controller 的监听 pid）与 pgrep（隔离目录下匹配不到任何进程）。
  */
 

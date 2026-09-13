@@ -166,11 +166,11 @@ export function getActiveSubscription(): Subscription | null {
   return subs[0];
 }
 
-/** 取当前活跃订阅，无则抛 CliError（emptyMsg 按场景定制：无订阅 vs 有订阅但需指定）。 */
-export function requireActiveSubscription(emptyMsg = '没有订阅，请先添加订阅'): Subscription {
+/** 取当前活跃订阅，无则抛 CliError。 */
+export function requireActiveSubscription(): Subscription {
   const sub = getActiveSubscription();
   if (!sub) {
-    throw new CliError(emptyMsg);
+    throw new CliError('没有订阅，请先添加订阅');
   }
   return sub;
 }

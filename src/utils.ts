@@ -1,5 +1,3 @@
-import os from 'node:os';
-
 import { AVAILABLE_MIRRORS, DEFAULT_AUTO_UPDATE_TIMEOUT, MIRROR_ALIASES, MIRROR_BARE } from './constants.js';
 import { CliError } from './errors.js';
 import { matchValueFlagToken, START_RESTART_FLAGS, VALUE_FLAGS } from './flags.js';
@@ -195,7 +193,7 @@ export function assertKnownFlags(args: string[] | undefined, known: readonly str
     if (match && match.form !== 'exact' && knownSet.has(match.baseForm)) continue;
     // `--mirror` 故意不登记（见 flags.ts），等号形式仅在其自身白名单内放行
     if (a.startsWith('--mirror=') && knownSet.has('--mirror')) continue;
-    // 白名单为空的命令（completion/dir/stop 等不接受任何选项）不打「可用选项: 」——
+    // 白名单为空的命令（dir/stop 等不接受任何选项）不打「可用选项: 」——
     // 那会渲染成空列表，看着像是工具自己没填上。改说「该命令不接受任何选项」。
     // `-h`/`--help` 单独点一句：它俩是顶层 help 的别名、命令级并不接受，用户很自然会试
     const isHelpFlag = a === '-h' || a === '--help';
@@ -329,12 +327,12 @@ export function assertRestartOptionValues(args: string[] | undefined): void {
   parseIntArg(args, '-u', '--update-timeout', DEFAULT_AUTO_UPDATE_TIMEOUT);
 }
 
-export function getNonFlagArg(args: string[] | undefined, startIdx: number, valueFlags: ReadonlySet<string> = VALUE_FLAGS): string | null {
+export function getNonFlagArg(args: string[] | undefined, startIdx: number): string | null {
   if (!args) return null;
   for (let i = startIdx; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith('-')) {
-      if (valueFlags.has(a)) i++; // 跳过该带值选项的值
+      if (VALUE_FLAGS.has(a)) i++; // 跳过该带值选项的值
       continue;
     }
     return a;
@@ -390,28 +388,6 @@ export function suggestSimilar(input: string, candidates: readonly string[]): st
  * 该产物随后以 root 运行，不能走明文），还会把 `ftp://e.test` 拼成
  * `https://ftp://e.test/` 这种畸形串。裸主机名（`gh.example.com`）补 https。
  */
-/**
- * 本机是否有全局 IPv6 地址（非 loopback / link-local / 唯一本地）。
- * 只看网卡地址、不做网络探测：有 v6 地址不保证 v6 路由通，但作为镜像选择
- * 启发式足够——下载失败有错误提示与其他通道兜底。
- */
-function hasGlobalIpv6(): boolean {
-  for (const addrs of Object.values(os.networkInterfaces())) {
-    for (const addr of addrs ?? []) {
-      if (addr.family !== 'IPv6' || addr.internal) continue;
-      // fe80::/10 link-local、fc00::/7 唯一本地地址不算「有 IPv6」
-      if (/^(fe80|f[c-d])/i.test(addr.address)) continue;
-      return true;
-    }
-  }
-  return false;
-}
-
-/** 裸 --mirror 的默认镜像：有全局 IPv6 走 v6 子域，否则走裸域 */
-export function getDefaultMirror(): string {
-  return hasGlobalIpv6() ? MIRROR_ALIASES.v6 : MIRROR_BARE;
-}
-
 function normalizeMirrorUrl(val: string): string | null {
   if (!val) return null;
   if (val === 'direct') return null;
@@ -449,8 +425,8 @@ function normalizeMirrorUrl(val: string): string | null {
  * `chmod 755` 并在 TUN / 系统级服务下以 root 运行——上游不提供 checksums，
  * 把来源钉死（assertTrustedAssetUrl）是主要防线，不能让镜像自己指定下载地址。
  *
- * 镜像选择**不持久化**：每次调用按当前环境独立决策（gh/代理是否可用、网络是否有
- * IPv6），记住偏好反而会在换环境后用到错误的镜像。
+ * 镜像选择**不持久化**：每次调用按当前环境独立决策（gh/代理是否可用），
+ * 记住偏好反而会在换环境后用到错误的镜像。
  */
 export function parseMirrorArg(args: string[] | undefined): MirrorArg {
   if (!args || args.length < 2) {
@@ -478,8 +454,8 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
     const inline = mirrorEq?.slice('--mirror='.length);
     const nextArg = inline ?? args[mirrorIdx + 1];
     if (!nextArg || nextArg.startsWith('-')) {
-      // 显式表达「我要用镜像」：按当前网络选默认（有 IPv6 走 v6，否则裸域）
-      return { mirror: getDefaultMirror(), isOverride: true };
+      // 显式表达「我要用镜像」：默认走裸域；需要 v4/v6/cdn 子域时显式写别名
+      return { mirror: MIRROR_BARE, isOverride: true };
     }
     // `--mirror direct`：normalize 返回 null，按强制直连处理
     const normalized = normalizeMirrorUrl(nextArg);

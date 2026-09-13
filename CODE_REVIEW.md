@@ -1,10 +1,21 @@
 # 代码审查：验证结论与边界
 
-当前审查：2026-09-13，v4.13.0（v4.12.0 后的全仓复审，已发布）
+当前审查：2026-09-13，v4.13.0 后的过度设计清理（未发布）
 
-本轮是一次通读式复审。修 1 项安全缺口并补 1 项防漏机制：`allow-lan`/`bind-address`/`authentication`/`skip-auth-prefixes`/`lan-allowed-ips`/`lan-disallowed-ips` 六个上游 `config.Inbound` 字段从未进过锁定表，远端订阅三行 YAML 即可开出全网卡无鉴权代理；同时把「锁定清单靠人肉对表」换成带上游版本号的字段快照测试。单测 700（+11）
+本轮针对「设施规模与真实使用面不匹配」做减法，全部以实测使用面为依据：
 
-## 本轮验证（v4.12.0 后复审）
+| 范围 | 验证方式与结论 |
+| --- | --- |
+| 移除 shell 补全子系统 | 实现 580 行 + 两个 spec 546 行（共占全仓约 6%），服务 20 个命令。实测使用面为零：本机 `~/.zsh/completions`、`~/.bash_completion`、fish 目录均不存在，fish 未安装。更关键的是它**已经坏了且无人发现**——三个 shell 的 flag 词表各手抄一份：fish 整个没有 logs 分支、start 的 `-s`/`-u` 三 shell 全不补、bin 名硬编码 6 处。删除 `commands/completion.ts` 与两个 spec，注册表移除 completion 命令，SubCommand.description 字段（唯一消费者就是补全派生）一并删除，README 删节 |
+| 移除 tar.gz 解压设施 | `findBinaryInDir`、`parseTarEntrySize`（兼 GNU/bsdtar 两种布局）、`--max-filesize` 之外的解压总量守卫与 tar 路径穿越/类型两道列表扫描，约 90 行。经 gh 核实上游 v1.19.30 的全部 darwin 资产都是单文件 `mihomo-darwin-*.gz`、从无 tar 包，平台又门控 darwin，该分支生产不可达；唯一测试只覆盖纯函数、解压分支本身零覆盖。现 `.gz` 是唯一资产形态，其他形态显式报错。`findMatchingAsset` 第二个 OR 子句是第一个的真子集，一并删除 |
+| 移除其余死设施 | ① `dispatchSubcommand` 的 WeakSet 表记忆化：CLI 单进程只分发一条命令，跨进程不持久，生产零命中，改为每次直接扫描（表仅 1-4 项）；② 四个零外部引用的导出私有化（process-probe 两个、process-stop 两个等待常量）；③ 六个无人覆盖的参数收敛为内部常量/删除（openLogFile 的 label、getNonFlagArg 第三参、requireActiveSubscription 的 emptyMsg、readLogTail/cleanupOldLogs/probeProxyConnectivity 的时长参数）；④ 裸 `--mirror` 不给值时不再枚举网卡猜 IPv6，固定走裸域——有 v6 地址不保证 v6 路由通，探测本就是不可靠猜测，需要 v6 子域的用户显式 `--mirror v6` |
+| 既有防线回归 | typecheck / 643 测试 / Biome（`src/` 79 文件）/ build 全绿。测试从 700 降到 643（-57，逐文件实跑基线核准：completion.spec 25、completion-install.spec 21、tar 4、位置参数 completion 用例 5、镜像默认值 2）。日志归档 `wx` 占名、withFileLock 的 deadline 分支等经评估**保留**：前者有双终端同秒轮转覆盖的实测复现，后者是「等待者绝不删新鲜锁」并发不变量的回归锚点 |
+
+---
+
+## 上一轮验证（v4.13.0 入站锁定，已发布）
+
+修 1 项安全缺口并补 1 项防漏机制：`allow-lan`/`bind-address`/`authentication`/`skip-auth-prefixes`/`lan-allowed-ips`/`lan-disallowed-ips` 六个上游 `config.Inbound` 字段从未进过锁定表，远端订阅三行 YAML 即可开出全网卡无鉴权代理；同时把「锁定清单靠人肉对表」换成带上游版本号的字段快照测试。单测 700（+11）
 
 | 范围 | 验证方式与结论 |
 | --- | --- |
@@ -173,7 +184,7 @@ v4.11.0 改的是展示层一处误导：status 的覆写行此前列「目录�
 - root-guard.spec 验证入口在创建数据目录前拒绝 root；用户态 LaunchAgent 无权创建 TUN
 - launchd 的 terminating signal 与 last exit code 两字段互斥；需要 describeExitCause 同时覆盖
 - disabled label 的 bootstrap 硬失败，enable 必须在前；bootstrap 返回 0 不表示内核已健康，TUN 的 kill -0 也不能排除僵尸进程
-- 内核四种下载通道曾各自下载真实产物；kernel.spec 覆盖通道选择、标准资产选择、curl/gh 参数纯函数、tar 列表大小解析（`parseTarEntrySize`）。tar 的路径穿越（-tzf）与类型（-tvzf）两道守卫逻辑内联在 downloadKernel，无直接用例，改动时需补
+- 内核四种下载通道曾各自下载真实产物；kernel.spec 覆盖通道选择、标准资产选择、curl/gh 参数纯函数。资产形态按上游 v1.19.30 实测只有单文件 `.gz`（gzip 解压，maxBuffer 256MB 即体积上限），tar 设施已移除；非 `.gz` 资产显式报错
 - 上游 mihomo v1.19.30 的已查资产未提供 checksums；来源约束、大小比对和执行自检应保留，不能写成已验证哈希
 - HTTP 超时覆盖响应体，错误体读取限量；订阅 URL 按完整 URL 脱敏，不能按合法逗号拆开
 - 归档列表与清理使用相同判据，同秒多次轮转的序号后缀可被列出（log-files.spec）
@@ -196,15 +207,13 @@ v4.11.0 改的是展示层一处误导：status 的覆写行此前列「目录�
 - 停止计数是多写者读-改-写且刻意不加锁：极端交错下可能用较小值覆盖较大值，使某条后续命令偶发判为「变了」而中止。判据是 `!==` 本就偏保守，接受之
 - `cmdStop` 路径 (b) 的「记录必须在 handleStopResult 之后」只由代码位置与注释保证：非 root 下无法让 SIGKILL 失败，测不出来
 - settings/cache 写入有锁，但 reset 的跨文件删除不是事务；未承诺与下载、另一次 reset 并行时整个目录原子切换
-- fish 补全脚本未做语法校验：本机未装 fish。zsh/bash 经 `zsh -n`/`bash -n` 校验过（含注入撇号/反引号/`$(...)` 的恶意描述），改动补全生成逻辑时注意 fish 那份只有生成、没有验证（gating、词表派生与转义规则已由 completion.spec 字符串级断言锁住，语法仍无验证）。本轮的 fish 反斜杠转义修复同样只验证了生成形态，未执行确认
-- 测试只依赖 macOS 自带命令（zsh/bash/launchctl/pgrep/pkill/lsof/gh）与 node 自身。doctor 的计时桩一度用 `python3` 取毫秒（`date` 不支持 `%3N`），是全仓唯一的外部依赖孤例，已改用 `process.execPath -e "Date.now()"`——跑测试的解释器必然在，路径也确定。新增测试桩需要取时间/做计算时照此办理，别再引第二个运行时
-- zsh 补全的 eval 路径已修并真机验证，但**只验了注册（`_comps` 为 1）**，没有驱动一次真实补全交互确认候选词正确——那需要 pty 与 `zpty` 编排，成本高于收益。fpath 路径同理
+- 测试只依赖 macOS 自带命令（bash/launchctl/pgrep/pkill/lsof/gh）与 node 自身（bash 仅作桩脚本的 shebang）。doctor 的计时桩一度用 `python3` 取毫秒（`date` 不支持 `%3N`），是全仓唯一的外部依赖孤例，已改用 `process.execPath -e "Date.now()"`——跑测试的解释器必然在，路径也确定。新增测试桩需要取时间/做计算时照此办理，别再引第二个运行时
 - `config` 命令不做内核校验，故它能输出「形态合法但内核会拒绝」的配置（例如引用了不存在的节点）。这是刻意的分工——校验归 `doctor` 与 `start`，只读展示不该要求装了内核
 - sudo 三处收口（超时 60s、退出码分工、残留清理 CliError）的完整链路只能真机 sudo 验证：慢密码场景、bootout 真实失败的 exit 3 渲染、四个命令下的实际终端输出；包装决策已纯函数化测试
 - `restartService` 的 copy-truncate 路径中 `allocateArchivePath()` 在 best-effort try 之外：同秒已存在 1001 个归档（序号耗尽）时 CliError 会穿出而非被吞。病态场景，接受之；动这段时别顺手「修」进 try——归档名拿不到时轮转整体跳过是更合理的语义
 - TUN 运行中 `sub use`/`ow` 的按原模式重启与更新提示（`start tun`）已修，但真实 TUN 提权流程的端到端（sudo 弹窗、路由切换、恢复）未复测，仅经 runtime.spec 的桩内核路径验证决策
-- 本轮深审其余未修的低危项：`unhandledRejection`/`uncaughtException` 已统一口径但渲染函数本身不可注入测试；补全 install 的「已含标记块幂等跳过」无用例；`NO_COLOR`/stderr 设色经 pty 手工验证、无自动化；clearProxyEnv 对企业 env 代理网络的影响已文档化（CLAUDE）但无提示机制。`npm_config_proxy` 等 npm 专属代理变量未清——npm 读 npmrc 不依赖该 env、gh/curl 不识别，不构成下载死锁，保持现状
-- 4.9.0 复审记录但未修（判定接受或不可自动化）：`FORCE_COLOR` 不支持、`TERM=dumb` 仍出色；无 `--` 结束选项约定（当前无需要它的入口，订阅名已禁止 `-` 开头）；tar 穿越/类型两道守卫仍内联无直接测试；gh 资产名未拦前导 `-`（仅 GitHub API 被篡改时可达）；代理探测 curl 未加 `--proto =https`（只看 204 无机密）；findBinaryInDir 同目录多匹配时不保证精确名优先（有 -v + 版本对账两道门）
+- 本轮深审其余未修的低危项：`unhandledRejection`/`uncaughtException` 已统一口径但渲染函数本身不可注入测试；`NO_COLOR`/stderr 设色经 pty 手工验证、无自动化；clearProxyEnv 对企业 env 代理网络的影响已文档化（CLAUDE）但无提示机制。`npm_config_proxy` 等 npm 专属代理变量未清——npm 读 npmrc 不依赖该 env、gh/curl 不识别，不构成下载死锁，保持现状
+- 4.9.0 复审记录但未修（判定接受或不可自动化）：`FORCE_COLOR` 不支持、`TERM=dumb` 仍出色；无 `--` 结束选项约定（当前无需要它的入口，订阅名已禁止 `-` 开头）；gh 资产名未拦前导 `-`（仅 GitHub API 被篡改时可达）；代理探测 curl 未加 `--proto =https`（只看 204 无机密）
 
 ## 已评估未采纳
 
@@ -248,4 +257,6 @@ v4.12.0 的教训是**「待定」不是中间状态，在实现上等于放行*
 
 **同一轮还有一处「五轮漏键」的新形态**：`allow-lan`/`bind-address` 早在 v4.9.2 就被写进注释和测试名（「别拿 allow-lan 当兜底」），却从没人问过「那它自己锁了吗」。**被写进防线说明里的键，看起来就像已经被防线覆盖了**——这与上一轮「待定标签让人以为处理过」是同构的错觉，只是载体从归档结论换成了注释。核对锁定表时，注释里出现过的键名不能当作已覆盖的证据，唯一证据是它在不在 `LOCKED_CONFIG_KEYS` 里
 
-**隔离不是只隔离 `MIHOMO_CLI_DIR`。** v4.12.0 复审时为了测重复标记块，直接跑了一句 `completion install bash`，只设了数据目录变量——而补全的落盘位置取自 `os.homedir()`，于是真写进了开发机的 `~/.bash_completion`（当时该文件不存在，是 install 新建的；块外无用户内容，用 `uninstall` 原样复原）。CLAUDE 里「进程匹配需绑定临时 `MIHOMO_CLI_DIR`；涉及服务查询还需隔离 `MIHOMO_CLI_DAEMON_LABEL`」这条，对补全路径还要再加一项 **`HOME`**：凡是落盘位置经 `os.homedir()` 推导的命令（`completion install/uninstall`、LaunchAgent plist），临时目录变量一个都挡不住。`completion-install.spec.ts` 本就用临时 HOME，手工验证时却没照做——**测试里做对了的隔离，手工命令同样要做**
+**删测试时数用例不能 grep 源码，要跑删除前的基线。** 本轮核对「700 删了多少条」时，静态数 `it(` 模板得到 completion.spec 21、completion-install.spec 21，加上 tar 4、位置参数 5，算出来的总数对不上实跑的 643——前者的用例在 `for (const shell of …)` 循环里展开，21 个模板运行时是 25 条（子代理报的 26 同样是数出来的错数）。最终用临时 worktree  checkout 基线逐个 spec 跑 `ℹ tests` 才核准 -57 的拆账（另含被静态盘点整体漏掉的 utils.spec 镜像用例 2 条）。与发布流程核对测试数同一条纪律：计数只认真实运行结果。
+
+**隔离不是只隔离 `MIHOMO_CLI_DIR`。** 落盘位置经 `os.homedir()` 推导的东西（LaunchAgent plist 在 `~/Library/LaunchAgents`），数据目录变量挡不住，还需把 **`HOME`** 指向临时目录——service-concurrency.spec 的热重载场景就是三层隔离（`MIHOMO_CLI_DIR` + 一次性 label + 临时 HOME）。手工验证涉及 plist 的路径时同样要做，别只设数据目录变量

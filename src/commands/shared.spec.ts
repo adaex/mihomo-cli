@@ -39,7 +39,7 @@ beforeEach(() => {
 /**
  * 子命令表的重复 token 防护：registry 的 COMMAND_INDEX 在构建时对重复 token 抛错，
  * 但 dispatchSubcommand 用 `table.find`，两个子命令撞主名/别名时会静默取先注册者，
- * 后者永远不可达且无提示。入口处补同款检查（表按引用记忆，每张表只校验一次）。
+ * 后者永远不可达且无提示。入口处补同款检查（表只有 1-4 个条目，每次分发直接扫描）。
  */
 describe('dispatchSubcommand：子命令表重复 token 防护', () => {
   it('两个子命令的主名相同时抛错，不静默取先注册者', async () => {
@@ -96,7 +96,7 @@ describe('dispatchSubcommand：合法表的分发协议不受影响', () => {
     );
   });
 
-  it('同一张表重复分发不重复校验（记忆化，分发结果不受影响）', async () => {
+  it('同一张表重复分发结果稳定', async () => {
     await dispatchSubcommand(['x', 'on'], TABLE, OPTIONS);
     await dispatchSubcommand(['x', 'off'], TABLE, OPTIONS);
     assert.deepEqual(called, ['on', 'off']);

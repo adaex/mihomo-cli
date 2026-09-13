@@ -45,7 +45,6 @@ npm run build
 - 修完必做反向验证：把修复还原，确认对应用例真的转红。**预测「理应会红」不能代替实跑**——v4.13.0 预测「allow-lan 塞回 BASE_CONFIG 会红」，实测全绿，暴露出那是一处谁都不报错的死配置（锁定项的恒定值由 systemConfig 写入，BASE_CONFIG 那份根本不参与）。预测落空处往往正是认知与实现的偏差点，比预测对更值钱；发现后补不变量用例挡在结构层，别只改当前这一处
 - 能隔离的进程路径用真实系统工具验证；真实 sudo/TUN 与会永久污染 launchd disabled 表的测试不自动执行，理由见 CODE_REVIEW
 - 测试隔离前提必须有断言：进程匹配需绑定临时 `MIHOMO_CLI_DIR`；涉及 reset/服务查询时还需隔离 `MIHOMO_CLI_DAEMON_LABEL`，LaunchAgent plist 位于数据目录之外
-- 补全的落盘位置取自 `os.homedir()`，`MIHOMO_CLI_DIR` 挡不住：跑 `completion install/uninstall`（自动化或手工）一律另设临时 `HOME`，否则会写进开发机真实的 `~/.zsh/completions`、`~/.bash_completion`
 - 删除或更名导出后，搜索整个仓库，包括测试里的内嵌脚本与工作流示例；类型检查看不到字符串中的 import，也不检查 Markdown 示例
 
 ## 产品边界
@@ -67,7 +66,6 @@ npm run build
 - `--mirror` 值可选，由 `parseMirrorArg` 单独解析；布尔开关不接受 `=value` 或附加字符
 - `dispatchSubcommand` 必须 await/返回 Promise，无子命令走 fallback，未知子命令走必填的 onUnknown
 - `config` 命令重新推导而非读 runtime/config.yaml（停止时那个文件会被删掉），走 `buildConfig` 不走带内核校验的 `prepareConfigForStart`；展示前脱敏 secret
-- 补全卸载是安装的逆操作：bash 共享文件只剥标记块，zsh/fish 独占文件名但删前必须确认是本工具产物；三个 shell 的 `install`/`uninstall` 词表要同步
 
 ## 错误与操作结果
 

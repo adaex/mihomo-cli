@@ -9,7 +9,6 @@ import {
   assertPositionalCount,
   displayWidth,
   formatRelativeTime,
-  getDefaultMirror,
   padEndDisplay,
   parseIntArg,
   parseMirrorArg,
@@ -136,8 +135,10 @@ describe('parseMirrorArg', () => {
   });
 
   it('--mirror 仍正常工作（仅作用于产物下载），不持久化偏好', () => {
-    // 裸 --mirror 的默认镜像按当前网络选择（有 IPv6 走 v6，否则裸域），与 getDefaultMirror 对齐
-    assert.equal(parseMirrorArg(['kernel', '--mirror']).mirror, getDefaultMirror());
+    // 裸 --mirror 固定走裸域；返回的主机名必须在展示清单内
+    const bare = parseMirrorArg(['kernel', '--mirror']).mirror;
+    assert.equal(bare, MIRROR_BARE);
+    assert.ok(AVAILABLE_MIRRORS.includes(new URL(bare).hostname));
     assert.equal(parseMirrorArg(['kernel', '--mirror', 'gh.example.com']).mirror, 'https://gh.example.com/');
     assert.equal(parseMirrorArg(['kernel', '--mirror=gh.example.com']).mirror, 'https://gh.example.com/');
   });
@@ -188,22 +189,6 @@ describe('parseMirrorArg', () => {
 
   it('无镜像选项时不覆盖', () => {
     assert.deepEqual(parseMirrorArg(['kernel']), { mirror: null, isOverride: false });
-  });
-});
-
-describe('getDefaultMirror', () => {
-  it('按本机 IPv6 情况返回 v6 子域或裸域', () => {
-    assert.ok([MIRROR_ALIASES.v6, MIRROR_BARE].includes(getDefaultMirror()));
-  });
-
-  it('返回值恒在展示清单内（默认镜像不能是清单里没有的地址）', () => {
-    // 三处镜像清单曾各自维护（展示清单手写域名、别名表手写地址、getDefaultMirror
-    // 硬编码裸域），增删镜像要改三处且无兜底。现在都从 MIRROR_HOST/MIRROR_ALIASES 派生，
-    // 这条断言锁住派生关系：默认镜像必须是用户在帮助里看得到的那几个之一
-    assert.ok(
-      AVAILABLE_MIRRORS.includes(new URL(getDefaultMirror()).hostname),
-      `默认镜像 ${getDefaultMirror()} 不在展示清单 ${AVAILABLE_MIRRORS.join(', ')} 内`,
-    );
   });
 });
 

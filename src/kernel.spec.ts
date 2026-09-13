@@ -6,9 +6,7 @@ import {
   buildKernelCurlArgs,
   buildReleaseApiCurlArgs,
   findMatchingAsset,
-  MAX_EXTRACTED_BYTES,
   parseCurlStatusOutput,
-  parseTarEntrySize,
   pickLatestRelease,
   resolveDownloadChannel,
   translateReleaseApiCurlError,
@@ -161,39 +159,6 @@ describe('buildKernelCurlArgs', () => {
     const i = args.indexOf('-o');
     assert.equal(args[i + 1], '/tmp/x.gz');
     assert.equal(args[args.length - 1], common.url);
-  });
-});
-
-describe('parseTarEntrySize（tar -tv 列表的解压总量护栏）', () => {
-  // bsdtar（macOS 自带）：perms links owner group size date ...
-  const bsdtarLine = '-rwxr-xr-x  0 501    20  34567890 Jan  1  2024 mihomo';
-  // GNU tar：perms owner/group size date time name
-  const gnuLine = '-rwxr-xr-x root/root       34567890 2024-01-01 00:00 mihomo';
-
-  it('bsdtar 与 GNU 两种布局都解析出第 5/3 列大小', () => {
-    assert.equal(parseTarEntrySize(bsdtarLine), 34567890);
-    assert.equal(parseTarEntrySize(gnuLine), 34567890);
-  });
-
-  it('目录行按 0 计，不把日期列误当大小', () => {
-    assert.equal(parseTarEntrySize('drwxr-xr-x  0 501    20         0 Jan  1  2024 mihomo'), 0);
-    assert.equal(parseTarEntrySize('drwxr-xr-x root/root            0 2024-01-01 00:00 dir'), 0);
-  });
-
-  it('汇总超过 MAX_EXTRACTED_BYTES 可被调用方检出（压缩炸弹场景）', () => {
-    // 行为断言放在纯累加层：每条 300MB、两条即超 512MB 上限
-    const total = [
-      parseTarEntrySize(bsdtarLine.replace('34567890', String(300 * 1024 * 1024))),
-      parseTarEntrySize(bsdtarLine.replace('34567890', String(300 * 1024 * 1024))),
-    ]
-      .filter((n): n is number => n !== null)
-      .reduce((a, b) => a + b, 0);
-    assert.ok(total > MAX_EXTRACTED_BYTES);
-  });
-
-  it('无法解析的行返回 null 而非 NaN', () => {
-    assert.equal(parseTarEntrySize(''), null);
-    assert.equal(parseTarEntrySize('garbage line'), null);
   });
 });
 

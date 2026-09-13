@@ -25,9 +25,8 @@ export function openUrl(url: string): void {
   }
 }
 
-export function openLogFile(logPath: string, label?: string): void {
-  const displayLabel = label || logPath;
-  console.log(`用系统默认程序打开: ${displayLabel}`);
+export function openLogFile(logPath: string): void {
+  console.log(`用系统默认程序打开: ${logPath}`);
   openUrl(logPath);
 }
 

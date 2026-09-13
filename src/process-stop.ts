@@ -20,8 +20,8 @@ import { sleep } from './utils.js';
  * 慢速网络下另一进程会等到强夺陈旧锁，等于没锁。）
  */
 
-export const PROCESS_WAIT_ATTEMPTS = 50;
-export const PROCESS_WAIT_INTERVAL = 100;
+const PROCESS_WAIT_ATTEMPTS = 50;
+const PROCESS_WAIT_INTERVAL = 100;
 
 const BATCH_KILL_THRESHOLD = 3;
 

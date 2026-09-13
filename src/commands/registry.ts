@@ -1,4 +1,3 @@
-import { cmdCompletion } from './completion.js';
 import { cmdConfig } from './config.js';
 import { cmdDirectory } from './directory.js';
 import { cmdDoctor } from './doctor.js';
@@ -192,17 +191,6 @@ export const COMMANDS: Command[] = [
     handler: cmdDoctor,
     group: 'system',
     usage: [{ signature: 'doctor', description: '体检诊断（内核/服务/端口/订阅/配置/连通性/CLI 版本，有异常退出码 1）' }],
-  },
-  {
-    name: 'completion',
-    aliases: [],
-    handler: args => cmdCompletion(args, COMMANDS),
-    group: 'system',
-    usage: [
-      { signature: 'completion install <zsh|bash|fish>', description: '安装补全到对应 shell 的默认位置' },
-      { signature: 'completion uninstall <zsh|bash|fish>', description: '移除已安装的补全' },
-      { signature: 'completion <zsh|bash|fish>', description: '输出补全脚本（重定向或 eval 使用）' },
-    ],
   },
   // === meta(不在分组清单展示,help 末尾单列) ===
   {

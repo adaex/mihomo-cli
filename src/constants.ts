@@ -26,11 +26,10 @@ export const MIN_NODE_VERSION: string | null = (() => {
  * 镜像的**单一真相源**：短别名 → 完整地址。`--mirror <别名>` 经 `MIRROR_ALIASES` 展开，
  * 帮助文案里的「可用镜像」由 `AVAILABLE_MIRRORS` 从本表派生。
  *
- * 此前是三份各自维护的清单（`AVAILABLE_MIRRORS` 手写域名、`MIRROR_ALIASES` 手写别名、
- * `getDefaultMirror` 里硬编码裸域），增删镜像要改三处且无机制兜底：漏改
- * `AVAILABLE_MIRRORS` 只是帮助文案过期，漏改 `MIRROR_ALIASES` 则是别名直接不认。
+ * 展示清单 `AVAILABLE_MIRRORS` 也从本表派生，增删镜像只需改这里：
+ * 漏改别名表是别名直接不认，漏改展示清单至多是帮助文案过期。
  *
- * `bare` 是不带子域的裸域，供无 IPv6 时的默认选择（见 utils.ts 的 getDefaultMirror）；
+ * `bare` 是不带子域的裸域，是裸 `--mirror`（不给值）时的默认选择；
  * 它不作为短别名（用户写 `--mirror gh-proxy.org` 走裸主机名补 https 的通路即可）。
  */
 export const MIRROR_HOST = 'gh-proxy.org';
@@ -43,12 +42,12 @@ export const MIRROR_ALIASES: Record<string, string> = {
   axisnow: `https://axisnow.${MIRROR_HOST}/`,
 };
 
-/** 裸域镜像（无子域）：无全局 IPv6 时的默认选择 */
+/** 裸域镜像（无子域）：裸 `--mirror` 不给值时的默认选择 */
 export const MIRROR_BARE = `https://${MIRROR_HOST}/`;
 
 /**
  * 可用镜像的展示清单（帮助/错误提示用），从 MIRROR_ALIASES 派生。
- * 裸域排最前，与 getDefaultMirror 的回退顺序一致。
+ * 裸域排最前，与裸 `--mirror` 的默认选择一致。
  */
 export const AVAILABLE_MIRRORS: string[] = [MIRROR_HOST, ...Object.values(MIRROR_ALIASES).map(url => new URL(url).hostname)];
 
