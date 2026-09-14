@@ -12,6 +12,7 @@ import {
   padEndDisplay,
   parseIntArg,
   parseMirrorArg,
+  proxyEnvPointsAtSelf,
   subscriptionUrgency,
   suggestSimilar,
 } from './utils.js';
@@ -370,5 +371,36 @@ describe('padEndDisplay：按显示宽度补齐', () => {
 
   it('已超出目标宽度时原样返回，不截断', () => {
     assert.equal(padEndDisplay('subscription remove <name>', 5), 'subscription remove <name>');
+  });
+});
+
+describe('proxyEnvPointsAtSelf：只认指向本机 Mixed 端口的代理 env', () => {
+  it('本机回环 + 自己的端口才判定为自代理', () => {
+    for (const url of ['http://127.0.0.1:7890', 'http://localhost:7890', 'socks5://127.0.0.1:7890', '127.0.0.1:7890']) {
+      assert.equal(proxyEnvPointsAtSelf(url, 7890), true, url);
+    }
+  });
+
+  it('企业代理、别的工具与无端口形态一律保留（不能误伤 env 代理出网）', () => {
+    for (const url of [
+      'http://corp-proxy.internal:8080',
+      'http://127.0.0.1:1087', // 别的代理工具占用的相邻端口
+      'http://192.168.1.10:7890', // 同端口但非本机
+      'http://localhost', // 无端口
+      'socks5://[::1]:7891',
+    ]) {
+      assert.equal(proxyEnvPointsAtSelf(url, 7890), false, url);
+    }
+  });
+
+  it('自定义 Mixed 端口后按新端口判定', () => {
+    assert.equal(proxyEnvPointsAtSelf('http://127.0.0.1:17890', 17890), true);
+    assert.equal(proxyEnvPointsAtSelf('http://127.0.0.1:7890', 17890), false);
+  });
+
+  it('垃圾值不判为自代理（保守保留，交给下游报错而非静默清除）', () => {
+    for (const v of ['', 'not a url', '!!!']) {
+      assert.equal(proxyEnvPointsAtSelf(v, 7890), false, JSON.stringify(v));
+    }
   });
 });

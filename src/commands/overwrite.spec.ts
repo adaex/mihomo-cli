@@ -84,14 +84,30 @@ describe('ow 列表展示文件级开关', () => {
     });
   });
 
-  it('enabled 写错时报错并指出是哪个文件', () => {
+  it('enabled 写错时 ow 列表不崩溃，红字标出加载失败与原因', () => {
     withFixture((dataDir, run) => {
       fs.writeFileSync(path.join(dataDir, 'overwrite.bad.yaml'), 'enabled: nope\nlog-level: debug\n');
+      // 诊断面（ow/status）永远可渲染：最需要排查工具时工具不能先坏。
+      // 合并路径的硬失败由 overwrite.spec 的 loadOverwriteFile 用例锁住
       const r = run(['ow']);
-      assert.notEqual(r.status, 0);
-      const out = `${r.stdout}${r.stderr}`;
-      assert.match(out, /overwrite\.bad\.yaml/);
-      assert.match(out, /enabled 必须是布尔值/);
+      assert.equal(r.status, 0, 'ow 列表不应被坏文件击穿');
+      assert.match(r.stdout, /overwrite\.bad\.yaml \[加载失败\]/);
+      assert.match(r.stdout, /enabled 必须是布尔值/);
+    });
+  });
+
+  it('坏覆写文件在 status 人读与 JSON 两形态都可见，且不混进 files/applied', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'overwrite.good.yaml'), 'log-level: debug\n');
+      fs.writeFileSync(path.join(dataDir, 'overwrite.bad.yaml'), 'enabled: nope\nlog-level: debug\n');
+      assert.match(run(['status', '--no-probe']).stdout, /overwrite\.bad\.yaml.*解析|enabled 必须是布尔值/);
+
+      const json = JSON.parse(run(['status', '--json', '--no-probe']).stdout);
+      assert.deepEqual(json.overwrite.files, ['overwrite.good.yaml']);
+      assert.deepEqual(json.overwrite.applied, ['overwrite.good.yaml']);
+      assert.equal(json.overwrite.errors.length, 1);
+      assert.equal(json.overwrite.errors[0].name, 'overwrite.bad.yaml');
+      assert.match(json.overwrite.errors[0].message, /enabled 必须是布尔值/);
     });
   });
 

@@ -94,6 +94,14 @@ describe('doctor：体检透传配置构建的 warnings', () => {
     assert.match(stdout, /✓ 配置构建: 当前订阅通过内核校验（mixed）/);
     assert.ok(!stdout.includes('未匹配到当前订阅中的同名元素'), '无警告时不应出现跳过提示');
   });
+
+  it('内核版本检查始终执行并渲染（ok/warn/skip 取决于 GitHub 可达性）', () => {
+    // 桩内核报 v1.19.13：有网且上游更新时为 warn（当前 x，最新 y），不可达/超时为 skip，
+    // 最新时为 ok——三态都合法，只锁「该项存在且在体检完成前跑到」，具体取值不写死
+    const { stdout, output } = run(['doctor']);
+    assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
+    assert.match(stdout, /内核版本/);
+  });
 });
 
 /**

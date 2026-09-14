@@ -170,7 +170,7 @@ export function getActiveSubscription(): Subscription | null {
 export function requireActiveSubscription(): Subscription {
   const sub = getActiveSubscription();
   if (!sub) {
-    throw new CliError('没有订阅，请先添加订阅');
+    throw new CliError('没有订阅，请先添加订阅', { hint: '添加订阅: mihomo sub add <url>' });
   }
   return sub;
 }
@@ -291,7 +291,11 @@ export async function downloadSubscription(url: string, subName = 'default', sig
 export async function prepareConfigForStart(mode: string, subName = 'default'): Promise<PreparedConfig> {
   const rawContent = readSubscriptionRawConfig(subName);
   if (!rawContent) {
-    throw new CliError(`未找到订阅配置 "${subName}"，请先添加订阅`);
+    // 条目还在、文件没了（手动删除/外部清理）：正确动作是重新下载而非重新添加，
+    // 与 config/doctor 同口径，三处不能给两个方向
+    throw new CliError(`订阅 "${subName}" 有条目但没有本地配置文件`, {
+      hint: `更新订阅: mihomo sub update ${subName}`,
+    });
   }
 
   const subUrl = getSubscriptions().find(s => s.name === subName)?.url;

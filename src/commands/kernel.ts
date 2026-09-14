@@ -23,7 +23,8 @@ export async function cmdKernel(args: string[]): Promise<void> {
   const effectiveMirror = mirrorInfo.mirror;
 
   // 下载通道：显式 --mirror / --mirror direct 手动覆盖最高优先，默认 gh > 本机代理 > 直连。
-  // 镜像选择不持久化——每次按当前环境独立决策（gh/代理是否可用、网络是否有 IPv6）。
+  // 镜像选择不持久化——每次按当前环境独立决策（gh/代理是否可用）；裸 --mirror 固定走
+  // 裸域，不再枚举网卡猜 IPv6（有 v6 地址不代表 v6 路由通），需要 v6 子域显式 --mirror v6。
   // 运行状态由命令层探测后注入——kernel.ts 不依赖 runtime/settings，通道决策保持纯函数可测
   const proxyRunning = getRunningState().running;
   const proxyPort = proxyRunning ? getPorts().mixed : null;
@@ -73,7 +74,7 @@ export async function cmdKernel(args: string[]): Promise<void> {
         hint.push(
           '',
           '提示: 直连失败或下载过慢时可使用镜像:',
-          '  mihomo kernel --mirror [镜像]   # 强制走镜像（默认按网络选 v6/裸域）',
+          '  mihomo kernel --mirror [镜像]   # 强制走镜像（裸 --mirror 固定裸域，可用 v6/v4/cdn 等别名）',
           `  可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`,
         );
       }
@@ -102,9 +103,16 @@ export async function cmdKernel(args: string[]): Promise<void> {
       });
     }
     console.log(`\n已更新到 ${result.version}`);
-    // 运行中的内核仍是旧二进制（进程持有旧 inode），提醒重启生效
-    if (getRunningState().running) {
-      console.log(colors.yellow('提示: 运行中的内核仍是旧版本，执行 mihomo start 重启后生效'));
+    // 运行中的内核仍是旧二进制（进程持有旧 inode），提醒重启生效。
+    // TUN 在跑时裸 start 会静默切回 Mixed（还要一次 sudo），必须给 start tun——
+    // 与 sub update 的重启提示同判据
+    const state = getRunningState();
+    if (state.running) {
+      const restartCommand = state.kind === 'tun' ? 'mihomo start tun' : 'mihomo start';
+      console.log(colors.yellow(`提示: 运行中的内核仍是旧版本，执行 ${restartCommand} 重启后生效`));
     }
+    // ad-hoc 签名的 Go 二进制被替换后，macOS 可能按新可执行文件重新要求本地网络授权；
+    // 只影响指向局域网地址的节点，提示一次胜过连不通时翻 README
+    console.log(colors.gray('提示: 若使用局域网节点（192.168/10.x/*.local），首次启动可能重新弹出「本地网络」授权'));
   }
 }

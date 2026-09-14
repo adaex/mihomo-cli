@@ -7,14 +7,33 @@ import { colors } from '../colors.js';
 import { getConfigInfo, getKernelVersion, hasKernel } from '../config.js';
 import { DEFAULT_MIXED_PORT, VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
+import { checkUpdate } from '../kernel.js';
 import { PATHS, USER_DATA_DIR } from '../paths.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
 import { getPorts, getSubscriptionsWithCache, isValidSettingsContent, readSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription, isSubscriptionStale, prepareConfigForStart, resolveUpdateInterval } from '../subscription.js';
+import type { KernelUpdateInfo } from '../types.js';
 import { assertKnownFlags, assertPositionalCount, formatRelativeTime } from '../utils.js';
 import { getLatestNpmVersion } from './update.js';
+
+/** 限时等待：GitHub 查询在 doctor 里只给数秒，超时按「不可达」降级为 skip，不拖慢体检 */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout')), ms);
+    promise.then(
+      v => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      e => {
+        clearTimeout(timer);
+        reject(e as Error);
+      },
+    );
+  });
+}
 
 type CheckStatus = 'ok' | 'warn' | 'fail' | 'skip';
 
@@ -57,6 +76,23 @@ async function collectChecks(): Promise<Check[]> {
   // （已反向验证）。留着是因为一旦它的契约改成抛错，缺这层就会退化成「doctor 偶发崩溃」，
   // 而那种失败只在「另有检查项先抛错」时出现，极难复现。
   const latestVersionPromise = getLatestNpmVersion(4_000).catch(() => null);
+
+  // 内核版本同样在开头并行发起：运行中则经本机代理查 GitHub（与 mihomo kernel 同通道），
+  // 4s 超时/失败一律降级 skip——体检不该被 registry 之外再多一个网络故障拖红。
+  // 与 npm 项并列后，「CLI 与内核各有一条更新线、该更新哪个」不再需要用户自己记
+  const earlyState = getRunningState();
+  let kernelProxyPort: number | null = null;
+  try {
+    kernelProxyPort = earlyState.running ? getPorts().mixed : null;
+  } catch {
+    kernelProxyPort = null;
+  }
+  const kernelVersionPromise: Promise<KernelUpdateInfo | null> = hasKernel()
+    ? withTimeout(checkUpdate(kernelProxyPort), 4_000).then(
+        v => v,
+        () => null,
+      )
+    : Promise.resolve(null);
 
   // === 内核 ===
   if (!hasKernel()) {
@@ -210,6 +246,18 @@ async function collectChecks(): Promise<Check[]> {
     }
   } else {
     push('代理连通', 'skip', '未运行');
+  }
+
+  // === 内核版本 ===
+  // 与 CLI 版本同结构：查询在函数开头发起、此处收口。未装内核时「内核」项已 fail，
+  // 不再重复列版本；GitHub 不可达/超时 skip（内核更新不是本机体检能解决的问题）
+  const kernelInfo = await kernelVersionPromise;
+  if (hasKernel() && kernelInfo === null) {
+    push('内核版本', 'skip', 'GitHub 不可达，跳过检查');
+  } else if (kernelInfo?.needsUpdate) {
+    push('内核版本', 'warn', `当前 ${kernelInfo.current}，最新 ${kernelInfo.latest}`, 'mihomo kernel');
+  } else if (kernelInfo) {
+    push('内核版本', 'ok', `${kernelInfo.current}（最新）`);
   }
 
   // === CLI 版本 ===

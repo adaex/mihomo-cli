@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
+import { type SpawnSyncReturns, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -189,5 +190,71 @@ describe('sub 的选项白名单按子命令校验', () => {
         assert.equal(result.status, 1, result.stderr);
         assert.match(result.stderr, /请指定订阅名称/);
       }));
+  });
+});
+
+/**
+ * 批量更新的部分失败反馈：逐条结果之外必须有汇总，且退出码非 0——
+ * 此前 2/3 成功时退出 0，脚本与用户都发现不了那条失败。用本地 HTTP 桩，不碰外网。
+ */
+describe('sub update 批量结果', () => {
+  it('部分失败时给汇总、非零退出、逐条重试命令；成功的订阅照常落盘', async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-sub-batch-'));
+    const label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
+    fs.mkdirSync(path.join(dataDir, 'subscriptions'));
+
+    const server = http.createServer((req, res) => {
+      if (req.url === '/alpha') {
+        res.writeHead(200, { 'Content-Type': 'text/yaml' });
+        res.end('proxies:\n  - { name: A, type: direct }\n');
+      } else {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('server error');
+      }
+    });
+
+    try {
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      const port = (server.address() as { port: number }).port;
+      fs.writeFileSync(
+        path.join(dataDir, 'settings.json'),
+        JSON.stringify({
+          subscriptions: [
+            { name: 'alpha', url: `http://127.0.0.1:${port}/alpha` },
+            { name: 'beta', url: `http://127.0.0.1:${port}/beta` },
+          ],
+          active_subscription: 'alpha',
+        }),
+      );
+
+      const env: NodeJS.ProcessEnv = { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: label, NO_COLOR: '1' };
+      // 子进程不得继承任何外部代理设置（经外部代理访问 127.0.0.1 会失败）
+      for (const k of ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']) delete env[k];
+
+      // 必须用**异步** spawn：桩 server 与测试同进程，spawnSync 会阻塞事件循环，
+      // server 无法 accept，子进程的 fetch 挂到超时——父子死锁
+      const child = spawn(process.execPath, ['--import', 'tsx', path.resolve('src/index.ts'), 'sub', 'update'], { env });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', d => {
+        stdout += d;
+      });
+      child.stderr.on('data', d => {
+        stderr += d;
+      });
+      const status = await new Promise<number | null>(resolve => child.on('close', resolve));
+
+      assert.notEqual(status, 0, '部分失败必须非零退出');
+      assert.match(stdout, /✓ alpha: 已更新/);
+      assert.match(stdout, /✗ beta: 失败/);
+      assert.match(stdout, /更新完成: 1 个成功，1 个失败/);
+      assert.match(stderr, /1 个订阅更新失败: beta/);
+      assert.match(stderr, /重试: mihomo sub update beta/);
+      assert.ok(fs.existsSync(path.join(dataDir, 'subscriptions', 'alpha.yaml')), '成功的订阅必须照常落盘');
+      assert.ok(!fs.existsSync(path.join(dataDir, 'subscriptions', 'beta.yaml')), '失败不得留下半成品');
+    } finally {
+      server.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 });

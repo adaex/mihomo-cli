@@ -11,7 +11,7 @@ function printOverwriteList(): void {
   console.log(`${colors.gray('状态: ')}${statusText}`);
   console.log(`${colors.gray('位置: ')}${info.dir}`);
   console.log('');
-  if (info.files.length === 0) {
+  if (info.files.length === 0 && info.broken.length === 0) {
     console.log('暂无覆写文件');
     console.log('');
     console.log(`用法示例: 创建文件 ${path.join(info.dir, 'overwrite.yaml')}`);
@@ -19,7 +19,8 @@ function printOverwriteList(): void {
     console.log('');
   } else {
     // 计数说「未禁用」而非「生效」：本列表看不到当前活跃订阅，无从判断 match 是否命中，
-    // 真·生效清单在内核拒绝提示里（已按 match 过滤）。两处用不同措辞免得对不上
+    // 真·生效清单在内核拒绝提示里（已按 match 过滤）。两处用不同措辞免得对不上。
+    // 加载失败的文件不计入「N 个文件」，单独红字段落，避免与停用/不适用混淆
     const disabledCount = info.files.filter(f => !f.enabled).length;
     const countText =
       disabledCount > 0 ? `${info.files.length} 个，${info.files.length - disabledCount} 个未禁用，按顺序加载` : `${info.files.length} 个，按顺序加载`;
@@ -36,7 +37,15 @@ function printOverwriteList(): void {
         console.log(`    ${colors.gray('字段: ')}${f.keys.join(', ')}`);
       }
     });
-    console.log('');
+    if (info.broken.length > 0) {
+      console.log(colors.red(`加载失败 (${info.broken.length} 个，未参与合并；start/doctor 会报错):`));
+      info.broken.forEach((b, i) => {
+        const num = info.files.length + i < 10 ? ` ${info.files.length + i}` : `${info.files.length + i}`;
+        console.log(`  ${num}. ${colors.red(b.name)} ${colors.red('[加载失败]')}`);
+        console.log(colors.red(`    ${b.message}`));
+      });
+      console.log('');
+    }
   }
   console.log('启用覆写: mihomo ow on');
   console.log('禁用覆写: mihomo ow off');

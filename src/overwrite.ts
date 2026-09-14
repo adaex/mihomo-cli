@@ -5,7 +5,16 @@ import * as yaml from 'js-yaml';
 import { CliError } from './errors.js';
 import { USER_DATA_DIR } from './paths.js';
 import { readSettings, writeSettings } from './settings.js';
-import type { OperatorShapedKey, OverwriteFileEntry, OverwriteListResult, OverwriteMatch, OverwriteScope, ParsedOverrideKey, SkippedMerge } from './types.js';
+import type {
+  BrokenOverwriteFile,
+  OperatorShapedKey,
+  OverwriteFileEntry,
+  OverwriteListResult,
+  OverwriteMatch,
+  OverwriteScope,
+  ParsedOverrideKey,
+  SkippedMerge,
+} from './types.js';
 
 export function parseOverrideKey(key: string): ParsedOverrideKey {
   let actualKey = key;
@@ -582,12 +591,35 @@ function normalizeEnabled(raw: unknown, fileName: string): boolean {
   );
 }
 
-export function loadOverwriteFile(): OverwriteFileEntry[] {
-  const dir = USER_DATA_DIR;
+/** 把单文件加载异常归一成纯数据的坏文件条目（诊断面渲染、合并路径重建异常共用） */
+function toBrokenFile(file: string, filePath: string, e: unknown): BrokenOverwriteFile {
+  if (e instanceof CliError) {
+    return { name: file, path: filePath, label: e.label, message: e.message, hint: e.hint };
+  }
+  const message = (e as Error).message || String(e);
+  // YAML 里 `*` 开头的标量是**别名语法**，`name: *edu` 会解析失败。推广订阅名 glob 后
+  // 前缀通配是很自然的写法，光说「解析失败」用户想不到是引号问题
+  const hint = ['该文件当前未参与合并，请修正后重试（mihomo ow 可查看全部覆写文件）。'];
+  if (/alias/i.test(message)) {
+    hint.push('若写了以 * 开头的通配值（如 name: *edu），YAML 会把它当别名语法，请加引号写成 name: "*edu"');
+  }
+  return { name: file, path: filePath, label: '覆写配置错误', message: `覆写文件 "${file}" 解析失败: ${message}`, hint };
+}
 
-  if (!fs.existsSync(dir)) return [];
+/**
+ * 读取目录下全部覆写文件，**不抛错、不静默**：成功的进 ok，解析/校验失败的进 broken。
+ * 两条消费路径各自决定姿态：
+ * - 合并路径（loadOverwriteFile → buildConfig → start/doctor）：存在 broken 即硬失败
+ * - 诊断路径（listOverwriteFile → status/ow 列表）：broken 红字列出，仪表盘永远
+ *   能渲染——最需要排查工具的时候工具不能先坏
+ */
+function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwriteFile[] } {
+  const ok: OverwriteFileEntry[] = [];
+  const broken: BrokenOverwriteFile[] = [];
 
-  const entries = fs.readdirSync(dir);
+  if (!fs.existsSync(USER_DATA_DIR)) return { ok, broken };
+
+  const entries = fs.readdirSync(USER_DATA_DIR);
   const files = entries.filter(isOverwriteFilename).sort((a, b) => {
     if (a === 'overwrite.yaml') return -1;
     if (b === 'overwrite.yaml') return 1;
@@ -595,23 +627,22 @@ export function loadOverwriteFile(): OverwriteFileEntry[] {
   });
 
   // 近失文件名：意图明显是覆写文件却不被任何合法模式认（最典型：主文件写成 overwrite.yml）。
-  // 静默不加载 = 用户以为覆写生效了、`ow` 列表里也看不见，故打一行警告；与解析失败
-  // 共用同一出口。只认整体近失（见 isOverwriteFilenameTypo），不扫全部「形近」文件
+  // 静默不加载 = 用户以为覆写生效了、`ow` 列表里也看不见，故打一行警告。
+  // 只认整体近失（见 isOverwriteFilenameTypo），不扫全部「形近」文件
   for (const typo of entries.filter(e => isOverwriteFilenameTypo(e))) {
     console.warn(
       `警告: "${typo}" 不会被当作覆写文件加载（合法文件名: overwrite.yaml 主文件、overwrite.*.yaml / overwrite.*.yml 扩展文件；主文件不支持 .yml）；若是笔误请改名`,
     );
   }
 
-  const results: OverwriteFileEntry[] = [];
-
   for (const file of files) {
-    const filePath = path.join(dir, file);
+    const filePath = path.join(USER_DATA_DIR, file);
     try {
       const content = fs.readFileSync(filePath, 'utf8');
       // 别名上限防 YAML 炸弹 DoS（同 config.ts SAFE_YAML_LOAD_OPTIONS，此处内联避免与 config 循环依赖）
       const parsed = yaml.load(content, { maxAliases: 200 }) as Record<string, unknown> | null;
-      // 顶层数组/标量不是合法覆写文件（解构会得到数字键），直接跳过并告警
+      // 顶层数组/标量不是合法覆写文件：曾只 warn 一行就跳过，与语法错同族的静默失效，
+      // 统一收进 broken（启动硬失败、诊断面可见）
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         // match / enabled 是元数据键：抽成结构化字段并从 config 剥离，确保它们永不进入
         // 最终 mihomo 配置（内核对未知顶层键宽松、`-t` 不会替我们拦下，剥离是本 CLI 的责任）。
@@ -619,24 +650,35 @@ export function loadOverwriteFile(): OverwriteFileEntry[] {
         // 「停用期间藏着错误、一启用就炸」
         const { match, enabled, ...config } = parsed;
         assertNoMetadataKeyLookalikes(config, file);
-        results.push({ name: file, path: filePath, config, match: normalizeMatch(match, file), enabled: normalizeEnabled(enabled, file) });
+        ok.push({ name: file, path: filePath, config, match: normalizeMatch(match, file), enabled: normalizeEnabled(enabled, file) });
       } else if (parsed !== null) {
-        console.warn(`警告: 覆写文件 "${file}" 顶层必须是对象，已跳过`);
+        const shape = Array.isArray(parsed) ? '数组' : typeof parsed;
+        throw new CliError(`覆写文件 "${file}" 顶层必须是映射（键值对），当前是 ${shape}`, {
+          label: '覆写配置错误',
+          hint: ['该文件当前未参与合并。覆写文件形如:', '  +rules:', '    - DOMAIN-SUFFIX,example.com,DIRECT'],
+        });
       }
+      // parsed === null（空文件）无内容可合并，按现状不计入任何一边
     } catch (e) {
-      // normalizeMatch / normalizeEnabled / assertNoMetadataKeyLookalikes 抛的 CliError
-      // 必须上抛到 main().catch 统一渲染：吞成 warn + 跳过文件虽然也是 fail-closed，
-      // 但用户只看到一行「解析失败」，看不见哪个键错了、该怎么改
-      if (e instanceof CliError) throw e;
-      const message = (e as Error).message;
-      // YAML 里 `*` 开头的标量是**别名语法**，`name: *edu` 会解析失败、整个文件被静默跳过。
-      // 推广订阅名 glob 后前缀通配是很自然的写法，光说「解析失败」用户想不到是引号问题
-      const aliasHint = /alias/i.test(message) ? '；若是以 * 开头的通配值（如 name: *edu），YAML 会把它当别名语法，请加引号写成 name: "*edu"' : '';
-      console.warn(`警告: 覆写文件 "${file}" 解析失败: ${message}${aliasHint}`);
+      broken.push(toBrokenFile(file, filePath, e));
     }
   }
 
-  return results;
+  return { ok, broken };
+}
+
+/**
+ * 合并路径的加载出口：**任何坏文件都硬失败**，由 main().catch 统一渲染完整原因。
+ * 语义错（enabled: no / match 拼错）一直如此；语法错曾是 warn 一行后跳过、退出码 0，
+ * 启动照常成功但覆写根本没参与合并——「以为生效了」比报错危险，故与语义错同等级别。
+ */
+export function loadOverwriteFile(): OverwriteFileEntry[] {
+  const { ok, broken } = readOverwriteFiles();
+  if (broken.length > 0) {
+    const first = broken[0];
+    throw new CliError(first.message, { label: first.label, hint: first.hint });
+  }
+  return ok;
 }
 
 /**
@@ -665,22 +707,24 @@ export function applyOverwrite(
 }
 
 /**
- * 列出目录里的全部覆写文件（含被停用的），供 `ow` 列表与 status 展示。
+ * 列出目录里的全部覆写文件（含被停用的、**含加载失败的 broken 条目**），供 `ow` 列表
+ * 与 status 展示。这是刻意的旁路：诊断面绝不因坏文件抛错（合并闸门是 loadOverwriteFile，
+ * start/doctor 在那里硬失败）。
  *
- * 传 `scope` 时每个条目附带 `matched`：该文件的 match 是否命中这个作用域。判据仍是
+ * 传 `scope` 时每个正常条目附带 `matched`：该文件的 match 是否命中这个作用域。判据仍是
  * matchesScope 本身（与 selectActiveOverwriteFiles 同一个函数），**这里只是展示**——
  * 合并闸门始终是 selectActiveOverwriteFiles，不要拿 matched 去筛要合并的文件。
  * 不传 scope 则 matched 恒为 undefined（= 未判定），`ow` 列表走这条路径：它不绑定
- * 某条订阅，判不了也不该判。
+ * 某条订阅，判不了也不该判。broken 条目不判 match（文件根本没解析出来）。
  */
 export function listOverwriteFile(scope?: OverwriteScope): OverwriteListResult {
-  const files = loadOverwriteFile();
+  const { ok, broken } = readOverwriteFiles();
   const enabled = isOverwriteEnabled();
 
   return {
     enabled,
     dir: USER_DATA_DIR,
-    files: files.map(f => ({
+    files: ok.map(f => ({
       name: f.name,
       path: f.path,
       keys: Object.keys(f.config || {}),
@@ -688,5 +732,6 @@ export function listOverwriteFile(scope?: OverwriteScope): OverwriteListResult {
       enabled: f.enabled !== false,
       ...(scope ? { matched: matchesScope(f.match, scope) } : {}),
     })),
+    broken,
   };
 }

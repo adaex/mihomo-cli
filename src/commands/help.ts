@@ -1,10 +1,11 @@
 import { colors } from '../colors.js';
 import { getKernelVersion, hasKernel } from '../config.js';
 import { VERSION } from '../constants.js';
+import { CliError } from '../errors.js';
 import { USER_DATA_DIR } from '../paths.js';
 import { getServiceStatus } from '../service.js';
 import { getSubscriptions } from '../settings.js';
-import { displayWidth, padEndDisplay } from '../utils.js';
+import { displayWidth, padEndDisplay, suggestSimilar } from '../utils.js';
 import type { Command, CommandGroup, UsageLine } from './registry.js';
 
 /**
@@ -102,6 +103,51 @@ export function printHelp(commands: Command[]): void {
   );
 
   console.log(lines.join('\n'));
+}
+
+/**
+ * 单条命令的帮助（别名 + 该命令在注册表里的全部用法行）。
+ * 用法行仍是唯一真相源，这里只负责渲染，不手写第二份描述。
+ */
+export function printCommandHelp(command: Command): void {
+  const aliasText = command.aliases.length > 0 ? colors.gray(`（别名: ${command.aliases.join(', ')}）`) : '';
+  const lines: string[] = ['', `${colors.cyan(colors.bold(`mihomo ${command.name}`))}${aliasText}`];
+
+  if (command.usage.length > 0) {
+    lines.push('', '用法:');
+    const width = Math.max(...command.usage.map(u => displayWidth(u.signature)));
+    for (const u of command.usage) {
+      lines.push(`  ${colors.bold(padEndDisplay(u.signature, width))}  ${u.description}`);
+    }
+  } else {
+    // tun / use 这类无独立用法行的快捷命令
+    lines.push('', colors.gray('快捷命令，完整用法见 mihomo help'));
+  }
+
+  console.log(lines.join('\n'));
+}
+
+/**
+ * `mihomo help [命令]`：无参打印整页帮助；带命令名时只打印该命令的用法。
+ * finder 由 registry 注入（help.ts 不反向 import registry，保持 commands 层无环）。
+ */
+export function printHelpEntry(args: string[], commands: Command[], finder: (token: string) => Command | undefined): void {
+  const token = args[1];
+  if (!token) {
+    printHelp(commands);
+    return;
+  }
+  const command = finder(token.toLowerCase());
+  if (!command) {
+    const suggestion = suggestSimilar(
+      token,
+      commands.flatMap(c => [c.name, ...c.aliases]),
+    );
+    throw new CliError(`未知命令: ${token}`, {
+      hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '使用 "mihomo help" 查看全部命令'],
+    });
+  }
+  printCommandHelp(command);
 }
 
 export function printVersion(): void {

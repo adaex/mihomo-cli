@@ -10,9 +10,11 @@ import { fileURLToPath } from 'node:url';
  * 多余位置参数统一报错的端到端回归。
  *
  * 此前 flag 侧早已「未知即报错」，位置参数却只认第一个：`start mixed garbage`
- * 忽略 garbage 继续执行，`sub use foo bar`、`dir open logs extra`、`ui zash extra`、
- * `help extra` 同型——与「未知命令、子命令和选项统一报错」的产品边界不对称。
+ * 忽略 garbage 继续执行，`sub use foo bar`、`dir open logs extra`、`ui zash extra`
+ * 同型——与「未知命令、子命令和选项统一报错」的产品边界不对称。
  * reset 是可变参数命令（每个位置参数都是目标名，自带校验），不在此列。
+ * help 现接受一个命令名（`help <命令>`），`help extra` 改走「未知命令」纠错，
+ * 也不在「多余参数」之列（见 help.spec.ts）。
  *
  * 每个命令配一对用例：多余参数报「参数错误」；声明个数内的合法形态**不触发**该错误，
  * 而是到达各自的下一道校验或正常输出——后者是防误伤的关键断言（`sub use name -u 5000`
@@ -55,7 +57,6 @@ describe('多余位置参数报错', () => {
     ['ui：名称之后', ['ui', 'zash', 'extra']],
     ['logs：编号之后', ['logs', '1', '2']],
     ['ow on：开关之后', ['ow', 'on', 'garbage']],
-    ['help：meta 不接受位置参数', ['help', 'extra']],
     ['version：meta 不接受位置参数', ['version', 'extra']],
     ['顶层快捷 use', ['use', 'foo', 'bar']],
     ['顶层快捷 tun', ['tun', 'extra']],

@@ -102,6 +102,18 @@ export interface OverwriteFileEntry {
   enabled?: boolean;
 }
 
+/** 加载失败（YAML 语法错/元数据键非法等）的覆写文件：诊断面要带着错误列出它 */
+export interface BrokenOverwriteFile {
+  name: string;
+  path: string;
+  /** 单行失败原因 */
+  message: string;
+  /** 错误标签（如「覆写配置错误」），合并路径硬失败时重建 CliError 用 */
+  label: string;
+  /** 完整排查提示（含别名加引号这类定向指引） */
+  hint: string[];
+}
+
 export interface OverwriteFileInfo {
   name: string;
   path: string;
@@ -109,6 +121,8 @@ export interface OverwriteFileInfo {
   scope?: string;
   /** 该文件自身是否启用（文件内 `enabled` 键）；与 OverwriteListResult.enabled 的全局开关是两层 */
   enabled: boolean;
+  /** 加载失败原因；存在时该文件既未参与合并、也不能按 enabled/match 归类 */
+  error?: string;
   /**
    * match 是否命中调用方给的作用域；**仅在 listOverwriteFile 传了 scope 时存在**。
    * undefined = 未判定（`ow` 列表不绑定某条订阅，判不了），不等于「没命中」。
@@ -282,6 +296,8 @@ export interface OverwriteListResult {
   enabled: boolean;
   dir: string;
   files: OverwriteFileInfo[];
+  /** 加载失败的文件（语法错/元数据键非法）；诊断面据此红字列出，合并路径会硬失败 */
+  broken: BrokenOverwriteFile[];
 }
 
 // === Log ===
@@ -343,7 +359,7 @@ export interface StatusJson {
   pid: number | null;
   kernel: string | null;
   kernelInstalled: boolean;
-  ports: { mixed?: number; tun?: boolean };
+  ports: { mixed?: number; controller?: number; tun?: boolean };
   subscription: {
     name: string;
     proxies: number;
@@ -368,7 +384,7 @@ export interface StatusJson {
    * 恒为空数组（那时 buildConfig 压根不加载覆写），再滤掉文件级 `enabled: false`，
    * 最后按当前活跃订阅的 match 过滤。无活跃订阅时判不了 match，不额外收窄
    */
-  overwrite: { enabled: boolean; files: string[]; applied: string[] };
+  overwrite: { enabled: boolean; files: string[]; applied: string[]; errors: { name: string; message: string }[] };
   service: {
     installed: boolean;
     loaded: boolean;

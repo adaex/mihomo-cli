@@ -412,7 +412,13 @@ export function buildKernelRejectHint(detail: string, overwriteSummaries: string
     hint.push(`${HINT_INDENT}若报错的元素来自覆写追加（~key 未匹配到同名元素时会新增），改用 ~?key 可在缺少该元素的订阅上跳过。`);
   }
 
-  hint.push('', `${HINT_INDENT}请修正订阅或覆写；当前运行时配置未改动。`);
+  hint.push(
+    '',
+    `${HINT_INDENT}请修正订阅或覆写；当前运行时配置未改动。`,
+    // 「未知键/字段」类报错的另一个真实根因是内核落后于订阅：机场开始用新协议字段，
+    // 旧内核 -t 一律按不认识拒绝。只提示「修正订阅或覆写」会把方向带反
+    `${HINT_INDENT}若订阅或覆写本身没有明显错误，也可能是内核版本过旧、不认识新配置键，可尝试: mihomo kernel`,
+  );
   return hint;
 }
 

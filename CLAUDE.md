@@ -73,7 +73,7 @@ npm run build
 - 再包装错误前先透传已有 CliError，避免标签重复；模块顶层不抛 CliError，环境变量在使用点校验
 - detached/事件回调不得抛 CliError；信号处理与 tail 事件回调是直接 exit 的例外
 - Node 版本、平台与非 root 三个守卫都在 ensureDirs 之前执行，共用同一份 help/version 豁免名单；豁免命令连 ensureDirs 也跳过——豁免免掉的是副作用面（不建目录）而不只是「不被拒绝」，按 `command.name` 匹配已覆盖别名与改写 token；Node 下限取自 package.json 的 `engines.node`（只认 `>=x.y.z`，解析不出就跳过检查，不能挡死所有命令）；开发逃生阀为 `MIHOMO_CLI_ALLOW_ANY_PLATFORM=1`
-- `main()` 开头清除代理环境变量（`http_proxy`/`https_proxy`/`all_proxy` 及大写形式），npm/gh/curl 等派生子进程继承的是清除后的 env——防止系统代理恰好指向本工具自身的 Mixed 端口时下载经自己的代理死锁；代价是企业网络必须靠 env 代理出网时这些子进程会直连失败
+- `main()` 开头**只清除指向本机自己 Mixed 端口**的代理环境变量（`proxyEnvPointsAtSelf(value, selfPort)`：回环 host + 端口等于 settings 的 ports.mixed，守卫前用无副作用的只读方式取端口，异常回退默认 7890），其余 env 代理原样保留并透传给 npm/gh/curl——无差别清除会让只能靠 env 代理（企业网/别的工具）出网的用户在 update/kernel 必败且报错与代理无关；要防的死锁只有「代理恰好是本工具自己（重启时先停内核）」这一种
 - 报告成功应有独立的结果依据：配置提交查写入结果，服务启动查健康，停止查卸载/残留，下载查大小与可执行性
 - 内核校验失败的提示附带本次生效的覆写文件与作用域；文案收口在 `buildKernelRejectHint`，空清单时不加该段，调用点不散写文案
 - doctor 的失败项透传 `CliError.hint`（`Check.notes`），只取 message 首行会丢掉唯一的排查线索
@@ -118,8 +118,9 @@ npm run build
 - glob **不用正则实现**，走双指针贪心回溯（`nameMatchesPattern`）。「转义成正则再 test」的写法有灾难性回溯：`*a`×20 的 pattern 配 64 个 `a` 的订阅名实测 **70 秒**，而 64 正是 SAFE_NAME_RE 的上限——合法输入就能挂死 CLI，不是理论风险。改实现前先跑 spec 里那条带耗时断言的用例；`?` 逐 UTF-16 码元比较，放开星平面字符（emoji）时要重新评估
 - 覆写文件顶层 `enabled` 与 `match` 同为元数据键，加载时剥离、绝不进最终配置（内核对未知顶层键宽松，实测 `-t` 放行 `enabled: false`，拦不住要靠自己）；只认真布尔，`no`/`off` 在 YAML 里是**字符串**、按 truthy 会让停用静默失效，故非布尔报错并提示写 `false`。被停用的文件仍完整加载并校验 match：`ow` 列表要显示它与它的作用域，且避免停用期间藏错、一启用就炸
 - 元数据键（`match`/`enabled`）的两类近失都报错，判据都在 `assertNoMetadataKeyLookalikes`，新增元数据键只改 `METADATA_KEYS` 那张表：① **操作符形态**（`enabled!`/`+match`/`<enabled>`）——剥离在解构、早于操作符解析，`enabled!: false` 既不停用文件又会把 `enabled` 当普通键写进运行配置；`match!` 是同族存量洞。判据为 `parseOverrideKey(k).key` 落在表内且与原 token 不同。② **大小写/空白变体**（`Enabled`/`MATCH`/`enabled `）——剥离用精确键名，这类键同样两头落空，且 mihomo 顶层没有这些键、必然是笔误。判据为小写去空白后落在表内且原样不等于。两类失效都零反馈（内核对未知顶层键不报错），必须在加载期拦
-- YAML 里 `*` 开头的标量是别名语法：`name: *edu` 解析失败、整个文件被静默跳过，故解析失败的 warn 在错误含 alias 时追加「加引号」提示；推广订阅名 glob 后前缀通配是自然写法，光说「解析失败」用户想不到是引号问题
+- YAML 里 `*` 开头的标量是别名语法：`name: *edu` 解析失败进 broken（合并路径硬失败、诊断路径红字），`toBrokenFile` 在错误含 alias 时追加「加引号写成 name: "*edu"」提示；推广订阅名 glob 后前缀通配是自然写法，光说「解析失败」用户想不到是引号问题
 - `selectActiveOverwriteFiles` 是「本次参与合并的文件」唯一出口，`enabled` 与 match 两道过滤合在其中，不拆成并列函数——漏调一个就会让停用文件照常合并；新增筛选维度继续加在该函数内。`listOverwriteFile` 是**有意的旁路**（列表要显示全部文件，含被停用的）
+- 覆写加载有两条姿态不同的出口，底层共用 `readOverwriteFiles()`（返回 `{ ok, broken }`，**不抛错**）：合并路径 `loadOverwriteFile()` 有 broken 即抛 `CliError`（语法错与语义错同级硬失败，不得退回 warn 跳过——warn+退出 0 会让启动成功但覆写没生效）；诊断路径 `listOverwriteFile()` 把 broken 原样带出（`ow`/status 红字渲染、status JSON 进 `overwrite.errors`），**仪表盘永远不能被坏文件击穿**。新增加载错误形态进 `toBrokenFile`，不要在两条路径各写一份
 - `ow` 列表的计数措辞是「N 个未禁用」而非「N 个生效」：该列表不绑定某条订阅、无从判断 match 是否命中，故 `listOverwriteFile` 不传 scope 时 `matched` 恒为 undefined（未判定 ≠ 未命中），列表也不得出现「不适用」字样
 - status 反过来知道活跃订阅，故 `listOverwriteFile(scope)` 会给出 `matched`，覆写行按它分三层：主行只列生效文件，未命中的每个展开一行（文件名 + 当前订阅 + 作用域，三者凑齐才看得出为什么没命中），被 `enabled: false` 停用的只折一句计数。两类失效分开计数不合并——原因与改法不同（改 match/切订阅 vs 改文件里的 enabled），混在「已启用 (a, b)」里会让用户拿没生效的文件解释自己看到的行为。`matched` 仅供展示，合并闸门永远只有 `selectActiveOverwriteFiles`；`status --json` 的 `applied` 是生效清单，三道过滤与 buildConfig 对齐（全局开关关闭时恒为空——否则同一份 JSON 里 `enabled:false` 却列着生效文件，与人读形态打架），`files` 保持旧契约（只滤文件级 enabled）
 - 覆写操作符只在文件顶层生效：`key!` 整体覆盖，`+key`/`key+` 数组插入，`~key` 按 name 合并（未命中追加）、`~?key` 按 name 合并但未命中忽略，`<+key>` 转义（含 `~<key>`/`~?<key>` 组合）；嵌套键一律字面（含 `~key` 元素补丁的字段），`+.域名` 原生通配键在嵌套层安全，形似操作符的嵌套键按字面处理并经 buildConfig warnings 每文件每键提示一次（`+.` 开头不提示；措辞只说「处理」不承诺最终保留——后加载文件的 `key!` 可能整体覆盖掉它）；数组操作遇到已存在的非数组值应报错；互斥修饰同时出现（`+x+`/`~x!`/`<x>+!`）与解析后空键名（裸 `+:`/`~:`）显式报错，不静默按分支优先级取其一

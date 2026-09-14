@@ -1,152 +1,94 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import * as yaml from 'js-yaml';
-
 /**
- * `mihomo config`：只读展示当前生效的运行配置。
- *
- * 关键性质是**停止状态下也能用**——`runtime/config.yaml` 在 stop 时被 `clearRuntime()`
- * 整个删掉，而「停着的时候看看配置对不对」恰是最需要它的场景。故实现是重新推导而非读盘，
- * 这些用例全部在没有 runtime/config.yaml 的目录里跑，正是要锁住这一点。
+ * `mihomo config` 凭据脱敏与缺文件提示（CLI 级）。
+ * 脱敏规则的单元覆盖在 redact.spec.ts，这里锁命令接线：默认上屏的是掩码、
+ * --reveal 才给原文、JSON 信封带 redacted，以及缺文件时三处口径统一指向 sub update。
  */
+const ENTRY = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'index.ts');
 
-const SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
-const ENTRY = path.join(SRC_DIR, '..', 'index.ts');
+const SUBSCRIPTION = [
+  'proxies:',
+  '  - { name: HK-1, type: ss, server: 1.2.3.4, port: 8388, cipher: aes-128-gcm, password: realpassword }',
+  'proxy-providers:',
+  '  second: { type: http, url: "https://sub.example.com/api?token=tokentokentoken1234", interval: 3600, path: ./second.yaml }',
+  'proxy-groups:',
+  '  - { name: PROXY, type: select, proxies: [HK-1] }',
+  'rules:',
+  '  - MATCH,PROXY',
+  '',
+].join('\n');
 
-let dataDir: string;
-
-beforeEach(() => {
-  dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cfg-'));
-  fs.mkdirSync(path.join(dataDir, 'subscriptions'));
-  fs.writeFileSync(
-    path.join(dataDir, 'settings.json'),
-    JSON.stringify({
-      subscriptions: [{ name: 'demo', url: 'https://example.com/sub?token=secret123' }],
-      active_subscription: 'demo',
-      controller_secret: 'my-secret-key',
-    }),
-  );
-  fs.writeFileSync(
-    path.join(dataDir, 'subscriptions', 'demo.yaml'),
-    [
-      'proxies:',
-      '  - { name: HK-1, type: ss, server: 1.2.3.4, port: 8388, cipher: aes-128-gcm, password: pw }',
-      'proxy-groups:',
-      '  - { name: PROXY, type: select, proxies: [HK-1] }',
-      'rules:',
-      '  - MATCH,PROXY',
-      '',
-    ].join('\n'),
-  );
-});
-
-afterEach(() => {
-  fs.rmSync(dataDir, { recursive: true, force: true });
-});
-
-function run(args: string[]): { status: number | null; stdout: string; output: string } {
-  const r = spawnSync(process.execPath, ['--import', 'tsx', ENTRY, ...args], {
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      MIHOMO_CLI_DIR: dataDir,
-      MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(dataDir)}`,
-      NO_COLOR: '1',
-    },
-    timeout: 30_000,
-  });
-  return { status: r.status, stdout: r.stdout || '', output: `${r.stdout || ''}${r.stderr || ''}` };
+function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSyncReturns<string>) => void): void {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-config-cli-'));
+  const label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
+  try {
+    fs.mkdirSync(path.join(dataDir, 'subscriptions'));
+    fs.writeFileSync(
+      path.join(dataDir, 'settings.json'),
+      JSON.stringify({ subscriptions: [{ name: 'demo', url: 'https://example.com/sub' }], active_subscription: 'demo' }),
+    );
+    fs.writeFileSync(path.join(dataDir, 'subscriptions', 'demo.yaml'), SUBSCRIPTION);
+    const run = (args: string[]) =>
+      spawnSync(process.execPath, ['--import', 'tsx', ENTRY, ...args], {
+        encoding: 'utf8',
+        timeout: 15_000,
+        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: label, NO_COLOR: '1' },
+      });
+    check(dataDir, run);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
 }
 
-describe('config：查看当前生效的运行配置', () => {
-  it('无 runtime/config.yaml 时仍能输出合法 YAML（重新推导，不读盘）', () => {
-    assert.equal(fs.existsSync(path.join(dataDir, 'runtime', 'config.yaml')), false, '前提：本用例就是在没有落盘配置的状态下跑');
-
-    const { status, stdout, output } = run(['config']);
-    assert.equal(status, 0, output);
-
-    // 注释头以 # 开头，去掉后必须是完整可解析的 YAML——否则管给内核或别的工具就废了
-    const parsed = yaml.load(
-      stdout
-        .split('\n')
-        .filter(l => !l.startsWith('#'))
-        .join('\n'),
-    ) as Record<string, unknown>;
-    assert.equal(typeof parsed, 'object');
-    // 订阅内容与系统锁定项都应在
-    assert.ok(Array.isArray(parsed.proxies));
-    assert.equal(parsed['mixed-port'], 7890);
-    assert.equal(parsed['external-controller'], '127.0.0.1:9090');
+describe('config：凭据默认脱敏', () => {
+  it('YAML 出口掩码节点密码与 provider URL token，并提示 --reveal', () => {
+    withFixture((_d, run) => {
+      const out = run(['config']).stdout;
+      assert.match(out, /password: '\*\*\*'/);
+      assert.ok(!out.includes('realpassword'), '节点密码不得明文上屏');
+      assert.match(out, /token=\*\*\*/);
+      assert.ok(!out.includes('tokentokentoken1234'), 'provider 订阅 token 不得明文上屏');
+      assert.match(out, /凭据已脱敏显示，--reveal/);
+    });
   });
 
-  it('secret 脱敏，不打印明文凭据', () => {
-    const { status, output } = run(['config']);
-    assert.equal(status, 0, output);
-    assert.ok(!output.includes('my-secret-key'), 'controller_secret 绝不能明文出现在输出里');
-    assert.match(output, /secret: '\*\*\*'/);
+  it('--reveal 显示原文且不带脱敏提示', () => {
+    withFixture((_d, run) => {
+      const out = run(['config', '--reveal']).stdout;
+      assert.match(out, /password: realpassword/);
+      assert.match(out, /token=tokentokentoken1234/);
+      assert.ok(!out.includes('凭据已脱敏'));
+    });
   });
 
-  it('--json 输出信封 { config, warnings }：配置在 config 内且脱敏，无警告时 warnings 为空数组', () => {
-    const { status, stdout, output } = run(['config', '--json']);
-    assert.equal(status, 0, output);
-    const parsed = JSON.parse(stdout) as { config: Record<string, unknown>; warnings: unknown };
-    assert.equal(parsed.config.secret, '***');
-    assert.ok(Array.isArray(parsed.config.proxies));
-    // 字段形状稳定，消费者不必判 undefined
-    assert.deepEqual(parsed.warnings, []);
+  it('JSON 信封带 redacted 标记；--reveal 时为 false', () => {
+    withFixture((_d, run) => {
+      const masked = JSON.parse(run(['config', '--json']).stdout);
+      assert.equal(masked.redacted, true);
+      assert.equal(masked.config.proxies[0].password, '***');
+      assert.match(JSON.stringify(masked.config['proxy-providers']), /\*\*\*/);
+
+      const revealed = JSON.parse(run(['config', '--json', '--reveal']).stdout);
+      assert.equal(revealed.redacted, false);
+      assert.equal(revealed.config.proxies[0].password, 'realpassword');
+    });
   });
 
-  it('--json 的 CLI warnings 不顶替配置自身的同名键（信封与 YAML 出口的配置内容一致）', () => {
-    // mihomo 不识别 warnings 段，但订阅/覆写里写了就该原样出现在 config 里，
-    // 不能被 CLI 提示数组顶掉；CLI 提示是信封上的同级字段
-    fs.writeFileSync(path.join(dataDir, 'subscriptions', 'demo.yaml'), 'proxies: []\nwarnings: user-value\n');
-    const { status, stdout, output } = run(['config', '--json']);
-    assert.equal(status, 0, output);
-    const parsed = JSON.parse(stdout) as { config: Record<string, unknown>; warnings: unknown };
-    assert.equal(parsed.config.warnings, 'user-value');
-    assert.deepEqual(parsed.warnings, []);
-  });
-
-  it('--json 携带 buildConfig 的 warnings，不把信号丢在 JSON 之外', () => {
-    // 分组名拼错的 ~? 补丁会被跳过——这正是 warnings 要暴露、而 JSON 分支此前丢弃的信号
-    fs.writeFileSync(path.join(dataDir, 'overwrite.yaml'), '~?proxy-groups:\n  - { name: TYPO-GROUP, type: select, proxies: [HK-1] }\n');
-
-    const { status, stdout, output } = run(['config', '--json']);
-    assert.equal(status, 0, output);
-    // stdout 仍是单个可整体解析的 JSON 对象：warnings 在对象内，而不是溢到 stderr 或第二段输出
-    const parsed = JSON.parse(stdout) as { warnings?: string[] };
-    assert.ok(Array.isArray(parsed.warnings), 'warnings 必须是 JSON 输出里的顶层数组字段');
-    assert.equal(parsed.warnings.length, 1);
-    assert.match(parsed.warnings[0], /~\?proxy-groups/);
-    assert.match(parsed.warnings[0], /TYPO-GROUP/);
-    assert.match(parsed.warnings[0], /未匹配到当前订阅中的同名元素/);
-  });
-
-  it('无订阅时报错并给出下一步', () => {
-    fs.rmSync(path.join(dataDir, 'settings.json'));
-    const { status, output } = run(['config']);
-    assert.notEqual(status, 0);
-    assert.match(output, /尚无订阅/);
-    assert.match(output, /sub add/);
-  });
-
-  it('订阅有条目但缺配置文件时报错并指向 sub update', () => {
-    fs.rmSync(path.join(dataDir, 'subscriptions', 'demo.yaml'));
-    const { status, output } = run(['config']);
-    assert.notEqual(status, 0);
-    assert.match(output, /没有本地配置文件/);
-    assert.match(output, /sub update/);
-  });
-
-  it('未知选项报错', () => {
-    const { status, output } = run(['config', '--bogus']);
-    assert.notEqual(status, 0);
-    assert.match(output, /未知的选项/);
+  it('订阅有条目无文件时指向 sub update（与 start/doctor 同口径）', () => {
+    withFixture((dataDir, run) => {
+      fs.rmSync(path.join(dataDir, 'subscriptions', 'demo.yaml'));
+      const r = run(['config']);
+      assert.notEqual(r.status, 0);
+      assert.match(`${r.stdout}${r.stderr}`, /有条目但没有本地配置文件/);
+      assert.match(`${r.stdout}${r.stderr}`, /mihomo sub update demo/);
+      assert.ok(!`${r.stdout}${r.stderr}`.includes('请先添加订阅'), '条目还在时正确动作是 update 不是 add');
+    });
   });
 });

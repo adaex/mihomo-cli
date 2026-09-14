@@ -15,10 +15,10 @@
 - 🛡️ **服务托管** - 基于 launchd，崩溃/登录自动拉起，代理后台常驻；日常 `start`/`stop` **全程免密**
 - 🔄 **双模式支持** - Mixed 模式和 TUN 透明代理模式
 - 📊 **状态监控** - 查看运行状态、内存占用、订阅流量、到期时间与更新新鲜度（紧急度着色，`--json` 机器可读）
-- 🩺 **体检诊断** - `mihomo doctor` 一键检查内核/服务/端口/订阅/配置/连通性/CLI 版本并给修复指引
-- 🔌 **端口逃生口** - 默认 7890/9090 可经 `settings.json` 的 `ports` 覆盖，与其他代理工具并存
+- 🩺 **体检诊断** - `mihomo doctor` 一键检查内核/服务/端口/订阅/配置/连通性/内核与 CLI 版本并给修复指引
+- 🔌 **端口逃生口** - 默认 7890/9090 可经 `settings.json` 的 `ports` 覆盖，status 与 `mihomo ui` 会显示实际端口
 - 🔌 **连通性探测** - 启动与状态展示独立确认「代理真的通」，不通时归因到订阅过期/流量用尽/节点失效
-- 🔎 **查看生效配置** - `mihomo config [--json]` 展示由订阅与覆写推导出的运行配置，停止状态下同样可用
+- 🔎 **查看生效配置** - `mihomo config [--json] [--reveal]` 展示由订阅与覆写推导出的运行配置，停止状态下同样可用；节点密码、UUID、provider 订阅 token 等凭据默认脱敏
 - 📝 **日志管理** - 每次启动归档上一次日志，保留 7 天，支持列表/跟随/编号查看
 - 🎨 **Web UI** - 一键打开 Web 控制面板 (zash/metacubexd/yacd)
 - 🔄 **内核更新** - 自动检查更新，支持 GitHub 镜像加速
@@ -53,11 +53,12 @@ npm link
 # 自动选择通道：gh > 本机代理 > 直连
 mihomo kernel
 
-# 国内网络强制走镜像（有 IPv6 走 v6，否则裸域）
+# 国内网络强制走镜像（裸 --mirror 固定走裸域 gh-proxy.org）
 mihomo kernel --mirror
 
-# 或用短别名指定镜像
+# 或用短别名指定镜像（纯 IPv6 网络用 v6）
 mihomo kernel --mirror cdn
+mihomo kernel --mirror v6
 ```
 
 ### 2. 添加订阅
@@ -137,7 +138,7 @@ mihomo ui yacd     # YACD
 | `mihomo ow`                  | 查看覆写配置状态和文件列表（别名 `enable`/`disable` 亦可用于开关） |
 | `mihomo ow on`                   | 启用覆写配置（**默认已启用**，自动重启）                          |
 | `mihomo ow off`                  | 禁用覆写配置（自动重启）                                          |
-| `mihomo config [--json]`         | 查看当前生效的运行配置（由订阅与覆写推导，停止状态下同样可用；`secret` 脱敏） |
+| `mihomo config [--json] [--reveal]` | 查看当前生效的运行配置（由订阅与覆写推导，停止状态下同样可用；凭据默认脱敏，`--reveal` 显示原文） |
 
 > `ow on`/`ow off` 是**全局总开关**（一次开关所有覆写）。只想停用某一个文件，在该文件里写 `enabled: false`，见[单个文件的开关](#单个文件的开关enabled)
 
@@ -147,13 +148,13 @@ mihomo ui yacd     # YACD
 | --------------------------------- | ------------------------------------------------------------------- |
 | `mihomo kernel [--mirror [镜像]]` | 更新内核（自动选择通道：gh > 本机代理 > 直连；`--mirror` 强制镜像，`--mirror direct` 强制直连） |
 | `mihomo update`                   | 更新 mihomo-cli（先查 npm 最新版，已是最新则跳过重装）              |
-| `mihomo ui [zash\|dash\|yacd]`    | 打开 Web UI（配了访问密钥时自动复制到剪贴板）                       |
+| `mihomo ui [zash\|dash\|yacd] [-c]` | 打开 Web UI（`-c` 把控制器访问密钥复制到剪贴板；默认只提示、不动剪贴板） |
 | `mihomo dir`                      | 显示数据目录位置                                                    |
 | `mihomo dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `data`, `runtime`, `kernel`）  |
 | `mihomo reset [目标...] [--full] [-y]` | 重置用户数据（可用目标：`subs`, `logs`, `data`, `runtime`, `settings`, `kernel`, `overwrites`, `service`；`--full` 删全部，`-y` 跳过确认） |
 | `mihomo doctor`                   | 体检诊断（内核/服务/端口/订阅/配置/连通性/CLI 版本，有异常退出码 1） |
 | `mihomo version`                  | 显示版本信息                                                        |
-| `mihomo help`                     | 显示帮助信息                                                        |
+| `mihomo help [命令]`             | 显示帮助（无参数显示全部；也可用 `mihomo <命令> -h`）               |
 
 ### 命令别名
 
@@ -220,7 +221,7 @@ mihomo status          # 查看状态
 
 > `uninstall` 只卸服务，订阅/内核/日志仍留在数据目录（重装后可继续用）。要彻底移除 mihomo-cli：`mihomo reset --full` 删全部数据，再 `npm uninstall -g mihomo-cli`——`uninstall` 结束时也会提示这两步。
 >
-> **顺序别反**：先 `npm uninstall -g` 的话，LaunchAgent plist 会留下来，而能清理它的命令已经没了（plist 带 `KeepAlive`，仍会尝试拉起一个不存在的内核）。真反了也能救，手动执行：
+> **顺序别反**：先 `npm uninstall -g` 的话，LaunchAgent plist 会留下来，而能清理它的命令已经没了（plist 带 `KeepAlive`，仍会尝试拉起一个不存在的内核）。npm 卸载时会打印一条残留提醒（升级触发同一脚本，忽略即可），但最好仍按上面的顺序来。真反了也能救，手动执行：
 >
 > ```bash
 > launchctl bootout gui/$(id -u)/com.mihomo-cli.daemon 2>/dev/null
@@ -304,7 +305,8 @@ mihomo logs 1       # 查看最新的归档
 
 ```bash
 mihomo kernel                # 自动选择通道
-mihomo kernel --mirror       # 强制走镜像（有 IPv6 走 v6.gh-proxy.org，否则 gh-proxy.org）
+mihomo kernel --mirror       # 强制走镜像（裸域 gh-proxy.org；不探测网络，纯 IPv6 网络请显式 v6）
+mihomo kernel --mirror v6    # 显式走 v6.gh-proxy.org
 mihomo kernel --mirror cdn   # 短别名指定镜像（cdn/v4/v6/axisnow）
 mihomo kernel --mirror hk.gh-proxy.org  # 任意镜像主机名或完整 URL
 mihomo kernel --mirror direct  # 强制直连（绕过 gh/代理自动通道）
@@ -316,8 +318,8 @@ mihomo kernel --mirror direct  # 强制直连（绕过 gh/代理自动通道）
 
 | 镜像                 | 短别名 | 说明                 |
 | -------------------- | ------ | -------------------- |
-| `gh-proxy.org`       | —      | 无 IPv6 时的默认镜像 |
-| `v6.gh-proxy.org`    | `v6`   | 有 IPv6 时的默认镜像 |
+| `gh-proxy.org`       | —      | 裸 `--mirror` 的默认主机 |
+| `v6.gh-proxy.org`    | `v6`   | 纯 IPv6 网络显式指定 |
 | `v4.gh-proxy.org`    | `v4`   | 强制 IPv4            |
 | `cdn.gh-proxy.org`   | `cdn`  | CDN 节点             |
 | `axisnow.gh-proxy.org` | `axisnow` |                  |
@@ -469,7 +471,9 @@ hosts:
   glados 不适用于当前订阅 mini1（作用域 name=edu*）
 ```
 
-「不适用」指文件本身是启用的，只是 `match` 没命中当前订阅——切到命中的订阅（`sub use`）或改 `match` 才会生效，与 `enabled: false` 的「已禁用」是两回事。`mihomo ow` 列表不做这个判断（它不绑定某条订阅），那里的作用域一栏只说明该文件管哪些订阅。`--json` 形态下 `overwrite.applied` 是生效清单（`ow off` 全局关闭时为空数组），`overwrite.files` 仍是「未被 `enabled: false` 停用」的全部文件
+「不适用」指文件本身是启用的，只是 `match` 没命中当前订阅——切到命中的订阅（`sub use`）或改 `match` 才会生效，与 `enabled: false` 的「已禁用」是两回事。`mihomo ow` 列表不做这个判断（它不绑定某条订阅），那里的作用域一栏只说明该文件管哪些订阅。`--json` 形态下 `overwrite.applied` 是生效清单（`ow off` 全局关闭时为空数组），`overwrite.files` 仍是「未被 `enabled: false` 停用」的全部文件；语法或元数据键写错的文件进 `overwrite.errors`（不混进 files/applied）。
+
+**坏文件不阻断诊断、但阻断启动**：YAML 语法错误（含 `enabled: no` 这类元数据键错误）的文件在 `mihomo ow` 与 `status` 中以「加载失败」红字标出，诊断命令永远可用；但该文件不参与合并，`mihomo start`/`doctor` 会硬失败并给出原因——曾经语法错只警告一行就跳过、退出码 0，启动成功但覆写根本没生效。
 
 ### 单个文件的开关（enabled）
 
@@ -586,8 +590,9 @@ mihomo doctor
 ```
 
 逐项检查内核可执行性、数据目录可写、settings 有效性（含端口覆盖合法性）、订阅配置与新鲜度、服务状态、端口占用、
-配置的内核原生校验、代理连通性、CLI 版本（落后时提示 `mihomo update`；npm registry 不可达则跳过），
-每项给出 ✓/!/✗ 与修复命令；存在异常项时退出码为 1，可接入脚本。
+配置的内核原生校验、代理连通性、内核版本（落后时提示 `mihomo kernel`）、CLI 版本（落后时提示 `mihomo update`）；
+两个版本检查都访问网络，GitHub/npm 不可达则跳过、不算异常。每项给出 ✓/!/✗ 与修复命令；
+存在异常项时退出码为 1（警告不影响退出码）。
 
 ### 启动失败
 

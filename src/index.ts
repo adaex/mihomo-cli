@@ -1,13 +1,14 @@
+import fs from 'node:fs';
 import { compareVersions } from 'compare-versions';
 import { stderrColors } from './colors.js';
-import { printShortHelp } from './commands/help.js';
+import { printCommandHelp, printShortHelp } from './commands/help.js';
 import { allCommandTokens, findCommand } from './commands/registry.js';
 import { printStatus } from './commands/status.js';
-import { MIN_NODE_VERSION } from './constants.js';
+import { DEFAULT_MIXED_PORT, MIN_NODE_VERSION } from './constants.js';
 import { CliError, errorMessage } from './errors.js';
 import { isSilentSigint } from './lifecycle.js';
-import { ensureDirs } from './paths.js';
-import { assertKnownFlags, assertPositionalCount, suggestSimilar } from './utils.js';
+import { ensureDirs, PATHS } from './paths.js';
+import { assertKnownFlags, assertPositionalCount, proxyEnvPointsAtSelf, suggestSimilar } from './utils.js';
 
 process.on('SIGINT', () => {
   // 走 stderr：status --json / config --json 探测期间按 Ctrl+C 时，stdout 必须保持
@@ -36,13 +37,40 @@ process.on('unhandledRejection', (reason: unknown) => {
   process.exit(1);
 });
 
+const PROXY_ENV_KEYS = ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY'] as const;
+
+/**
+ * 在守卫与 ensureDirs **之前**取本机 Mixed 端口：不能建目录、不能因 settings 损坏抛错，
+ * 故直接读 settings.json 原始 JSON，任何异常都回退默认端口。
+ * 它只服务一个判断：env 代理是否恰好指向自己（见 clearProxyEnv）。
+ */
+function readSelfMixedPortEarly(): number {
+  try {
+    const raw = JSON.parse(fs.readFileSync(PATHS.settingsFile, 'utf8')) as { ports?: { mixed?: unknown } } | null;
+    const mixed = raw?.ports?.mixed;
+    if (typeof mixed === 'number' && Number.isInteger(mixed) && mixed >= 1 && mixed <= 65535) return mixed;
+  } catch {
+    // 文件不存在/损坏/非对象：用默认端口，不影响守卫之前不抛错的约束
+  }
+  return DEFAULT_MIXED_PORT;
+}
+
+/**
+ * 只清除指向**本机 Mixed 端口**的代理环境变量，其余保留。
+ *
+ * 无差别清除会误伤：企业网络或国内环境里，npm/gh/curl 出网本身就依赖用户 shell 里
+ * export 的 https_proxy（指向公司代理或别的工具）；清掉后 `mihomo update`/`kernel`
+ * 必然直连失败，而报错里没有任何代理线索。唯一必须清除的是「代理恰好是本工具自己」
+ * 的死锁形态——下载经自己的端口，而重启会先停掉那个内核。
+ */
 function clearProxyEnv(): void {
-  delete process.env.http_proxy;
-  delete process.env.https_proxy;
-  delete process.env.HTTP_PROXY;
-  delete process.env.HTTPS_PROXY;
-  delete process.env.all_proxy;
-  delete process.env.ALL_PROXY;
+  const selfPort = readSelfMixedPortEarly();
+  for (const key of PROXY_ENV_KEYS) {
+    const value = process.env[key];
+    if (value && proxyEnvPointsAtSelf(value, selfPort)) {
+      delete process.env[key];
+    }
+  }
 }
 
 /**
@@ -177,10 +205,18 @@ async function main(): Promise<void> {
     ensureDirs();
   }
 
-  // meta（help/version）不接受任何位置参数与选项；此前只查 flag，`help extra` 被静默忽略
+  // meta 不接受选项；help 可带一个命令名（help <命令>），version 不带任何位置参数。
+  // 此前 help extra 直接报「多余的参数」，命令级帮助没有入口
   if (command.group === 'meta') {
     assertKnownFlags(args.slice(1), [], command.name);
-    assertPositionalCount(args, 0, 1, `mihomo ${command.name}`);
+    assertPositionalCount(args, command.name === 'help' ? 1 : 0, 1, `mihomo ${command.name}`);
+  }
+
+  // 命令级帮助：`<命令> -h|--help|help` 是最自然的试法，此前三路全报错
+  // （未知选项 / 未知子命令 / 多余位置参数）。在分发前统一拦截、渲染该命令自己的用法
+  if (command.group !== 'meta' && (args[1] === '-h' || args[1] === '--help' || args[1] === 'help')) {
+    printCommandHelp(command);
+    return;
   }
 
   // rewrite 把顶层快捷命令(tun/use)映射为子命令形式;其余命令原样透传。

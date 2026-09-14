@@ -109,6 +109,22 @@ describe('reset 的最终数据状态', () => {
       }
     }));
 
+  it('删除计划含订阅时挑明链接不可恢复；不含订阅时不恐吓', () =>
+    withFixture((_dataDir, run) => {
+      // 非 TTY 且无 -y：确认环节报错退出，但删除计划在确认前已打印
+      const bare = run(['reset']);
+      assert.notEqual(bare.status, 0);
+      assert.match(bare.stdout, /订阅链接与本地配置将被删除且无法恢复/);
+
+      const explicit = run(['reset', 'subs']);
+      assert.notEqual(explicit.status, 0);
+      assert.match(explicit.stdout, /无法恢复/);
+
+      const logs = run(['reset', 'logs']);
+      assert.notEqual(logs.status, 0);
+      assert.ok(!logs.stdout.includes('无法恢复'), '与订阅无关的目标不该显示该警告');
+    }));
+
   /**
    * 会破坏运行前提的 reset 必须记录「停止过」，纯配置类的不记录。
    *

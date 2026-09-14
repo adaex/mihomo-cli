@@ -1,6 +1,6 @@
 {
   "name": "mihomo-cli",
-  "version": "4.13.0",
+  "version": "4.14.0",
   "type": "module",
   "description": "A terminal-based mihomo (Clash.Meta) client for macOS",
   "bin": {
@@ -11,6 +11,7 @@
   },
   "files": [
     "dist",
+    "scripts",
     "CHANGELOG.md"
   ],
   "scripts": {
@@ -22,6 +23,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"src/**/*.spec.ts\"",
     "prepublishOnly": "npm run build",
+    "preuninstall": "node scripts/preuninstall.mjs",
     "prepare": "husky"
   },
   "keywords": [

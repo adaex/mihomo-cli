@@ -433,18 +433,33 @@ describe('buildKernelRejectHint：内核拒绝配置时的排查线索', () => {
       '  若报错的元素来自覆写追加（~key 未匹配到同名元素时会新增），改用 ~?key 可在缺少该元素的订阅上跳过。',
       '',
       '  请修正订阅或覆写；当前运行时配置未改动。',
+      '  若订阅或覆写本身没有明显错误，也可能是内核版本过旧、不认识新配置键，可尝试: mihomo kernel',
     ]);
   });
 
   // 空清单的三种来源（无覆写文件、ow off、没命中 match）都不该出现这段：
   // 问题必在订阅本身，多打一段只会把排查方向引偏
   it('覆写清单为空时完全不含该段', () => {
-    assert.deepEqual(buildKernelRejectHint('boom', []), ['', '  boom', '', '  请修正订阅或覆写；当前运行时配置未改动。']);
+    assert.deepEqual(buildKernelRejectHint('boom', []), [
+      '',
+      '  boom',
+      '',
+      '  请修正订阅或覆写；当前运行时配置未改动。',
+      '  若订阅或覆写本身没有明显错误，也可能是内核版本过旧、不认识新配置键，可尝试: mihomo kernel',
+    ]);
   });
 
   it('内核多行输出逐行缩进，空行仍是空行（不缩出尾随空格）', () => {
     const hint = buildKernelRejectHint('line1\n\nline2', []);
-    assert.deepEqual(hint, ['', '  line1', '', '  line2', '', '  请修正订阅或覆写；当前运行时配置未改动。']);
+    assert.deepEqual(hint, [
+      '',
+      '  line1',
+      '',
+      '  line2',
+      '',
+      '  请修正订阅或覆写；当前运行时配置未改动。',
+      '  若订阅或覆写本身没有明显错误，也可能是内核版本过旧、不认识新配置键，可尝试: mihomo kernel',
+    ]);
   });
 
   it('覆写摘要经终端消毒，ESC 序列不进输出', () => {

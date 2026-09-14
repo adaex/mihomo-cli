@@ -40,6 +40,34 @@ export function shellQuote(s: string): string {
 }
 
 /**
+ * 判定一个代理环境变量的值（http_proxy/https_proxy/all_proxy，大小写两种形式）
+ * 是否指向**本机自己的 Mixed 端口**——这是唯一必须清除的形态：下载订阅/内核时
+ * 流量经自己的代理，而重启过程中旧内核会先被停掉，形成下载死锁。
+ *
+ * 指向其他任何地址（企业网络的 env 代理、别的代理工具）都必须保留：无差别清除会让
+ * 只能靠 env 代理出网的用户在 update/kernel 时全部直连失败，且报错与代理无关。
+ *
+ * 接受的形态：`http://127.0.0.1:7890`、`socks5://localhost:7890`、
+ * 以及无协议的裸 `127.0.0.1:789`（all_proxy 的常见写法，补协议再解析）。
+ * 纯函数，host 比较去方括号、忽略大小写；无端口或解析失败一律不判为自代理。
+ */
+export function proxyEnvPointsAtSelf(value: string, selfPort: number): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    try {
+      parsed = new URL(`http://${value}`);
+    } catch {
+      return false;
+    }
+  }
+  const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') return false;
+  return Number.parseInt(parsed.port, 10) === selfPort;
+}
+
+/**
  * 终端显示宽度：CJK 字符（含全角标点）占两列，其余按一列算。
  *
  * 不能用 `.length` 代替：帮助里的签名含中文占位符（`logs [编号]`、`--mirror [镜像]`），

@@ -5,7 +5,7 @@ import { listOverwriteFile } from '../overwrite.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
-import { getSubscriptionsWithCache } from '../settings.js';
+import { getPorts, getSubscriptionsWithCache } from '../settings.js';
 import { formatProxySummary, getActiveSubscription, isSubscriptionStale, resolveUpdateInterval } from '../subscription.js';
 import type { OverwriteFileInfo, ProxyProbeResult, StatusJson, SubscriptionUrgency } from '../types.js';
 import {
@@ -49,11 +49,13 @@ function buildStatusJson(args: {
   kind: 'service' | 'tun' | null;
   pid: number | null;
   probe: ProxyProbeResult | null;
+  controllerPort: number | null;
   info: ReturnType<typeof getConfigInfo>;
   activeSub: ReturnType<typeof getActiveSubscription>;
   cached: ReturnType<typeof getSubscriptionsWithCache>[number] | undefined;
   overwriteEnabled: boolean;
   overwriteFiles: OverwriteFileInfo[];
+  overwriteBroken: ReturnType<typeof listOverwriteFile>['broken'];
   service: ReturnType<typeof getServiceStatus>;
   legacy: boolean;
 }): StatusJson {
@@ -68,11 +70,11 @@ function buildStatusJson(args: {
     kernel: getKernelVersion(),
     kernelInstalled: hasKernel(),
     ports: args.info
-      ? args.info.tun
-        ? { tun: true, ...(args.info.mixedPort ? { mixed: args.info.mixedPort } : {}) }
-        : {
-            ...(args.info.mixedPort ? { mixed: args.info.mixedPort } : {}),
-          }
+      ? {
+          ...(args.info.mixedPort ? { mixed: args.info.mixedPort } : {}),
+          ...(args.controllerPort !== null ? { controller: args.controllerPort } : {}),
+          ...(args.info.tun ? { tun: true } : {}),
+        }
       : {},
     subscription: args.activeSub
       ? {
@@ -94,6 +96,8 @@ function buildStatusJson(args: {
       // 全局关闭时 buildConfig 不加载任何覆写，applied 必须空——只滤 enabled/match
       // 会列出「生效文件」，与同一份 JSON 里的 enabled:false 自相矛盾
       applied: args.overwriteEnabled ? args.overwriteFiles.filter(f => f.enabled && f.matched !== false).map(f => f.name) : [],
+      // 加载失败的文件不属于 files/applied（既没合并也无法判 enabled/match），单列 errors
+      errors: args.overwriteBroken.map(b => ({ name: b.name, message: b.message })),
     },
     service: {
       installed: args.service.installed,
@@ -122,9 +126,20 @@ export async function printStatus(args: string[] = []): Promise<void> {
   const activeSub = getActiveSubscription();
   // 带上活跃订阅的作用域：status 与 `ow` 列表不同，它知道当前订阅是谁，因而能判 match。
   // 不判的话，只对别的订阅生效的文件会混在「已启用」里，看着像正在生效
-  const { enabled: overwriteEnabled, files: overwriteFiles } = listOverwriteFile(activeSub ? { subName: activeSub.name, subUrl: activeSub.url } : undefined);
+  const {
+    enabled: overwriteEnabled,
+    files: overwriteFiles,
+    broken: overwriteBroken,
+  } = listOverwriteFile(activeSub ? { subName: activeSub.name, subUrl: activeSub.url } : undefined);
   const cached = activeSub ? getSubscriptionsWithCache().find(s => s.name === activeSub.name) : undefined;
   const legacy = detectLegacySystemInstall();
+  // 控制器端口在 settings 非法时不应让整个 status 崩掉（doctor 另有一项专查非法 ports）
+  let controllerPort: number | null = null;
+  try {
+    controllerPort = getPorts().controller;
+  } catch {
+    controllerPort = null;
+  }
 
   const { running, pid, kind } = state;
 
@@ -143,6 +158,7 @@ export async function printStatus(args: string[] = []): Promise<void> {
           kind,
           pid,
           probe,
+          controllerPort,
           info,
           activeSub,
           cached,
@@ -150,6 +166,7 @@ export async function printStatus(args: string[] = []): Promise<void> {
           // 两个数组在 buildStatusJson 里分出来：files 仍是旧契约（只滤文件级 enabled，
           // 不按 match、不随全局开关变空），applied 才是本次真正参与合并的
           overwriteFiles,
+          overwriteBroken,
           service,
           legacy,
         }),
@@ -206,14 +223,17 @@ export async function printStatus(args: string[] = []): Promise<void> {
   }
 
   if (info) {
+    // 控制器口一并展示：改过 ports.controller 后，托管 UI 默认连 9090 必然连不上，
+    // 而端口此前在任何只读界面都看不到（README 承诺「status 会显示实际端口」）
+    const controllerSuffix = controllerPort !== null ? `，控制器 ${controllerPort}` : '';
     if (info.tun) {
       // TUN 模式由虚拟网卡接管全局流量；mixed-port 仍在监听可作备用入口，一并标注
-      const extra = info.mixedPort ? `，另监听 ${info.mixedPort}` : '';
-      console.log(`${colors.gray('端口: ')}TUN 接管${extra}`);
+      const extra = info.mixedPort ? `，混合端口 ${info.mixedPort}` : '';
+      console.log(`${colors.gray('端口: ')}TUN 接管${extra}${controllerSuffix}`);
     } else if (info.mixedPort) {
-      console.log(`${colors.gray('端口: ')}${info.mixedPort}`);
+      console.log(`${colors.gray('端口: ')}${info.mixedPort}${controllerSuffix}`);
     } else {
-      console.log(`${colors.gray('端口: ')}未知`);
+      console.log(`${colors.gray('端口: ')}未知${controllerSuffix}`);
     }
   }
 
@@ -245,9 +265,14 @@ export async function printStatus(args: string[] = []): Promise<void> {
     console.log(`${colors.gray('订阅: ')}未配置 ${colors.gray('(添加: mihomo sub add <url>)')}`);
   }
 
-  printOverwriteLines(overwriteEnabled, overwriteFiles, activeSub);
+  printOverwriteLines(overwriteEnabled, overwriteFiles, overwriteBroken, activeSub);
 
   printServiceLines(service, legacy);
+
+  // TUN 是临时 root 进程且不随终端退出消失，每次查看状态都提醒怎么收掉
+  if (kind === 'tun') {
+    console.log(colors.gray('TUN 为临时进程；停止: mihomo stop（之后 mihomo start 恢复 Mixed）'));
+  }
 
   console.log('');
 }
@@ -276,7 +301,12 @@ function shortOverwriteName(name: string): string {
  * matched 为 undefined（无活跃订阅、没法判 match）时按「未被排除」处理：此时
  * 连订阅都没有，覆写本就无从谈起，不值得再分一类。
  */
-function printOverwriteLines(enabled: boolean, files: OverwriteFileInfo[], activeSub: ReturnType<typeof getActiveSubscription>): void {
+function printOverwriteLines(
+  enabled: boolean,
+  files: OverwriteFileInfo[],
+  broken: ReturnType<typeof listOverwriteFile>['broken'],
+  activeSub: ReturnType<typeof getActiveSubscription>,
+): void {
   if (!enabled) {
     console.log(`${colors.gray('覆写: ')}${colors.yellow('已禁用')}`);
     return;
@@ -304,6 +334,11 @@ function printOverwriteLines(enabled: boolean, files: OverwriteFileInfo[], activ
   for (const f of unmatched) {
     const scope = f.scope ? `作用域 ${f.scope}` : '作用域受限';
     console.log(colors.gray(`  ${shortOverwriteName(f.name)} 不适用于当前订阅${activeSub ? ` ${activeSub.name}` : ''}（${scope}）`));
+  }
+
+  // 加载失败的文件不参与任何分类，红字给出原因；start 会硬失败，这里只负责让它可见
+  for (const b of broken) {
+    console.log(colors.red(`  ${b.message}`));
   }
 }
 

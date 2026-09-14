@@ -1,6 +1,29 @@
 # 代码审查：验证结论与边界
 
-当前审查：2026-09-13，v4.13.0 后的过度设计清理（未发布）
+当前审查：2026-09-14，v4.14.0 产品体验收口（未发布）
+
+本轮针对产品审查发现的「成功路径最后一公里」与反馈倒挂问题收口，失败路径的既有防线不动：
+
+| 范围 | 验证方式与结论 |
+| --- | --- |
+| 覆写加载双出口（本轮最大结构改动） | 底层 `readOverwriteFiles()` 返回 `{ ok, broken }` **不抛错**；合并路径 `loadOverwriteFile()` 有 broken 即硬失败——语法错（含顶层数组/标量）从「warn 一行+退出 0、启动成功但覆写没生效」收口为与语义错同级；诊断路径 `listOverwriteFile()` 带 broken，`ow`/status 红字渲染、`status --json` 新增 `overwrite.errors`，仪表盘不再被 `enabled: no` 一个笔误整体击穿。overwrite.spec 的别名用例改为断言合并路径抛 `CliError` + 诊断路径 broken 带引号 hint；CLI spec 锁 ow 退出 0 且标 `[加载失败]`、status 人读/JSON 两形态。**反向验证**：临时让 loadOverwriteFile 忽略 broken，别名及坏文件 5 条用例转红 |
+| 配置凭据脱敏 | 新 `redact.ts`：递归掩码 password/uuid/private-key/pre-shared-key/auth-str/secret，provider 容器（proxy/rule-providers）内 url 走 maskUrl、容器外 url 不动；纯函数+深拷贝，redact.spec 4 组用例。`config` 默认脱敏、`--reveal` 原文，JSON 信封带 `redacted`。CLI spec 锁密码/provider token 不上屏与缺文件 hint。**反向验证**：断开接线后 2 条用例转红 |
+| 控制器端口可见 | status 文本/JSON 与 ui 固定显示 `127.0.0.1:<controller>`（settings 非法时 status 不崩、doctor 另有专查项）。help.spec 自定义端口用例锁文本与 JSON。**反向验证**：置空后缀后该用例转红 |
+| doctor 内核版本检查 | 与 npm 查询同位置并行发起，4s 超时/失败降级 skip（与 CLI 版本同姿态），warn 指向 `mihomo kernel`；未装内核不列。doctor.spec 只锁检查项存在（ok/warn/skip 取值依赖网络，不写死） |
+| `sub update` 部分失败 | 汇总行 + 非零退出 + 逐条重试 hint。CLI 测试用本地 HTTP 桩（200/500 各一）：**必须用异步 spawn**——桩 server 与测试同进程时 spawnSync 阻塞父事件循环，server 无法 accept，子进程 fetch 挂死（父子死锁），实测 30s 超时零请求；改异步后一次通过。成功订阅照常落盘、失败无半成品 |
+| clearProxyEnv 精准化 | 只清 `proxyEnvPointsAtSelf(value, selfPort)`（回环 host+端口等于 settings 的 ports.mixed；守卫前无副作用只读 settings，异常回退 7890）命中的 env，企业/外部代理透传。utils.spec 4 组 12 用例锁回环+端口双条件与垃圾值保守保留 |
+| 命令级帮助 | `help <命令>` 与 `<命令> -h/--help/help` 在 index 分发前统一拦截（help 放开一个位置参数、version 仍 0 个）；help.spec 7 条含未知纠错与多参数上限；positional-args.spec 移除 `help extra` 旧预期 |
+| TUN/内核/订阅文案族 | ① `kernel` 重启提示按运行模式给 `start tun`（复用 sub update 的 kind 判据）+ 本地网络授权提示；② TUN 取消提权/失败时错误带「自启已关、mihomo start 恢复」，成功后与 TUN status 常驻停止行；③ start 无订阅给命令；④ 缺订阅文件三处统一 `sub update`；⑤ `-t` 拒绝 hint 补「内核过旧」另因（config.spec 三条逐行期望同步）；⑥ reset 含 subs 时确认语挑明链接不可恢复（reset.spec 非 TTY 计划断言） |
+| ui 剪贴板 | 默认只提示 `-c`、不碰剪贴板；ui.spec CLI 用 PATH 前置桩 open/pbcopy，锁默认不复制、`-c` 才调用 pbcopy，测试不弹浏览器不碰真实剪贴板 |
+| npm preuninstall | `scripts/preuninstall.mjs` + package.json `files`/钩子：只警告不自动卸载（升级也触发该钩子，自动 uninstall 会在每次 `mihomo update` 删掉服务）；lifecycle-script.spec spawn 真实脚本，隔离 HOME/label 锁干净环境静默与残留时手动命令两态 |
+| 文档同步 | README：镜像 IPv6 说法、config/ui/doctor/help 命令表、卸载段钩子提醒、覆写坏文件行为；CLAUDE.md：clearProxyEnv 新判据、覆写加载双出口约束；registry usage 行（config/ui/help/doctor） |
+| 全量验证 | typecheck / **661 测试**（643 → 661，+18）/ Biome（`src/ scripts/` 84 文件，非 0）/ build 全绿。三次反向验证（覆写硬失败、脱敏接线、控制器口）均按预期转红后恢复 |
+
+**未覆盖与待发布后验证**：TUN 真实 sudo 路径（取消密码框、root 进程收尾）与内核真机更新按既有边界不自动执行，仅类型与代码审查；doctor 内核版本项的 ok/warn 具体取值依赖 GitHub，不做硬断言；npm 钩子的真实 `npm uninstall` 接线计划发布后用 registry 拉回包验证（脚本本体已用 spawn 直接跑过）。
+
+---
+
+## 上一轮验证（v4.13.0 过度设计清理，已发布）
 
 本轮针对「设施规模与真实使用面不匹配」做减法，全部以实测使用面为依据：
 

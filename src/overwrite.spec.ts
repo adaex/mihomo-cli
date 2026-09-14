@@ -913,23 +913,25 @@ describe('覆写文件 enabled 开关', () => {
     }
   });
 
-  it('YAML 别名陷阱：* 开头的值解析失败时提示加引号', () => {
-    // name: *edu 是 YAML 别名语法而非通配，整个文件会被跳过；
-    // 推广 glob 后前缀通配是自然写法，只说「解析失败」用户想不到是引号问题
+  it('YAML 别名陷阱：合并路径硬失败，诊断路径带加引号提示', () => {
+    // name: *edu 是 YAML 别名语法而非通配。曾只 warn 一行就跳过文件、退出码 0，
+    // 启动成功但覆写没生效；现合并路径硬失败，诊断路径（listOverwriteFile）红字可见
     write('overwrite.alias.yaml', 'match:\n  name: *edu\nlog-level: debug\n');
-    const original = console.warn;
-    const lines: string[] = [];
-    console.warn = (m?: unknown) => {
-      lines.push(String(m));
-    };
     try {
-      assert.deepEqual(loadOverwriteFile(), []);
-      assert.equal(lines.length, 1);
-      assert.match(lines[0], /解析失败/);
-      assert.match(lines[0], /加引号/);
-      assert.match(lines[0], /name: "\*edu"/);
+      assert.throws(
+        () => loadOverwriteFile(),
+        (e: unknown) => e instanceof CliError && /解析失败/.test((e as Error).message),
+        '合并路径必须硬失败，不能 warn 后照常启动',
+      );
+
+      const info = listOverwriteFile();
+      assert.equal(info.files.length, 0);
+      assert.equal(info.broken.length, 1);
+      assert.match(info.broken[0].message, /解析失败/);
+      // 推广 glob 后前缀通配是自然写法，只说「解析失败」用户想不到是引号问题
+      assert.match(info.broken[0].hint.join('\n'), /加引号/);
+      assert.match(info.broken[0].hint.join('\n'), /name: "\*edu"/);
     } finally {
-      console.warn = original;
       cleanup('overwrite.alias.yaml');
     }
   });

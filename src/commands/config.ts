@@ -1,6 +1,7 @@
 import { colors } from '../colors.js';
 import { buildConfig, dumpYaml, getConfigInfo } from '../config.js';
 import { CliError } from '../errors.js';
+import { redactConfigSecrets } from '../redact.js';
 import { readSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription } from '../subscription.js';
 import { assertKnownFlags, assertPositionalCount, hasFlag } from '../utils.js';
@@ -20,10 +21,11 @@ import { assertKnownFlags, assertPositionalCount, hasFlag } from '../utils.js';
  * mode 与 status/doctor 同判据：看当前落盘配置里有没有 tun，没有就按 mixed 推导。
  */
 export function cmdConfig(args: string[] = []): void {
-  assertKnownFlags(args.slice(1), ['-j', '--json'], 'config [--json]');
+  assertKnownFlags(args.slice(1), ['-j', '--json', '--reveal'], 'config [--json] [--reveal]');
   // 不接受位置参数：`config garbage` 此前被静默忽略
-  assertPositionalCount(args, 0, 1, 'mihomo config [--json]');
+  assertPositionalCount(args, 0, 1, 'mihomo config [--json] [--reveal]');
   const asJson = hasFlag(args, '-j', '--json');
+  const reveal = hasFlag(args, '--reveal');
 
   const active = getActiveSubscription();
   if (!active) {
@@ -39,24 +41,24 @@ export function cmdConfig(args: string[] = []): void {
   const mode = getConfigInfo()?.tun ? 'tun' : 'mixed';
   const { config, warnings } = buildConfig(rawContent, mode, { subName: active.name, subUrl: active.url });
 
-  // secret 是凭据，不能明文打印——展示用的副本改掉，不动 config 本体。
-  // 不判类型：buildConfig 已保证非字符串 secret 直接报错，这里只要键存在就脱敏，
-  // 不把「凭据是否上屏」寄托在类型判断上
-  const shown: Record<string, unknown> = { ...config };
-  if ('secret' in shown) shown.secret = '***';
+  // 默认凭据脱敏：顶层 secret 之外，节点的 password/uuid/private-key/auth-str 与
+  // provider 订阅 URL 里的 token 同样是凭据，明文铺满整屏（录屏、| pbcopy 求助）即泄漏。
+  // --reveal 显式查看原文。脱敏在展示副本上做，config 本体不动
+  const redacted = reveal ? { config, changed: false } : redactConfigSecrets(config);
+  const shown = redacted.config as Record<string, unknown>;
 
   if (asJson) {
     // 配置与 CLI 提示分两个键：warnings 若铺在顶层会顶替配置自身的同名键，
     // 也破坏「config 内容 = start 写入内容」。信封形态与 YAML 出口的「正文 + # 提示段」同构。
     // stdout 始终是单个可整体解析的 JSON；无警告时输出空数组，字段形状稳定
-    console.log(JSON.stringify({ config: shown, warnings }, null, 2));
+    console.log(JSON.stringify({ config: shown, warnings, redacted: !reveal && redacted.changed }, null, 2));
     return;
   }
 
   console.log(colors.gray(`# 订阅: ${active.name}  模式: ${mode}`));
   console.log(colors.gray('# 由订阅与覆写推导，与 start 写入 runtime/config.yaml 的内容一致'));
-  if ('secret' in config) {
-    console.log(colors.gray('# secret 已脱敏显示'));
+  if (!reveal && redacted.changed) {
+    console.log(colors.gray('# 凭据已脱敏显示，--reveal 可查看原文'));
   }
   console.log('');
   console.log(dumpYaml(shown).trimEnd());

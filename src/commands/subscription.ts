@@ -185,11 +185,21 @@ async function subUpdate(args: string[]): Promise<void> {
       if (r.success) ok++;
       subscription.printUpdateResult(r);
     }
-    // 各条结果已逐条打印；全部失败时以非零码收尾（无额外信息，故 hint 留空）
-    if (ok === 0) throw new CliError('全部订阅更新失败');
+    const failedResults = results.filter(r => !r.success);
     console.log('');
+    if (failedResults.length > 0) {
+      console.log(colors.yellow(`更新完成: ${ok} 个成功，${failedResults.length} 个失败`));
+    }
     printRestartHintIfRunning();
     printSubscriptionList();
+    // 部分失败也要非零退出：此前 2/3 成功时退出 0，脚本与「更新过了」的用户都发现不了
+    // 那条失败；逐条原因已在上面打印，hint 只给逐条重试命令
+    if (failedResults.length > 0) {
+      const allFailed = failedResults.length === results.length;
+      throw new CliError(allFailed ? '全部订阅更新失败' : `${failedResults.length} 个订阅更新失败: ${failedResults.map(r => r.name).join('、')}`, {
+        hint: failedResults.map(r => `重试: mihomo sub update ${r.name}`),
+      });
+    }
     return;
   }
 

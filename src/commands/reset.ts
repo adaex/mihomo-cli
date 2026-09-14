@@ -89,6 +89,11 @@ export async function cmdReset(args: string[]): Promise<void> {
     console.log(colors.yellow('将清理遗留的系统级服务（root LaunchDaemon，需要一次管理员密码）'));
   }
   console.log(`将删除: ${targets.map(t => t.label).join('、')}`);
+  // 「订阅」两个字传达不出删掉的是找不回的机场链接——裸 reset 的默认集就含它，
+  // 必须把不可恢复性挑明（数据保护段 README 有流程说明，确认瞬间用户只看得到这行）
+  if (ids.has('subs')) {
+    console.log(colors.yellow('订阅链接与本地配置将被删除且无法恢复，需重新从机场获取订阅地址'));
+  }
   if (
     !args.includes('-y') &&
     !args.includes('--yes') &&

@@ -1,7 +1,7 @@
 import { cmdConfig } from './config.js';
 import { cmdDirectory } from './directory.js';
 import { cmdDoctor } from './doctor.js';
-import { printHelp, printVersion } from './help.js';
+import { printHelpEntry, printVersion } from './help.js';
 import { cmdKernel } from './kernel.js';
 import { cmdLogs } from './log.js';
 import { cmdOverwrite } from './overwrite.js';
@@ -103,7 +103,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdUI,
     group: 'interface',
-    usage: [{ signature: 'ui [zash|dash|yacd]', description: '打开 Web UI（默认 zash）' }],
+    usage: [{ signature: 'ui [zash|dash|yacd] [-c]', description: '打开 Web UI（默认 zash；-c 复制控制器访问密钥）' }],
   },
   {
     name: 'logs',
@@ -141,7 +141,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdConfig,
     group: 'config',
-    usage: [{ signature: 'config [--json]', description: '查看当前生效的运行配置（由订阅与覆写推导）' }],
+    usage: [{ signature: 'config [--json] [--reveal]', description: '查看当前生效的运行配置（由订阅与覆写推导，凭据默认脱敏）' }],
   },
   {
     name: 'overwrite',
@@ -190,15 +190,15 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdDoctor,
     group: 'system',
-    usage: [{ signature: 'doctor', description: '体检诊断（内核/服务/端口/订阅/配置/连通性/CLI 版本，有异常退出码 1）' }],
+    usage: [{ signature: 'doctor', description: '体检诊断（内核/服务/端口/订阅/配置/连通性/内核与 CLI 版本，有异常退出码 1）' }],
   },
   // === meta(不在分组清单展示,help 末尾单列) ===
   {
     name: 'help',
     aliases: ['-h', '--help'],
-    handler: () => printHelp(COMMANDS),
+    handler: args => printHelpEntry(args, COMMANDS, findCommand),
     group: 'meta',
-    usage: [{ signature: 'help, -h', description: '显示帮助' }],
+    usage: [{ signature: 'help [命令]', description: '显示帮助（无参数显示全部命令）' }],
   },
   {
     name: 'version',

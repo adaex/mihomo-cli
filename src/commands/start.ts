@@ -32,6 +32,8 @@ export async function cmdStart(args: string[]): Promise<void> {
   // 放在 hasKernel 等状态检查之前——参数错误应在任何环境副作用之前报出
   assertPositionalCount(args, 1, 1, 'mihomo start [tun|mixed] [-s] [-u ms]');
   const targetMode = resolveStartMode(args);
+  // TUN 分支若在弹密码前关了服务自启，启动失败/取消时错误提示要带上自启位的最终状态
+  let disabledAutoStartForTun = false;
 
   if (!hasKernel()) {
     throw new CliError('未找到内核', { hint: '下载内核: mihomo kernel' });
@@ -81,6 +83,7 @@ export async function cmdStart(args: string[]): Promise<void> {
     // 放在启动前而非启动后：中途失败/被 Ctrl+C 也不会留下「自启开着 + TUN 配置」的组合。
     if (serviceBefore.installed && !serviceBefore.disabled) {
       disableServiceAutoStart();
+      disabledAutoStartForTun = true;
       console.log(colors.gray('已临时关闭服务自启（避免重启后服务拿 TUN 配置启动）'));
       console.log(colors.gray('TUN 用完后 mihomo start 可恢复'));
       console.log('');
@@ -126,9 +129,17 @@ export async function cmdStart(args: string[]): Promise<void> {
     const pid = await runtime.launchOrRestart(targetMode, stopEpochBefore);
     console.log(`${colors.green('已启动')}${pid ? ` (PID ${pid})` : ''}`);
   } catch (e) {
-    if (e instanceof CliError) throw e;
     const lines = (e as Error).message.split('\n');
-    throw new CliError(lines[0], { label: '启动失败', hint: lines.slice(1) });
+    const extraHint: string[] = [];
+    // sudo 取消/内核没起来时，自启位已经关掉了——只报启动失败会让用户以为一切照旧，
+    // 下次开机才发现代理没回来
+    if (targetMode === 'tun' && disabledAutoStartForTun) {
+      extraHint.push('', '服务自启已被关闭（启动 TUN 前关闭以避免自启失败循环）。', '恢复 Mixed 模式: mihomo start');
+    }
+    if (e instanceof CliError) {
+      throw new CliError(e.message, { label: e.label, hint: [...e.hint, ...extraHint] });
+    }
+    throw new CliError(lines[0], { label: '启动失败', hint: [...lines.slice(1), ...extraHint] });
   }
 
   await printStatus();
@@ -138,6 +149,9 @@ export async function cmdStart(args: string[]): Promise<void> {
   // 端口取实际配置（settings.ports 可覆盖默认 7890）——提示错了端口用户会直接连不上
   if (targetMode === 'mixed') {
     console.log(colors.gray(`提示: Mixed 模式需在系统设置配置 HTTP/SOCKS 代理 127.0.0.1:${getPorts().mixed}（TUN 模式无需）`));
-    console.log('');
+  } else {
+    // TUN 是 root 临时进程：关终端、退出 shell 都不会停它，「怎么收掉」必须随成功一起告知
+    console.log(colors.gray('TUN 为临时进程，关闭终端不会停止；停止: mihomo stop（之后 mihomo start 恢复 Mixed）'));
   }
+  console.log('');
 }

@@ -1,5 +1,40 @@
 # Changelog
 
+## [4.14.0] - 2026-09-14
+
+### 新增
+
+- 命令级帮助：`mihomo help <命令>` 与 `mihomo <命令> -h/--help/help` 只显示该命令用法（此前三路都是报错）。
+- `mihomo doctor` 新增内核版本检查：对比 GitHub 最新稳定版，落后时提示 `mihomo kernel`；GitHub 不可达或超时按「跳过」处理，不拖慢体检。
+- `mihomo config --reveal` 显式查看凭据原文；`mihomo ui -c, --copy-secret` 显式把控制器访问密钥复制到剪贴板。
+- npm 卸载时若检测到 LaunchAgent 服务或数据目录残留，打印手动清理提醒（升级触发同一脚本，忽略即可；不会自动卸载服务）。
+- status 文本/JSON 与 `mihomo ui` 固定显示控制器实际端口——自定义 `ports.controller` 后托管 UI 默认连 9090 必然失败，而此前没有任何界面能看到该端口。
+
+### 移除
+
+- 移除 `mihomo completion` 与 `mihomo completion install`（shell 补全子系统）：该设施已长期损坏且无人维护（三 shell 词表手抄、多个分支生成内容错误），本机实测无任何用户；需要补全可自行参照 `mihomo help` 包装。
+
+### 变更
+
+- 覆写文件语法错误（含顶层写成数组/标量）不再只警告一行就跳过：`start`/`doctor` 改为硬失败并给完整原因；`mihomo ow` 与 status 诊断面不再被坏文件击穿，改为红字列出「加载失败」（`status --json` 新增 `overwrite.errors`）。
+- `mihomo sub update`（无参批量）部分订阅失败时打印「N 个成功，M 个失败」汇总并以非零退出，此前 2/3 成功时退出 0，脚本与用户都发现不了失败项。
+- 代理环境变量只在指向**本机自己的 Mixed 端口**时清除，指向企业代理或其他工具的 env 代理保留并透传给 npm/gh/curl——此前无差别清除会让只能靠 env 代理出网的用户 `mihomo update`/`kernel` 必败。
+- 裸 `mihomo kernel --mirror` 固定走裸域 `gh-proxy.org`，不再猜测 IPv6（有 v6 地址不代表 v6 路由通）；纯 IPv6 网络显式用 `--mirror v6`。
+
+### 安全
+
+- `mihomo config` 默认递归脱敏节点凭据（`password`/`uuid`/`private-key`/`pre-shared-key`/`auth-str`/`secret`）与 provider 订阅 URL 里的 token；此前只脱敏顶层 `secret`，录屏或 `config | pbcopy` 会泄露节点密码与订阅地址。
+- `mihomo ui` 不再默认把控制器密钥写入剪贴板（需显式 `-c`），避免静默覆盖剪贴板内容及经通用剪贴板同步到同 Apple ID 设备。
+
+### 修复
+
+- TUN 运行时执行 `mihomo kernel`，重启提示改为 `mihomo start tun`；此前提示裸 `mihomo start`，照做会静默切回 Mixed 并再要一次 sudo。
+- TUN 启动被取消提权或失败时，错误提示说明服务自启已被关闭及恢复方式（disable 发生在弹密码之前）；启动成功后与 TUN 状态下的 status 常驻「停止: mihomo stop」收尾行。
+- 内核更新成功后提示：使用局域网节点时首次启动可能重新弹出 macOS「本地网络」授权（此前只写在 README）。
+- 内核 `-t` 拒绝配置的提示补上另一真实根因：订阅/覆写无误时可能是内核过旧、不认识新配置键，可尝试 `mihomo kernel`。
+- `mihomo start` 无订阅时给出 `mihomo sub add <url>` 命令；订阅有条目但本地配置文件缺失时，start 与 config/doctor 统一指向 `mihomo sub update <名称>`（此前 start 误导为重新添加）。
+- 裸 `mihomo reset` 及显式 `reset subs` 的确认计划挑明「订阅链接与本地配置将被删除且无法恢复」。
+
 ## [4.13.0] - 2026-09-13
 
 一项入站安全边界修复，并给锁定清单补上防漏机制。单测 700（+11）。
