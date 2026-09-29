@@ -96,14 +96,19 @@ function buildTunLaunchScript(): string {
 
 export async function startTun(): Promise<StartResult> {
   ensureDirs();
-  rotateAndCleanupLogs();
 
+  // 存在性校验先于日志轮转：轮转把 mihomo.log rename 成归档后，仍在运行的旧 TUN
+  // 内核（fd 指向被改名的 inode、O_APPEND）会继续往「归档文件」写——秒失败错误
+  // （内核没装、配置缺失）不该先动日志。sudo 取消路径的同类窗口无法完全消除
+  // （rename 进不了 root 脚本），但校验前置消掉了最常见的形态
   if (!fs.existsSync(PATHS.mihomoBinary)) {
     throw new CliError('未找到 mihomo 内核，请先下载内核', { hint: '下载内核: mihomo kernel' });
   }
   if (!fs.existsSync(PATHS.configFile)) {
     throw new CliError('未找到配置文件，请先添加订阅并启动');
   }
+
+  rotateAndCleanupLogs();
 
   // 系统级服务或此前的 TUN 曾以 root 写过 mihomo.log；日志此后仍由 root 追加，
   // 但 rotateAndCleanupLogs 的 rename 需要目录权限（logs/ 属用户，可行）。

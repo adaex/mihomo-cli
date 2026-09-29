@@ -6,7 +6,7 @@ import { isValidServiceLabel, RAW_SERVICE_LABEL_INPUT, SERVICE_BINARY_NAME, SERV
 import { CliError } from './errors.js';
 import { allocateArchivePath, cleanupOldLogs, rotateAndCleanupLogs } from './log-files.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './paths.js';
-import { getMihomoPids, isPidFileOwnedByRoot, isProcessRoot, MAIN_INSTANCE_PATTERN } from './process-probe.js';
+import { getMihomoPids, isMihomoProcess, isPidFileOwnedByRoot, isProcessRoot, MAIN_INSTANCE_PATTERN } from './process-probe.js';
 import { getPorts, readSettings } from './settings.js';
 import { runSudoScript, SudoAuthError } from './sudo.js';
 import type { ServiceStatus } from './types.js';
@@ -610,6 +610,9 @@ function killResidualKernels(ctx: RootResidueCleanupContext): void {
   const rootPids = pids.filter(isProcessRoot);
   for (const pid of pids) {
     if (rootPids.includes(pid)) continue;
+    // 发信号前复核命令行（isMihomoProcess）：探测到现在隔着逐 pid 的 ps 查询，
+    // 目标自行退出且 pid 被复用时盲目 SIGKILL 会误杀无关进程
+    if (!isMihomoProcess(pid)) continue;
     try {
       process.kill(pid, 'SIGKILL');
     } catch {
@@ -1166,7 +1169,8 @@ async function tryHotReload(): Promise<boolean> {
       body: '{}',
       signal: controller.signal,
     });
-    return res.status === 204 || res.ok;
+    // 文档化成功码是 204（属 2xx，res.ok 天然涵盖）；非 2xx 一律回退 kickstart
+    return res.ok;
   } catch {
     return false;
   } finally {

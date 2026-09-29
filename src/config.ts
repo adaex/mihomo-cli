@@ -4,7 +4,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import * as yaml from 'js-yaml';
-import { BASE_CONFIG, TUN_CONFIG } from './constants.js';
+import { BASE_CONFIG, TUN_CONFIG, YAML_MAX_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
 import { applyOverwrite, describeOverwriteScope, loadOverwriteFile, parseOverrideKey, selectActiveOverwriteFiles } from './overwrite.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
@@ -17,7 +17,7 @@ import { sanitizeTerminal } from './utils.js';
  * js-yaml 5 默认 maxAliases=-1(无限制),恶意配置可借指数级别名膨胀撑爆内存/CPU。
  * 所有解析不可信来源(订阅、覆写、运行时配置)的 yaml.load 都应带上此选项。
  */
-export const SAFE_YAML_LOAD_OPTIONS: yaml.LoadOptions = { maxAliases: 200 };
+export const SAFE_YAML_LOAD_OPTIONS: yaml.LoadOptions = { maxAliases: YAML_MAX_ALIASES };
 
 /**
  * 系统锁定的入站/控制面键：只允许来自 settings 或系统约束，订阅与覆写显式提供时

@@ -3,6 +3,12 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 
+/**
+ * YAML 别名上限（防 billion-laughs 类 DoS）。config.ts 与 overwrite.ts 的两处
+ * yaml.load 共用——此前各自内联 200，改一处忘另一处会让两条解析路径的防护漂移
+ */
+export const YAML_MAX_ALIASES = 200;
+
 /** CLI 自身版本与包名（package.json 单一来源；http UA、version/update 命令共用） */
 export const VERSION: string = pkg.version;
 export const PKG_NAME: string = pkg.name;

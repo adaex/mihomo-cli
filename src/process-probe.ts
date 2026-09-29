@@ -90,6 +90,17 @@ export function getPid(): number | null {
 export function isRunning(): boolean {
   const pid = getPid();
   if (!pid) return false;
+  return isMihomoProcess(pid);
+}
+
+/**
+ * 判定某 pid 是否仍是我们的内核进程（活着 + 命令行含任一二进制路径）。
+ * kill 前的最后一道复核：探测（pgrep）到发信号之间隔着逐 pid 的 ps 查询，目标
+ * 自行退出且 pid 被复用时，盲目 SIGKILL 会误杀无关进程——批量 pkill 分支在发信号
+ * 前由 pkill 自身重估 pattern，逐 pid 分支此前没有等价防线（两侧安全性倒挂）。
+ */
+export function isMihomoProcess(pid: number): boolean {
+  if (!pid) return false;
   // 同时校验命令行含内核路径：pidFile 残留 + 系统重启后 PID 可能被无关进程复用，
   // 只看存活会把无关进程误判成运行中的 mihomo。
   // 两种路径都要认：pid 文件虽只由 tun 写（真实二进制），但用户可能手工介入，

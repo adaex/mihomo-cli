@@ -39,6 +39,13 @@ export function cmdLogs(args: string[]): void {
     }
 
     if (openInViewer) {
+      // -o 用系统查看器打开后即返回，tail 进程无处附身——静默忽略 -f 会让用户以为
+      // 在跟随刷新。互斥显式报错，与「用户以为选项生效了」的红线一致
+      if (follow) {
+        throw new CliError('-o（系统查看器打开）与 -f（终端跟随）互斥', {
+          hint: '跟随输出请去掉 -o: mihomo logs 0 -f',
+        });
+      }
       openLogFile(logPath);
       return;
     }

@@ -196,6 +196,20 @@ describe('空串参数不当作缺省（变量展开为空的笔误要有反馈�
     assert.notEqual(status, 0);
     assert.match(output, /未知的目录目标/);
   });
+
+  it('sub add <url> "" 报订阅名不能为空，不静默命名 default', () => {
+    // sub add 会先走到名称校验（无订阅环境下剪贴板读取也会先做名称检查前的参数解析）；
+    // 断言错误信息本身——出现「订阅名不能为空」即证明空串没有落进默认名分支
+    const { status, output } = run(['sub', 'add', 'https://example.com/sub', '']);
+    assert.notEqual(status, 0);
+    assert.match(output, /订阅名不能为空/);
+  });
+
+  it('logs 0 -f -o 报互斥，不静默忽略 -f', () => {
+    const { status, output } = run(['logs', '0', '-f', '-o']);
+    assert.notEqual(status, 0);
+    assert.match(output, /互斥/);
+  });
 });
 
 describe('重启透传选项即使不重启也被校验', () => {

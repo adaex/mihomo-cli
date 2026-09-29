@@ -119,7 +119,16 @@ async function subAdd(args: string[]): Promise<void> {
   // 校验先于入库/下载，避免半成品副作用
   assertPositionalCount(args, 2, 2, 'mihomo sub add <url> [name]');
   let url = args[2]?.trim();
-  const name = args[3] || 'default';
+  // 空串按显式提供处理并报错，而非静默落到 'default'——同仓其他命令（ui/dir open/
+  // sub update）对空串位置参数一律报错，这里是对齐；静默改名会让「想传名字但传了空」
+  // 的用户找不到自己的订阅
+  // 空串按显式提供处理并报错，而非静默落到 'default'——同仓其他命令（ui/dir open/
+  // sub update）对空串位置参数一律报错，这里是对齐；静默改名会让「想传名字但传了空」
+  // 的用户找不到自己的订阅
+  const name = args[3] === undefined ? 'default' : args[3];
+  if (!name.trim()) {
+    throw new CliError('订阅名不能为空', { hint: '不指定名称时省略该参数即可（默认名 default）' });
+  }
 
   if (!url) {
     // 高频流程是「机场页面点复制 → 终端粘贴」：交互下剪贴板里往往就是订阅链接，

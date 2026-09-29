@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 
 import { DIRS, ensureDirs, PATHS, rmrf } from './paths.js';
-import { getMihomoPids, isPidFileOwnedByRoot, isProcessRoot, MAIN_INSTANCE_PATTERN } from './process-probe.js';
+import { getMihomoPids, isMihomoProcess, isPidFileOwnedByRoot, isProcessRoot, MAIN_INSTANCE_PATTERN } from './process-probe.js';
 import { SUDO_TIMEOUT_MS } from './sudo.js';
 import type { CleanupResult, StopResult } from './types.js';
 import { sleep } from './utils.js';
@@ -124,6 +124,13 @@ export async function cleanupAll(forceSudo = false): Promise<CleanupResult> {
       }
     } else {
       for (const pid of pids) {
+        // 发信号前复核命令行：pgrep 探测到此刻隔着逐 pid 的 ps（isProcessRoot），
+        // 目标自行退出且 pid 被复用的话，盲目 SIGKILL 会误杀无关进程——
+        // 复核不匹配按「无事可做」计成功（与 pkill 无匹配退 1 的口径一致）
+        if (!isMihomoProcess(pid)) {
+          killedCount++;
+          continue;
+        }
         if (killProcess(pid)) {
           killedCount++;
         } else {

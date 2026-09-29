@@ -331,7 +331,10 @@ export function commitPreparedConfig(prepared: PreparedConfig): ConfigSummary {
   return prepared.info;
 }
 
-function needsAutoUpdate(sub: SubscriptionWithCache): boolean {
+// 导出仅供测试：与 isSubscriptionStale 对「异常时间戳」的口径**刻意相反**
+// （这里 true=立即更新纠正缓存，那边 false=不算超龄），两份口径各自有注释依据，
+// 最怕被「合并去重」后悄悄统一——用例直接锁住这一对口径
+export function needsAutoUpdate(sub: SubscriptionWithCache): boolean {
   if (!sub.updated_at) return true;
   const lastUpdate = new Date(sub.updated_at).getTime();
   if (Number.isNaN(lastUpdate)) return true;
@@ -339,6 +342,10 @@ function needsAutoUpdate(sub: SubscriptionWithCache): boolean {
   // needsAutoUpdate 恒 false —— 订阅从此永不自动更新，静默过期到失联。
   // 视为「缓存不可信」立即更新，顺带把 updated_at 纠正回当前时间。
   if (lastUpdate > Date.now()) return true;
+  // 未来时间戳（系统时钟被改过、跨时区调时、缓存被手改）会让下面的差值恒为负，
+  // needsAutoUpdate 恒 false —— 订阅从此永不自动更新，静默过期到失联。
+  // 视为「缓存不可信」立即更新，顺带把 updated_at 纠正回当前时间。
+
   // 防御历史坏缓存：update_interval 为 0/负数/非数时回退默认值
   const intervalHours = resolveUpdateInterval(sub.update_interval);
   const intervalMs = intervalHours * 60 * 60 * 1000;

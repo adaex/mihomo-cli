@@ -36,7 +36,16 @@ export async function cmdKernel(args: string[]): Promise<void> {
   // 裸域，不再枚举网卡猜 IPv6（有 v6 地址不代表 v6 路由通），需要 v6 子域显式 --mirror v6。
   // 运行状态由命令层探测后注入——kernel.ts 不依赖 runtime/settings，通道决策保持纯函数可测
   const proxyRunning = getRunningState().running;
-  const proxyPort = proxyRunning ? getPorts().mixed : null;
+  // 端口只用于选通道，settings.ports 损坏（getPorts 抛错）时降级为「不探测本机代理」
+  // 走 gh/直连——与 doctor/status 对同一调用的降级姿态一致，不该在做任何下载前就中止
+  let proxyPort: number | null = null;
+  if (proxyRunning) {
+    try {
+      proxyPort = getPorts().mixed;
+    } catch {
+      proxyPort = null;
+    }
+  }
   const forceDirect = mirrorInfo.isOverride && !mirrorInfo.mirror;
   const ghAvailable = kernel.hasGh();
   const channel = kernel.resolveDownloadChannel({

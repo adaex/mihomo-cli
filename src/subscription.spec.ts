@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { isSubscriptionStale, isValidHttpUrl, parseUserInfo } from './subscription.js';
+import { isSubscriptionStale, isValidHttpUrl, needsAutoUpdate, parseUserInfo } from './subscription.js';
 
 describe('parseUserInfo：只收有限非负数，其余按缺失处理', () => {
   it('正常头全字段解析', () => {
@@ -94,5 +94,35 @@ describe('isValidHttpUrl：URL 解析 + 协议白名单（scheme 大小写不绕
     assert.equal(isValidHttpUrl('not a url'), false);
     assert.equal(isValidHttpUrl(''), false);
     assert.equal(isValidHttpUrl('  https://example.com/sub  '), true);
+  });
+});
+
+describe('needsAutoUpdate 与 isSubscriptionStale 的口径（异常时间戳方向相反，刻意如此）', () => {
+  // 两个函数对缺失/NaN/未来时间戳的处理**刻意相反**：needsAutoUpdate 答 true
+  // （立即更新、顺带纠正缓存），isSubscriptionStale 答 false（展示上不算超龄）。
+  // 各自注释都有依据；这组用例防止重构「合并去重」时悄悄统一掉一个
+  it('缺失 / NaN / 未来时间戳：needsAutoUpdate 全部要求立即更新', () => {
+    for (const sub of [
+      { name: 'a', url: 'https://example.com/a' },
+      { name: 'a', url: 'https://example.com/a', updated_at: 'not-a-date' },
+      { name: 'a', url: 'https://example.com/a', updated_at: new Date(Date.now() + 86_400_000).toISOString() },
+    ]) {
+      assert.equal(needsAutoUpdate(sub as never), true);
+    }
+  });
+
+  it('同形态输入：isSubscriptionStale 全部判「不算超龄」', () => {
+    for (const cached of [{}, { updated_at: 'not-a-date' }, { updated_at: new Date(Date.now() + 86_400_000).toISOString() }]) {
+      assert.equal(isSubscriptionStale(cached as never), false);
+    }
+  });
+
+  it('正常超龄两者一致为真、未超龄一致为假（口径仅在异常输入上分叉）', () => {
+    const staleSub = { name: 'a', url: 'https://example.com/a', updated_at: new Date(Date.now() - 48 * 3_600_000).toISOString() };
+    const freshSub = { ...staleSub, updated_at: new Date(Date.now() - 3_600_000).toISOString() };
+    assert.equal(needsAutoUpdate(staleSub), true);
+    assert.equal(isSubscriptionStale(staleSub), true);
+    assert.equal(needsAutoUpdate(freshSub), false);
+    assert.equal(isSubscriptionStale(freshSub), false);
   });
 });
