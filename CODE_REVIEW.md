@@ -1,6 +1,29 @@
 # 代码审查：验证结论与边界
 
-当前审查：2026-09-29，v26.9.90 kernel 更新链路韧性与体验收口（已发布）
+当前审查：2026-09-30，两轮整体复审的 17 项修复（未发布）
+
+四个并行审查（覆写/配置合并、并发锁与设置、进程与运行时、下载网络与命令层）+ 主线逐条复核产出 21 条发现，两轮修 17 项、判定不修 3 项（见「未覆盖与待复核」末尾）。全部行为修复做过反向验证（还原即红、恢复即绿）；过程中另抓出两处测试自身的假阳性并当场修正（详见各行内注）。
+
+| 范围 | 验证方式与结论 |
+| --- | --- |
+| TUN 方向并发防线 | 旧状：mixed 侧六条防线（v4.7.5–4.7.7）全在防「stop 被 start 覆盖」，反向裸奔——`start tun` 的 loaded 守卫读命令开头快照，此后订阅更新约 10s + sudo 密码窗口最长 60s 期间并发 `start` 起的服务会被 TUN 脚本 pkill 杀掉、KeepAlive 拉回后与 root TUN 内核抢端口。两道补防线：TUN 分支过守卫后递增停止计数（并发的 start 锁内检出即放弃）、startTun 执行含 pkill 的 sudo 脚本前复核服务装载状态（检出即中止）。service-concurrency.spec 桩 launchctl + 子进程真实模块三用例（bump 落地早于慢速阶段、复核中止、未装载放行负向对照），两道分别反向验证转红。复核点到 pkill 的毫秒级残余窗口见「未覆盖与待复核」 |
+| 覆写 match 空值 | `match:` 值为 null（条件块缩进笔误，js-yaml 解析出 `match: null` + 顶层垃圾键）旧实现与「未写」一并当全局生效——文件应用到所有订阅、垃圾键进最终配置。normalizeMatch 区分 undefined（未写，全局生效是承诺行为）与 null（报错）；旧版 spec 把 null 锁成「无 match 块」预期，一并修正。单元 + 端到端（loadOverwriteFile 硬失败）双用例，反向验证转红 |
+| env 自代理裸 localhost | `new URL('localhost:7890')` 不抛异常、hostname 为空串（localhost 被当 scheme）——旧实现恰好漏判，而 curl/gh 都认这个形态的代理 env，漏掉即重启后下载死锁。解析后 hostname 为空串即补协议重解析；大小写、非本机端口负向对照齐 |
+| 订阅缓存非对象 JSON | cache.json 合法 JSON 但非对象（数组/标量/null）旧实现静默返回空、无备份无告警，下次写入无声覆盖原件——readSettings 对同族早已备份+告警，cache 侧漏修且注释声称一致。对齐后参数化四输入用例；**用例首版有假阳性**（先触发一次语法损坏备份再测非对象，断言恒过），修场景后反向验证四输入全红再恢复 |
+| sudo 脚本目录 | 旧写在 `DIRS.runtime`——stop/reset 会 rmrf 该目录（锁文件为此早已迁出），密码窗口内脚本被连带删除会让 sudo 执行不存在的文件、错误误诊成「密码错误」。移到数据根目录；真实 sudo 不进测试，结构断言锁定（与 process-stop.spec 的常量断言同款先例），反向验证转红 |
+| clearPid sudo 分支 | 自抄 10s 超时（同文件 killAllMihomo 注释立项防过的写法）+ spawnSync 结果无人检查（超时不抛异常）。对齐 SUDO_TIMEOUT_MS 并显式检查失败告警；spec 常量断言改为「stdio:inherit 调用块内不得自抄数字超时」（旧断言只锚定文件内存在一处常量引用，clearPid 从它眼皮底下漏过），反向验证转红 |
+| `__proto__` 原型污染 | 覆写嵌套层写 `__proto__` 时 `result[key] = value` 走原型 setter：键不落地、合并结果原型被静默换成用户写的值，dumpYaml 抛裸 YAMLException 带堆栈按程序 bug 渲染（探针实测复现，`dns: {__proto__: {evil: true}, enable: true}` 覆写进任何带 dns 的订阅即炸）。合并层在操作符解析后拦（覆盖 `__proto__!` 等形态）；订阅侧 own `__proto__` 经探针实测**不经赋值点、透传后 dump 不炸**（内核按未知键忽略），刻意不拦。三用例（嵌套、~key 元素补丁、订阅透传负向对照），反向验证转红 |
+| remove 副作用时序 | 删原始 yaml 原在 mutator 内（先于设置落盘）：写失败留下「条目在、文件已删」；放锁外又回与并发 sub add 的 TOCTOU。updateSettings 增 postCommit（写盘成功后、仍持锁）。时序判别用例以「未命中（空补丁）不删文件」区分两种实现——**首版文件名与 remove 目标不一致判别恒过（假阳性），修正后**反向验证（rm 挪回 mutator）转红 |
+| 原子写 fsync | 旧实现 rename-only：进程崩溃有 rename 原子性兜底，OS 崩溃/掉电 POSIX 不保证（元数据可先于数据块持久化，settings.json 可能截断）。补临时文件 fsync + rename 后父目录 fsync；docstring 分层写明保证范围与 macOS 边界（F_FULLFSYNC 无 Node API）。行为面由既有原子写用例覆盖（数据最终状态不变） |
+| doctor 查询挂起 | withTimeout 只弃 promise：子进程 stdio 管道占住事件循环，报告打完后进程等满子进程自身超时（curl --max-time 120s）才退。AbortSignal 经 ReleaseQueryOptions 透传 gh（execFile signal）/curl/直连（HTTP_CLIENT 原生支持）三路；gh 被 abort 后不再回退（带着已中止的信号回退只会再吃一次中止）。端到端用例（挂 30s 桩 gh）：修复前实测 13.6s 退出、修复后 4s 预算内，反向验证（不透传 signal）转红 |
+| 低危收口 | url-domain 含通配符报错（恒不命中且零提示）；kernel 命令对坏 ports 降级（与 doctor/status 同姿态）；startTun 存在性校验提到日志轮转前（秒失败不再动日志，sudo 取消残余窗口记「未覆盖」）；逐 pid kill 前复核命令行（isMihomoProcess 导出，cleanupAll 与 killResidualKernels 两个调用点，与批量 pkill 分支安全性对齐，假内核进程桩用例）；logs -f -o 互斥报错；sub add 空串报名不能为空（对齐其他命令）；readSettings 对 ENOENT（并发 reset 间隙）不误报「格式损坏」 |
+| 口径与清理 | YAML_MAX_ALIASES 收进 constants 两处共用；needsAutoUpdate/isSubscriptionStale 对异常时间戳**刻意相反**的口径加用例锁死（防合并去重时统一掉一个），反向验证（删未来时间戳分支）转红；删 StopResult.warning 死字段与 --connect-timeout 死参数；tryHotReload 的 204\|\|ok 冗余清理；文档漂移修正（CLAUDE.md 版本查询优先级、模块表补 system-proxy.ts） |
+| 判定不修 | 名为 help 的订阅 `use` 撞车（频率极低、`sub use help` 可用、动 argv 拦截风险大于收益）；lsof 多 pid 取第一个（误判方向是回退 kickstart，保守侧）；cleanupAll 的 killedCount 在 pkill 退 1 时记满（仅测试消费） |
+| 全量验证 | typecheck / **714 测试**（692 → 714，两轮 +22）/ Biome（85 文件，非 0）/ build 全绿。两轮各 6 项与 8 项反向验证全部按预期转红后恢复；测试自身的两处假阳性（cache 备份、remove 时序）当场修正并重验 |
+
+---
+
+## 上一轮验证（v26.9.90 kernel 更新链路韧性与体验收口，已发布）
 
 本轮从用户视角实测（空目录首跑、真实环境 status/doctor/sub/ow、kernel 全链路）倒出的缺口，全部实机验证：
 
