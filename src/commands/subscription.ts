@@ -67,10 +67,12 @@ function printSubscriptionList(): void {
       console.log(`    ${colors.gray('页面: ')}${s.web_page_url}`);
     }
   });
-  // 全部订阅都没有流量数据（从未成功 update / 缓存丢失）时点一句：流量与到期是列表的
-  // 常驻展示项，静默缺行用户无从知道只差一次 update（列表面板不能被坏状态击穿，只提示）
-  if (subs.every(s => formatTraffic(s.upload, s.download, s.total) === null)) {
-    console.log(colors.gray('提示: 更新订阅后可显示流量与到期信息（mihomo sub update）'));
+  // 全部订阅都没有流量数据、且至少一个从未更新过时点一句：流量与到期是列表的常驻
+  // 展示项，静默缺行用户无从知道只差一次 update。加了后一个条件——有的机场根本不下发
+  // Subscription-Userinfo，刚 update 完仍无数据；这种「更新过却没数据」再提示会让用户
+  // 反复 update 并怀疑工具坏了（列表面板不能被坏状态击穿，只提示）
+  if (subs.some(s => s.updated_at == null) && subs.every(s => formatTraffic(s.upload, s.download, s.total) === null)) {
+    console.log(colors.gray('提示: 更新订阅后可显示流量与到期信息（mihomo sub update；机场不下发用量数据则无此信息）'));
   }
   console.log('');
   console.log('切换订阅: mihomo sub use <name>');

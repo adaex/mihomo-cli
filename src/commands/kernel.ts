@@ -38,10 +38,11 @@ export async function cmdKernel(args: string[]): Promise<void> {
   const proxyRunning = getRunningState().running;
   const proxyPort = proxyRunning ? getPorts().mixed : null;
   const forceDirect = mirrorInfo.isOverride && !mirrorInfo.mirror;
+  const ghAvailable = kernel.hasGh();
   const channel = kernel.resolveDownloadChannel({
     mirror: mirrorInfo.mirror,
     isOverride: mirrorInfo.isOverride,
-    ghAvailable: kernel.hasGh(),
+    ghAvailable,
     proxyRunning,
     proxyPort,
     proxyOverride: proxyInfo.proxy,
@@ -60,12 +61,14 @@ export async function cmdKernel(args: string[]): Promise<void> {
     console.log('');
   }
 
-  // 版本查询（GitHub API）的出网方式与下载通道对齐：显式 --proxy > gh（认证查询，
-  // 免未认证限流）> 本机代理 > 直连；gh 失败在 getLatestRelease 内自动回退到 apiProxy/直连。
+  // 版本查询（GitHub API）的出网方式：代理可用（显式 --proxy 或本机在跑）时**直接经代理**
+  // ——代理在跑说明出网路径已定，先试 gh 直连再回退会把「直连被墙」的等待白白叠加在
+  // 可用的代理前面（spinner 也会说「经代理」而实际在等 gh）。gh 认证只在无代理可用时
+  // 介入——那正是未认证直连撞 403 限流的场景（配额 5000 次/时 vs 60）。
   // --mirror direct 连 gh 一起绕过（「强制直连」含 API）。镜像仍绝不碰 API——
   // 内核二进制在 TUN 下以 root 运行，下载地址必须由 GitHub 官方 API 给出
   const apiProxy = proxyInfo.proxy ?? (proxyRunning && !forceDirect && proxyPort !== null ? `http://127.0.0.1:${proxyPort}` : null);
-  const useGh = !proxyInfo.proxy && !forceDirect && kernel.hasGh();
+  const useGh = apiProxy === null && !forceDirect && ghAvailable;
 
   let info: Awaited<ReturnType<typeof kernel.checkUpdate>>;
   try {
@@ -95,7 +98,7 @@ export async function cmdKernel(args: string[]): Promise<void> {
         '  brew install gh && gh auth login',
       );
       if (useGh) {
-        hint.push('', '本次已先尝试 gh 认证通道、失败后才回退到直连，可检查 gh 登录状态: gh auth status');
+        hint.push('', '本次已先尝试 gh 认证通道、失败后才回退直连，可检查 gh 登录状态: gh auth status');
       }
     } else if (!mirrorInfo.mirror) {
       if (apiProxy) {

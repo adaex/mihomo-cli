@@ -82,6 +82,51 @@ describe('summarizeSystemProxy（与 Mixed 端口的关系判定）', () => {
       7890,
     );
     assert.deepEqual(s.active, ['127.0.0.1:7890']);
+    assert.deepEqual(s.diverged, []);
+  });
+
+  it('部分指向时 diverged 如实列出——matched 不掩盖「另一半指向别处」', () => {
+    const s = summarizeSystemProxy({ http: { host: '127.0.0.1', port: 8888 }, https: { host: '127.0.0.1', port: 7890 } }, 7890);
+    assert.equal(s.matched, true);
+    assert.deepEqual(s.diverged, ['127.0.0.1:8888']);
+  });
+});
+
+describe('PAC / WPAD（脚本接管的系统代理）', () => {
+  it('PAC URL 形态解析并透传到 summary（此时不再给手动代理设置命令）', () => {
+    const view = parseScutilProxy(
+      `<dictionary> {
+  ProxyAutoConfigEnable : 1
+  ProxyAutoConfigURLString : http://127.0.0.1:6152/proxy.pac
+}
+`,
+    );
+    assert.deepEqual(view.pac, { source: 'http://127.0.0.1:6152/proxy.pac', wpad: false });
+    const s = summarizeSystemProxy(view, 7890);
+    assert.equal(s.pac?.source, 'http://127.0.0.1:6152/proxy.pac');
+  });
+
+  it('PAC 老式 host/port 形态与 WPAD 自动发现', () => {
+    const legacy = parseScutilProxy(
+      `<dictionary> {
+  ProxyAutoConfigEnable : 1
+  ProxyAutoConfigHost : 127.0.0.1
+  ProxyAutoConfigPort : 6152
+}
+`,
+    );
+    assert.deepEqual(legacy.pac, { source: '127.0.0.1:6152', wpad: false });
+    const wpad = parseScutilProxy(
+      `<dictionary> {
+  ProxyAutoDiscoveryEnable : 1
+}
+`,
+    );
+    assert.deepEqual(wpad.pac, { source: '', wpad: true });
+  });
+
+  it('PAC 未启用时 summary.pac 为 null', () => {
+    assert.equal(summarizeSystemProxy({}, 7890).pac, null);
   });
 });
 

@@ -77,9 +77,10 @@ async function collectChecks(): Promise<Check[]> {
   // 而那种失败只在「另有检查项先抛错」时出现，极难复现。
   const latestVersionPromise = getLatestNpmVersion(4_000).catch(() => null);
 
-  // 内核版本同样在开头并行发起：查询出网与 mihomo kernel 同口径——gh 认证优先
-  //（免未认证限流），运行中经本机代理回退，4s 超时/失败一律降级 skip——
-  // 体检不该被 registry 之外再多一个网络故障拖红。
+  // 内核版本同样在开头并行发起：查询出网与 mihomo kernel 同口径——代理在跑直接经代理，
+  // 没跑才走 gh 认证（免未认证限流）。gh 不能优先于在跑的代理：gh 直连被墙时会挂到自身
+  // 超时，4s 的体检预算被耗干，「内核版本 ok」退化成 skip，还拖住进程退出（子进程句柄）。
+  // 4s 超时/失败一律降级 skip——体检不该被 registry 之外再多一个网络故障拖红。
   // 与 npm 项并列后，「CLI 与内核各有一条更新线、该更新哪个」不再需要用户自己记
   const earlyState = getRunningState();
   let kernelProxyPort: number | null = null;
@@ -92,7 +93,7 @@ async function collectChecks(): Promise<Check[]> {
     ? withTimeout(
         checkUpdate({
           proxy: kernelProxyPort !== null ? `http://127.0.0.1:${kernelProxyPort}` : null,
-          useGh: hasGh(),
+          useGh: kernelProxyPort === null && hasGh(),
         }),
         4_000,
       ).then(

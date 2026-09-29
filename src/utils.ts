@@ -40,6 +40,16 @@ export function shellQuote(s: string): string {
 }
 
 /**
+ * 回环主机名判定（127.0.0.1 / localhost / ::1），忽略大小写。
+ * env 自代理判定（proxyEnvPointsAtSelf）与系统代理指向判定（system-proxy）共用，
+ * 不各自维护清单——任何一边扩集都会让两个判定悄悄漂移。
+ */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.toLowerCase();
+  return h === '127.0.0.1' || h === 'localhost' || h === '::1';
+}
+
+/**
  * 判定一个代理环境变量的值（http_proxy/https_proxy/all_proxy，大小写两种形式）
  * 是否指向**本机自己的 Mixed 端口**——这是唯一必须清除的形态：下载订阅/内核时
  * 流量经自己的代理，而重启过程中旧内核会先被停掉，形成下载死锁。
@@ -62,8 +72,8 @@ export function proxyEnvPointsAtSelf(value: string, selfPort: number): boolean {
       return false;
     }
   }
-  const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') return false;
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
+  if (!isLoopbackHost(host)) return false;
   return Number.parseInt(parsed.port, 10) === selfPort;
 }
 
@@ -241,6 +251,11 @@ export function assertKnownFlags(args: string[] | undefined, known: readonly str
  * 的产品边界不对称。带值选项的值不算位置参数（与 getNonFlagArg 同一跳值口径），
  * `sub use name -u 5000`、`logs 3 -f` 这类合法形态不受影响。
  *
+ * 跳值只在下一个 token **不是 flag** 时进行：`--mirror` 是可选值选项，裸写后跟
+ * `--proxy 7897` 时它没有值，无条件跳会吞掉 `--proxy` 本身、把 7897 误判成多余位置
+ * 参数（四种等价组合写法里 exact 形式被拒、等号形式却通过）。必带值选项的值以 `-`
+ * 开头时本就是各解析器的报错形态，不跳不影响最终报错。
+ *
  * kernel 的 `--mirror` 是可选值选项、不在 VALUE_FLAGS 里（见 flags.ts 注释），
  * 调用方需经 valueFlags 传入，否则 `kernel --mirror cdn` 的镜像地址会被误计为位置参数。
  */
@@ -256,7 +271,8 @@ export function assertPositionalCount(
   for (let i = startIdx; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith('-')) {
-      if (valueFlags.has(a)) i++; // 跳过该带值选项的值
+      // 跳过该带值选项的值；值位置上是 flag 说明该选项没有值（可选值选项裸写）
+      if (valueFlags.has(a) && i + 1 < args.length && !args[i + 1].startsWith('-')) i++;
       continue;
     }
     count++;
@@ -519,10 +535,15 @@ const KERNEL_FLAG_WHITELIST: readonly string[] = ['--mirror', '--proxy', '-p'];
 const PROXY_SCHEMES = new Set(['http:', 'https:', 'socks5:', 'socks5h:']);
 
 /**
- * 把 `--proxy` 的值规范化为 curl -x 可用的代理地址（`协议//host:port`）。
+ * 把 `--proxy` 的值规范化为 curl -x 可用的代理地址（`协议//[userinfo@]host:port`）。
  * 纯数字端口补本机回环（`7897` → `http://127.0.0.1:7897`）；
  * 无 scheme 的 host:port 补 http://；带 scheme 的校验白名单后原样。
- * URL.toString() 会给地址补尾斜杠（curl 虽容忍但不美观），故用 protocol//host 手动拼。
+ *
+ * 用原始串的 authority（`[user:pass@]host:port`）而非 URL.host 重组：
+ * - URL.host 不含 userinfo，带认证的代理（`http://user:pass@proxy:8080`）会被静默剥掉
+ *   凭据，curl 拿到无认证地址连代理必 407，错误里却没有任何「凭据被丢」的线索
+ * - WHATWG URL 会剥掉与协议默认值相同的显式端口（`http://x:80` 的 port 为空），
+ *   「需要端口」的校验若只看 parsed.port 会把用户亲眼写了的端口误报成缺失
  */
 function normalizeProxyUrl(val: string): string {
   if (/^\d+$/.test(val)) {
@@ -548,12 +569,14 @@ function normalizeProxyUrl(val: string): string {
   if (!parsed.hostname) {
     throw new CliError(`代理地址无效: "${val}"（缺少主机名）`, { label: '参数错误', hint: ['例如: --proxy 127.0.0.1:7897'] });
   }
-  // 无端口的代理地址（http 默认 80 被 URL 隐式补全、查不出）——对本地代理工具几乎必是笔误，
-  // 要求显式端口，避免「以为配了代理、实际连到 80」的静默错路
-  if (!parsed.port) {
+  // authority = scheme 后到首个 /?# 之前的整段（含 userinfo 与端口）。
+  // 显式默认端口（:80/:443）保留原样；无端口的代理地址对本地代理工具几乎必是笔误，
+  // 要求显式端口，避免「以为配了代理、实际连到默认端口」的静默错路
+  const authority = withScheme.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '').split(/[/?#]/)[0];
+  if (!/:\d+$/.test(authority)) {
     throw new CliError(`代理地址需要端口: "${val}"`, { label: '参数错误', hint: ['例如: --proxy 127.0.0.1:7897'] });
   }
-  return `${parsed.protocol}//${parsed.host}`;
+  return `${parsed.protocol}//${authority}`;
 }
 
 /**

@@ -234,6 +234,15 @@ describe('parseProxyArg', () => {
     assert.equal(parseProxyArg(['kernel', '--proxy=http://127.0.0.1:7897']).proxy, 'http://127.0.0.1:7897');
   });
 
+  it('带认证的代理保留 userinfo（URL.host 会静默剥掉凭据，重组用原始 authority）', () => {
+    assert.equal(parseProxyArg(['kernel', '--proxy', 'http://user:pass@proxy.corp.example.com:8080']).proxy, 'http://user:pass@proxy.corp.example.com:8080');
+  });
+
+  it('显式写出的协议默认端口不误报缺端口（WHATWG URL 会剥 :80/:443）', () => {
+    assert.equal(parseProxyArg(['kernel', '--proxy', 'http://gw.example.com:80']).proxy, 'http://gw.example.com:80');
+    assert.equal(parseProxyArg(['kernel', '--proxy', 'https://gw.example.com:443']).proxy, 'https://gw.example.com:443');
+  });
+
   it('-p 短形式与 attached/等号形式同口径（登记表 matchValueFlagToken 统一判定）', () => {
     assert.equal(parseProxyArg(['kernel', '-p', '7897']).proxy, 'http://127.0.0.1:7897');
     assert.equal(parseProxyArg(['kernel', '-p7897']).proxy, 'http://127.0.0.1:7897');
@@ -402,6 +411,17 @@ describe('assertPositionalCount：多余位置参数报错、合法形态不误�
     assert.doesNotThrow(() => assertPositionalCount(['sub', 'remove', '-y', 'foo'], 1, 2, 'mihomo sub remove'));
     // 布尔 flag 不吃值：-y 后面的 foo 是位置参数，计数仍为 1
     assert.throws(() => assertPositionalCount(['sub', 'remove', '-y', 'foo', 'bar'], 1, 2, 'mihomo sub remove'), CliError);
+  });
+
+  it('可选值选项裸写后跟 flag 时不吞 flag（--mirror --proxy 组合的 exact 形式不再误报）', () => {
+    // kernel 的 KERNEL_VALUE_FLAGS = VALUE_FLAGS + --mirror。四种等价组合写法里
+    // `--mirror --proxy 7897` / `--mirror -p 7897` 此前被「--mirror 必带值」的跳值
+    // 逻辑吞掉 --proxy 本身、把 7897 误判为多余位置参数；等号/紧贴形式却通过
+    const kernelValueFlags = new Set([...VALUE_FLAGS, '--mirror']);
+    assert.doesNotThrow(() => assertPositionalCount(['kernel', '--mirror', '--proxy', '7897'], 0, 1, 'mihomo kernel', kernelValueFlags));
+    assert.doesNotThrow(() => assertPositionalCount(['kernel', '--mirror', '-p', '7897'], 0, 1, 'mihomo kernel', kernelValueFlags));
+    // 有值时照常跳（既有行为不回归）
+    assert.doesNotThrow(() => assertPositionalCount(['kernel', '--mirror', 'cdn', '--proxy', '7897'], 0, 1, 'mihomo kernel', kernelValueFlags));
   });
 
   it('等号长选项与紧贴短选项不产生位置参数', () => {

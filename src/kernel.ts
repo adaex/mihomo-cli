@@ -249,7 +249,7 @@ export function translateReleaseApiCurlError(e: unknown): Error {
 export interface ReleaseQueryOptions {
   /** curl -x 代理地址（本机混合端口或显式 --proxy）；null = 不经代理 */
   proxy: string | null;
-  /** gh 可用时优先用 gh api 查询（见 getLatestRelease）；显式 --proxy 时应为 false */
+  /** 无代理可用时才走 gh api 查询（见 getLatestRelease）；代理可用（显式 --proxy 或本机在跑）时应为 false */
   useGh: boolean;
 }
 
@@ -262,11 +262,16 @@ export function buildGhApiReleaseArgs(repo: string): string[] {
   return ['api', `repos/${repo}/releases`, '--method', 'GET'];
 }
 
+/** gh 版本查询的子进程超时：API 查询是轻量调用，正常秒级完成；gh 无内建连接超时，
+ * 直连被墙时会挂到进程超时——既拖慢 doctor/kernel 的回退链，子进程句柄还会在
+ * withTimeout 弃掉 promise 后继续占住事件循环、推迟进程退出，故给远小于 HTTP 超时的值 */
+const GH_API_TIMEOUT = 10_000;
+
 async function getLatestReleaseViaGh(repo: string): Promise<GitHubRelease> {
   const result = await execFileAsync('gh', buildGhApiReleaseArgs(repo), {
     encoding: 'utf8',
     maxBuffer: 50 * 1024 * 1024,
-    timeout: KERNEL_HTTP_TIMEOUT,
+    timeout: GH_API_TIMEOUT,
   });
   return pickLatestRelease(JSON.parse(result.stdout) as GitHubRelease[]);
 }
@@ -274,9 +279,10 @@ async function getLatestReleaseViaGh(repo: string): Promise<GitHubRelease> {
 /**
  * 拉取 release 列表。**绝不经过镜像**：镜像只作用于产物下载，API 若走镜像，
  * `browser_download_url` 就完全由镜像说了算（见 assertTrustedAssetUrl 的说明）。
- * 优先级 gh > 代理 > 直连：gh api 带认证（限流 5000 次/时 vs 未认证 60 次/时，
- * 未认证直连的 403 rate limit 几乎都发生在共享出口 IP 上），失败（未登录/网络不通）
- * 静默回退代理/直连——回退也可能失败，但那与无 gh 时的现状一致，不会更糟。
+ * gh 与代理由调用方按环境二选一为首选（代理可用直接走代理；无代理才 gh 认证——
+ * 限流 5000 次/时 vs 未认证 60 次/时，未认证直连的 403 rate limit 几乎都发生在
+ * 共享出口 IP 上），失败（未登录/网络不通）静默回退到代理/直连——回退也可能失败，
+ * 但那与无 gh 时的现状一致，不会更糟。
  * 代理路径经 curl 转发（fetch 不支持 HTTP 代理的 CONNECT），本地代理只是传输层，
  * TLS 端到端，响应仍来自 GitHub。
  */
