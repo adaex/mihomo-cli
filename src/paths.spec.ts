@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { DIRS, PATHS, withFileLock } from './paths.js';
+import { DIRS, PATHS, USER_DATA_DIR, withFileLock } from './paths.js';
 
 let tmpDir: string;
 /** 锁文件路径。withFileLock 收的就是锁本身（不再是被保护的数据文件 + 内部拼 .lock） */
@@ -353,6 +353,19 @@ describe('锁文件的存放位置', () => {
       assert.equal(code, 0, '缓存锁应在 rmrf(subscriptions/) 后幸存（子进程退出码非 0 表示断言失败）');
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('有生命周期的瞬态文件位置约定', () => {
+  // installService 的 plist 暂存（stage）要活到 plutil/bootout/waitUntilUnloaded 之后的
+  // copyFileSync，中间隔着最多 5s——放 runtime/ 的话，并发 stop（rmrf runtime/）或
+  // 含 runtime 目标的 reset 会删掉它，copyFileSync 裸 ENOENT。与锁文件同族：凡是要
+  // 跨多个调用存活、又会被整体删除目录殃及的文件，一律放 USER_DATA_DIR 根下
+  it('service.plist.stage 在数据根目录、不在会被整体删除的目录里', () => {
+    assert.equal(PATHS.servicePlistStage, path.join(USER_DATA_DIR, 'service.plist.stage'));
+    for (const dir of [DIRS.runtime, DIRS.logs, DIRS.data, DIRS.subscriptions, DIRS.kernel]) {
+      assert.ok(!PATHS.servicePlistStage.startsWith(dir + path.sep), `stage 不得在 ${dir} 内`);
     }
   });
 });

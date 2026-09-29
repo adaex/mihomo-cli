@@ -433,7 +433,21 @@ export function ensureServiceSymlink(): void {
       throw e;
     }
   }
-  fs.symlinkSync('mihomo', PATHS.serviceBinary);
+  try {
+    fs.symlinkSync('mihomo', PATHS.serviceBinary);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+    // 并发 start/start：两个进程同时过了上面的 readlink（ENOENT）再各自建链，后建者
+    // 撞 EEXIST——链目标恒定（同目录相对链 'mihomo'），属正常竞争不是故障。
+    // 复核已存在的链指向同一目标后容忍；不一致（异常残留）不吞，重抛原错
+    let existing: string;
+    try {
+      existing = fs.readlinkSync(PATHS.serviceBinary);
+    } catch {
+      throw e;
+    }
+    if (existing !== 'mihomo') throw e;
+  }
 }
 
 // === 操作 ===
@@ -455,6 +469,31 @@ function runLaunchctlOrThrow(args: string[], what: string, timeoutMs: number = L
   const detail = result.stderr.trim();
   throw new CliError(`${what}失败（launchctl 退出码 ${result.status ?? '执行失败'}）`, {
     hint: [detail, `手动确认: launchctl ${args.join(' ')}`].filter(Boolean),
+  });
+}
+
+/**
+ * 锁内 bootstrap，吸收「并发同向启动」的撞车（startService / installService 恢复分支 /
+ * restartService kickstart 回退三处共用，别处不得散写 bootstrap）。
+ *
+ * 两个 start（或 install/start 交错）都过了锁外阶段时，后到者的 bootstrap 会撞上
+ * 先到者在锁内刚完成的任务，launchctl 报 **exit 5 + "Bootstrap failed: 5: Input/output
+ * error"**（本机实测）——与「bootstrap disabled 标签」的 exit 5 完全同形，而 5 在本项目
+ * 语境被多处注释关联到 disabled，用户会被指向完全错误的排查方向，服务实际健康在跑。
+ *
+ * 收到 5 时复读 print 区分两种形态：
+ * - print 0（已装载）= 并发者已完成装载：本进程按幂等成功继续，后续健康确认照常
+ *   （epoch 防线不受影响——并发 stop 早在锁内 shouldAbortStartOnDisable 被拦）
+ * - print 113（未装载）= 真失败（disabled 残留 / I/O error），维持报错
+ * 其他退出码原样抛，不吸收。
+ */
+function bootstrapServiceIdempotentOrThrow(what: string): void {
+  const result = runLaunchctl(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist]);
+  if (result.status === 0) return;
+  if (result.status === 5 && runLaunchctl(['print', serviceTarget()]).status === 0) return;
+  const detail = result.stderr.trim();
+  throw new CliError(`${what}失败（launchctl 退出码 ${result.status ?? '执行失败'}）`, {
+    hint: [detail, `手动确认: launchctl print ${serviceTarget()}`].filter(Boolean),
   });
 }
 
@@ -656,7 +695,8 @@ export async function installService(wasRunning: boolean, stopEpochBefore: numbe
   ensureServiceSymlink();
 
   let restoreSkipped = false;
-  const stagePath = path.join(DIRS.runtime, 'service.plist.stage');
+  // 暂存路径见 PATHS.servicePlistStage 的注释：不放 runtime/（并发 stop/reset 删目录的窗口）
+  const stagePath = PATHS.servicePlistStage;
   atomicWriteFileSync(stagePath, buildPlist(), { mode: 0o600 });
 
   try {
@@ -691,7 +731,7 @@ export async function installService(wasRunning: boolean, stopEpochBefore: numbe
           return;
         }
         runLaunchctlOrThrow(['enable', serviceTarget()], '启用服务');
-        runLaunchctlOrThrow(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist], '装载服务');
+        bootstrapServiceIdempotentOrThrow('装载服务');
       });
     }
 
@@ -911,7 +951,7 @@ export async function startService(stopEpochBefore: number): Promise<{ started: 
       return;
     }
     runLaunchctlOrThrow(['enable', serviceTarget()], '启用服务');
-    runLaunchctlOrThrow(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist], '启动服务');
+    bootstrapServiceIdempotentOrThrow('启动服务');
   });
 
   return { started };
@@ -1275,7 +1315,7 @@ export async function restartService(stopEpochBefore: number): Promise<{ hotRelo
         return;
       }
       runLaunchctl(['enable', serviceTarget()]); // 容忍失败：bootstrap 会再判一次
-      runLaunchctlOrThrow(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist], '重启服务');
+      bootstrapServiceIdempotentOrThrow('重启服务');
     });
     // 被取消：直接返回，不清理归档也不做别的收尾
     if (!started) return { hotReloaded: false, started: false };

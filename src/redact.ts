@@ -34,17 +34,28 @@ function walk(node: unknown, withinProvider: boolean, state: { changed: boolean 
   if (node !== null && typeof node === 'object') {
     const out: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      // '__proto__' 经对象字面赋值会命中原型 setter：own 键静默丢失、副本原型被换掉，
+      // 随后的 dumpYaml 抛「unacceptable kind of an object to dump」让 mihomo config
+      // 按程序 bug 渲染（订阅内容可携带 own __proto__ 键，与覆写合并层同族问题的展示路径漏网）。
+      // defineProperty 绕开 setter，保住键与其内容，副本仍是普通对象
+      const assign = (v: unknown): void => {
+        if (key === '__proto__') {
+          Object.defineProperty(out, key, { value: v, enumerable: true, writable: true, configurable: true });
+        } else {
+          out[key] = v;
+        }
+      };
       if (typeof value === 'string' && SECRET_KEYS.has(key.toLowerCase())) {
-        out[key] = '***';
+        assign('***');
         state.changed = true;
       } else if (typeof value === 'string' && withinProvider && key === 'url') {
         const masked = maskUrl(value);
-        out[key] = masked;
+        assign(masked);
         // URL 里没有 token/userinfo/长路径段时 maskUrl 原样返回，不算发生过脱敏
         if (masked !== value) state.changed = true;
       } else {
         // 进入 provider 容器后，下一层的每个条目都按 provider 条目处理（其 url 脱敏）
-        out[key] = walk(value, withinProvider || URL_PROVIDER_KEYS.has(key), state);
+        assign(walk(value, withinProvider || URL_PROVIDER_KEYS.has(key), state));
       }
     }
     return out;

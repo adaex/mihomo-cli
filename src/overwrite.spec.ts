@@ -1019,3 +1019,28 @@ describe('match 的 url-domain 通配符拦截', () => {
     assert.deepEqual(normalizeMatch({ 'url-domain': 'corp.com' }, 'overwrite.yaml'), { 'url-domain': ['corp.com'] });
   });
 });
+
+describe('覆写扩展文件加载顺序', () => {
+  // 回归：排序曾用 localeCompare，同一组文件在不同 LANG 的机器上顺序不同（实测
+  // ['dns','工作','机场'] en/zh_CN/ja 三种序），而排序即合并顺序——同一套覆写经
+  // dotfiles 同步到不同机器会合并出不同运行配置。修复为码点序。
+  // 用 B/a 这组文件名：任何 ICU locale 的 localeCompare 都排 a 先（字母序），
+  // 码点序 B(0x42) 先——与测试机的 LANG 无关，旧实现此用例必红
+  it('按码点序加载，与系统 locale 无关', () => {
+    const names = ['overwrite.B.yaml', 'overwrite.a.yaml'];
+    for (const name of names) {
+      fs.writeFileSync(path.join(tmpDir, name), 'log-level: debug\n');
+    }
+    try {
+      const files = loadOverwriteFile();
+      assert.deepEqual(
+        files.map(f => f.name),
+        names,
+      );
+    } finally {
+      for (const name of names) {
+        fs.rmSync(path.join(tmpDir, name));
+      }
+    }
+  });
+});

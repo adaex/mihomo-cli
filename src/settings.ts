@@ -417,6 +417,12 @@ export function saveSubscriptionRawConfig(subName: string, content: string): voi
   atomicWriteFileSync(filePath, content, { mode: 0o600 });
 }
 
+/** 删除订阅原始配置文件（缓存写失败回滚刚写的 yaml 等场景），路径防御与读/写同族 */
+export function removeSubscriptionRawConfig(subName: string): void {
+  const filePath = getSubscriptionRawConfigPath(subName);
+  fs.rmSync(filePath, { force: true });
+}
+
 export function readSubscriptionRawConfig(subName: string): string | null {
   const filePath = getSubscriptionRawConfigPath(subName);
   if (!fs.existsSync(filePath)) return null;

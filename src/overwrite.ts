@@ -660,10 +660,13 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
   if (!fs.existsSync(USER_DATA_DIR)) return { ok, broken };
 
   const entries = fs.readdirSync(USER_DATA_DIR);
+  // 码点序，不用 localeCompare：后者随系统 locale 漂移（实测同一组中文文件名在
+  // en/zh_CN/ja 下三种顺序），而排序即合并顺序——不同机器合并出不同运行配置，
+  // 全程静默。排序是合并语义的一部分，不是展示细节。
   const files = entries.filter(isOverwriteFilename).sort((a, b) => {
     if (a === 'overwrite.yaml') return -1;
     if (b === 'overwrite.yaml') return 1;
-    return a.localeCompare(b);
+    return a < b ? -1 : a > b ? 1 : 0;
   });
 
   // 近失文件名：意图明显是覆写文件却不被任何合法模式认（最典型：主文件写成 overwrite.yml）。

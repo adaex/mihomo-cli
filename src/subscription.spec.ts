@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { isSubscriptionStale, isValidHttpUrl, needsAutoUpdate, parseUserInfo } from './subscription.js';
@@ -124,5 +128,52 @@ describe('needsAutoUpdate 与 isSubscriptionStale 的口径（异常时间戳方
     assert.equal(isSubscriptionStale(staleSub), true);
     assert.equal(needsAutoUpdate(freshSub), false);
     assert.equal(isSubscriptionStale(freshSub), false);
+  });
+});
+
+describe('downloadSubscription：缓存写失败的回滚与错误包装', () => {
+  it('cache.json 不可写时抛 CliError、回滚已写的订阅文件（子进程端到端）', () => {
+    // 端到端回归：订阅文件与缓存是两个写操作，缓存写失败（典型：cache.json 被手改
+    // 成目录 → EISDIR）时旧实现留着刚写的新 yaml 报「更新失败」——回执与终态矛盾，
+    // 下次 start 实际会用这次失败的配置；且错误是裸 Node errno 无标签无指引。
+    // 子进程隔离数据目录：父进程静态 import 的模块已绑定默认 MIHOMO_CLI_DIR
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-dl-rollback-'));
+    const subscriptionPath = path.resolve('src/subscription.ts');
+    const script = [
+      "import http from 'node:http';",
+      "import fs from 'node:fs';",
+      'const server = http.createServer((req, res) => {',
+      "  res.setHeader('Content-Type', 'text/yaml');",
+      "  res.end('proxies:\\n  - {name: n1, type: ss, server: 1.2.3.4, port: 8388, cipher: aes-256-gcm, password: x}\\n');",
+      '});',
+      "await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));",
+      'const port = server.address().port;',
+      'const dir = process.env.MIHOMO_CLI_DIR;',
+      "fs.mkdirSync(dir + '/subscriptions/cache.json', { recursive: true });",
+      `const { downloadSubscription } = await import(${JSON.stringify(subscriptionPath)});`,
+      'try {',
+      '  await downloadSubscription(`http://127.0.0.1:${port}/sub`, \'probe\');',
+      "  console.log('RESULT:NO-THROW');",
+      '} catch (e) {',
+      "  console.log('RESULT:' + JSON.stringify({ name: e.name, message: e.message }));",
+      '} finally { server.close(); }',
+      "console.log('YAML_EXISTS:' + fs.existsSync(dir + '/subscriptions/probe.yaml'));",
+    ].join('\n');
+    try {
+      const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: { ...process.env, MIHOMO_CLI_DIR: dataDir },
+      });
+      assert.equal(r.status, 0, r.stderr);
+      const resultLine = r.stdout.split('\n').find(l => l.startsWith('RESULT:'));
+      assert.ok(resultLine, `应有 RESULT 行，stdout: ${r.stdout}`);
+      assert.ok(!resultLine.includes('NO-THROW'), '缓存写失败必须抛错，不能静默成功');
+      assert.match(resultLine, /"name":"CliError"/, '错误须包装成 CliError（旧实现裸 Node errno）');
+      assert.match(resultLine, /订阅缓存写入失败/);
+      assert.match(r.stdout, /YAML_EXISTS:false/, '刚写的订阅文件必须随失败回滚');
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 });

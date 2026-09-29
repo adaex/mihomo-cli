@@ -559,4 +559,148 @@ describe('TUN 方向的并发防线（cmdStart bump 与 startTun 复核的消费
     // 否则场景若在复核点之前因无关原因出错，上面两条 doesNotMatch 仍恒绿
     assert.match(result.stdout, /RESULT:error=当前环境无法输入管理员密码/, `复核放行后应走到 sudo（非 TTY 报错），stdout: ${result.stdout}`);
   });
+
+  // 顺序防线：装载复核必须先于日志轮转。回归场景是「cmdStart 的 loaded 守卫之后
+  // 另一终端拉起了 Mixed 服务」——旧顺序下 startTun 会把在跑服务的 mihomo.log
+  // rename 进归档才拒绝（launchd fd 继续写归档，`logs 0` 从此看不到服务的新日志）；
+  // 复核前置后，拒绝时日志原样未动
+  it('服务已装载时复核先于日志轮转：拒绝时 mihomo.log 原样未动、无归档产生', async () => {
+    const script = `import fs from 'node:fs';
+import path from 'node:path';
+import { PATHS } from ${MODULES.paths};
+import { startTun } from ${JSON.stringify(path.resolve('src/process-start.ts'))};
+
+fs.mkdirSync(path.dirname(PATHS.mihomoBinary), { recursive: true });
+fs.writeFileSync(PATHS.mihomoBinary, 'stub-kernel');
+fs.mkdirSync(path.dirname(PATHS.configFile), { recursive: true });
+fs.writeFileSync(PATHS.configFile, 'stub-config');
+fs.mkdirSync(path.dirname(PATHS.logFile), { recursive: true });
+fs.writeFileSync(PATHS.logFile, 'service-log-line\\n');
+
+try {
+  await startTun();
+  console.log('RESULT:unexpected-ok');
+} catch (e) {
+  console.log('RESULT:error=' + (e instanceof Error ? e.message : String(e)).split('\\n')[0]);
+}
+const intact = fs.existsSync(PATHS.logFile) && fs.readFileSync(PATHS.logFile, 'utf8') === 'service-log-line\\n';
+console.log('LOG_INTACT:' + intact);
+`;
+    const result = await runTunScript(script, 'running');
+
+    assert.match(result.stdout, /RESULT:error=另一终端已启动 Mixed 服务，TUN 未启动/, `应报并发 start 并中止，stdout: ${result.stdout}`);
+    assert.match(result.stdout, /LOG_INTACT:true/, `拒绝时日志不得被轮转（旧顺序会先 rename 进归档），stdout: ${result.stdout}`);
+  });
+});
+
+/**
+ * 并发同向 start 的 bootstrap 撞车吸收。
+ *
+ * 场景：三个进程同时走真实 startService（锁外阶段在命令层，此处三方的竞争点
+ * 就是锁内 enable+bootstrap）。第一个 bootstrap 成功后，后两个会撞上「任务已装载」，
+ * 真实 launchd 报 exit 5（本机实测：Bootstrap failed: 5: Input/output error）——
+ * 与「bootstrap disabled 标签」的 exit 5 完全同形，而 5 在本项目语境被多处注释
+ * 关联到 disabled，用户会被指向完全错误的排查方向，服务实际健康在跑。
+ * 桩 launchctl 用状态文件模拟装载与否：race 模式下第二次起 bootstrap 报 exit 5、
+ * print 报已装载（应被吸收为幂等成功）；never-load 模式下 bootstrap 恒 exit 5 且
+ * print 报未装载（disabled 形态的真失败，必须仍报错——负向对照，锁死不吸收半边）。
+ */
+const FAKE_LAUNCHCTL_BOOTSTRAP = `
+case "$1" in
+  bootstrap)
+    if [ "$FAKE_MODE" = 'never-load' ] || [ -f "$FAKE_STATE" ]; then
+      echo 'Bootstrap failed: 5: Input/output error' >&2
+      exit 5
+    fi
+    touch "$FAKE_STATE"
+    exit 0
+    ;;
+  print)
+    if [ -f "$FAKE_STATE" ]; then
+      printf '\\tstate = running\\n\\tpid = 4321\\n'
+      exit 0
+    fi
+    exit 113
+    ;;
+  print-disabled)
+    exit 0
+    ;;
+  enable)
+    exit 0
+    ;;
+  bootout)
+    rm -f "$FAKE_STATE"
+    exit 0
+    ;;
+esac
+exit 0
+`;
+
+function startServiceProbeScript(): string {
+  return `import fs from 'node:fs';
+import path from 'node:path';
+import { PATHS } from ${MODULES.paths};
+import { startService } from ${MODULES.service};
+
+// startService 内部 ensureServiceSymlink 要求内核文件存在（hasKernel 判据），
+// isServiceInstalled 查 userAgentPlist（HOME 已指向隔离目录），运行配置须存在且非 TUN
+fs.mkdirSync(path.dirname(PATHS.mihomoBinary), { recursive: true });
+fs.writeFileSync(PATHS.mihomoBinary, 'stub-kernel');
+fs.mkdirSync(path.dirname(PATHS.userAgentPlist), { recursive: true });
+fs.writeFileSync(PATHS.userAgentPlist, 'stub');
+fs.mkdirSync(path.dirname(PATHS.configFile), { recursive: true });
+fs.writeFileSync(PATHS.configFile, 'mixed-port: 17890\\n');
+
+try {
+  const r = await startService(0);
+  console.log('RESULT:started=' + r.started);
+} catch (e) {
+  console.log('RESULT:error=' + (e instanceof Error ? e.message : String(e)));
+  process.exitCode = 1;
+}
+`;
+}
+
+describe('并发同向 start：bootstrap 撞已装载按幂等成功（exit 5 复读 print 区分）', () => {
+  async function runBootstrapRace(mode: 'race' | 'never-load', children: number): Promise<{ status: number | null; stdout: string; stderr: string }[]> {
+    const fixture = makeFixture('mihomo-bootstrap-race');
+    const script = writeScript(fixture.fakeBin, 'start-service.mts', startServiceProbeScript());
+    writeFakeLaunchctl(fixture.fakeBin, FAKE_LAUNCHCTL_BOOTSTRAP);
+    const env = {
+      ...process.env,
+      MIHOMO_CLI_DIR: fixture.dataDir,
+      MIHOMO_CLI_DAEMON_LABEL: fixture.label,
+      HOME: fixture.fakeHome,
+      PATH: `${fixture.fakeBin}:${process.env.PATH}`,
+      FAKE_STATE: path.join(fixture.fakeBin, 'loaded.state'),
+      FAKE_MODE: mode,
+      MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1',
+      NO_COLOR: '1',
+    };
+    try {
+      const runs = Array.from({ length: children }, () => spawnScript(script, env));
+      return await Promise.all(runs.map(r => r.done));
+    } finally {
+      cleanupFixture(fixture);
+    }
+  }
+
+  it('三个进程同时 startService：全部 started=true，无「退出码 5」误报', async () => {
+    const results = await runBootstrapRace('race', 3);
+
+    for (const [i, r] of results.entries()) {
+      assert.equal(r.status, 0, `进程 ${i} 应正常退出，stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+      assert.match(r.stdout, /RESULT:started=true/, `进程 ${i} 应幂等成功，stdout: ${r.stdout}`);
+    }
+  });
+
+  // 负向对照：bootstrap 失败且 print 未装载（disabled 残留 / I/O error 的真失败形态）
+  // 必须仍报错——证明上面的吸收只认「已装载」，不是「exit 5 全吞」的假阳性
+  it('bootstrap exit 5 且未装载：仍报「启动服务失败（退出码 5）」，不被吸收', async () => {
+    const results = await runBootstrapRace('never-load', 1);
+
+    assert.equal(results.length, 1);
+    assert.notEqual(results[0].status, 0, `应非 0 退出，stdout: ${results[0].stdout}`);
+    assert.match(results[0].stdout, /RESULT:error=启动服务失败（launchctl 退出码 5）/, `stdout: ${results[0].stdout}`);
+  });
 });

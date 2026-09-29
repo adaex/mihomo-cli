@@ -160,3 +160,29 @@ describe('reset 的最终数据状态', () => {
       assert.equal(readEpoch(dataDir), beforeOw, 'reset ow 不碰运行前提，不该记录停止');
     }));
 });
+
+describe('reset 目标解析的防呆', () => {
+  it('目标与 --full 同现报错，不静默扩成全量', () => {
+    // 回归：`reset subs --full` 此前静默忽略 subs、扩成全量重置——本意多半是
+    // 「彻底删 subs」，却放大到删设置/内核/服务。矛盾输入显式报错，数据不动
+    withFixture((dataDir, run) => {
+      const result = run(['reset', 'subs', '--full', '-y']);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /不能同时指定重置目标与 --full/);
+      assert.ok(fs.existsSync(path.join(dataDir, 'subscriptions', 'x.yaml')), 'subs 未被删除');
+      assert.ok(fs.existsSync(path.join(dataDir, 'settings.json')), 'settings 未被删除');
+    });
+  });
+
+  it('reset config 报未知目标（config 不是 settings 的别名）', () => {
+    // 回归：`config` 曾在 settings 目标的别名里，与用户从 `mihomo config` 命令得到的
+    // 「运行配置」直觉对撞（那属于 runtime 目标）；`reset config -y` 会删超预期的
+    // 订阅列表/端口/密钥。未知目标报错 + 目标列表兜底
+    withFixture((dataDir, run) => {
+      const result = run(['reset', 'config', '-y']);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /未知的重置目标/);
+      assert.ok(fs.existsSync(path.join(dataDir, 'settings.json')), 'settings 未被删除');
+    });
+  });
+});

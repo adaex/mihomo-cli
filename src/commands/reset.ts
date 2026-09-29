@@ -33,8 +33,14 @@ export const RESET_TARGETS: ResetTarget[] = [
         : [],
   },
   {
+    // 别名刻意不含 'config'：用户从 `mihomo config` 命令得到的直觉是「运行配置」
+    // （那属于 runtime 目标），而这里删的是 settings（订阅列表/端口/密钥）——
+    // 静默对撞会让 reset config -y 删超预期的数据。未知目标报错 + 目标列表兜底
+    // 别名刻意不含 'config'：用户从 `mihomo config` 命令得到的直觉是「运行配置」
+    // （那属于 runtime 目标），而这里删的是 settings（订阅列表/端口/密钥）——
+    // 静默对撞会让 reset config -y 删超预期的数据。未知目标报错 + 目标列表兜底
     id: 'settings',
-    aliases: ['setting', 'settings', 'config'],
+    aliases: ['setting', 'settings'],
     label: '设置',
     needsStop: false,
     preserveOnBare: true,
@@ -60,6 +66,17 @@ function resolveResetTargets(names: string[]): ResetTarget[] {
 export async function cmdReset(args: string[]): Promise<void> {
   assertKnownFlags(args, ['--full', '--yes', '-y'], 'reset [目标...] [--full] [-y]');
   const names = args.slice(1).filter(a => !a.startsWith('-'));
+  // 目标与 --full 互斥：此前 `reset subs --full` 静默忽略 subs、扩成全量重置——
+  // 用户给具体目标再补 --full，本意多半是「彻底删这个目标」，静默放大到删设置/
+  // 内核/服务远超预期。矛盾输入显式报错，与全仓同姿态
+  // 目标与 --full 互斥：此前 `reset subs --full` 静默忽略 subs、扩成全量重置——
+  // 用户给具体目标再补 --full，本意多半是「彻底删这个目标」，静默放大到删设置/
+  // 内核/服务远超预期。矛盾输入显式报错，与全仓同姿态
+  if (names.length > 0 && args.includes('--full')) {
+    throw new CliError('不能同时指定重置目标与 --full', {
+      hint: [`只删指定目标: mihomo reset ${names.join(' ')}`, '重置全部: mihomo reset --full'],
+    });
+  }
   const namedTargets = resolveResetTargets(names);
   const targets = args.includes('--full') ? RESET_TARGETS : names.length > 0 ? namedTargets : RESET_TARGETS.filter(t => !t.preserveOnBare);
   const ids = new Set(targets.map(t => t.id));

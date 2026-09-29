@@ -1,8 +1,34 @@
 # 代码审查：验证结论与边界
 
-当前审查：2026-09-30，两轮整体复审的 17 项修复（已发布为 26.9.91）
+当前审查：2026-09-30，第四轮复审的 13 项修复（未发布）
+
+四个并行深审（进程与服务、数据与下载、配置与覆写、命令层与错误处理）+ 主线外围横切，产出 16 项发现：修 13 项、判定不修/记录 3 项。除流程项外全部配了行为级用例并逐项反向验证（还原即红、恢复即绿）。过程中测试自身的一处假阳性当场修正（locale 用例数据，见对应行），并顺测试暴露补了一项新缺陷（ensureServiceSymlink 并发竞态）。
+
+| 范围 | 验证方式与结论 |
+| --- | --- |
+| 并发同向 start 的 bootstrap 撞车 | 两个 start 都过锁外阶段时，后到者的锁内 bootstrap 撞「任务已装载」，launchctl 报 **exit 5 + "Bootstrap failed: 5: Input/output error"**（本机一次性 plist 实测）——与「bootstrap disabled 标签」的 exit 5 完全同形，而 5 在本项目语境被多处注释关联到 disabled，用户被指向错误排查方向、服务实际健康在跑。锁内 exit 5 复读 print 区分：已装载按幂等成功继续（健康确认照常）、未装载维持报错；startService / installService 恢复分支 / restartService kickstart 回退三处收进 `bootstrapServiceIdempotentOrThrow`。fake launchctl（状态文件模拟装载）+ 三进程并行：修复前 1 成 2 败、修复后全成；负向对照（bootstrap 恒败且未装载）锁「不吸收真失败」半边，反向验证互转 |
+| ensureServiceSymlink 并发竞态 | bootstrap 幂等用例的三个并行 child 在修复前第一步就倒在这：两个进程同时过了 readlink（ENOENT）再各自建链，后建者裸 EEXIST 崩——注释自称「ln -sfn 语义」但实现是先读再删再建的三步。容忍 EEXIST + readlink 复核目标一致（恒定 'mihomo'），不一致仍抛。测试先行暴露、修复后同一用例绿 |
+| sub remove 删当前订阅无提示 | remove 是 add/update/remove 中唯一改变「运行中配置来源」却无提示的：删当前订阅时 active 静默切到 subs[0]，运行中的内核仍服务**已删除订阅**的旧配置，用户看到「已自动切换到 X」会误以为代理已在用 X。`printRestartHintIfRunning` 加 variant，removed-active 复用同一重启命令判据（TUN 在跑提示 start tun）。CLI 级用例（`exec -a` 伪造内核命令行 + runtime/pid），含删非当前订阅与未运行两档负向对照，反向验证转红 |
+| 覆写扩展文件排序 localeCompare | 排序即合并顺序，localeCompare 随 LANG 漂移（实测 ['dns','工作','机场'] 在 en/zh_CN/ja 三种序）——同一套覆写经 dotfiles 同步到不同机器合并出不同运行配置，全程静默。改码点序。**测试数据是第一版假阳性**：上述中文组在 en 下 localeCompare 与码点序同序，CI（en）对旧实现恒绿；改用 ['overwrite.B.yaml','overwrite.a.yaml']——任何 ICU locale 都字母序 a 先、码点序 B(0x42) 先，与测试机 LANG 无关。反向验证转红 |
+| isLoopbackHost 漏 0.0.0.0/:: | 与前两轮「裸 localhost」同族漏网：macOS 实测 connect 到 0.0.0.0 路由到回环监听器，curl 认这个代理形态——`https_proxy=http://0.0.0.0:7890` 逃过自代理清除，重启先停内核后 update/kernel 必成死锁。URL parser 已把 0、00.0.0.0、[::0] 归一为 0.0.0.0/::，判两种即可；system-proxy 共用此函数，扩集两边天然一致（扩前已在注释里警告过漂移风险，本轮把 0.0.0.0/:: 语义补进注释）。反向验证转红 |
+| redact 对订阅 own `__proto__` | 第三轮修了覆写合并层的同族问题，展示路径漏网：js-yaml 解析订阅顶层 `__proto__:` 得 own 键，脱敏 walk 里对象字面赋值命中原型 setter——键静默丢失、副本原型被换、dumpYaml 抛「unacceptable kind of an object to dump」，`mihomo config` 按程序 bug 渲染。walk 改 defineProperty 绕 setter 保住键与内容（内核按未知顶层键忽略）。探针实测（原型替换 + 键丢失）确认，反向验证转红 |
+| ui 对非法 ports 硬失败 | status 对同一 getPorts() 有 try/catch 降级（控制器端口非法不该让整个 status 崩），ui 没有——mixed 写坏也挡死整个命令，用户连实际控制器地址都看不到。补同款降级，控制器行给「配置非法」文案。CLI 级用例（两端口相同），反向验证转红 |
+| startTun 复核晚于日志轮转 | loaded 复核（防并发 start）此前排在 rotateAndCleanupLogs 之后：慢速阶段内另一终端拉起 Mixed 服务的话，TUN 会先把在跑服务的 mihomo.log rename 进归档才拒绝（launchd fd 继续写归档，`logs 0` 从此看不到服务新日志）。复核挪到轮转之前，注释一并记录「轮转先行」这一更贵形态。fake loaded 场景的 LOG_INTACT 用例，反向验证（旧顺序）转红 |
+| installService 的 plist stage 在 runtime/ | stage 要活到 plutil/bootout/waitUntilUnloaded（最多 5s）之后的 copyFileSync——窗口内并发 stop（rmrf runtime/）或含 runtime 目标的 reset 删目录，copyFileSync 裸 ENOENT。CLAUDE.md 立过「runtime 会被整体删除，不能放有生命周期的文件」的规矩（锁、sudo 脚本因此迁出），stage 是同族违规。挪数据根目录（PATHS.servicePlistStage，已有 finally 清理）。paths.spec 位置约定用例（与锁文件约定同款），反向验证转红 |
+| 订阅缓存写失败的回执矛盾 | 订阅 yaml 与 cache 两步写非原子：缓存写失败（典型 cache.json 被手改成目录 → EISDIR）时报「更新失败」但新 yaml 已落盘——下次 start 实际用这次「失败」的配置，且错误是裸 Node errno 无标签无指引。失败时回滚删除刚写的 yaml（updated_at 未推进、下次 start 自动重下自愈）+ CliError 包装。settings.ts 导 removeSubscriptionRawConfig 与读/写同族路径防御。子进程端到端用例（临时 HTTP 供合法订阅），反向验证转红 |
+| reset 目标解析两缺口 | ① 目标与 --full 同现此前静默忽略目标、扩成全量（`reset subs --full` 本意多半是彻底删 subs）——矛盾输入显式报错；② settings 目标别名含 'config'，与 `mihomo config` 命令的运行配置直觉对撞（那属于 runtime 目标），`reset config -y` 删超预期的订阅列表/端口/密钥——别名删 config，未知目标报错 + 目标列表兜底（README 目标清单本就只写 settings）。两个 CLI 级用例，反向验证分别转红 |
+| --mirror= 空值静默裸域 | `--mirror=` 与 `--mirror ""`（脚本拼接产生空值的两种形态）此前静默按裸域处理，与 --proxy= 的显式报错姿态不一致；裸 `--mirror`（无值）是文档化的「强制走镜像、域用默认裸域」，保持不变。用例两形态 + 裸 --mirror 负向对照，反向验证转红 |
+| 镜像用户的版本查询失败提示压制 | 提示补给的 else if 以 !mirrorInfo.mirror 为条件：显式 --mirror + 无代理 + 直连 API 不通（正是需要镜像的网络）时，限流提示与镜像/代理建议全跳过，只剩裸「更新失败: fetch failed」——压制条件本意是「别再建议镜像」，把 gh 认证/--proxy 出路一起吞了。拆成 apiProxy / useGh / 镜像三档指引。CLI 级用例（--mirror cdn --proxy 127.0.0.1:1 连接即拒、不依赖外网），反向验证转红 |
+| 判定不修/记录 | ① remove/add 并发同名订阅可留孤儿 yaml：subAdd 下载刻意不持锁（60s），A remove 提交时 B 的 yaml 未写出则 postCommit rm 落空、B 随后写盘——终态「无条目有孤儿文件」，grep 证实无 subscriptions/ 目录枚举消费方，仅 dir open subs 可见；修复需下载后二次确认归属，收益不抵复杂度。② stop 游离路径批量 pkill 理论上可杀并发 start 刚拉起的内核（B 读 status 未装载 → A bootstrap 起内核 → B 读 pids 命中 → pkill，KeepAlive 拉回而此路径不 bootout）——与已接受的「探测与动作隔次查询」同族、方向相反，触发需精确交错。两项均记录在「未覆盖与待复核」 |
+| 全量验证 | typecheck / **729 测试**（714 → 729，+15）/ Biome（85+ 文件，非 0）/ build 全绿。13 项修复的反向验证逐项还原转红后恢复；三进程 bootstrap 用例顺带坐实了 ensureServiceSymlink 竞态的历史存在（修复前该用例第一步即 EEXIST 裸错误） |
+
+---
+
+## 上一轮验证（26.9.91 两轮整体复审，已发布）
 
 四个并行审查（覆写/配置合并、并发锁与设置、进程与运行时、下载网络与命令层）+ 主线逐条复核产出 20 项决策：两轮修 17 项、判定不修 3 项（见下方汇总表「判定不修」行）。除 remove 时序与 fsync 两项（时序差异无法黑盒注入，见对应行的如实记录）外，行为修复均做过反向验证（还原即红、恢复即绿）；过程中抓出三处测试自身或验证记录的假阳性并当场修正（详见各行内注与「文档与流程复盘」）。
+
+注：26.9.91 tag 之后的 `cdddff8`（第三轮复审修正：缓存 ENOENT 误报、tmp 清扫位置/覆盖）与 `43b37a2`（文档）合入 main 时未发布、CHANGELOG 无 Unreleased 登记——本轮一并补登。
 
 | 范围 | 验证方式与结论 |
 | --- | --- |
@@ -257,6 +283,8 @@ v4.11.0 改的是展示层一处误导：status 的覆写行此前列「目录�
 
 ## 未覆盖与待复核
 
+- **remove/add 并发同名订阅的孤儿 yaml**（第四轮记录不修）：subAdd 的下载刻意不持 settings 锁（60s 下载不能压进临界区），A remove 完整提交时 B 的 yaml 尚未写出 → postCommit rm 落空 → B 随后写盘。终态「条目已删、孤儿文件残留」，无行为消费方（grep 证实无 subscriptions/ 目录枚举），仅 `dir open subs` 可见。要封死需下载完成后二次确认归属，收益不抵复杂度
+- **stop 游离路径批量 pkill 与并发 start 的交错**（第四轮记录不修）：B 读 status（未装载）→ 并发 A bootstrap 并拉起服务内核 → B 读 pids 命中 A 的内核 → stop() 的 cleanupAll pkill 杀掉它，KeepAlive 约 10s 拉回（游离路径不 bootout）。B 报「已停止」与终态相反。与已接受的「探测与动作之间隔一次查询」同族（TUN sudo 窗口），方向相反（stop 伤 start），触发要求两次读取之间落入对方的 bootstrap+进程拉起，记录不修
 - 健康观察窗只覆盖启动初期，之后的 OOM/panic 由 status/doctor 展示异常退出；延长 start 到无限观察不在目标内
 - install 恢复分支的并发只能手工双终端复现（需真装了内核的机器）：自动化要么得真跑 launchctl enable/disable（留永久记录），要么退化成对实现清单的断言。已修；热重载成功分支（PATH 前置桩 launchctl + 桩 controller）与查询失败回退分支（计数桩 launchctl）均已自动化（service-concurrency.spec，不碰真实 launchd），install 恢复分支仍只能手工复现
 - 控制器/入站家族锁定（external-controller-tls/-unix/-cors/-doh、tuic-server、ss-config/vmess-config、listeners/tunnels、tls 段、allow-lan 与鉴权家族）只回上游源码核对了键名与启动前提、用 buildConfig 实测了剥除，**没用真内核验证过额外监听真的开不出来**；unix socket 文件创建、TUIC/SS/Vmess server bind、`allow-lan: true` 下内核是否真的绑到全网卡等内核侧行为同理。**这不是待办**：主力开发机（Mac mini）按设计不装内核（见「平台实测备忘」末条），要验得换一台装了内核的机器，与 launchd 真实启停、TUN 提权同属「只能在别的机器上手工复现」那一类。剥除行为本身由 config.spec 全覆盖，内核侧只是第二道确认
@@ -328,3 +356,7 @@ v4.12.0 的教训是**「待定」不是中间状态，在实现上等于放行*
 **删测试时数用例不能 grep 源码，要跑删除前的基线。** 本轮核对「700 删了多少条」时，静态数 `it(` 模板得到 completion.spec 21、completion-install.spec 21，加上 tar 4、位置参数 5，算出来的总数对不上实跑的 643——前者的用例在 `for (const shell of …)` 循环里展开，21 个模板运行时是 25 条（子代理报的 26 同样是数出来的错数）。最终用临时 worktree  checkout 基线逐个 spec 跑 `ℹ tests` 才核准 -57 的拆账（另含被静态盘点整体漏掉的 utils.spec 镜像用例 2 条）。与发布流程核对测试数同一条纪律：计数只认真实运行结果。
 
 **隔离不是只隔离 `MIHOMO_CLI_DIR`。** 落盘位置经 `os.homedir()` 推导的东西（LaunchAgent plist 在 `~/Library/LaunchAgents`），数据目录变量挡不住，还需把 **`HOME`** 指向临时目录——service-concurrency.spec 的热重载场景就是三层隔离（`MIHOMO_CLI_DIR` + 一次性 label + 临时 HOME）。手工验证涉及 plist 的路径时同样要做，别只设数据目录变量
+
+**第四轮（本轮）的教训一：测「与 locale 无关」的用例，数据必须选在任意目标 locale 下都分出两种序的组合。** 覆写排序用例第一版取 ['dns','工作','机场']——在 zh 开发机上能咬住 localeCompare 旧实现，但在 en 的 CI 上 localeCompare 与码点序恰好同序，对旧实现**恒绿**：用例锁的是「当前机器的 locale」而不是「码点序」。改为 ['overwrite.B.yaml','overwrite.a.yaml']（任何 ICU locale 的字母序都 a 先、码点序 B(0x42) 先）后才与 LANG 无关。写这类用例前，先在 en/zh/ja 下实跑一遍测试数据，确认它真的分出两种序
+
+**本轮教训二：修一条红线要回查它的全部路径，同族漏网按「路径」不按「模块」分布。** 第三轮修了覆写**合并层**的 `__proto__`，本轮在**展示层**（redact）抓到同族；第二轮修了 isLoopbackHost 的裸 localhost，本轮在同一函数抓到 0.0.0.0/::。漏网都不在「没改过的模块」里，而在「改过的判据的另一半消费路径」里。修法：修红线（裸异常按 bug 渲染、自代理死锁）时列出该判据/红线的全部消费路径（合并、展示、下载、诊断），逐条确认，而不是只回看本次动过的文件

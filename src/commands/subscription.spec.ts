@@ -258,3 +258,43 @@ describe('sub update 批量结果', () => {
     }
   });
 });
+
+describe('sub remove 删除当前订阅的运行中提示', () => {
+  // 回归：remove 是 add/update/remove 中唯一改变「运行中配置来源」却不给提示的操作——
+  // 删当前订阅时 active 静默切到 subs[0]，运行中的内核仍服务已删除订阅的旧配置，
+  // 用户看到「已自动切换到 X」会误以为代理已在用 X
+  it('运行中删除当前订阅：提示按原模式重启；删非当前订阅不提示', () =>
+    withFixture((dataDir, run) => {
+      // 伪造 TUN 运行：exec -a 让 ps 命令行含内核路径（isMihomoProcess 的判据），
+      // pid 写入 runtime/pid；bash -c 的 exec 替换进程本身，fake.pid 即目标进程
+      fs.mkdirSync(path.join(dataDir, 'kernel'), { recursive: true });
+      fs.mkdirSync(path.join(dataDir, 'runtime'), { recursive: true });
+      fs.writeFileSync(path.join(dataDir, 'kernel', 'mihomo'), '');
+      const fake = spawn('bash', ['-c', `exec -a '${path.join(dataDir, 'kernel', 'mihomo')}' sleep 300`]);
+      try {
+        fs.writeFileSync(path.join(dataDir, 'runtime', 'pid'), String(fake.pid));
+
+        // 删当前订阅 alpha → 自动切到 beta → 运行中必须给「仍在用已删除订阅配置」提示，
+        // 命令与 restartToApply 同判据：TUN 在跑提示 start tun（裸 start 会切回 Mixed）
+        const removed = run(['sub', 'remove', 'alpha', '-y']);
+        assert.equal(removed.status, 0, removed.stderr);
+        assert.match(removed.stdout, /已自动切换到 "beta"/);
+        assert.match(removed.stdout, /仍在使用已删除订阅的配置，执行 mihomo start tun 切换到新订阅/);
+
+        // 删非当前订阅（此时 active=beta）：配置来源没变，不提示
+        const removed2 = run(['sub', 'remove', 'beta', '-y']);
+        assert.equal(removed2.status, 0, removed2.stderr);
+        assert.ok(!removed2.stdout.includes('仍在使用已删除订阅'), '非当前订阅的删除不影响运行中的配置来源，不该提示');
+      } finally {
+        fake.kill();
+      }
+    }));
+
+  it('未运行时删除当前订阅：无提示', () =>
+    withFixture((_dataDir, run) => {
+      const removed = run(['sub', 'remove', 'alpha', '-y']);
+      assert.equal(removed.status, 0, removed.stderr);
+      assert.match(removed.stdout, /已自动切换到 "beta"/);
+      assert.ok(!removed.stdout.includes('仍在使用已删除订阅'), '未运行时不该提示重启');
+    }));
+});

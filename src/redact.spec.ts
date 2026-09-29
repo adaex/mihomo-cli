@@ -66,4 +66,21 @@ describe('redactConfigSecrets：配置凭据脱敏', () => {
     assert.deepEqual(redactConfigSecrets(null).config, null);
     assert.deepEqual(redactConfigSecrets([{ password: 'x' }, 1]).config, [{ password: '***' }, 1]);
   });
+
+  it('own __proto__ 键：副本保留键与内容，原型不被替换（可正常 dump）', () => {
+    // 回归：js-yaml 解析订阅里的顶层 `__proto__: {...}` 得到 own 键（不污染
+    // Object.prototype，但键真实存在）。旧实现 walk 里 out['__proto__'] = ...
+    // 命中原型 setter：键从副本静默丢失、副本原型被换成键内容，随后的 dumpYaml
+    // 抛「unacceptable kind of an object to dump」让 mihomo config 按程序 bug 渲染
+    // （与覆写合并层的同族问题在展示路径的漏网）。JSON.parse 构造 own 键等价
+    const doc = JSON.parse('{"proxies":[{"name":"a","password":"x"}],"__proto__":{"evil":true}}');
+    const { config } = redactConfigSecrets(doc);
+    const out = config as Record<string, unknown>;
+
+    assert.equal(Object.prototype.hasOwnProperty.call(out, '__proto__'), true, '键必须保留在副本里');
+    assert.equal(Object.getPrototypeOf(out), Object.prototype, '副本原型仍是 Object.prototype，没被键内容换掉');
+    assert.equal((out as { evil?: boolean }).evil, undefined, '键内容没有漏成实例属性');
+    assert.deepEqual(out.__proto__, { evil: true }, '键内容原样保留（mihomo 按未知顶层键忽略）');
+    assert.equal((out.proxies as [{ password: string }])[0].password, '***', '同文档其他键照常脱敏');
+  });
 });

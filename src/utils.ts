@@ -40,13 +40,20 @@ export function shellQuote(s: string): string {
 }
 
 /**
- * 回环主机名判定（127.0.0.1 / localhost / ::1），忽略大小写。
+ * 回环/本机主机名判定，忽略大小写：127.0.0.1、localhost、::1，
+ * 以及未指定地址族写法 0.0.0.0 与 ::——macOS 上 connect 到它们会路由到
+ * 本机监听器（0.0.0.0 实测 TCP connect 成功），curl 同样认这些代理形态；
+ * 漏判会让 `https_proxy=http://0.0.0.0:7890` 这类「指向自己」的值逃过
+ * 自代理清除，重启先停内核后下载必成死锁。URL parser 已把 0、00.0.0.0、
+ * [::0] 等变体归一为这两种形态（hostname 去方括号后比较）。
+ *
  * env 自代理判定（proxyEnvPointsAtSelf）与系统代理指向判定（system-proxy）共用，
- * 不各自维护清单——任何一边扩集都会让两个判定悄悄漂移。
+ * 不各自维护清单——任何一边扩集都会让两个判定悄悄漂移；本机语义两边一致，
+ * 扩集同时生效。
  */
 export function isLoopbackHost(host: string): boolean {
   const h = host.toLowerCase();
-  return h === '127.0.0.1' || h === 'localhost' || h === '::1';
+  return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '0.0.0.0' || h === '::';
 }
 
 /**
@@ -519,6 +526,15 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
   const mirrorIdx = args.indexOf('--mirror');
   if (mirrorIdx >= 0 || mirrorEq) {
     const inline = mirrorEq?.slice('--mirror='.length);
+    // 空值报错，与 --proxy= 同姿态：`--mirror=` 与 `--mirror ""` 都是脚本拼接参数时产生
+    // 空值的形态，静默落到裸域会让用户在不知情下选错通道。裸 `--mirror`（无值）不同——
+    // 那是文档化的「强制走镜像、域用默认裸域」，保持不变
+    if (inline === '' || (mirrorIdx >= 0 && args[mirrorIdx + 1] === '')) {
+      throw new CliError('--mirror 的值不能为空（单独的 --mirror 表示使用默认镜像域）', {
+        label: '参数错误',
+        hint: ['用法: mihomo kernel [--mirror [镜像]]', `可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`, '不使用镜像: mihomo kernel --mirror direct'],
+      });
+    }
     const nextArg = inline ?? args[mirrorIdx + 1];
     if (!nextArg || nextArg.startsWith('-')) {
       // 显式表达「我要用镜像」：默认走裸域；需要 v4/v6/cdn 子域时显式写别名

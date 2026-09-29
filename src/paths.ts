@@ -40,6 +40,14 @@ export const PATHS = {
   logFile: path.join(DIRS.logs, 'mihomo.log'),
   pidFile: path.join(DIRS.runtime, 'pid'),
   /**
+   * installService 的 plist 暂存文件（plutil -lint 校验通过后才 copyFileSync 到
+   * LaunchAgents）。**不放 runtime/**：stage 要活到 copy 那一刻，中间隔着 plutil、
+   * bootout、waitUntilUnloaded（最多 5s）——此窗口并发 stop（游离内核路径 rmrf runtime/）
+   * 或含 runtime 目标的 reset 删掉目录，copyFileSync 就裸 ENOENT。与锁文件同族
+   * （「runtime 会被整体删除，不能放有生命周期的文件」），用后即删（service.ts finally）
+   */
+  servicePlistStage: path.join(USER_DATA_DIR, 'service.plist.stage'),
+  /**
    * 跨进程锁文件。**全部以 `Lock` 结尾命名并放在 USER_DATA_DIR 根下**——这两点都是不变量，
    * `paths.spec.ts` 按命名约定枚举它们并断言位置，故新增锁只要照此命名就自动进回归测试。
    *

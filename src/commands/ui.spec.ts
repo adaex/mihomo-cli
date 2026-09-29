@@ -115,3 +115,14 @@ describe('ui CLI：控制器地址与 secret 剪贴板策略', () => {
     }
   });
 });
+
+describe('ui CLI：ports 配置非法时的降级', () => {
+  it('两端口相同（getPorts 抛错）时 ui 照常打开并打印降级文案，不硬失败', () => {
+    // 回归：status 对同一 getPorts 调用有 try/catch 降级，ui 没有——mixed 端口写坏
+    // 也会把整个命令挡死，用户连实际控制器地址都看不到（UI 只需要 controller 端口）
+    const r = runCli(['ui'], { ports: { mixed: 19090, controller: 19090 } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /ports 配置非法/);
+    fs.rmSync(r.binDir, { recursive: true, force: true });
+  });
+});

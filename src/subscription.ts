@@ -9,6 +9,7 @@ import {
   maskUrl,
   readSettings,
   readSubscriptionRawConfig,
+  removeSubscriptionRawConfig,
   saveSubscriptionCache,
   saveSubscriptionRawConfig,
 } from './settings.js';
@@ -272,7 +273,21 @@ export async function downloadSubscription(url: string, subName = 'default', sig
   saveSubscriptionRawConfig(subName, content);
 
   const meta = extractSubscriptionMeta(response.headers);
-  saveSubscriptionMeta(subName, meta);
+  try {
+    saveSubscriptionMeta(subName, meta);
+  } catch (e) {
+    // 订阅文件与缓存是两个写操作，任何一步失败都该回到起点：留着刚写的新 yaml，
+    // 「更新失败」的回执与「配置已变」的终态矛盾（下次 start 实际会用这次失败的
+    // 配置）。回滚删除后，缓存里 updated_at 未推进、下次 start 的自动更新会重下；
+    // 错误包装成 CliError——此前裸 Node errno（如 cache.json 被手改成目录的 EISDIR）
+    // 没有标签与排查指引
+    try {
+      removeSubscriptionRawConfig(subName);
+    } catch {
+      /* 回滚失败不掩盖原始错误 */
+    }
+    throw new CliError(`订阅缓存写入失败: ${(e as Error).message}`, { label: '更新失败', hint: ['订阅文件已回滚，可重试: mihomo sub update'] });
+  }
 
   const proxies = parsed.proxies as unknown[] | undefined;
   const proxyGroups = parsed['proxy-groups'] as unknown[] | undefined;

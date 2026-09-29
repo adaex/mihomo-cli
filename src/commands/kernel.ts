@@ -122,6 +122,23 @@ export async function cmdKernel(args: string[]): Promise<void> {
           '  mihomo kernel --proxy <端口>    # 经本机其他代理工具出网',
         );
       }
+    } else if (apiProxy) {
+      // 显式镜像 + 版本查询经代理失败：镜像按设计绝不碰 API，失败与镜像无关，
+      // 只提示检查代理本身（此前此类用户只剩裸「更新失败」，没有任何出路）
+      hint.push('', '提示: 版本查询（GitHub API）经代理失败，可检查代理是否可用；镜像只作用于内核下载，与查询无关');
+    } else if (useGh) {
+      // useGh 意味着 gh 认证通道已先试过、失败才回退直连——两边都不通
+      hint.push('', '提示: gh 认证通道与直连都失败了，可检查 gh 登录状态: gh auth status');
+    } else {
+      // 显式镜像、无代理可用：正是「直连 API 不通才需要镜像」的网络形态，
+      // 而版本查询按设计直连 GitHub API、绝不经过镜像——不给指引就只剩裸「更新失败」
+      hint.push(
+        '',
+        '提示: 镜像只作用于内核下载，版本查询仍需直连 GitHub API（当前不通）。出路:',
+        '  安装并登录 GitHub CLI（认证配额 5000 次/时）:',
+        '    brew install gh && gh auth login',
+        '  或经本机代理工具查询: mihomo kernel --proxy <端口>',
+      );
     }
     throw new CliError(err.message, { label: '更新失败', hint });
   }

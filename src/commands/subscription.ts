@@ -23,12 +23,19 @@ import { confirmOrThrow, confirmPrompt, dispatchSubcommand, restartToApply, type
 
 /** 订阅内容更新后，运行中的实例仍用旧配置，提示重启生效。
  * 提示的命令须与 restartToApply 选出的重启模式一致：TUN 在跑时裸 start 默认 Mixed，
- * 用户照提示执行会把全局路由静默切走——与「配置变更按原模式重启」是同一判据的两面 */
-function printRestartHintIfRunning(): void {
+ * 用户照提示执行会把全局路由静默切走——与「配置变更按原模式重启」是同一判据的两面。
+ * variant：变更形态。remove 删除当前订阅时运行中的内核还在服务**已删除订阅**的配置、
+ * 当前订阅已静默切走，用户看到「已自动切换到 X」会误以为代理已在用 X——必须提示，
+ * 复用这里同一重启命令判据，不另写一份 */
+function printRestartHintIfRunning(variant: 'update' | 'removed-active' = 'update'): void {
   const state = runtime.getRunningState();
   if (state.running) {
     const hintCommand = state.kind === 'tun' ? 'mihomo start tun' : 'mihomo start';
-    console.log(colors.yellow(`提示: 运行中的实例仍使用旧配置，执行 ${hintCommand} 使更新生效`));
+    const message =
+      variant === 'removed-active'
+        ? `提示: 运行中的实例仍在使用已删除订阅的配置，执行 ${hintCommand} 切换到新订阅`
+        : `提示: 运行中的实例仍使用旧配置，执行 ${hintCommand} 使更新生效`;
+    console.log(colors.yellow(message));
     console.log('');
   }
 }
@@ -309,6 +316,8 @@ async function subRemove(args: string[]): Promise<void> {
   console.log(`已删除订阅 "${target.name}"`);
   if (switchedTo) {
     console.log(`已自动切换到 "${switchedTo}"`);
+    // 删的是当前订阅：运行中的内核仍在服务已删除订阅的旧配置（add/update 同款缺口）
+    printRestartHintIfRunning('removed-active');
   }
 
   console.log('');

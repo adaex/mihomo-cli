@@ -45,13 +45,21 @@ export function cmdUI(args: string[]): void {
   }
 
   const url = UI_URLS[uiName];
-  const controllerPort = getPorts().controller;
+  // 与 status 同款的降级：UI 只用控制器端口，ports 配置写坏（如两端口相同）不应
+  // 把整个命令挡死——控制器地址是排查「UI 连不上」的唯一可见线索，必须能打印
+  // （doctor 有专查非法 ports 的一项）
+  let controllerPort: number | null = null;
+  try {
+    controllerPort = getPorts().controller;
+  } catch {
+    controllerPort = null;
+  }
 
   console.log(`打开 Web UI: ${uiName}`);
   console.log(`页面: ${url}`);
   // 控制器地址固定打印：托管网页默认连 127.0.0.1:9090，自定义端口后这里是唯一可见的
   // 实际连接地址（排查「UI 连不上」全靠它）
-  console.log(`控制器: http://127.0.0.1:${controllerPort}`);
+  console.log(`控制器: http://127.0.0.1:${controllerPort ?? '（settings.json 的 ports 配置非法，无法确定）'}`);
 
   // 非字符串值在 buildConfig 时会报错（start/doctor/config 路径），这里只读 settings
   // 展示 UI 信息，单独收口：不把数字/布尔塞进 pbcopy 或当成密钥提示

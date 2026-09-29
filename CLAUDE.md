@@ -89,7 +89,7 @@ npm run build
 - `writeSettings` 只用于单键/整值替换，undefined 表示删除键；订阅列表通过 `getSubscriptions(snapshot)` 读取并过滤结构错误
 - mutator 必须同步，不得重入 updateSettings/writeSettings；并发测试要用 spawn 并行启动，spawnSync 顺序运行无法验证并发
 - settings 损坏先备份 `.bak` 再回退默认值；订阅缓存读改写也必须持锁
-- `withFileLock` 接收锁文件路径，锁均在用户数据根目录，命名 `xxxLock`；runtime/subscriptions 等目录会被整体删除，不能放锁，sudo 脚本同理——密码窗口内被并发 stop/reset 连带删除的话，sudo 会执行一个不存在的文件，错误被误诊成「密码错误」
+- `withFileLock` 接收锁文件路径，锁均在用户数据根目录，命名 `xxxLock`；runtime/subscriptions 等目录会被整体删除，不能放锁，sudo 脚本与 plist stage 等跨调用生命期的暂存文件同理——密码窗口/安装窗口内被并发 stop/reset 连带删除的话，sudo 会执行一个不存在的文件、copyFileSync 裸 ENOENT（错误被误诊成「密码错误」）
 - 锁超过 10s 可强夺；释放时校验 pid+hrtime token，只删除仍归自己的锁
 - 进程退出轮询必须 async + sleep，让 SIGINT 能被处理；只有同步文件锁内部等待使用同步睡眠
 - URL 按整条处理，不按逗号拆分；展示时脱敏并清除终端控制字符
