@@ -214,6 +214,9 @@ describe('doctor：内核版本查询超时不拖住进程退出', () => {
         ].join('\n'),
         { mode: 0o755 },
       );
+      // 桩 npm：CLI 更新检查的 npm view 也走真实网络（自身超时 15s），registry 慢时
+      // 会与 9s 上界无关地拖长总时长——桩成即时应答，时长断言只反映 gh 查询路径
+      fs.writeFileSync(path.join(binDir, 'npm'), ['#!/bin/sh', '[ "$1" = "view" ] && { echo "26.9.90"; exit 0; }', 'exit 9', ''].join('\n'), { mode: 0o755 });
 
       const started = Date.now();
       const r = spawnSync(process.execPath, ['--import', 'tsx', ENTRY, 'doctor'], {

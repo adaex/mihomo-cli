@@ -216,7 +216,10 @@ export function readSubscriptionCache(): SubscriptionCache {
       // 拷进无原型对象：JSON.parse 的结果仍是普通对象，直接返回会让后续
       // cache['__proto__'] = ... 重新踩回设置原型的坑
       return Object.assign(empty(), parsed);
-    } catch {
+    } catch (e) {
+      // existsSync 与 readFileSync 之间被并发删除（另一终端 reset）：正常形态不是
+      // 损坏，回退空缓存即可——与 readSettings 对 ENOENT 的处理同款
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return empty();
       return backupCorruptSubscriptionCache('格式损坏');
     }
   }

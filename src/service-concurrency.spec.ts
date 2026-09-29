@@ -555,6 +555,8 @@ describe('TUN 方向的并发防线（cmdStart bump 与 startTun 复核的消费
     const result = await runTunScript(startTunProbeScript(), 'unloaded');
 
     assert.doesNotMatch(result.stdout, /另一终端已启动/, `未装载时不得误报并发 start，stdout: ${result.stdout}`);
-    assert.doesNotMatch(result.stdout, /RESULT:unexpected-ok/, `非 TTY 下 sudo 必然失败，不应走到成功，stdout: ${result.stdout}`);
+    // 锚定失败点：必须真的走到了 sudo 环节（非 TTY 下 runSudoScript 早抛），
+    // 否则场景若在复核点之前因无关原因出错，上面两条 doesNotMatch 仍恒绿
+    assert.match(result.stdout, /RESULT:error=当前环境无法输入管理员密码/, `复核放行后应走到 sudo（非 TTY 报错），stdout: ${result.stdout}`);
   });
 });

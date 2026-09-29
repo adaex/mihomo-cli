@@ -394,9 +394,6 @@ export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch |
       result.subscriptionKey = key;
       continue;
     }
-    // url-domain 只做字面后缀比对，不含通配语义（通配只有订阅名键支持）——值里
-    // 出现 `*`/`?` 恒不命中，文件会静默对任何订阅都不生效。订阅名 glob 让人
-    // 很自然地以为 url-domain 也能通配，零提示的静默全不命中会被当成 bug
 
     // url-domain 只做字面后缀比对，不含通配语义（通配只有订阅名键支持）——值里
     // 出现 `*`/`?` 恒不命中，文件会静默对任何订阅都不生效。订阅名 glob 让人

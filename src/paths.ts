@@ -154,19 +154,24 @@ export function rmrf(dir: string): void {
  * tmp）绝不能碰。幂等、容错（清扫失败不影响命令本身），main 每次执行顺带跑一次
  */
 export function cleanupStaleTmpFiles(): void {
-  try {
-    const cutoff = Date.now() - 60 * 60 * 1000;
-    for (const entry of fs.readdirSync(USER_DATA_DIR)) {
-      if (!entry.endsWith('.tmp')) continue;
-      const full = path.join(USER_DATA_DIR, entry);
-      try {
-        if (fs.statSync(full).mtimeMs < cutoff) fs.rmSync(full, { force: true });
-      } catch {
-        /* 单个文件失败跳过 */
+  // atomicWriteFileSync 的目标分布在根目录（settings/cache/epoch）、subscriptions/
+  // （原始订阅）与 runtime/（config.yaml）——三处都扫，runtime 另有 stop/reset 整删
+  // 兜底，前两处的残留没有别的清理路径
+  for (const dir of [USER_DATA_DIR, DIRS.subscriptions, DIRS.runtime]) {
+    try {
+      const cutoff = Date.now() - 60 * 60 * 1000;
+      for (const entry of fs.readdirSync(dir)) {
+        if (!entry.endsWith('.tmp')) continue;
+        const full = path.join(dir, entry);
+        try {
+          if (fs.statSync(full).mtimeMs < cutoff) fs.rmSync(full, { force: true });
+        } catch {
+          /* 单个文件失败跳过 */
+        }
       }
+    } catch {
+      /* 目录不存在/不可读时无事可做 */
     }
-  } catch {
-    /* 目录不可读时无事可做 */
   }
 }
 

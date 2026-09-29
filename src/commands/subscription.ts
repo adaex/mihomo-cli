@@ -122,9 +122,6 @@ async function subAdd(args: string[]): Promise<void> {
   // 空串按显式提供处理并报错，而非静默落到 'default'——同仓其他命令（ui/dir open/
   // sub update）对空串位置参数一律报错，这里是对齐；静默改名会让「想传名字但传了空」
   // 的用户找不到自己的订阅
-  // 空串按显式提供处理并报错，而非静默落到 'default'——同仓其他命令（ui/dir open/
-  // sub update）对空串位置参数一律报错，这里是对齐；静默改名会让「想传名字但传了空」
-  // 的用户找不到自己的订阅
   const name = args[3] === undefined ? 'default' : args[3];
   if (!name.trim()) {
     throw new CliError('订阅名不能为空', { hint: '不指定名称时省略该参数即可（默认名 default）' });

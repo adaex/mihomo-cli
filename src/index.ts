@@ -168,8 +168,6 @@ function assertSupportedPlatform(commandName: string): void {
 
 async function main(): Promise<void> {
   clearProxyEnv();
-  // 崩溃遗留的原子写临时文件（*.tmp）顺带清扫：幂等容错，只动超过 1 小时的旧残留
-  cleanupStaleTmpFiles();
 
   const args = process.argv.slice(2);
 
@@ -178,6 +176,7 @@ async function main(): Promise<void> {
     assertSupportedPlatform('status');
     assertNotRoot('status');
     ensureDirs();
+    cleanupStaleTmpFiles();
     await printStatus();
     printShortHelp();
     return;
@@ -205,6 +204,10 @@ async function main(): Promise<void> {
   // 已覆盖别名 token 与改写命令（改写只动 argv，不动豁免判定）
   if (!GUARD_EXEMPT_COMMANDS.has(command.name)) {
     ensureDirs();
+    // 崩溃遗留的原子写临时文件（*.tmp）顺带清扫：幂等容错，只动超过 1 小时的旧残留。
+    // 放守卫与豁免判定之后——豁免免掉的是副作用面（不建目录、不碰数据目录），
+    // 清扫是删除动作，同样不该在守卫拒绝（旧平台/root）或 help/version 时执行
+    cleanupStaleTmpFiles();
   }
 
   // meta 不接受选项；help 可带一个命令名（help <命令>），version 不带任何位置参数。

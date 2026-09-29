@@ -342,10 +342,6 @@ export function needsAutoUpdate(sub: SubscriptionWithCache): boolean {
   // needsAutoUpdate 恒 false —— 订阅从此永不自动更新，静默过期到失联。
   // 视为「缓存不可信」立即更新，顺带把 updated_at 纠正回当前时间。
   if (lastUpdate > Date.now()) return true;
-  // 未来时间戳（系统时钟被改过、跨时区调时、缓存被手改）会让下面的差值恒为负，
-  // needsAutoUpdate 恒 false —— 订阅从此永不自动更新，静默过期到失联。
-  // 视为「缓存不可信」立即更新，顺带把 updated_at 纠正回当前时间。
-
   // 防御历史坏缓存：update_interval 为 0/负数/非数时回退默认值
   const intervalHours = resolveUpdateInterval(sub.update_interval);
   const intervalMs = intervalHours * 60 * 60 * 1000;
