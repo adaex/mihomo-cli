@@ -333,7 +333,21 @@ const SUBSCRIPTION_KEYS = ['name', 'subscription'] as const;
  * （scope 缺字段则不应用），此处把加载侧补齐。
  */
 export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch | undefined {
-  if (raw == null) return undefined;
+  // undefined = 没写 match 键，全局生效是文档承诺的默认行为。
+  // null = **写了 `match:` 但值为空**——最常见成因是条件块缩进笔误（`match:` 下面的
+  // `name: edu*` 顶了格，js-yaml 解析成 match: null + 顶层垃圾键）。它与键名打错
+  // （下方「未知键」分支）是同族输入，按本函数 fail-closed 的自我承诺必须报错，
+  // 不能静默降级成全局生效：用户写了 match 显然想限定作用域，笔误后文件反而
+  // 应用到**所有**订阅，是比「报错挡住启动」严重得多的静默失效。
+  // 调用侧（readOverwriteFiles）经解构传值，未写该键时恰为 undefined、写空值时
+  // 恰为 null——YAML 层不会产出 undefined，两种形态在这里天然可区分
+  if (raw === undefined) return undefined;
+  if (raw === null) {
+    throw new CliError(`覆写文件 "${fileName}" 的 match 为空`, {
+      label: '覆写配置错误',
+      hint: ['match: 后面要跟条件块（检查缩进），如:', '  match:', '    name: edu*'],
+    });
+  }
   if (typeof raw !== 'object' || Array.isArray(raw)) {
     throw new CliError(`覆写文件 "${fileName}" 的 match 必须是对象（name / url-domain）`, { label: '覆写配置错误' });
   }

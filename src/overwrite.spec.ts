@@ -426,9 +426,14 @@ describe('normalizeMatch（match 块 fail-closed）', () => {
     });
   };
 
-  it('无 match 块返回 undefined（默认全局生效）', () => {
+  it('无 match 键返回 undefined（默认全局生效）', () => {
     assert.equal(normalizeMatch(undefined, 'overwrite.yaml'), undefined);
-    assert.equal(normalizeMatch(null, 'overwrite.yaml'), undefined);
+  });
+
+  it('写了 match 但值为空（缩进笔误解析成 null）抛错而非静默全局生效', () => {
+    // 回归：旧实现把 null 与「未写」一并当全局生效——`match:` 下面的 `name: edu*`
+    // 顶了格时文件反而应用到所有订阅，垃圾键还进最终配置
+    assert.throws(() => normalizeMatch(null, 'overwrite.yaml'), /match 为空/);
   });
 
   it('正常 match 块解析为条件', () => {
@@ -511,6 +516,20 @@ describe('applyOverwrite：嵌套层形似操作符键的告警', () => {
     const r = applyOverwrite({}, [file({ hosts: { '<+.google.cn>': '8.8.8.8' } })]);
     assert.deepEqual(r.config.hosts, { '<+.google.cn>': '8.8.8.8' });
     assert.deepEqual(r.operatorShapedKeys, []);
+  });
+});
+
+describe('loadOverwriteFile：match 笔误形态', () => {
+  it('`match:` 空值（条件块缩进笔误）→ 合并路径硬失败，不静默全局生效', () => {
+    // 端到端回归：`match:` 下面的条件顶了格 → js-yaml 解析出 match: null + 顶层垃圾键。
+    // 旧实现把 null 当「未写 match」→ 文件对所有订阅生效且垃圾键进最终配置
+    const content = ['match:', 'name: edu*', 'log-level: debug'].join('\n');
+    fs.writeFileSync(path.join(tmpDir, 'overwrite.yaml'), content);
+    try {
+      assert.throws(() => loadOverwriteFile(), /match 为空/);
+    } finally {
+      fs.rmSync(path.join(tmpDir, 'overwrite.yaml'));
+    }
   });
 });
 

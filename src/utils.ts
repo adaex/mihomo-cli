@@ -58,13 +58,17 @@ export function isLoopbackHost(host: string): boolean {
  * 只能靠 env 代理出网的用户在 update/kernel 时全部直连失败，且报错与代理无关。
  *
  * 接受的形态：`http://127.0.0.1:7890`、`socks5://localhost:7890`、
- * 以及无协议的裸 `127.0.0.1:789`（all_proxy 的常见写法，补协议再解析）。
+ * 以及无协议的裸 `127.0.0.1:789` 与裸 `localhost:7890`（all_proxy 的常见写法，
+ * 补协议再解析）。裸 localhost 必须单列：`new URL('localhost:7890')` 不抛异常、
+ * 把 localhost 当 scheme、hostname 为空串——不走补协议重解析的话它恰好漏出
+ * 本判定，而 curl/gh 都认这个形态的代理 env，漏掉即自代理死锁清除失效
  * 纯函数，host 比较去方括号、忽略大小写；无端口或解析失败一律不判为自代理。
  */
 export function proxyEnvPointsAtSelf(value: string, selfPort: number): boolean {
   let parsed: URL;
   try {
     parsed = new URL(value);
+    if (parsed.hostname === '') parsed = new URL(`http://${value}`);
   } catch {
     try {
       parsed = new URL(`http://${value}`);

@@ -497,6 +497,15 @@ describe('proxyEnvPointsAtSelf：只认指向本机 Mixed 端口的代理 env', 
     }
   });
 
+  it('裸 localhost:端口也判自代理（curl/gh 认这个形态，漏掉即死锁清除失效）', () => {
+    // 回归：`new URL('localhost:7890')` 不抛异常而 hostname 为空串（localhost 被当
+    // scheme），旧实现恰好漏判——export https_proxy=localhost:7890 的用户在 start/kernel
+    // 重启内核后照样经死代理出网，正是本函数唯一要防的死锁形态
+    assert.equal(proxyEnvPointsAtSelf('localhost:7890', 7890), true);
+    assert.equal(proxyEnvPointsAtSelf('LOCALHOST:7890', 7890), true, 'scheme 与 host 均忽略大小写');
+    assert.equal(proxyEnvPointsAtSelf('localhost:7890', 17890), false, '端口不是自己的仍保留');
+  });
+
   it('企业代理、别的工具与无端口形态一律保留（不能误伤 env 代理出网）', () => {
     for (const url of [
       'http://corp-proxy.internal:8080',
