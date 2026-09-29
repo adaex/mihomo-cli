@@ -4,6 +4,7 @@ import { CliError } from './errors.js';
 import { readLogTail, rotateAndCleanupLogs } from './log-files.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
 import { checkStaleState, getPid, isRunning, MAIN_INSTANCE_PATTERN } from './process-probe.js';
+import { getServiceStatus } from './service.js';
 import { runSudoScript } from './sudo.js';
 import type { StartResult } from './types.js';
 import { shellQuote } from './utils.js';
@@ -130,6 +131,28 @@ export async function startTun(): Promise<StartResult> {
     }
   }
   console.log('TUN 模式需要 sudo 权限...');
+
+  // pkill 前最后一道复核：cmdStart 的 loaded 守卫读的是命令开头的快照，此后隔着
+  // 订阅更新与配置构建两个慢速阶段；期间另一终端 start（mixed）把服务拉起的话，
+  // 脚本的 pkill 会无差别杀掉它，KeepAlive 拉回后与 root TUN 内核抢同一组端口。
+  // 检出即中止——TUN 未启动、服务的运行不动。
+  // 复核点到 pkill 执行之间仍隔着 sudo 密码窗口，无法归零（pkill 在 root 脚本内，
+  // 进不了锁）；那一侧由 stop epoch 防线兜底：TUN 分支过守卫后已 bump，start 的
+  // enable+bootstrap 在锁内必读到变化而放弃——与 kickstart 60s 锁外交错同一级别的
+  // 已知残余，见 CODE_REVIEW「未覆盖与待复核」
+  if (getServiceStatus().loaded) {
+    throw new CliError('另一终端已启动 Mixed 服务，TUN 未启动', {
+      hint: ['两者会抢占同一组端口与配置。请先停止服务:', '  mihomo stop', '', '之后可重试 TUN: mihomo start tun'],
+    });
+  }
+  // pkill 前最后一道复核：cmdStart 的 loaded 守卫读的是命令开头的快照，此后隔着
+  // 订阅更新与配置构建两个慢速阶段；期间另一终端 start（mixed）把服务拉起的话，
+  // 脚本的 pkill 会无差别杀掉它，KeepAlive 拉回后与 root TUN 内核抢同一组端口。
+  // 检出即中止——TUN 未启动、服务的运行不动。
+  // 复核点到 pkill 执行之间仍隔着 sudo 密码窗口，无法归零（pkill 在 root 脚本内，
+  // 进不了锁）；那一侧由 stop epoch 防线兜底：TUN 分支过守卫后已 bump，start 的
+  // enable+bootstrap 在锁内必读到变化而放弃——与 kickstart 60s 锁外交错同一级别的
+  // 已知残余，见 CODE_REVIEW「未覆盖与待复核」
 
   // runSudoScript 统一处理：写临时脚本 + chmod 700 + 单次 sudo + 退出码映射 + 用后即删。
   // 退出码 2 是脚本自身的「启动失败（详见上方日志）」；1 留给 sudo 鉴权取消/密码错误。

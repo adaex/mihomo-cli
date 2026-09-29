@@ -423,3 +423,138 @@ esac
     );
   });
 });
+
+/**
+ * TUN 方向的并发防线消费点（与上面 mixed 方向对称）：
+ *
+ * 缺陷形态：cmdStart 的 loaded 守卫读的是命令开头的快照，TUN 分支此后有订阅更新
+ * （约 10s）与 sudo 密码窗口（最长 60s）两个慢速阶段，期间另一终端 start（mixed）
+ * 起的服务会被 TUN 脚本的 pkill 无差别杀掉，KeepAlive 拉回后与 root TUN 内核抢端口
+ * ——mixed 侧的六条防线全在防「stop 被 start 覆盖」，这个反方向此前没有任何防线。
+ *
+ * 两道补防线各自验证：
+ * 1. TUN 分支过守卫后 bump 停止计数（服务已 disabled/未装时走 recordServiceStopped，
+ *    disable 路径本来就会 bump）——并发的 start 在锁内读到变化即放弃
+ * 2. startTun 在执行含 pkill 的 sudo 脚本前复核服务装载状态，检出即中止
+ */
+
+/** 桩 launchctl（TUN 场景）：print 按 PRINT_MODE 报 113（未装载）或 running；print-disabled 报 disabled 表 */
+const FAKE_LAUNCHCTL_TUN = `
+case "$1" in
+  print)
+    if [ "${'$'}PRINT_MODE" = "running" ]; then
+      printf '\\tstate = running\\n\\tpid = 4242\\n'
+      exit 0
+    fi
+    exit 113
+    ;;
+  print-disabled)
+    printf '\\t\\t"%s" => disabled\\n' "$MIHOMO_CLI_DAEMON_LABEL"
+    exit 0
+    ;;
+esac
+exit 0
+`;
+
+/** TUN 分支 bump 场景：跑真实 cmdStart(['tun'])，无订阅必然在中途抛错——断言抛错前计数已递增 */
+function tunStartScript(): string {
+  return `import fs from 'node:fs';
+import path from 'node:path';
+import { PATHS } from ${MODULES.paths};
+import { readStopEpoch } from ${MODULES.service};
+import { cmdStart } from ${JSON.stringify(path.resolve('src/commands/start.ts'))};
+
+// 服务已安装 + disabled（起 TUN 的最常见前置：上次 stop/tun 留下的位）
+fs.mkdirSync(path.dirname(PATHS.userAgentPlist), { recursive: true });
+fs.writeFileSync(PATHS.userAgentPlist, 'stub');
+fs.mkdirSync(path.dirname(PATHS.mihomoBinary), { recursive: true });
+fs.writeFileSync(PATHS.mihomoBinary, 'stub-kernel');
+
+try {
+  // cmdStart 收到的 argv 带命令头（registry 恒等透传、shared.ts 显式拼 ['start', ...]）
+  await cmdStart(['start', 'tun']);
+  console.log('RESULT:unexpected-ok');
+} catch (e) {
+  console.log('RESULT:error=' + (e instanceof Error ? e.message : String(e)).split('\\n')[0]);
+} finally {
+  console.log('EPOCH:' + readStopEpoch());
+}
+`;
+}
+
+/** startTun 复核场景：跑真实 startTun，前置文件齐全，服务装载与否由桩 PRINT_MODE 决定 */
+function startTunProbeScript(): string {
+  return `import fs from 'node:fs';
+import path from 'node:path';
+import { PATHS } from ${MODULES.paths};
+import { startTun } from ${JSON.stringify(path.resolve('src/process-start.ts'))};
+
+fs.mkdirSync(path.dirname(PATHS.mihomoBinary), { recursive: true });
+fs.writeFileSync(PATHS.mihomoBinary, 'stub-kernel');
+fs.mkdirSync(path.dirname(PATHS.configFile), { recursive: true });
+fs.writeFileSync(PATHS.configFile, 'stub-config');
+
+try {
+  await startTun();
+  console.log('RESULT:unexpected-ok');
+} catch (e) {
+  console.log('RESULT:error=' + (e instanceof Error ? e.message : String(e)).split('\\n')[0]);
+}
+`;
+}
+
+describe('TUN 方向的并发防线（cmdStart bump 与 startTun 复核的消费点）', () => {
+  async function runTunScript(script: string, printMode: 'unloaded' | 'running'): Promise<{ status: number | null; stdout: string; stderr: string }> {
+    const fixture = makeFixture('mihomo-tun');
+    const file = writeScript(fixture.fakeBin, 'tun-scenario.mts', script);
+    writeFakeLaunchctl(fixture.fakeBin, FAKE_LAUNCHCTL_TUN);
+    const env = {
+      ...process.env,
+      MIHOMO_CLI_DIR: fixture.dataDir,
+      MIHOMO_CLI_DAEMON_LABEL: fixture.label,
+      HOME: fixture.fakeHome,
+      PATH: `${fixture.fakeBin}:${process.env.PATH}`,
+      PRINT_MODE: printMode,
+      MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1',
+      NO_COLOR: '1',
+    };
+    try {
+      const result = await spawnScript(file, env).done;
+      return result;
+    } finally {
+      cleanupFixture(fixture);
+    }
+  }
+
+  // 防线 1（缺陷本体）：TUN 分支在慢速阶段之前把「服务该停着」落地为计数递增。
+  // 场景让命令在订阅阶段抛「没有订阅」——它发生在 bump 之后，故 finally 里读到
+  // EPOCH:1 即证明 bump 先于慢速阶段落地（修复前服务已 disabled 时无人 bump，读到 0）
+  it('start tun 在慢速阶段之前递增停止计数（并发 start 锁内可检出）', async () => {
+    const result = await runTunScript(tunStartScript(), 'unloaded');
+
+    assert.match(result.stdout, /RESULT:error=没有订阅/, `无订阅应中断命令，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.match(result.stdout, /EPOCH:1/, `TUN 分支过 loaded 守卫后应递增停止计数（并发 start 的锁内判据依赖它），stdout: ${result.stdout}`);
+  });
+
+  // 防线 2（缺陷本体）：服务在 TUN 启动路径的慢速阶段里被并发 start 拉起时，
+  // startTun 必须在 pkill 之前检出并中止——否则脚本杀掉服务内核，KeepAlive 拉回后
+  // 与 root TUN 内核互抢端口。TUN 未启动、服务的运行不动
+  it('startTun 复核点检出服务已装载 → 报并发 start 并中止，不执行 pkill', async () => {
+    const result = await runTunScript(startTunProbeScript(), 'running');
+
+    assert.match(
+      result.stdout,
+      /RESULT:error=另一终端已启动 Mixed 服务，TUN 未启动/,
+      `应报并发 start 并中止，stdout: ${result.stdout}\nstderr: ${result.stderr}`,
+    );
+  });
+
+  // 负向对照：服务未装载时复核必须放行（走到 sudo 环节，测试环境非 TTY 报 sudo 错误）
+  // ——证明上一条的中止不是「复核恒拦」的假阳性
+  it('服务未装载时复核放行，继续走启动路径', async () => {
+    const result = await runTunScript(startTunProbeScript(), 'unloaded');
+
+    assert.doesNotMatch(result.stdout, /另一终端已启动/, `未装载时不得误报并发 start，stdout: ${result.stdout}`);
+    assert.doesNotMatch(result.stdout, /RESULT:unexpected-ok/, `非 TTY 下 sudo 必然失败，不应走到成功，stdout: ${result.stdout}`);
+  });
+});

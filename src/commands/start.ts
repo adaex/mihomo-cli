@@ -3,7 +3,14 @@ import { hasKernel } from '../config.js';
 import { DEFAULT_AUTO_UPDATE_TIMEOUT } from '../constants.js';
 import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
-import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, disableServiceAutoStart, getServiceStatus, readStopEpoch } from '../service.js';
+import {
+  cleanupLegacyInstallOrThrow,
+  detectLegacySystemInstall,
+  disableServiceAutoStart,
+  getServiceStatus,
+  readStopEpoch,
+  recordServiceStopped,
+} from '../service.js';
 import { getPorts } from '../settings.js';
 import * as subscription from '../subscription.js';
 import { printSystemProxyHint } from '../system-proxy.js';
@@ -48,8 +55,8 @@ export async function cmdStart(args: string[]): Promise<void> {
   // 但真实的窗口，期间跑完的 stop 会被算进基线）。取晚了并发判定即失效，
   // 见 service.ts 的 shouldAbortStartOnDisable。
   //
-  // 下面 TUN 分支的 disableServiceAutoStart() 也会 bump，但那与本快照无关：
-  // TUN 走 startTun()，压根不消费 epoch，两个分支互斥。**若将来 TUN 分支之后还要走
+  // 下面 TUN 分支的 disableServiceAutoStart() 会 bump，且 bump 之后 TUN 分支不消费
+  // 本快照（走 startTun()，两个分支互斥）。**若将来 TUN 分支之后还要走
   // launchOrRestart('mixed')，这里就会检出自己的 bump 并自我取消。**
   const stopEpochBefore = readStopEpoch();
 
@@ -88,6 +95,16 @@ export async function cmdStart(args: string[]): Promise<void> {
       console.log(colors.gray('已临时关闭服务自启（避免重启后服务拿 TUN 配置启动）'));
       console.log(colors.gray('TUN 用完后 mihomo start 可恢复'));
       console.log('');
+    } else {
+      // disable 位已在（上次 stop/tun 留下，起 TUN 的最常见前置）或服务根本未装——
+      // 服务此刻「不会自启且未装载」，这是 recordServiceStopped 不变式的第 2 类证据
+      // （读到的状态本身）。bump 是给并发 `start`（mixed）的防线：本命令接下来有
+      // 订阅更新（约 10s）与 sudo 密码窗口（最长 60s）两个慢速阶段，期间另一终端
+      // start 的话，其锁内会读到计数变化而放弃 enable+bootstrap；没有这道 bump，
+      // start 起的服务会被 TUN 脚本的 pkill 杀掉、KeepAlive 拉回后与 root TUN 内核
+      // 抢同一组端口。mixed 侧的六条防线（v4.7.5–4.7.7）全在防「stop 被 start 覆盖」，
+      // 这个反方向此前裸奔
+      recordServiceStopped();
     }
   } else if (!serviceBefore.installed) {
     // Mixed 恒由 launchd 服务托管，没有用户态直启路径。

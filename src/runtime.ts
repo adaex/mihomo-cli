@@ -116,8 +116,8 @@ export function restartModeOnChange(): RuntimeMode | null {
  * @param stopEpochBefore 命令开始时的停止计数快照（`readStopEpoch()`），透传给
  *   `startService` / `restartService` 判定「本次执行期间是否有人 stop 过」。
  *   **必填**：可选默认值会让新调用方静默退化成「只防本函数执行期间的 stop」，
- *   而这正是本仓反复栽的「防线只铺一条路径」。TUN 分支不消费它（`startTun` 与 launchd
- *   无关），保留形参是为了调用方无需分支
+ *   而这正是本仓反复栽的「防线只铺一条路径」。TUN 分支不消费它（TUN 侧的并发防线是
+ *   命令层的 bump + startTun 复核，见 cmdStart/startTun），保留形参是为了调用方无需分支
  */
 export async function launchOrRestart(mode: RuntimeMode, stopEpochBefore: number): Promise<number | null> {
   if (mode === 'tun') {
