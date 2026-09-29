@@ -1,6 +1,6 @@
 # 代码审查：验证结论与边界
 
-当前审查：2026-09-29，v4.15.0 kernel 更新链路韧性与体验收口（未发布）
+当前审查：2026-09-29，v26.9.37 kernel 更新链路韧性与体验收口（已发布）
 
 本轮从用户视角实测（空目录首跑、真实环境 status/doctor/sub/ow、kernel 全链路）倒出的缺口，全部实机验证：
 
@@ -14,7 +14,7 @@
 | start 系统代理提醒 | 新 `system-proxy.ts`：`scutil --proxy` 一次调用取**当前生效网络集**的 HTTP/HTTPS/SOCKS/PAC 状态（networksetup 按服务持久配置、需逐个查再判活跃，聚合视图才是「现在流量走不走代理」的判据），解析纯函数单测 + 实机 detectSystemProxy 结构断言；matched 一句确认（**仍有条目指向别处时升级黄色提醒**，diverged 单列）、指向别处/未设置给 networksetup 命令（HTTP/HTTPS/SOCKS 三条——缺 HTTPS 的命令清单会让 https 流量照旧直连）、**PAC/WPAD 接管时只说明状态不给覆盖命令**（照敲手动代理命令会把可用的 PAC 配置改坏）、检测失败回退静态提示。只检测不设置，不触碰「不自动设置系统代理」的边界 |
 | 独立 code-review 修复 | 提交前跑独立 review，11 条发现修了 8 组：① `assertPositionalCount` 跳值不看下一个 token，裸 `--mirror` 后跟 `--proxy 7897` 的 exact 组合被误报多余参数（review 用本仓解析器栈实跑复现；修为值位置是 flag 时不跳，**反向验证**恢复旧逻辑后新用例转红）；② 上述 gh 优先级倒挂（spinner 文案与实际出网不符 + doctor 退化）；③ `--proxy` 地址用原始 authority 重组——URL.host 剥 userinfo（带认证代理静默丢凭据、连上必 407 无线索）、WHATWG URL 剥显式默认端口（`:80` 被误报缺端口）；④ PAC/WPAD 盲区与命令清单缺 HTTPS（见上行）；⑤ sub 提示加「至少一个从未更新过」条件（机场不下发用量头时刚 update 完仍无数据，反复提示会让用户怀疑工具坏了）；⑥ `isLoopbackHost` 抽共享（env 自代理与系统代理两处判定不各自维护清单）；⑦ hasGh 每命令 spawn 两次收敛为一次 |
 | 小改 | `sub` 无流量数据尾部提示（条件：至少一个从未更新过 + 全部 formatTraffic 为 null）；`ow` 编号 1 基（broken 连续编号）；帮助示例按 kernel → sub add → install → start 依赖序重排（README 快速开始本就是这个顺序）；kernel usage 行补 --proxy |
-| 文档同步 | README：--proxy 快速开始与通道章节、gh 认证查询说明、卸载段钩子表述如实化；CLAUDE.md：内核下载段补 --proxy 与 gh api；CHANGELOG 4.15.0 |
+| 文档同步 | README：--proxy 快速开始与通道章节、gh 认证查询说明、卸载段钩子表述如实化；CLAUDE.md：内核下载段补 --proxy 与 gh api；CHANGELOG 26.9.37（本版起版本号改为年.月.序号，规则见 release.md） |
 | 全量验证 | typecheck / **692 测试**（661 → 692，+31）/ Biome（85 文件，非 0）/ 全绿。三次反向验证（短别名拦截、通道显式代理优先级、跳值条件）均按预期转红后恢复；kernel gh 通道端到端在临时 MIHOMO_CLI_DIR 完整跑通（含下载与自检）；`--mirror --proxy` 四种等价组合形式与 userinfo 代理实机验证通过，验证后临时目录已清理 |
 
 ---
@@ -38,7 +38,7 @@
 | 文档同步 | README：镜像 IPv6 说法、config/ui/doctor/help 命令表、卸载段钩子提醒、覆写坏文件行为；CLAUDE.md：clearProxyEnv 新判据、覆写加载双出口约束；registry usage 行（config/ui/help/doctor） |
 | 全量验证 | typecheck / **661 测试**（643 → 661，+18）/ Biome（`src/ scripts/` 84 文件，非 0）/ build 全绿。三次反向验证（覆写硬失败、脱敏接线、控制器口）均按预期转红后恢复 |
 
-**未覆盖与待发布后验证**：TUN 真实 sudo 路径（取消密码框、root 进程收尾）与内核真机更新按既有边界不自动执行，仅类型与代码审查；doctor 内核版本项的 ok/warn 具体取值依赖 GitHub，不做硬断言；npm 钩子的真实 `npm uninstall` 接线**已于 v4.15.0 轮经 registry 验证：npm 11.19.0 不执行 preuninstall，机制无效，详见上表**。
+**未覆盖与待发布后验证**：TUN 真实 sudo 路径（取消密码框、root 进程收尾）与内核真机更新按既有边界不自动执行，仅类型与代码审查；doctor 内核版本项的 ok/warn 具体取值依赖 GitHub，不做硬断言；npm 钩子的真实 `npm uninstall` 接线**已于 v26.9.37 轮经 registry 验证：npm 11.19.0 不执行 preuninstall，机制无效，详见上表**。
 
 ---
 
