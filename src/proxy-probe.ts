@@ -31,20 +31,7 @@ export async function probeProxyConnectivity(port: number): Promise<ProxyProbeRe
   try {
     const { stdout } = await execFileAsync(
       'curl',
-      [
-        '-x',
-        `http://127.0.0.1:${port}`,
-        '-s',
-        '-o',
-        '/dev/null',
-        '-w',
-        '%{http_code}',
-        '--connect-timeout',
-        '3',
-        '--max-time',
-        String(Math.ceil(PROBE_TIMEOUT_MS / 1000)),
-        PROBE_URL,
-      ],
+      ['-x', `http://127.0.0.1:${port}`, '-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', String(Math.ceil(PROBE_TIMEOUT_MS / 1000)), PROBE_URL],
       { timeout: PROBE_TIMEOUT_MS + 2_000 },
     );
     const code = Number.parseInt(stdout.trim(), 10);

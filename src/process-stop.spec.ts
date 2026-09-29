@@ -201,16 +201,23 @@ describe('isRunning 的 PID 复用防线', () => {
 });
 
 /**
- * killAllMihomo 的 sudo 分支超时必须引用 SUDO_TIMEOUT_MS（与 runSudoScript 同一常量）。
- * spawnSync 的 options 在模块私有函数内部构造，测试进程无法拦截参数本身；而该缺陷的
- * 形态恰是「抄数字」——15s 早于密码输完就把 sudo+pkill 连密码提示一起杀掉，用户被误判成
- * 「杀进程失败」。故此处锚定「源码引用同一常量」这一事实：引用常量后数值天然与
- * runSudoScript 同源，不会各自漂移。
+ * sudo 分支（会弹密码的交互式 spawnSync）超时必须引用 SUDO_TIMEOUT_MS（与 runSudoScript
+ * 同一常量）。spawnSync 的 options 在模块私有函数内部构造，测试进程无法拦截参数本身；而该
+ * 缺陷的形态恰是「抄数字」——早于密码输完就把 sudo 连密码提示一起杀掉，用户被误判成
+ * 「操作失败」。故此处锚定「源码引用同一常量」这一事实。
+ *
+ * 判据是「带 stdio:'inherit' 的调用块内 timeout 为字面数字即红」——旧断言只要求文件内
+ * **存在一处** `timeout: SUDO_TIMEOUT_MS`，killAllMihomo 的引用让它恒过，clearPid 自抄的
+ * 10s 从它眼皮底下漏过。免密分支（无 stdio:'inherit'）不受此限，10s 是合理值。
  */
 describe('sudo 分支超时统一', () => {
-  it('killAllMihomo 的 sudo 分支引用 SUDO_TIMEOUT_MS，而非自抄更短的超时', () => {
+  it('交互式（stdio: inherit）调用的超时不得是字面数字，必须引用 SUDO_TIMEOUT_MS', () => {
     const source = fs.readFileSync(new URL('./process-stop.ts', import.meta.url), 'utf8');
-    assert.match(source, /timeout:\s*SUDO_TIMEOUT_MS/, 'sudo 分支超时必须引用共享常量，不得抄数字');
+    assert.doesNotMatch(
+      source,
+      /stdio:[^}]*timeout:\s*[\d_]/,
+      '会弹密码的 spawnSync 自抄数字超时 = 密码输得慢的用户被杀掉提示、动作从未执行（引用 SUDO_TIMEOUT_MS）',
+    );
     assert.ok(SUDO_TIMEOUT_MS > 15_000, '超时必须覆盖交互输密码的时长（回归值是 15s）');
   });
 });

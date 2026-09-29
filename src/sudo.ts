@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { DIRS, ensureDirs } from './paths.js';
+import { ensureDirs, USER_DATA_DIR } from './paths.js';
 
 /**
  * sudo 脚本执行超时：交互输密码 + 多步 root 操作的统一上限。
@@ -27,7 +27,7 @@ export class SudoAuthError extends Error {
 interface SudoScriptOptions {
   /** 动作名，用于错误消息，如 "安装服务" */
   action: string;
-  /** 临时脚本文件名（写在 DIRS.runtime 下，用后即删） */
+  /** 临时脚本文件名（写在数据根目录下，用后即删） */
   file: string;
   /** 脚本自定义退出码 → 错误消息（≥2，避开 sudo 的 1=取消/密码错误） */
   codeMessages?: Record<number, string>;
@@ -59,7 +59,12 @@ export function runSudoScript(scriptBody: string, opts: SudoScriptOptions): void
   }
 
   ensureDirs();
-  const scriptPath = path.join(DIRS.runtime, opts.file);
+  // 写在数据根目录而非 runtime/：runtime 会被 stop/reset 整体 rmrf（锁文件为此全部
+  // 迁到了根目录），而脚本写入到 sudo 执行之间隔着密码窗口（最长 SUDO_TIMEOUT_MS），
+  // 期间并发的 stop/reset 会连脚本一起删掉——用户输完密码后 sudo 执行一个不存在的
+  // 文件，错误被误诊成「密码错误」或「启动失败 127」，指向完全错的排查方向。
+  // 根目录属主是用户自己，固定文件名 + 用后即删，残留会被同动作的下一次覆盖
+  const scriptPath = path.join(USER_DATA_DIR, opts.file);
   fs.writeFileSync(scriptPath, scriptBody, { mode: 0o700 });
   // writeFileSync 的 mode 只在**创建新文件**时生效：前次崩溃残留的同名文件会保留
   // 其原有权限位（实测重写 0666 文件后仍是 0666），而本文件下一步就交给 sudo 执行。

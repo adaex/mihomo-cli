@@ -155,7 +155,6 @@ export interface StopResult {
   success: boolean;
   notRunning?: boolean;
   killed?: number;
-  warning?: string;
   remaining?: number[];
 }
 

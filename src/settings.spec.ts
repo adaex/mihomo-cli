@@ -102,6 +102,33 @@ describe('损坏文件的备份只保留第一份原件', () => {
   it('cache.json：同族，已有 .bak 时保留更早的备份', () => {
     assert.equal(readBackupAfterTwoCorruptions('cache'), 'FIRST-CORRUPT{{');
   });
+
+  // 回归：合法 JSON 但不是对象（`[1,2]`/`42`/`"str"`/`null`）此前直接返回空缓存，
+  // 不备份也不出声，下一次写缓存全量覆盖、原件无声丢失——readSettings 对同族
+  // 形态早已「备份+告警」，cache 侧漏修
+  it('cache.json 合法 JSON 但非对象：同样备份原件再回退空缓存', () => {
+    for (const bad of ['[1,2,3]', '42', '"str"', 'null']) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-bak-'));
+      const code = `
+        const fs = await import('node:fs');
+        const nodePath = await import('node:path');
+        const m = await import(${JSON.stringify(settingsModuleUrl)});
+        const { PATHS } = await import(${JSON.stringify(pathsModuleUrl)});
+        const file = PATHS.subscriptionsCacheFile;
+        fs.mkdirSync(nodePath.dirname(file), { recursive: true });
+        fs.writeFileSync(file, ${JSON.stringify(bad)});
+        m.readSubscriptionCache();
+        process.stdout.write(fs.existsSync(file + '.bak') ? fs.readFileSync(file + '.bak', 'utf8') : 'NO-BAK');
+      `;
+      const r = spawnSync(process.execPath, ['--import', 'tsx', '-e', code], {
+        encoding: 'utf8',
+        env: { ...process.env, MIHOMO_CLI_DIR: dir },
+      });
+      fs.rmSync(dir, { recursive: true, force: true });
+      assert.equal(r.status, 0, r.stderr || r.stdout);
+      assert.equal(r.stdout, bad, `非对象 JSON 应先备份原件再回退空缓存（输入 ${bad}）`);
+    }
+  });
 });
 
 describe('saveSubscriptionCache 跨进程并发', () => {

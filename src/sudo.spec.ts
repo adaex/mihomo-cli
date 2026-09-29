@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { describe, it } from 'node:test';
 
 import { SudoAuthError, sudoExitToError } from './sudo.js';
@@ -39,5 +40,17 @@ describe('sudoExitToError：退出码到错误的分工协议', () => {
 
   it('status 为 null（sudo 被信号终止）单独描述，不与退出码混淆', () => {
     assert.equal(sudoExitToError('清理残留进程', null).message, '清理残留进程被中断（sudo 进程被信号终止）');
+  });
+});
+
+describe('runSudoScript 的脚本目录约定', () => {
+  // 真实 sudo 不进自动化测试，脚本写入位置只能以源码结构断言锁定（与
+  // process-stop.spec 对 SUDO_TIMEOUT_MS 的常量断言同款先例）：脚本必须写在
+  // 数据根目录而非 runtime/——runtime 会被 stop/reset 整体 rmrf，密码窗口内
+  // 被删会让 sudo 执行不存在的文件，错误被误诊成「密码错误」
+  it('脚本写在数据根目录（USER_DATA_DIR），不落在会被整体删除的 runtime/', () => {
+    const source = fs.readFileSync(new URL('./sudo.ts', import.meta.url), 'utf8');
+    assert.ok(!source.includes('DIRS.runtime'), 'sudo 脚本不得写入 DIRS.runtime（stop/reset 会 rmrf 该目录，密码窗口内脚本会被连带删除）');
+    assert.ok(source.includes('USER_DATA_DIR'), '脚本路径应派生自 USER_DATA_DIR（数据根目录）');
   });
 });

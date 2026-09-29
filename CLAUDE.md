@@ -24,6 +24,7 @@
 | `kernel.ts` / `http.ts` | 内核下载与有超时、大小限制的 HTTP 客户端 |
 | `paths.ts` | 路径、目录、原子写与跨进程锁 |
 | `log-files.ts` / `open.ts` | 日志轮转、查询与系统打开操作 |
+| `system-proxy.ts` | 系统代理的只读检测与分档提示（不写系统设置，产品边界见下） |
 | `proxy-probe.ts` / `spinner.ts` / `sudo.ts` | 连通性探测、等待反馈、按需提权 |
 | `errors.ts` / `utils.ts` / `colors.ts` / `lifecycle.ts` | 错误、纯函数工具、颜色、信号处理 |
 
@@ -88,7 +89,7 @@ npm run build
 - `writeSettings` 只用于单键/整值替换，undefined 表示删除键；订阅列表通过 `getSubscriptions(snapshot)` 读取并过滤结构错误
 - mutator 必须同步，不得重入 updateSettings/writeSettings；并发测试要用 spawn 并行启动，spawnSync 顺序运行无法验证并发
 - settings 损坏先备份 `.bak` 再回退默认值；订阅缓存读改写也必须持锁
-- `withFileLock` 接收锁文件路径，锁均在用户数据根目录，命名 `xxxLock`；runtime/subscriptions 等目录会被整体删除，不能放锁
+- `withFileLock` 接收锁文件路径，锁均在用户数据根目录，命名 `xxxLock`；runtime/subscriptions 等目录会被整体删除，不能放锁，sudo 脚本同理——密码窗口内被并发 stop/reset 连带删除的话，sudo 会执行一个不存在的文件，错误被误诊成「密码错误」
 - 锁超过 10s 可强夺；释放时校验 pid+hrtime token，只删除仍归自己的锁
 - 进程退出轮询必须 async + sleep，让 SIGINT 能被处理；只有同步文件锁内部等待使用同步睡眠
 - URL 按整条处理，不按逗号拆分；展示时脱敏并清除终端控制字符
@@ -151,7 +152,7 @@ npm run build
 - launchctl print 仅 113 表示未装载，112/125 是查询失败；bootout 对未装载目标返回 3
 - 退出码与 terminating signal 互斥；统一用 describeExitCause，status/doctor/启动失败共享判据
 - launchctl print 顶层字段以单 tab 开头，嵌套字段双 tab，解析锚定行首
-- TUN 与服务共享 config.yaml，启动 TUN 前关闭服务自启；startService 拒绝 TUN 配置，恢复 Mixed 由显式 start 完成
+- TUN 与服务共享 config.yaml，启动 TUN 前关闭服务自启；startService 拒绝 TUN 配置，恢复 Mixed 由显式 start 完成。并发防线对 TUN 方向同样成立：TUN 分支过 loaded 守卫后递增停止计数（并发的 start 锁内检出即放弃），startTun 执行含 pkill 的 sudo 脚本前复核服务装载状态，检出即中止——否则 pkill 杀掉并发 start 的服务内核，KeepAlive 拉回后与 root TUN 内核互抢端口
 - 进程命令行保留启动时路径，匹配需兼顾 mihomo 与 mihomo-cli-service 符号链
 - pgrep/pkill 使用 POSIX ERE，不支持 `(?:...)` 等 JS 正则；退出码仅接受 0/1，其他情况报错
 - BSD ps 读取 command 列必须带 -ww，否则路径可能截断；kill -0 不能区分僵尸进程，TUN 判活还需进程状态与完整观察窗口
@@ -162,7 +163,7 @@ npm run build
 
 - 默认通道 gh > 本机代理 > 直连；显式 --mirror / --mirror direct / --proxy（端口视为 127.0.0.1）优先且选择不持久化；--mirror 可与 --proxy 组合（镜像决定 URL、代理做传输），--mirror direct 与 --proxy 互斥
 - MIRROR_HOST/MIRROR_ALIASES 派生展示清单；裸 --mirror 固定裸域，不探测网络猜 IPv6；短别名拼错（无点无冒号的短 token）在解析层报错 + did-you-mean，不当自定义 host 放行
-- 版本查询优先 gh api 认证通道（免未认证 60 次/时的限流），失败回退代理/直连；GitHub API 不经过镜像，代理只是 TLS 传输层；assertTrustedAssetUrl 在拼镜像前缀之前校验原始地址
+- 版本查询在代理可用（显式 --proxy 或本机在跑）时**直接经代理**——出网路径已定，先试 gh 直连再回退会把「直连被墙」的等待叠加在可用代理前面；无代理可用才走 gh api 认证通道（免未认证 60 次/时的限流）；GitHub API 不经过镜像，代理只是 TLS 传输层；assertTrustedAssetUrl 在拼镜像前缀之前校验原始地址
 - gh 按精确资产名下载，拒绝 glob 元字符与路径成分
 - curl 强制初始与重定向全链路 HTTPS，有大小上限，下载后比对 asset.size，再用 -v 自检
 - 优先精确匹配标准版资产形态；没有标准版时可选匹配架构的其他资产，但 release 全是预发布时不回退

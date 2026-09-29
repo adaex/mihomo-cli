@@ -194,28 +194,41 @@ export function readSubscriptionCache(): SubscriptionCache {
     try {
       const content = fs.readFileSync(PATHS.subscriptionsCacheFile, 'utf8');
       const parsed = JSON.parse(content) as unknown;
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return empty();
+      // JSON 合法但不是对象（数组/标量/null）与解析失败是同一类「文件不可用」，
+      // 处置也该一样（备份+告警）——与 readSettings 对 settings.json 的处理对齐：
+      // 此前这条路径直接返回空缓存，既不备份也不出声，而下一次写缓存会把文件整个
+      // 覆盖成新内容，用户的原件无声无息地没了
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return backupCorruptSubscriptionCache(`内容不是对象（当前是${Array.isArray(parsed) ? '数组' : parsed === null ? 'null' : typeof parsed}）`);
+      }
       // 拷进无原型对象：JSON.parse 的结果仍是普通对象，直接返回会让后续
       // cache['__proto__'] = ... 重新踩回设置原型的坑
       return Object.assign(empty(), parsed);
     } catch {
-      // 与 settings.json 一致：损坏先备份再回退默认，避免下次写入覆盖丢失原始内容。
-      // 已有备份时不覆盖：那一份是更早的原件，比当前损坏内容更有恢复价值
-      const cacheBackup = `${PATHS.subscriptionsCacheFile}.bak`;
-      try {
-        if (fs.existsSync(cacheBackup)) {
-          console.warn(`警告: 订阅缓存格式损坏，已忽略（早前备份保留在 ${cacheBackup}，未覆盖）`);
-        } else {
-          fs.copyFileSync(PATHS.subscriptionsCacheFile, cacheBackup);
-          console.warn(`警告: 订阅缓存格式损坏，已备份到 ${cacheBackup}`);
-        }
-      } catch {
-        console.warn('警告: 订阅缓存格式损坏，已忽略');
-      }
-      return empty();
+      return backupCorruptSubscriptionCache('格式损坏');
     }
   }
   return empty();
+}
+
+/**
+ * 备份损坏的订阅缓存并告警，返回空缓存。与 backupCorruptSettings 同款语义：
+ * 备份只保留第一份（覆盖 `.bak` 会用新损坏盖掉唯一可能更早的原件），
+ * 备份失败不阻塞读取（探测缓存不该让 start 抛错）。
+ */
+function backupCorruptSubscriptionCache(reason: string): SubscriptionCache {
+  const cacheBackup = `${PATHS.subscriptionsCacheFile}.bak`;
+  try {
+    if (fs.existsSync(cacheBackup)) {
+      console.warn(`警告: 订阅缓存${reason}，已忽略（早前备份保留在 ${cacheBackup}，未覆盖）`);
+    } else {
+      fs.copyFileSync(PATHS.subscriptionsCacheFile, cacheBackup);
+      console.warn(`警告: 订阅缓存${reason}，已备份到 ${cacheBackup}`);
+    }
+  } catch {
+    console.warn(`警告: 订阅缓存${reason}，已忽略`);
+  }
+  return Object.create(null) as SubscriptionCache;
 }
 
 function writeSubscriptionCache(cache: SubscriptionCache): void {

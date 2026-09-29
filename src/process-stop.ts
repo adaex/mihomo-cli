@@ -36,10 +36,13 @@ function clearRuntime(): void {
 export function clearPid(): void {
   if (!fs.existsSync(PATHS.pidFile)) return;
   if (isPidFileOwnedByRoot()) {
-    try {
-      spawnSync('sudo', ['rm', '-f', PATHS.pidFile], { stdio: 'inherit', timeout: 10_000 });
-    } catch {
-      // ignore
+    // sudo 分支引用 SUDO_TIMEOUT_MS（与 runSudoScript / killAllMihomo 同一常量）：
+    // 此前自抄 10s——密码输得慢的用户提示被杀、rm 从未执行，正是 killAllMihomo
+    // 注释里立项防过的写法。spawnSync 超时不抛异常（只置 error/signal），
+    // 失败结果必须显式检查，不能只 try/catch 同步异常
+    const result = spawnSync('sudo', ['rm', '-f', PATHS.pidFile], { stdio: 'inherit', timeout: SUDO_TIMEOUT_MS });
+    if (result.error || result.status !== 0) {
+      console.warn('警告: root 属主的 pid 文件未能清理（sudo 失败或已取消），下次 stop 会再次尝试');
     }
   } else {
     try {
@@ -157,7 +160,7 @@ export async function stop(forceSudo = false): Promise<StopResult> {
     console.log(`进程 PID: ${remaining.join(', ')}`);
     console.log('手动命令: sudo pkill -9 mihomo');
     console.log('');
-    return { success: true, warning: '部分进程未终止', remaining };
+    return { success: true, remaining };
   }
 
   clearRuntime();
