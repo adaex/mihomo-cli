@@ -2,7 +2,7 @@
 
 当前审查：2026-09-30，两轮整体复审的 17 项修复（已发布为 26.9.91）
 
-四个并行审查（覆写/配置合并、并发锁与设置、进程与运行时、下载网络与命令层）+ 主线逐条复核产出 21 条发现，两轮修 17 项、判定不修 3 项（见「未覆盖与待复核」末尾）。全部行为修复做过反向验证（还原即红、恢复即绿）；过程中另抓出两处测试自身的假阳性并当场修正（详见各行内注）。
+四个并行审查（覆写/配置合并、并发锁与设置、进程与运行时、下载网络与命令层）+ 主线逐条复核产出 20 项决策：两轮修 17 项、判定不修 3 项（见下方汇总表「判定不修」行）。除 remove 时序与 fsync 两项（时序差异无法黑盒注入，见对应行的如实记录）外，行为修复均做过反向验证（还原即红、恢复即绿）；过程中抓出三处测试自身或验证记录的假阳性并当场修正（详见各行内注与「文档与流程复盘」）。
 
 | 范围 | 验证方式与结论 |
 | --- | --- |
@@ -13,8 +13,8 @@
 | sudo 脚本目录 | 旧写在 `DIRS.runtime`——stop/reset 会 rmrf 该目录（锁文件为此早已迁出），密码窗口内脚本被连带删除会让 sudo 执行不存在的文件、错误误诊成「密码错误」。移到数据根目录；真实 sudo 不进测试，结构断言锁定（与 process-stop.spec 的常量断言同款先例），反向验证转红 |
 | clearPid sudo 分支 | 自抄 10s 超时（同文件 killAllMihomo 注释立项防过的写法）+ spawnSync 结果无人检查（超时不抛异常）。对齐 SUDO_TIMEOUT_MS 并显式检查失败告警；spec 常量断言改为「stdio:inherit 调用块内不得自抄数字超时」（旧断言只锚定文件内存在一处常量引用，clearPid 从它眼皮底下漏过），反向验证转红 |
 | `__proto__` 原型污染 | 覆写嵌套层写 `__proto__` 时 `result[key] = value` 走原型 setter：键不落地、合并结果原型被静默换成用户写的值，dumpYaml 抛裸 YAMLException 带堆栈按程序 bug 渲染（探针实测复现，`dns: {__proto__: {evil: true}, enable: true}` 覆写进任何带 dns 的订阅即炸）。合并层在操作符解析后拦（覆盖 `__proto__!` 等形态）；订阅侧 own `__proto__` 经探针实测**不经赋值点、透传后 dump 不炸**（内核按未知键忽略），刻意不拦。三用例（嵌套、~key 元素补丁、订阅透传负向对照），反向验证转红 |
-| remove 副作用时序 | 删原始 yaml 原在 mutator 内（先于设置落盘）：写失败留下「条目在、文件已删」；放锁外又回与并发 sub add 的 TOCTOU。updateSettings 增 postCommit（写盘成功后、仍持锁）。时序判别用例以「未命中（空补丁）不删文件」区分两种实现——**首版文件名与 remove 目标不一致判别恒过（假阳性），修正后**反向验证（rm 挪回 mutator）转红 |
-| 原子写 fsync | 旧实现 rename-only：进程崩溃有 rename 原子性兜底，OS 崩溃/掉电 POSIX 不保证（元数据可先于数据块持久化，settings.json 可能截断）。补临时文件 fsync + rename 后父目录 fsync；docstring 分层写明保证范围与 macOS 边界（F_FULLFSYNC 无 Node API）。行为面由既有原子写用例覆盖（数据最终状态不变） |
+| remove 副作用时序 | 删原始 yaml 原在 mutator 内（先于设置落盘）：写失败留下「条目在、文件已删」；放锁外又回与并发 sub add 的 TOCTOU。updateSettings 增 postCommit（写盘成功后、仍持锁）。**回归测试的边界如实记录**：新增两条用例（终态守护 + 「未命中不删文件」）对 v26.9.90 历史代码实测**不红**——历史 rm 在未命中早退之后，未命中路径本就不删文件；发布时声称的「反向验证转红」验证的是手写的更坏实现（rm 挪进未命中分支），不是历史代码，该声明不成立（第三轮复审实测推翻）。写盘失败无法黑盒注入，此修复无自动化回归测试，由用例锁住两侧不变式 |
+| 原子写 fsync | 旧实现 rename-only：进程崩溃有 rename 原子性兜底，OS 崩溃/掉电 POSIX 不保证（元数据可先于数据块持久化，settings.json 可能截断）。补临时文件 fsync + rename 后父目录 fsync；docstring 分层写明保证范围与 macOS 边界（F_FULLFSYNC 无 Node API）。行为面由既有原子写用例覆盖（数据最终状态不变）。已知边界：非常规文件系统（如 NFS home）上 fsync 返回 EINVAL 会让原本 rename-only 能成功的写入整体失败——macOS APFS 实测无问题，未在其他文件系统实测；崩溃遗留 `*.tmp` 的清扫第三轮复审后扩到根目录/subscriptions/runtime 三处（atomicWriteFileSync 的全部目标目录），并挪到三道守卫与豁免判定之后（清扫是删除动作，不在被拒绝/豁免的命令上执行） |
 | doctor 查询挂起 | withTimeout 只弃 promise：子进程 stdio 管道占住事件循环，报告打完后进程等满子进程自身超时（curl --max-time 120s）才退。AbortSignal 经 ReleaseQueryOptions 透传 gh（execFile signal）/curl/直连（HTTP_CLIENT 原生支持）三路；gh 被 abort 后不再回退（带着已中止的信号回退只会再吃一次中止）。端到端用例（挂 30s 桩 gh）：修复前实测 13.6s 退出、修复后 4s 预算内，反向验证（不透传 signal）转红 |
 | 低危收口 | url-domain 含通配符报错（恒不命中且零提示）；kernel 命令对坏 ports 降级（与 doctor/status 同姿态）；startTun 存在性校验提到日志轮转前（秒失败不再动日志，sudo 取消残余窗口记「未覆盖」）；逐 pid kill 前复核命令行（isMihomoProcess 导出，cleanupAll 与 killResidualKernels 两个调用点，与批量 pkill 分支安全性对齐，假内核进程桩用例）；logs -f -o 互斥报错；sub add 空串报名不能为空（对齐其他命令）；readSettings 对 ENOENT（并发 reset 间隙）不误报「格式损坏」 |
 | 口径与清理 | YAML_MAX_ALIASES 收进 constants 两处共用；needsAutoUpdate/isSubscriptionStale 对异常时间戳**刻意相反**的口径加用例锁死（防合并去重时统一掉一个），反向验证（删未来时间戳分支）转红；删 StopResult.warning 死字段与 --connect-timeout 死参数；tryHotReload 的 204\|\|ok 冗余清理；文档漂移修正（CLAUDE.md 版本查询优先级、模块表补 system-proxy.ts） |
@@ -269,6 +269,7 @@ v4.11.0 改的是展示层一处误导：status 的覆写行此前列「目录�
 - 元数据键的操作符拦截覆盖 `parseOverrideKey` 能识别的全部形态，**含尖括号转义**：`<enabled>` 同样报错（实测）。代价是失去了「写一个真名为 `enabled` 的配置键」的逃生口——mihomo 顶层目前没有这个键，故暂无影响；若上游将来新增，需要在 `assertNoMetadataKeyLookalikes` 里为尖括号形态开一个口子
 - `kickstart -k` 超时 60s 远超锁的 10s 强夺阈值，必须留在锁外，故它与并发 bootout 的交错无法用锁串行化；现在只保证「不再 re-enable/re-bootstrap」与「不再把用户的 stop 报成内核故障」，不是把这个交错消掉了
 - startTun 的日志轮转已挪到存在性校验之后，但 sudo 取消路径仍有一个同类窗口：轮转（rename 归档）到 pkill 实际执行之间用户取消的话，仍在运行的旧 TUN 内核会继续往归档文件写。rename 进不了 root 脚本（归档命名/清理在 TS 层），接受——下次成功启动自愈，logs 列表短暂缺当前日志
+- TUN 分支 bump 的快照取自命令开头，而 `cleanupLegacyInstallOrThrow()`（遗留 root daemon 存在时）有最长 60s 的 sudo 密码窗口隔在快照与 loaded 守卫/bump 之间：窗口内并发的 mixed start 完成启动后，TUN 随后 bump + startTun 复核中止，mixed 侧健康确认后的 epoch 复检会报「启动已取消……已按最后一条命令保持停止」——该文案在此交错下失真（服务实际健康运行，TUN 未启动）。触发需要遗留 root daemon 存在 + 精确交错，概率极低；与 stop 的 bump 不同（stop 的 bump 在锁内伴随 bootout），TUN bump 无 bootout，「中止时服务已装载」是该路径独有形态。终态正确（服务运行），仅文案失真，记录不改
 - TUN 方向的并发防线（本轮补）也有同族残余：startTun 复核点到 sudo 脚本内 pkill 实际执行之间隔着密码窗口，pkill 在 root 脚本内进不了锁。两道防线合起来覆盖了「B 在 A bump 之前/之后进锁」两种交错，但「B 恰在 A 复核后、pkill 前完成 bootstrap」的毫秒级窗口仍在——B 出锁前锁内 epoch 检查读的是 bump 后的值会放弃，故该窗口要求 B 的整个 enable+bootstrap 压进 A 复核到 pkill 之间，实际可达性极低，与 kickstart 锁外交错同级接受
 - 锁内 launchctl 调用有持锁预算（最坏总时长 < `LOCK_STALE_MS`）：start 侧 enable+bootstrap 两次默认 5s、恰好等于阈值，是既有基线（startService/installService 本就如此），不因本轮变化；stop 侧 bootout+disable+复核共三次，单次 `SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS`（3s，合计 9s），别再往任何锁内加东西。锁内三环节（复核先于递增、递增在锁内、bootout 与 disable 同锁）谁也挪不出锁，缩减调用次数的路走不通，理由见 service.ts 该常量注释
 - 停止计数是多写者读-改-写且刻意不加锁：极端交错下可能用较小值覆盖较大值，使某条后续命令偶发判为「变了」而中止。判据是 `!==` 本就偏保守，接受之
