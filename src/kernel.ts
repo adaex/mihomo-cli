@@ -64,11 +64,11 @@ function assertTrustedAssetUrl(rawUrl: string): void {
 /**
  * 内核下载通道。选择逻辑见 resolveDownloadChannel：
  * - gh：GitHub CLI 直连 GitHub，信任锚是 gh 本身 + 精确资产名，最优通道
- * - proxy：经本机混合端口直连 GitHub，TLS 端到端
- * - mirror：第三方镜像前缀，无法验证来源完整性，仅兜底
+ * - proxy：经代理（本机混合端口或显式 --proxy）直连 GitHub，TLS 端到端
+ * - mirror：第三方镜像前缀，无法验证来源完整性，仅兜底；可附带 proxy 做传输层
  * - direct：curl 直连
  */
-export type DownloadChannel = { kind: 'gh' } | { kind: 'proxy'; port: number } | { kind: 'mirror'; mirror: string } | { kind: 'direct' };
+export type DownloadChannel = { kind: 'gh' } | { kind: 'proxy'; proxy: string } | { kind: 'mirror'; mirror: string; proxy?: string } | { kind: 'direct' };
 
 export interface ChannelResolutionInput {
   /** parseMirrorArg 解析出的镜像 URL，无（未指定或 --mirror direct）则 null */
@@ -79,19 +79,27 @@ export interface ChannelResolutionInput {
   proxyRunning: boolean;
   /** 仅 proxyRunning 时有意义 */
   proxyPort: number | null;
+  /** parseProxyArg 解析出的显式代理地址（--proxy）；null = 未指定 */
+  proxyOverride: string | null;
 }
 
 /**
- * 下载通道决策。显式 --mirror / --mirror direct 手动覆盖最高优先；
+ * 下载通道决策。显式覆盖最高优先：--mirror direct 强制直连、--mirror <镜像> 走镜像
+ * （两者都可与 --proxy 组合——除 direct 外，镜像决定 URL、代理只做传输层）；
+ * 显式 --proxy 单独给出时优先于 gh（指定代理的场景往往正是 gh 直连不通）；
  * 默认路径 gh > 本机代理 > 直连（镜像不持久化，每次按当前环境独立决策）。
  * 纯函数：运行状态（gh 是否存在、代理是否在跑）由命令层探测后注入，便于单测。
  */
 export function resolveDownloadChannel(input: ChannelResolutionInput): DownloadChannel {
-  // 显式 --mirror direct（isOverride 但 mirror 为 null）：强制直连，绕过 gh/代理
+  // 显式 --mirror direct（isOverride 但 mirror 为 null）：强制直连，绕过 gh/代理。
+  // 与 --proxy 互斥的校验在 cmdKernel（需要 mirror/proxy 两个解析器的结果），这里不重复
   if (input.isOverride && !input.mirror) return { kind: 'direct' };
-  if (input.isOverride && input.mirror) return { kind: 'mirror', mirror: input.mirror };
+  if (input.isOverride && input.mirror) {
+    return input.proxyOverride ? { kind: 'mirror', mirror: input.mirror, proxy: input.proxyOverride } : { kind: 'mirror', mirror: input.mirror };
+  }
+  if (input.proxyOverride) return { kind: 'proxy', proxy: input.proxyOverride };
   if (input.ghAvailable) return { kind: 'gh' };
-  if (input.proxyRunning && input.proxyPort !== null) return { kind: 'proxy', port: input.proxyPort };
+  if (input.proxyRunning && input.proxyPort !== null) return { kind: 'proxy', proxy: `http://127.0.0.1:${input.proxyPort}` };
   return { kind: 'direct' };
 }
 
@@ -159,6 +167,7 @@ export function pickLatestRelease(releases: GitHubRelease[]): GitHubRelease {
 /**
  * 构造代理路径查询 release API 的 curl 参数。纯函数，参数数组单测锁死（口径同 buildKernelCurlArgs）：
  * - URL 直指 api.github.com 且居末位——API 绝不经过镜像（镜像可伪造 browser_download_url）
+ * - `-x <proxy>`：curl 的代理传输层（本机混合端口或显式 --proxy），TLS 端到端，响应仍来自 GitHub
  * - `--proto '=https'` / `--proto-redir '=https'`：全链路强制 https，与下载通道同防线
  * - `--fail-with-body` + `-w '\n%{http_code}'`：此前 4xx（api.github.com 未认证限流 60 次/时，
  *   403 常见）时 curl 退出码为 0，JSON 错误对象一路流到 pickLatestRelease 才抛出笼统的
@@ -166,11 +175,11 @@ export function pickLatestRelease(releases: GitHubRelease[]): GitHubRelease {
  *   curl 层就失败（退出码 22），错误体与状态码随 stdout 带回，由 translateReleaseApiCurlError
  *   组装成与直连路径同形态的 HTTP 错误
  */
-export function buildReleaseApiCurlArgs(proxyPort: number, url: string): string[] {
+export function buildReleaseApiCurlArgs(proxy: string, url: string): string[] {
   return [
     '-s',
     '-x',
-    `http://127.0.0.1:${proxyPort}`,
+    proxy,
     '--proto',
     '=https',
     '--proto-redir',
@@ -236,21 +245,58 @@ export function translateReleaseApiCurlError(e: unknown): Error {
   return new Error(`版本查询失败 (curl 退出码 ${err.code ?? '?'}${lastLine ? `: ${lastLine}` : ''})`);
 }
 
+/** 版本查询的出网方式。两个调用点（kernel 命令 / doctor）按当前环境构造 */
+export interface ReleaseQueryOptions {
+  /** curl -x 代理地址（本机混合端口或显式 --proxy）；null = 不经代理 */
+  proxy: string | null;
+  /** gh 可用时优先用 gh api 查询（见 getLatestRelease）；显式 --proxy 时应为 false */
+  useGh: boolean;
+}
+
+/**
+ * 构造 gh api 查询 release 列表的参数。纯函数，单测锁死：
+ * 与 gh 下载通道同一信任锚——gh 只与 github.com 通信，返回同一份官方 API JSON，
+ * pickLatestRelease 的预发布过滤与 assertTrustedAssetUrl 的来源校验照常生效。
+ */
+export function buildGhApiReleaseArgs(repo: string): string[] {
+  return ['api', `repos/${repo}/releases`, '--method', 'GET'];
+}
+
+async function getLatestReleaseViaGh(repo: string): Promise<GitHubRelease> {
+  const result = await execFileAsync('gh', buildGhApiReleaseArgs(repo), {
+    encoding: 'utf8',
+    maxBuffer: 50 * 1024 * 1024,
+    timeout: KERNEL_HTTP_TIMEOUT,
+  });
+  return pickLatestRelease(JSON.parse(result.stdout) as GitHubRelease[]);
+}
+
 /**
  * 拉取 release 列表。**绝不经过镜像**：镜像只作用于产物下载，API 若走镜像，
  * `browser_download_url` 就完全由镜像说了算（见 assertTrustedAssetUrl 的说明）。
- * 代理开着时经本机混合端口转发——本地代理只是传输层，TLS 端到端，响应仍来自 GitHub。
- * fetch 不支持 HTTP 代理（CONNECT），代理路径走 curl（下载/探测本就依赖 curl）。
+ * 优先级 gh > 代理 > 直连：gh api 带认证（限流 5000 次/时 vs 未认证 60 次/时，
+ * 未认证直连的 403 rate limit 几乎都发生在共享出口 IP 上），失败（未登录/网络不通）
+ * 静默回退代理/直连——回退也可能失败，但那与无 gh 时的现状一致，不会更糟。
+ * 代理路径经 curl 转发（fetch 不支持 HTTP 代理的 CONNECT），本地代理只是传输层，
+ * TLS 端到端，响应仍来自 GitHub。
  */
-async function getLatestRelease(repo: string, proxyPort?: number | null): Promise<GitHubRelease> {
+async function getLatestRelease(repo: string, opts: ReleaseQueryOptions = { proxy: null, useGh: false }): Promise<GitHubRelease> {
   const url = `https://api.github.com/repos/${repo}/releases`;
 
-  if (proxyPort) {
+  if (opts.useGh) {
+    try {
+      return await getLatestReleaseViaGh(repo);
+    } catch {
+      /* 回退到代理/直连路径 */
+    }
+  }
+
+  if (opts.proxy) {
     // 异步执行（execFile 而非 spawnSync）：本查询在 withSpinner 内进行，同步等待最长
     // 130s 会冻结 spinner 动画与计时，SIGINT 也得不到处理
     let stdout: string;
     try {
-      const result = await execFileAsync('curl', buildReleaseApiCurlArgs(proxyPort, url), {
+      const result = await execFileAsync('curl', buildReleaseApiCurlArgs(opts.proxy, url), {
         encoding: 'utf8',
         maxBuffer: 50 * 1024 * 1024,
         timeout: KERNEL_HTTP_TIMEOUT + 10_000,
@@ -278,9 +324,9 @@ async function getLatestRelease(repo: string, proxyPort?: number | null): Promis
   return pickLatestRelease(response.data);
 }
 
-export async function checkUpdate(proxyPort?: number | null): Promise<KernelUpdateInfo> {
+export async function checkUpdate(opts: ReleaseQueryOptions): Promise<KernelUpdateInfo> {
   const currentVersion = getKernelVersion();
-  const latest = await getLatestRelease(GITHUB_REPO, proxyPort);
+  const latest = await getLatestRelease(GITHUB_REPO, opts);
   const latestVersion = latest.tag_name;
 
   let needsUpdate = false;
@@ -309,7 +355,7 @@ export async function checkUpdate(proxyPort?: number | null): Promise<KernelUpda
  * 构造内核下载的 curl 参数。纯函数：`--proto '=https'` 全链路强制 https 是安全防线
  * （curl -L 默认跟随协议降级重定向），参数数组值得单测锁死，防后续改动误删。
  */
-export function buildKernelCurlArgs(args: { url: string; proxyPort: number | null; maxBytes: number; outputPath: string }): string[] {
+export function buildKernelCurlArgs(args: { url: string; proxy: string | null; maxBytes: number; outputPath: string }): string[] {
   const argv = [
     '-L',
     '--proto',
@@ -328,8 +374,8 @@ export function buildKernelCurlArgs(args: { url: string; proxyPort: number | nul
     '--max-time',
     String(Math.floor(KERNEL_DOWNLOAD_TIMEOUT / 1000)),
   ];
-  if (args.proxyPort) {
-    argv.push('-x', `http://127.0.0.1:${args.proxyPort}`);
+  if (args.proxy) {
+    argv.push('-x', args.proxy);
   }
   argv.push('-o', args.outputPath, args.url);
   return argv;
@@ -350,7 +396,11 @@ export async function downloadKernel(
 ): Promise<{ version: string; path: string }> {
   ensureDirs();
 
-  const latest = releaseInfo || (await getLatestRelease(GITHUB_REPO, channel.kind === 'proxy' ? channel.port : null));
+  // fallback 查询（cmdKernel 总是传入 releaseInfo，此路径仅在直接调用时走到）：
+  // 查询出网方式与下载通道对齐——gh 通道用 gh api 查，proxy / mirror+proxy 通道经代理查。
+  // apiProxy 同时是下面 curl 下载的传输层代理（mirror 通道不带 proxy 时为 null）
+  const apiProxy: string | null = channel.kind === 'proxy' ? channel.proxy : channel.kind === 'mirror' ? (channel.proxy ?? null) : null;
+  const latest = releaseInfo || (await getLatestRelease(GITHUB_REPO, { proxy: apiProxy, useGh: channel.kind === 'gh' }));
   const arch = getArch();
   const platform = process.platform;
 
@@ -418,7 +468,7 @@ export async function downloadKernel(
         'curl',
         buildKernelCurlArgs({
           url: downloadUrl,
-          proxyPort: channel.kind === 'proxy' ? channel.port : null,
+          proxy: apiProxy,
           maxBytes,
           outputPath: tempPath,
         }),

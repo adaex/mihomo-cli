@@ -333,6 +333,11 @@ export interface MirrorArg {
   isOverride: boolean;
 }
 
+export interface ProxyArg {
+  /** 规范化后的 curl -x 代理地址（如 http://127.0.0.1:7897）；null = 未指定 --proxy */
+  proxy: string | null;
+}
+
 // === Proxy connectivity probe ===
 
 export interface ProxyProbeResult {

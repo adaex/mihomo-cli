@@ -6,23 +6,32 @@ import * as kernel from '../kernel.js';
 import { getRunningState } from '../runtime.js';
 import { getPorts } from '../settings.js';
 import { withSpinner } from '../spinner.js';
-import { assertPositionalCount, parseMirrorArg } from '../utils.js';
+import { assertPositionalCount, parseMirrorArg, parseProxyArg } from '../utils.js';
 
 /**
  * kernel 的位置参数口径：`--mirror` 的值（如 `--mirror cdn` 的 cdn）不算位置参数。
- * `--mirror` 是可选值选项、故意不在 VALUE_FLAGS 里（见 flags.ts 注释），
- * 故这里单独补一张含 `--mirror` 的表，否则合法的 `kernel --mirror cdn` 会被误判。
+ * `--mirror` 是可选值选项、故意不在 VALUE_FLAGS 里（见 flags.ts 注释），故这里单独补；
+ * `--proxy` 是标准带值选项，已随登记表进 VALUE_FLAGS。
  */
 const KERNEL_VALUE_FLAGS: ReadonlySet<string> = new Set([...VALUE_FLAGS, '--mirror']);
 
 export async function cmdKernel(args: string[]): Promise<void> {
   const mirrorInfo = parseMirrorArg(args);
-  // 不接受位置参数：`kernel garbage` 此前被静默忽略；校验放在 parseMirrorArg 之后
+  const proxyInfo = parseProxyArg(args);
+  // 不接受位置参数：`kernel garbage` 此前被静默忽略；校验放在两个 flag 解析之后
   // （flag 侧的错误优先报出）、checkUpdate 之前（不碰网络）
-  assertPositionalCount(args, 0, 1, 'mihomo kernel [--mirror [镜像]]', KERNEL_VALUE_FLAGS);
-  const effectiveMirror = mirrorInfo.mirror;
+  assertPositionalCount(args, 0, 1, 'mihomo kernel [--mirror [镜像]] [--proxy <端口|地址>]', KERNEL_VALUE_FLAGS);
 
-  // 下载通道：显式 --mirror / --mirror direct 手动覆盖最高优先，默认 gh > 本机代理 > 直连。
+  // --mirror direct 的语义是「绕过一切代理直连」，与 --proxy 正交冲突，同时给出必是误解
+  if (proxyInfo.proxy && mirrorInfo.isOverride && !mirrorInfo.mirror) {
+    throw new CliError('--mirror direct 与 --proxy 不能同时使用', {
+      label: '参数错误',
+      hint: ['--mirror direct 强制不经任何代理直连，需走代理时去掉它:', '  mihomo kernel --proxy <端口|地址>'],
+    });
+  }
+
+  // 下载通道：显式 --mirror / --mirror direct 手动覆盖最高优先（可与 --proxy 组合），
+  // 显式 --proxy 次之（用户指定了出网路径，gh 直连让位），默认 gh > 本机代理 > 直连。
   // 镜像选择不持久化——每次按当前环境独立决策（gh/代理是否可用）；裸 --mirror 固定走
   // 裸域，不再枚举网卡猜 IPv6（有 v6 地址不代表 v6 路由通），需要 v6 子域显式 --mirror v6。
   // 运行状态由命令层探测后注入——kernel.ts 不依赖 runtime/settings，通道决策保持纯函数可测
@@ -35,30 +44,40 @@ export async function cmdKernel(args: string[]): Promise<void> {
     ghAvailable: kernel.hasGh(),
     proxyRunning,
     proxyPort,
+    proxyOverride: proxyInfo.proxy,
   });
 
   if (channel.kind === 'gh') {
     console.log('下载通道: gh（GitHub CLI 直连）');
     console.log('');
   } else if (channel.kind === 'proxy') {
-    console.log(`下载通道: 本机代理 127.0.0.1:${channel.port}`);
+    const label = proxyInfo.proxy ? '代理' : '本机代理';
+    console.log(`下载通道: ${label} ${channel.proxy}`);
     console.log('');
   } else if (channel.kind === 'mirror') {
     const host = channel.mirror.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    console.log(`镜像: ${host}`);
+    console.log(`镜像: ${host}${channel.proxy ? `（经代理 ${channel.proxy}）` : ''}`);
     console.log('');
   }
 
+  // 版本查询（GitHub API）的出网方式与下载通道对齐：显式 --proxy > gh（认证查询，
+  // 免未认证限流）> 本机代理 > 直连；gh 失败在 getLatestRelease 内自动回退到 apiProxy/直连。
+  // --mirror direct 连 gh 一起绕过（「强制直连」含 API）。镜像仍绝不碰 API——
+  // 内核二进制在 TUN 下以 root 运行，下载地址必须由 GitHub 官方 API 给出
+  const apiProxy = proxyInfo.proxy ?? (proxyRunning && !forceDirect && proxyPort !== null ? `http://127.0.0.1:${proxyPort}` : null);
+  const useGh = !proxyInfo.proxy && !forceDirect && kernel.hasGh();
+
   let info: Awaited<ReturnType<typeof kernel.checkUpdate>>;
   try {
-    // 版本查询（GitHub API）在代理开着时也经本机代理：本地代理只是传输层，TLS 端到端，
-    // 镜像仍绝不碰 API。--mirror direct 强制直连（含 API），绕过代理
-    const useProxyForApi = proxyRunning && !forceDirect;
-    const spinnerText = useProxyForApi ? '检查内核更新（经本机代理访问 GitHub）' : '检查内核更新（GitHub 直连，国内网络可能较慢）';
-    info = await withSpinner(spinnerText, () => kernel.checkUpdate(useProxyForApi ? proxyPort : null));
+    const spinnerText = apiProxy
+      ? `检查内核更新（经代理 ${apiProxy}）`
+      : useGh
+        ? '检查内核更新（gh 认证通道）'
+        : '检查内核更新（GitHub 直连，国内网络可能较慢）';
+    info = await withSpinner(spinnerText, () => kernel.checkUpdate({ proxy: apiProxy, useGh }));
   } catch (e) {
     if (e instanceof CliError) throw e;
-    const err = e as Error & { response?: { data?: { message?: string; documentation_url?: string } } };
+    const err = e as Error & { response?: { status?: number; data?: { message?: string; documentation_url?: string } } };
     const hint: string[] = [];
     if (err.response?.data?.message) {
       hint.push(`原因: ${err.response.data.message}`);
@@ -66,16 +85,29 @@ export async function cmdKernel(args: string[]): Promise<void> {
     if (err.response?.data?.documentation_url) {
       hint.push(`文档: ${err.response.data.documentation_url}`);
     }
-    if (!effectiveMirror) {
-      if (proxyRunning && !forceDirect) {
-        hint.push('', '提示: 经本机代理查询 GitHub 失败，可检查代理状态（mihomo status），或 mihomo kernel --mirror direct 重试直连');
+    // GitHub 对未认证 API 请求限流 60 次/时，403 + rate limit 文案在共享出口 IP 上是常态。
+    // 镜像解决不了它（API 绝不经镜像），提示必须指向真正的出路：等重置或走 gh 认证
+    if (err.response?.status === 403 && /rate limit/i.test(err.response.data?.message ?? '')) {
+      hint.push(
+        '',
+        '提示: GitHub 对未认证 API 请求限流（约 60 次/时，共享出口 IP 常触发）；镜像只作用于下载，解决不了版本查询的限流',
+        '等待限流重置（约 1 小时）后重试，或安装并登录 GitHub CLI 走认证查询（配额 5000 次/时）:',
+        '  brew install gh && gh auth login',
+      );
+      if (useGh) {
+        hint.push('', '本次已先尝试 gh 认证通道、失败后才回退到直连，可检查 gh 登录状态: gh auth status');
+      }
+    } else if (!mirrorInfo.mirror) {
+      if (apiProxy) {
+        hint.push('', '提示: 经代理查询 GitHub 失败，可检查代理是否可用，或 mihomo kernel --mirror direct 重试直连');
       } else {
-        // 平时不打扰；仅直连失败时提示镜像用法
+        // 平时不打扰；仅直连失败时提示镜像/代理用法
         hint.push(
           '',
-          '提示: 直连失败或下载过慢时可使用镜像:',
+          '提示: 直连失败或下载过慢时可使用镜像或代理:',
           '  mihomo kernel --mirror [镜像]   # 强制走镜像（裸 --mirror 固定裸域，可用 v6/v4/cdn 等别名）',
           `  可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`,
+          '  mihomo kernel --proxy <端口>    # 经本机其他代理工具出网',
         );
       }
     }
@@ -99,6 +131,7 @@ export async function cmdKernel(args: string[]): Promise<void> {
           '',
           '下载通道按优先级自动选择: gh（GitHub CLI）> 本机代理 > 直连',
           '手动指定: mihomo kernel --mirror [镜像]（强制镜像）/ mihomo kernel --mirror direct（强制直连）',
+          '          mihomo kernel --proxy <端口>（经本机其他代理工具出网）',
         ],
       });
     }

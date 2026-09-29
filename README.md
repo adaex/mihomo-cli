@@ -59,6 +59,10 @@ mihomo kernel --mirror
 # 或用短别名指定镜像（纯 IPv6 网络用 v6）
 mihomo kernel --mirror cdn
 mihomo kernel --mirror v6
+
+# mihomo 没在跑、但本机有别的代理工具时，经指定代理出网（纯端口视为 127.0.0.1）
+mihomo kernel --proxy 7897
+mihomo kernel --proxy socks5://127.0.0.1:7897
 ```
 
 ### 2. 添加订阅
@@ -221,7 +225,7 @@ mihomo status          # 查看状态
 
 > `uninstall` 只卸服务，订阅/内核/日志仍留在数据目录（重装后可继续用）。要彻底移除 mihomo-cli：`mihomo reset --full` 删全部数据，再 `npm uninstall -g mihomo-cli`——`uninstall` 结束时也会提示这两步。
 >
-> **顺序别反**：先 `npm uninstall -g` 的话，LaunchAgent plist 会留下来，而能清理它的命令已经没了（plist 带 `KeepAlive`，仍会尝试拉起一个不存在的内核）。npm 卸载时会打印一条残留提醒（升级触发同一脚本，忽略即可），但最好仍按上面的顺序来。真反了也能救，手动执行：
+> **顺序别反**：先 `npm uninstall -g` 的话，LaunchAgent plist 会留下来，而能清理它的命令已经没了（plist 带 `KeepAlive`，仍会尝试拉起一个不存在的内核）。npm 现代版本**不会执行** uninstall 生命周期钩子（实测 npm 11.19.0 三种卸载场景均不触发，官方文档亦注明 uninstall lifecycle scripts 未实现），所以别指望卸载时看到任何提醒——按上面的顺序来。真反了也能救，手动执行：
 >
 > ```bash
 > launchctl bootout gui/$(id -u)/com.mihomo-cli.daemon 2>/dev/null
@@ -298,7 +302,7 @@ mihomo logs 1       # 查看最新的归档
 
 镜像不持久化——每次按当前环境独立决策，换网络不会用到上次的镜像。
 
-版本查询（GitHub API）在代理开着时同样经本机代理；镜像**绝不**作用于 API——
+版本查询（GitHub API）优先走 **gh 认证通道**（配额 5000 次/时，未认证直连仅 60 次/时——共享出口 IP 撞 403 限流时 gh 是唯一即时出路），gh 失败回退本机代理、再直连；镜像**绝不**作用于 API——
 内核二进制在 TUN 模式下会以 root 运行，下载地址必须由 GitHub 官方 API 给出，不能让镜像自己指定。
 
 手动覆盖：
@@ -310,6 +314,8 @@ mihomo kernel --mirror v6    # 显式走 v6.gh-proxy.org
 mihomo kernel --mirror cdn   # 短别名指定镜像（cdn/v4/v6/axisnow）
 mihomo kernel --mirror hk.gh-proxy.org  # 任意镜像主机名或完整 URL
 mihomo kernel --mirror direct  # 强制直连（绕过 gh/代理自动通道）
+mihomo kernel --proxy 7897   # 经指定代理出网（纯端口视为 127.0.0.1:7897；mihomo 没跑但本机有别的代理工具时用）
+mihomo kernel --proxy socks5://127.0.0.1:7897  # 完整代理地址；可与 --mirror 组合（镜像决定下载地址，代理只做传输）
 ```
 
 > 镜像经第三方中转，无法验证来源完整性；gh 与本机代理通道直连 GitHub，优先使用。

@@ -12,6 +12,7 @@ import {
   padEndDisplay,
   parseIntArg,
   parseMirrorArg,
+  parseProxyArg,
   proxyEnvPointsAtSelf,
   subscriptionUrgency,
   suggestSimilar,
@@ -190,6 +191,101 @@ describe('parseMirrorArg', () => {
 
   it('无镜像选项时不覆盖', () => {
     assert.deepEqual(parseMirrorArg(['kernel']), { mirror: null, isOverride: false });
+  });
+
+  it('拼错的短别名（无点无冒号）报错并给 did-you-mean，不再被当裸主机名 punycode 化', () => {
+    // 放行会被当自定义 host 补 https，展示成一串认不出的主机名且下载注定失败
+    assert.throws(
+      () => parseMirrorArg(['kernel', '--mirror', 'cdnn']),
+      (e: unknown) => {
+        if (!(e instanceof CliError)) return false;
+        assert.match(e.message, /未知的镜像别名/);
+        assert.ok(e.hint.join('\n').includes('cdn'), '应给出 did-you-mean 建议');
+        return true;
+      },
+    );
+    // 纯数字是把 --mirror 当 --proxy 用的常见形态，hint 应指向 --proxy
+    assert.throws(
+      () => parseMirrorArg(['kernel', '--mirror', '7897']),
+      (e: unknown) => {
+        if (!(e instanceof CliError)) return false;
+        assert.ok(e.hint.join('\n').includes('--proxy'), '纯数字别名应提示改用 --proxy');
+        return true;
+      },
+    );
+  });
+
+  it('含点或冒号的值仍走自定义主机名/URL 通路（承诺行为不回归）', () => {
+    assert.equal(parseMirrorArg(['kernel', '--mirror', 'hk.gh-proxy.org']).mirror, 'https://hk.gh-proxy.org/');
+    // normalizeMirrorUrl 统一补尾斜杠（前缀拼接的既有口径）
+    assert.equal(parseMirrorArg(['kernel', '--mirror', 'https://gh.example.com/x']).mirror, 'https://gh.example.com/x/');
+  });
+});
+
+describe('parseProxyArg', () => {
+  it('纯数字端口补 127.0.0.1', () => {
+    assert.deepEqual(parseProxyArg(['kernel', '--proxy', '7897']), { proxy: 'http://127.0.0.1:7897' });
+  });
+
+  it('host:port 补 http 前缀；完整 scheme 原样保留', () => {
+    assert.equal(parseProxyArg(['kernel', '--proxy', '127.0.0.1:7897']).proxy, 'http://127.0.0.1:7897');
+    assert.equal(parseProxyArg(['kernel', '--proxy', '192.168.1.2:7897']).proxy, 'http://192.168.1.2:7897');
+    assert.equal(parseProxyArg(['kernel', '--proxy', 'socks5://127.0.0.1:7897']).proxy, 'socks5://127.0.0.1:7897');
+    assert.equal(parseProxyArg(['kernel', '--proxy=http://127.0.0.1:7897']).proxy, 'http://127.0.0.1:7897');
+  });
+
+  it('-p 短形式与 attached/等号形式同口径（登记表 matchValueFlagToken 统一判定）', () => {
+    assert.equal(parseProxyArg(['kernel', '-p', '7897']).proxy, 'http://127.0.0.1:7897');
+    assert.equal(parseProxyArg(['kernel', '-p7897']).proxy, 'http://127.0.0.1:7897');
+  });
+
+  it('与 --mirror 可共存（组合语义在 resolveDownloadChannel，解析层互不干扰）', () => {
+    const p = parseProxyArg(['kernel', '--mirror', 'cdn', '--proxy', '7897']);
+    assert.equal(p.proxy, 'http://127.0.0.1:7897');
+    assert.equal(parseMirrorArg(['kernel', '--mirror', 'cdn', '--proxy', '7897']).mirror, 'https://cdn.gh-proxy.org/');
+  });
+
+  it('未指定返回 null；裸 --proxy、缺值、下一个 token 是选项都报错', () => {
+    assert.deepEqual(parseProxyArg(['kernel']), { proxy: null });
+    assert.deepEqual(parseProxyArg(['kernel', '--mirror', 'cdn']), { proxy: null });
+    for (const args of [
+      ['kernel', '--proxy'],
+      ['kernel', '--proxy', '-s'],
+      ['kernel', '--proxy='],
+      ['kernel', '-p'],
+    ]) {
+      // `--proxy -s` 会被白名单先拦（-s 不是 kernel 的选项），同样是显式报错——
+      // 用例锁的是「不静默成功」，不锁具体哪一层先报
+      assert.throws(
+        () => parseProxyArg(args),
+        (e: unknown) => e instanceof CliError,
+        `应报错: ${args.join(' ')}`,
+      );
+    }
+  });
+
+  it('重复指定报错（与 --mirror 同判，不静默取第一个）', () => {
+    assert.throws(
+      () => parseProxyArg(['kernel', '--proxy', '7897', '--proxy', '7898']),
+      (e: unknown) => e instanceof CliError && /只能指定一次/.test(e.message),
+    );
+  });
+
+  it('非法值显式报错：端口越界、协议不支持、缺端口', () => {
+    for (const [value, pattern] of [
+      ['0', /代理端口无效|需要 >= 1/],
+      ['70000', /代理端口无效/],
+      ['ftp://127.0.0.1:7897', /代理协议不支持/],
+      ['127.0.0.1', /代理地址需要端口/],
+      // URL 对怪异 host 宽容（'!!' 能解析、只是无端口），两种报错都算显式拦截
+      ['!!', /代理地址/],
+    ] as const) {
+      assert.throws(
+        () => parseProxyArg(['kernel', '--proxy', value]),
+        (e: unknown) => e instanceof CliError && pattern.test(e.message),
+        `应报错: --proxy ${value}`,
+      );
+    }
   });
 });
 

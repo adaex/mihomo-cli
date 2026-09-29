@@ -7,7 +7,7 @@ import { colors } from '../colors.js';
 import { getConfigInfo, getKernelVersion, hasKernel } from '../config.js';
 import { DEFAULT_MIXED_PORT, VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
-import { checkUpdate } from '../kernel.js';
+import { checkUpdate, hasGh } from '../kernel.js';
 import { PATHS, USER_DATA_DIR } from '../paths.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
@@ -77,8 +77,9 @@ async function collectChecks(): Promise<Check[]> {
   // 而那种失败只在「另有检查项先抛错」时出现，极难复现。
   const latestVersionPromise = getLatestNpmVersion(4_000).catch(() => null);
 
-  // 内核版本同样在开头并行发起：运行中则经本机代理查 GitHub（与 mihomo kernel 同通道），
-  // 4s 超时/失败一律降级 skip——体检不该被 registry 之外再多一个网络故障拖红。
+  // 内核版本同样在开头并行发起：查询出网与 mihomo kernel 同口径——gh 认证优先
+  //（免未认证限流），运行中经本机代理回退，4s 超时/失败一律降级 skip——
+  // 体检不该被 registry 之外再多一个网络故障拖红。
   // 与 npm 项并列后，「CLI 与内核各有一条更新线、该更新哪个」不再需要用户自己记
   const earlyState = getRunningState();
   let kernelProxyPort: number | null = null;
@@ -88,7 +89,13 @@ async function collectChecks(): Promise<Check[]> {
     kernelProxyPort = null;
   }
   const kernelVersionPromise: Promise<KernelUpdateInfo | null> = hasKernel()
-    ? withTimeout(checkUpdate(kernelProxyPort), 4_000).then(
+    ? withTimeout(
+        checkUpdate({
+          proxy: kernelProxyPort !== null ? `http://127.0.0.1:${kernelProxyPort}` : null,
+          useGh: hasGh(),
+        }),
+        4_000,
+      ).then(
         v => v,
         () => null,
       )

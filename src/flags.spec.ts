@@ -6,7 +6,7 @@ import { assertKnownFlags, extractStartOptions, parseIntArg } from './utils.js';
 
 describe('flags 单一登记表派生', () => {
   it('VALUE_FLAGS 恰好包含全部带值选项的各形式', () => {
-    assert.deepEqual([...VALUE_FLAGS].sort(), ['--lines', '--update-timeout', '-n', '-u']);
+    assert.deepEqual([...VALUE_FLAGS].sort(), ['--lines', '--proxy', '--update-timeout', '-n', '-p', '-u']);
   });
 
   it('可选值选项 --mirror 不在 VALUE_FLAGS（只走 parseMirrorArg）', () => {

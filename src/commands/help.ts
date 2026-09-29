@@ -82,12 +82,15 @@ export function printHelp(commands: Command[]): void {
   lines.push(
     '',
     `${colors.cyan('示例:')}`,
+    // 顺序即首次使用的依赖顺序（kernel → 订阅 → 服务 → 启动）：install 在无内核时会被
+    // 拦下提示先跑 kernel，示例若把 install 放第一条，照着敲的新用户第一步就撞墙
+    '  mihomo kernel             # 下载内核（首次使用的第一步）',
+    '  mihomo sub add <url>      # 添加订阅 (sub 是 subscription 别名)',
     '  mihomo install            # 安装服务（Mixed 模式的前置，只需一次）',
     '  mihomo start              # 启动代理并开启登录自启',
     '  mihomo stop               # 停止并关闭登录自启',
     '  mihomo start tun          # 临时 TUN 透明代理（不走服务，需 sudo）',
     '  mihomo start -s           # 跳过自动更新订阅',
-    '  mihomo sub add <url>      # 添加订阅 (sub 是 subscription 别名)',
     '  mihomo ui                 # 打开 Web UI',
     '',
     `${colors.cyan('快捷命令:')}`,

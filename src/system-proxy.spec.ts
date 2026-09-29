@@ -1,0 +1,97 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+
+import { detectSystemProxy, parseScutilProxy, summarizeSystemProxy } from './system-proxy.js';
+
+/** 本机实测的未配置形态：只有 ExceptionsList/FTPPassive，无任何代理键 */
+const EMPTY_DICT = `<dictionary> {
+  ExceptionsList : <array> {
+    0 : *.local
+    1 : 169.254/16
+  }
+  FTPPassive : 1
+}
+`;
+
+/** 本机实测的已配置形态（HTTP/HTTPS/SOCKS 全指向 mixed 端口） */
+const CONFIGURED_DICT = `<dictionary> {
+  ExceptionsList : <array> {
+    0 : *.local
+    1 : 169.254/16
+  }
+  FTPPassive : 1
+  HTTPEnable : 1
+  HTTPPort : 7890
+  HTTPProxy : 127.0.0.1
+  HTTPSEnable : 1
+  HTTPSProxy : 127.0.0.1
+  HTTPSPort : 7890
+  SOCKSEnable : 1
+  SOCKSPort : 7890
+  SOCKSProxy : 127.0.0.1
+}
+`;
+
+describe('parseScutilProxy（scutil --proxy 输出解析）', () => {
+  it('未配置时无任何代理条目（数组元素行不误配为键）', () => {
+    const view = parseScutilProxy(EMPTY_DICT);
+    assert.equal(view.http, undefined);
+    assert.equal(view.https, undefined);
+    assert.equal(view.socks, undefined);
+  });
+
+  it('已配置时解析出 HTTP/HTTPS/SOCKS 的 host 与 port', () => {
+    const view = parseScutilProxy(CONFIGURED_DICT);
+    assert.deepEqual(view.http, { host: '127.0.0.1', port: 7890 });
+    assert.deepEqual(view.https, { host: '127.0.0.1', port: 7890 });
+    assert.deepEqual(view.socks, { host: '127.0.0.1', port: 7890 });
+  });
+
+  it('Enable ≠ 1 的条目按缺省处理（启用位独立于地址字段）', () => {
+    const view = parseScutilProxy(
+      `<dictionary> {
+  HTTPEnable : 0
+  HTTPPort : 7890
+  HTTPProxy : 127.0.0.1
+  SOCKSEnable : 1
+  SOCKSPort : 1080
+  SOCKSProxy : 127.0.0.1
+}
+`,
+    );
+    assert.equal(view.http, undefined);
+    assert.deepEqual(view.socks, { host: '127.0.0.1', port: 1080 });
+  });
+});
+
+describe('summarizeSystemProxy（与 Mixed 端口的关系判定）', () => {
+  it('回环 host + 端口一致 → matched（HTTP/HTTPS/SOCKS 任一即可）', () => {
+    assert.equal(summarizeSystemProxy({ socks: { host: '127.0.0.1', port: 7890 } }, 7890).matched, true);
+    assert.equal(summarizeSystemProxy({ https: { host: 'localhost', port: 7890 } }, 7890).matched, true);
+  });
+
+  it('端口不一致或非回环 host → 不 matched，但 active 如实列出（供「指向别处」提示）', () => {
+    const s = summarizeSystemProxy({ http: { host: '127.0.0.1', port: 8888 }, socks: { host: '192.168.1.5', port: 7890 } }, 7890);
+    assert.equal(s.matched, false);
+    assert.deepEqual(s.active, ['127.0.0.1:8888', '192.168.1.5:7890']);
+  });
+
+  it('同地址多条目去重', () => {
+    const s = summarizeSystemProxy(
+      { http: { host: '127.0.0.1', port: 7890 }, https: { host: '127.0.0.1', port: 7890 }, socks: { host: '127.0.0.1', port: 7890 } },
+      7890,
+    );
+    assert.deepEqual(s.active, ['127.0.0.1:7890']);
+  });
+});
+
+describe('detectSystemProxy（真实 scutil 调用）', () => {
+  it('macOS 上 scutil 必在：无论配置与否都应返回判定结果而非 null', () => {
+    // 值不锁死（本机代理状态随测试环境变），锁「检测成功且有结构」；
+    // 非 macOS 或 scutil 异常时才允许 null，本仓只支持 darwin
+    const s = detectSystemProxy(7890);
+    assert.notEqual(s, null);
+    assert.equal(typeof s?.matched, 'boolean');
+    assert.ok(Array.isArray(s?.active));
+  });
+});

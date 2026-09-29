@@ -1,7 +1,7 @@
 import { AVAILABLE_MIRRORS, DEFAULT_AUTO_UPDATE_TIMEOUT, MIRROR_ALIASES, MIRROR_BARE } from './constants.js';
 import { CliError } from './errors.js';
 import { matchValueFlagToken, START_RESTART_FLAGS, VALUE_FLAGS } from './flags.js';
-import type { MirrorArg, SubscriptionUrgency } from './types.js';
+import type { MirrorArg, ProxyArg, SubscriptionUrgency } from './types.js';
 
 /**
  * 通用纯函数小工具：sleep、字符串转义、格式化、flag 解析、did-you-mean。
@@ -424,6 +424,23 @@ function normalizeMirrorUrl(val: string): string | null {
   const alias = MIRROR_ALIASES[val.toLowerCase()];
   if (alias) return alias;
 
+  // 无 scheme、无点无冒号的短 token 既不是别名也不是主机名/URL——主机名必含点。
+  // 放行会被当裸主机名补 https，经 punycode 转换后展示成一串认不出的主机名，
+  // 下载注定失败；按「拼错的别名」报错并给 did-you-mean（口径同命令层纠错）。
+  // 纯数字（把 --mirror 当 --proxy 用、只给了个端口）单独点一句正确用法
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(val) && !val.includes('.') && !val.includes(':')) {
+    const suggestions = suggestSimilar(val, [...Object.keys(MIRROR_ALIASES), 'direct']);
+    throw new CliError(`未知的镜像别名: "${val}"`, {
+      label: '参数错误',
+      hint: [
+        ...(suggestions.length > 0 ? [`是否想输入: ${suggestions.join(' / ')}?`] : []),
+        ...(/^\d+$/.test(val) ? ['指定代理端口请用: --proxy <端口>'] : []),
+        `可用别名: ${Object.keys(MIRROR_ALIASES).join(', ')}`,
+        '自定义镜像请用主机名或完整 URL: --mirror gh-proxy.org / --mirror https://gh-proxy.org/',
+      ],
+    });
+  }
+
   // 无 scheme 的裸主机名补 https；有 scheme 的必须是 https
   const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(val) ? val : `https://${val}`;
 
@@ -461,7 +478,9 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
     return { mirror: null, isOverride: false };
   }
 
-  assertKnownFlags(args.slice(1), ['--mirror'], 'kernel [--mirror [镜像]]');
+  // kernel 的选项校验白名单：--mirror（本函数消费）与 --proxy（parseProxyArg 消费）。
+  // 两个解析器先后各跑一次同白名单的 assertKnownFlags（幂等），先跑的负责拦未知选项
+  assertKnownFlags(args.slice(1), KERNEL_FLAG_WHITELIST, 'kernel [--mirror [镜像]] [--proxy <端口|地址>]');
 
   // 重复的 --mirror 此前静默以第一个为准，显式报错而非让用户以为后者生效
   const mirrorCount = args.filter(a => a === '--mirror' || a.startsWith('--mirror=')).length;
@@ -491,4 +510,98 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
   }
 
   return { mirror: null, isOverride: false };
+}
+
+/** kernel 命令的选项白名单：两个解析器（mirror/proxy）共用的唯一清单 */
+const KERNEL_FLAG_WHITELIST: readonly string[] = ['--mirror', '--proxy', '-p'];
+
+/** 代理地址允许的协议（curl -x 口径）；与镜像的 https-only 不同，代理只做传输层，不限制明文 */
+const PROXY_SCHEMES = new Set(['http:', 'https:', 'socks5:', 'socks5h:']);
+
+/**
+ * 把 `--proxy` 的值规范化为 curl -x 可用的代理地址（`协议//host:port`）。
+ * 纯数字端口补本机回环（`7897` → `http://127.0.0.1:7897`）；
+ * 无 scheme 的 host:port 补 http://；带 scheme 的校验白名单后原样。
+ * URL.toString() 会给地址补尾斜杠（curl 虽容忍但不美观），故用 protocol//host 手动拼。
+ */
+function normalizeProxyUrl(val: string): string {
+  if (/^\d+$/.test(val)) {
+    const port = Number(val);
+    if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+      throw new CliError(`代理端口无效: "${val}"`, { label: '参数错误', hint: ['端口范围 1-65535，例如: --proxy 7897'] });
+    }
+    return `http://127.0.0.1:${port}`;
+  }
+  const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(val) ? val : `http://${val}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(withScheme);
+  } catch {
+    throw new CliError(`代理地址无效: "${val}"`, {
+      label: '参数错误',
+      hint: ['格式如: --proxy 7897（视为 127.0.0.1:7897）', '      --proxy 127.0.0.1:7897', '      --proxy socks5://127.0.0.1:7897'],
+    });
+  }
+  if (!PROXY_SCHEMES.has(parsed.protocol)) {
+    throw new CliError(`代理协议不支持: "${val}"`, { label: '参数错误', hint: [`支持的协议: ${[...PROXY_SCHEMES].map(s => s.replace(':', '')).join(', ')}`] });
+  }
+  if (!parsed.hostname) {
+    throw new CliError(`代理地址无效: "${val}"（缺少主机名）`, { label: '参数错误', hint: ['例如: --proxy 127.0.0.1:7897'] });
+  }
+  // 无端口的代理地址（http 默认 80 被 URL 隐式补全、查不出）——对本地代理工具几乎必是笔误，
+  // 要求显式端口，避免「以为配了代理、实际连到 80」的静默错路
+  if (!parsed.port) {
+    throw new CliError(`代理地址需要端口: "${val}"`, { label: '参数错误', hint: ['例如: --proxy 127.0.0.1:7897'] });
+  }
+  return `${parsed.protocol}//${parsed.host}`;
+}
+
+/**
+ * 解析 `--proxy`：显式指定更新内核时版本查询与下载共用的出网代理。
+ * 它是「本机代理」自动通道的手动版——mihomo 自己没在跑、但本机有别的代理工具时使用；
+ * 显式给出时优先级高于自动通道与 gh（用户指定了出网路径，不再替他选）。
+ *
+ * `--mirror` 与 `--proxy` 可同用：镜像决定下载 URL，代理只做传输层（TLS 端到端），
+ * 与「代理开着时经本机代理」的既有语义一致；唯 `--mirror direct` 与 `--proxy` 互斥
+ * （direct 的语义是绕过一切代理），该校验在 cmdKernel 里（需要两个解析器的结果）。
+ */
+export function parseProxyArg(args: string[] | undefined): ProxyArg {
+  if (!args || args.length < 2) {
+    return { proxy: null };
+  }
+
+  assertKnownFlags(args.slice(1), KERNEL_FLAG_WHITELIST, 'kernel [--mirror [镜像]] [--proxy <端口|地址>]');
+
+  // 三种形式（`--proxy 7897` / `-p7897` / `--proxy=7897`）统一走登记表的
+  // matchValueFlagToken 判定，不手写 indexOf/find——后者会漏「同形态重复」的计数
+  const hits: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const match = matchValueFlagToken(args[i]);
+    if (!match?.spec.forms.includes('--proxy')) continue;
+    if (match.form === 'exact') {
+      hits.push(args[i + 1] ?? '');
+      i++;
+    } else {
+      hits.push(match.inlineValue ?? '');
+    }
+  }
+  if (hits.length === 0) {
+    return { proxy: null };
+  }
+  // 重复的 --proxy 与 --mirror 同判：静默取第一个会让用户以为后者生效
+  if (hits.length > 1) {
+    throw new CliError('--proxy 只能指定一次', {
+      label: '参数错误',
+      hint: ['用法: mihomo kernel --proxy <端口|地址>', '例如: mihomo kernel --proxy 7897'],
+    });
+  }
+
+  const raw = hits[0].trim();
+  if (!raw || raw.startsWith('-')) {
+    throw new CliError('--proxy 需要一个端口或代理地址', {
+      label: '参数错误',
+      hint: ['例如: --proxy 7897（视为 127.0.0.1:7897）', '      --proxy 127.0.0.1:7897 或 --proxy socks5://127.0.0.1:7897'],
+    });
+  }
+  return { proxy: normalizeProxyUrl(raw) };
 }

@@ -169,7 +169,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdKernel,
     group: 'system',
-    usage: [{ signature: 'kernel [--mirror [镜像]]', description: '更新内核（自动选择通道：gh > 本机代理 > 直连）' }],
+    usage: [{ signature: 'kernel [--mirror [镜像]] [--proxy <端口|地址>]', description: '更新内核（自动选择通道：gh > 本机代理 > 直连）' }],
   },
   {
     name: 'update',

@@ -27,7 +27,9 @@ function printOverwriteList(): void {
     console.log(`${colors.cyan('覆写文件')} (${countText}):`);
     console.log('');
     info.files.forEach((f, i) => {
-      const num = i < 10 ? ` ${i}` : `${i}`;
+      // 1 基编号与 sub 列表同口径（logs 的 0=当前是特有语义，不在此列）
+      const seq = i + 1;
+      const num = seq < 10 ? ` ${seq}` : `${seq}`;
       const mark = f.enabled ? '' : ` ${colors.yellow('[已禁用]')}`;
       console.log(`  ${num}. ${f.name}${mark}`);
       if (f.scope) {
@@ -40,7 +42,8 @@ function printOverwriteList(): void {
     if (info.broken.length > 0) {
       console.log(colors.red(`加载失败 (${info.broken.length} 个，未参与合并；start/doctor 会报错):`));
       info.broken.forEach((b, i) => {
-        const num = info.files.length + i < 10 ? ` ${info.files.length + i}` : `${info.files.length + i}`;
+        const seq = info.files.length + i + 1;
+        const num = seq < 10 ? ` ${seq}` : `${seq}`;
         console.log(`  ${num}. ${colors.red(b.name)} ${colors.red('[加载失败]')}`);
         console.log(colors.red(`    ${b.message}`));
       });

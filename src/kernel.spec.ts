@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  buildGhApiReleaseArgs,
   buildGhReleaseDownloadArgs,
   buildKernelCurlArgs,
   buildReleaseApiCurlArgs,
@@ -67,7 +68,7 @@ describe('findMatchingAsset（标准版形态精确匹配）', () => {
 });
 
 describe('resolveDownloadChannel（下载通道优先级）', () => {
-  const base = { mirror: null, isOverride: false, ghAvailable: false, proxyRunning: false, proxyPort: null };
+  const base = { mirror: null, isOverride: false, ghAvailable: false, proxyRunning: false, proxyPort: null, proxyOverride: null };
 
   it('显式 --mirror 优先于 gh 与代理（手动覆盖最高）', () => {
     const ch = resolveDownloadChannel({
@@ -93,15 +94,39 @@ describe('resolveDownloadChannel（下载通道优先级）', () => {
     assert.equal(ch.kind, 'direct');
   });
 
+  it('--mirror <镜像> 与 --proxy 可组合：镜像决定 URL，代理只做传输层', () => {
+    const ch = resolveDownloadChannel({
+      ...base,
+      mirror: 'https://cdn.gh-proxy.org/',
+      isOverride: true,
+      proxyOverride: 'socks5://127.0.0.1:7897',
+    });
+    assert.equal(ch.kind, 'mirror');
+    assert.equal(ch.kind === 'mirror' && ch.mirror, 'https://cdn.gh-proxy.org/');
+    assert.equal(ch.kind === 'mirror' && ch.proxy, 'socks5://127.0.0.1:7897');
+  });
+
+  it('显式 --proxy 优先于 gh（指定代理的场景往往正是 gh 直连不通）', () => {
+    const ch = resolveDownloadChannel({ ...base, ghAvailable: true, proxyOverride: 'http://127.0.0.1:7897' });
+    assert.equal(ch.kind, 'proxy');
+    assert.equal(ch.kind === 'proxy' && ch.proxy, 'http://127.0.0.1:7897');
+  });
+
+  it('显式 --proxy 优先于本机自动代理（不与自动通道混用）', () => {
+    const ch = resolveDownloadChannel({ ...base, proxyRunning: true, proxyPort: 7890, proxyOverride: 'http://192.168.1.2:7897' });
+    assert.equal(ch.kind, 'proxy');
+    assert.equal(ch.kind === 'proxy' && ch.proxy, 'http://192.168.1.2:7897');
+  });
+
   it('无显式选项时 gh 优先于代理', () => {
     const ch = resolveDownloadChannel({ ...base, ghAvailable: true, proxyRunning: true, proxyPort: 7890 });
     assert.equal(ch.kind, 'gh');
   });
 
-  it('无 gh 时走代理，且端口透传', () => {
+  it('无 gh 时走代理，且地址为本机混合端口', () => {
     const ch = resolveDownloadChannel({ ...base, proxyRunning: true, proxyPort: 7890 });
     assert.equal(ch.kind, 'proxy');
-    assert.equal(ch.kind === 'proxy' && ch.port, 7890);
+    assert.equal(ch.kind === 'proxy' && ch.proxy, 'http://127.0.0.1:7890');
   });
 
   it('全无条件时直连', () => {
@@ -131,7 +156,7 @@ describe('buildKernelCurlArgs', () => {
   const common = { url: 'https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-darwin-arm64.gz', maxBytes: 123, outputPath: '/tmp/x.gz' };
 
   it('恒含 --proto =https / --proto-redir =https（防协议降级重定向）', () => {
-    const args = buildKernelCurlArgs({ ...common, proxyPort: null });
+    const args = buildKernelCurlArgs({ ...common, proxy: null });
     const i = args.indexOf('--proto');
     assert.equal(args[i + 1], '=https');
     const j = args.indexOf('--proto-redir');
@@ -139,26 +164,32 @@ describe('buildKernelCurlArgs', () => {
   });
 
   it('恒含 --fail-with-body：镜像 4xx/5xx 错误页不再以退出码 0 落盘', () => {
-    const args = buildKernelCurlArgs({ ...common, proxyPort: null });
+    const args = buildKernelCurlArgs({ ...common, proxy: null });
     assert.ok(args.includes('--fail-with-body'));
   });
 
-  it('proxy 通道含 -x 且指向本机混合端口', () => {
-    const args = buildKernelCurlArgs({ ...common, proxyPort: 7890 });
+  it('proxy 通道含 -x 且原样透传代理地址（本机端口或显式 --proxy 同一口径）', () => {
+    const args = buildKernelCurlArgs({ ...common, proxy: 'socks5://127.0.0.1:7897' });
     const i = args.indexOf('-x');
-    assert.equal(args[i + 1], 'http://127.0.0.1:7890');
+    assert.equal(args[i + 1], 'socks5://127.0.0.1:7897');
   });
 
   it('非 proxy 通道不含 -x', () => {
-    const args = buildKernelCurlArgs({ ...common, proxyPort: null });
+    const args = buildKernelCurlArgs({ ...common, proxy: null });
     assert.ok(!args.includes('-x'));
   });
 
   it('-o 指向输出路径，末位为下载 URL', () => {
-    const args = buildKernelCurlArgs({ ...common, proxyPort: null });
+    const args = buildKernelCurlArgs({ ...common, proxy: null });
     const i = args.indexOf('-o');
     assert.equal(args[i + 1], '/tmp/x.gz');
     assert.equal(args[args.length - 1], common.url);
+  });
+});
+
+describe('buildGhApiReleaseArgs（gh 认证路径的 release 查询）', () => {
+  it('参数精确：gh api + 官方 releases endpoint，与下载通道同一信任锚', () => {
+    assert.deepEqual(buildGhApiReleaseArgs('MetaCubeX/mihomo'), ['api', 'repos/MetaCubeX/mihomo/releases', '--method', 'GET']);
   });
 });
 
@@ -166,26 +197,26 @@ describe('buildReleaseApiCurlArgs（代理路径的 release API 查询）', () =
   const url = 'https://api.github.com/repos/MetaCubeX/mihomo/releases';
 
   it('恒含 --proto =https / --proto-redir =https（API 全链路 https）', () => {
-    const args = buildReleaseApiCurlArgs(7890, url);
+    const args = buildReleaseApiCurlArgs('http://127.0.0.1:7890', url);
     assert.equal(args[args.indexOf('--proto') + 1], '=https');
     assert.equal(args[args.indexOf('--proto-redir') + 1], '=https');
   });
 
   it('含 --fail-with-body 与 -w 状态码回传（4xx 不再以退出码 0 混过 JSON 解析）', () => {
-    const args = buildReleaseApiCurlArgs(7890, url);
+    const args = buildReleaseApiCurlArgs('http://127.0.0.1:7890', url);
     assert.ok(args.includes('--fail-with-body'));
     assert.equal(args[args.indexOf('-w') + 1], '\n%{http_code}');
   });
 
   it('URL 直指 api.github.com 且居末位——API 绝不经过镜像', () => {
-    const args = buildReleaseApiCurlArgs(7890, url);
+    const args = buildReleaseApiCurlArgs('http://127.0.0.1:7890', url);
     assert.equal(args[args.length - 1], url);
     assert.ok(url.startsWith('https://api.github.com/'));
   });
 
-  it('-x 指向本机混合端口', () => {
-    const args = buildReleaseApiCurlArgs(7890, url);
-    assert.equal(args[args.indexOf('-x') + 1], 'http://127.0.0.1:7890');
+  it('-x 原样透传代理地址（显式 --proxy 与本机混合端口同一路径）', () => {
+    const args = buildReleaseApiCurlArgs('http://192.168.1.2:7897', url);
+    assert.equal(args[args.indexOf('-x') + 1], 'http://192.168.1.2:7897');
   });
 });
 

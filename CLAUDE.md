@@ -63,7 +63,7 @@ npm run build
 - 内部变量和函数用全称单数，常量用全大写下划线
 - `dir open` 精确匹配 root/subs/logs/data/runtime/kernel
 - `FLAGS` 是带值选项与 start 选项的登记表，派生 `VALUE_FLAGS`、重启透传集合与带值选项三种形式（exact / attached / long-eq）的统一判定 `matchValueFlagToken`——白名单、`parseIntArg`、重启透传三处共用，不各自实现；普通布尔选项不必登记
-- `--mirror` 值可选，由 `parseMirrorArg` 单独解析；布尔开关不接受 `=value` 或附加字符
+- `--mirror` 值可选，由 `parseMirrorArg` 单独解析（不进 FLAGS，登记了 getNonFlagArg 会吞值）；`--proxy`/-p 是标准带值选项、进 FLAGS 登记表，kernel 的两个解析器共用同一张白名单先拦未知选项；布尔开关不接受 `=value` 或附加字符
 - `dispatchSubcommand` 必须 await/返回 Promise，无子命令走 fallback，未知子命令走必填的 onUnknown
 - `config` 命令重新推导而非读 runtime/config.yaml（停止时那个文件会被删掉），走 `buildConfig` 不走带内核校验的 `prepareConfigForStart`；展示前脱敏 secret
 
@@ -160,9 +160,9 @@ npm run build
 
 ## 内核下载
 
-- 默认通道 gh > 本机代理 > 直连；显式 --mirror 或 --mirror direct 优先，选择不持久化
-- MIRROR_HOST/MIRROR_ALIASES 派生展示清单；默认镜像依本机 IPv6 情况选择
-- GitHub API 不经过镜像，代理只是 TLS 传输层；assertTrustedAssetUrl 在拼镜像前缀之前校验原始地址
+- 默认通道 gh > 本机代理 > 直连；显式 --mirror / --mirror direct / --proxy（端口视为 127.0.0.1）优先且选择不持久化；--mirror 可与 --proxy 组合（镜像决定 URL、代理做传输），--mirror direct 与 --proxy 互斥
+- MIRROR_HOST/MIRROR_ALIASES 派生展示清单；裸 --mirror 固定裸域，不探测网络猜 IPv6；短别名拼错（无点无冒号的短 token）在解析层报错 + did-you-mean，不当自定义 host 放行
+- 版本查询优先 gh api 认证通道（免未认证 60 次/时的限流），失败回退代理/直连；GitHub API 不经过镜像，代理只是 TLS 传输层；assertTrustedAssetUrl 在拼镜像前缀之前校验原始地址
 - gh 按精确资产名下载，拒绝 glob 元字符与路径成分
 - curl 强制初始与重定向全链路 HTTPS，有大小上限，下载后比对 asset.size，再用 -v 自检
 - 优先精确匹配标准版资产形态；没有标准版时可选匹配架构的其他资产，但 release 全是预发布时不回退

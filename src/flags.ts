@@ -30,9 +30,12 @@ export const FLAGS: readonly FlagSpec[] = [
   { forms: ['-u', '--update-timeout'], takesValue: true, passthroughToRestart: true },
   // === logs 的选项 ===
   { forms: ['-n', '--lines'], takesValue: true },
+  // === kernel 的选项 ===
+  { forms: ['-p', '--proxy'], takesValue: true },
   // 注意：`--mirror`（kernel）是可选值选项——`--mirror`、`--mirror=url`、`--mirror url`
   // 三种形式都合法，只走 parseMirrorArg。故意不在此登记：登记了 getNonFlagArg 反而会
   // 把它的值吞掉。它的解析与校验由 parseMirrorArg 自己负责。
+  // `--proxy` 与之不同：值必填（裸 `--proxy` 无意义），是标准带值选项，走登记表。
 ];
 
 /** 带值选项集合：`getNonFlagArg` 借此跳过选项的值，不把它误当位置参数 */

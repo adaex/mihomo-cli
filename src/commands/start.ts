@@ -6,6 +6,7 @@ import * as runtime from '../runtime.js';
 import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, disableServiceAutoStart, getServiceStatus, readStopEpoch } from '../service.js';
 import { getPorts } from '../settings.js';
 import * as subscription from '../subscription.js';
+import { printSystemProxyHint } from '../system-proxy.js';
 import type { PreparedConfig } from '../types.js';
 import { assertKnownFlags, assertPositionalCount, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
 
@@ -145,10 +146,11 @@ export async function cmdStart(args: string[]): Promise<void> {
   await printStatus();
 
   // Mixed 模式需手动配置系统代理：进程活着 ≠ 流量走代理，这是 Mixed 最大的日常摩擦。
-  // TUN 模式由虚拟网卡接管全局流量，无需此步。start 是低频命令（重启/首次），提示不烦
+  // TUN 模式由虚拟网卡接管全局流量，无需此步。start 是低频命令（重启/首次），提示不烦。
+  // 提示按实际系统代理状态分档（已指向/指向别处/检测不可用），见 system-proxy.ts；
   // 端口取实际配置（settings.ports 可覆盖默认 7890）——提示错了端口用户会直接连不上
   if (targetMode === 'mixed') {
-    console.log(colors.gray(`提示: Mixed 模式需在系统设置配置 HTTP/SOCKS 代理 127.0.0.1:${getPorts().mixed}（TUN 模式无需）`));
+    printSystemProxyHint(getPorts().mixed);
   } else {
     // TUN 是 root 临时进程：关终端、退出 shell 都不会停它，「怎么收掉」必须随成功一起告知
     console.log(colors.gray('TUN 为临时进程，关闭终端不会停止；停止: mihomo stop（之后 mihomo start 恢复 Mixed）'));

@@ -1,6 +1,24 @@
 # 代码审查：验证结论与边界
 
-当前审查：2026-09-14，v4.14.0 产品体验收口（已发布）
+当前审查：2026-09-29，v4.15.0 kernel 更新链路韧性与体验收口（未发布）
+
+本轮从用户视角实测（空目录首跑、真实环境 status/doctor/sub/ow、kernel 全链路）倒出的缺口，全部实机验证：
+
+| 范围 | 验证方式与结论 |
+| --- | --- |
+| `kernel --proxy`（新参数） | 纯端口补 `127.0.0.1`、`host:port` 补 `http://`、scheme 白名单（http/https/socks5/socks5h），无端口显式报错；三种形式（`--proxy v` / `-pv` / `--proxy=v`）统一走登记表 `matchValueFlagToken`，重复显式报错（手写 indexOf 的第一版漏了同形态重复的计数，flags 不变量测试逼出短形式要求后重写）。与 `--mirror` 组合（mirror 决定 URL、proxy 做传输）与 `--mirror direct` 互斥均在 cmdKernel 校验。utils.spec 12 用例 + kernel.spec 通道用例；实机验证通道展示、无监听端口的失败提示、互斥与缺值报错 |
+| gh 认证版本查询 | `getLatestRelease` 优先 `gh api repos/<repo>/releases`（带认证，与 gh 下载通道同一信任锚——gh 只与 github.com 通信，pickLatestRelease 与 assertTrustedAssetUrl 照跑），失败静默回退代理/直连。**实机决定性证据**：本机 IP 直连已被 GitHub 限流（403），gh 通道在临时 MIHOMO_CLI_DIR 下完整走通查询→下载→自检→v1.19.31。优先级与下载通道对齐：显式 --proxy > gh > 本机代理 > 直连；`--mirror direct` 连 gh 一起绕过。doctor 同口径 |
+| 403 限流分支 | `err.response.status===403 && /rate limit/i` 单独分支：说明限流成因（共享出口 IP 常触发）与「镜像解决不了版本查询限流」，指向等待重置或 `brew install gh && gh auth login`；已走 gh 仍失败时提示 `gh auth status`。其余网络错误保留镜像/代理提示 |
+| **npm preuninstall 验证结论**（上轮挂起的待办） | **钩子机制无效**：registry 拉包 + npm 11.19.0 三场景实测（`npm uninstall -g`、本地 uninstall、`--prefix` 隔离全局）均不执行 preuninstall——连裸 `echo` 标记包都不触发，[官方文档](https://docs.npmjs.com/cli/v12/using-npm/scripts)注明「uninstall lifecycle scripts are not implemented」。脚本保留（npm 恢复支持即生效），README 卸载段已改为不依赖该提醒。另：脚本尾部的 argv[1] 与 import.meta.url 比较在符号链路径下不等（/tmp → /private/tmp，ESM loader 解析真实路径而 resolve 不解析）——真实安装路径无符号链，不受影响，手动调试时须知 |
+| 镜像短别名拦截 | 无 scheme、无点无冒号的短 token（主机名必含点）按拼错别名报错 + did-you-mean（复用 suggestSimilar），纯数字提示 `--proxy`；含点/冒号的 host/URL 承诺行为有回归用例锁死。**反向验证**：拦截条件置 false 后用例转红、自定义 host 用例仍绿 |
+| start 系统代理提醒 | 新 `system-proxy.ts`：`scutil --proxy` 一次调用取**当前生效网络集**的 HTTP/HTTPS/SOCKS 状态（networksetup 按服务持久配置、需逐个查再判活跃，聚合视图才是「现在流量走不走代理」的判据），解析纯函数单测 + 实机 detectSystemProxy 结构断言；matched 一句确认、指向别处给 networksetup 命令、检测失败回退静态提示。只检测不设置，不触碰「不自动设置系统代理」的边界 |
+| 小改 | `sub` 无流量数据尾部提示（条件：全部订阅 formatTraffic 为 null）；`ow` 编号 1 基（broken 连续编号）；帮助示例按 kernel → sub add → install → start 依赖序重排（README 快速开始本就是这个顺序）；kernel usage 行补 --proxy |
+| 文档同步 | README：--proxy 快速开始与通道章节、gh 认证查询说明、卸载段钩子表述如实化；CLAUDE.md：内核下载段补 --proxy 与 gh api；CHANGELOG 4.15.0 |
+| 全量验证 | typecheck / **685 测试**（661 → 685，+24）/ Biome（85 文件，非 0）/ 全绿。两次反向验证（短别名拦截、通道显式代理优先级）均按预期转红后恢复；kernel gh 通道端到端在临时 MIHOMO_CLI_DIR 完整跑通（含下载与自检），验证后已清理 |
+
+---
+
+## 上一轮验证（v4.14.0 产品体验收口，已发布）
 
 本轮针对产品审查发现的「成功路径最后一公里」与反馈倒挂问题收口，失败路径的既有防线不动：
 
@@ -19,7 +37,7 @@
 | 文档同步 | README：镜像 IPv6 说法、config/ui/doctor/help 命令表、卸载段钩子提醒、覆写坏文件行为；CLAUDE.md：clearProxyEnv 新判据、覆写加载双出口约束；registry usage 行（config/ui/help/doctor） |
 | 全量验证 | typecheck / **661 测试**（643 → 661，+18）/ Biome（`src/ scripts/` 84 文件，非 0）/ build 全绿。三次反向验证（覆写硬失败、脱敏接线、控制器口）均按预期转红后恢复 |
 
-**未覆盖与待发布后验证**：TUN 真实 sudo 路径（取消密码框、root 进程收尾）与内核真机更新按既有边界不自动执行，仅类型与代码审查；doctor 内核版本项的 ok/warn 具体取值依赖 GitHub，不做硬断言；npm 钩子的真实 `npm uninstall` 接线计划发布后用 registry 拉回包验证（脚本本体已用 spawn 直接跑过）。
+**未覆盖与待发布后验证**：TUN 真实 sudo 路径（取消密码框、root 进程收尾）与内核真机更新按既有边界不自动执行，仅类型与代码审查；doctor 内核版本项的 ok/warn 具体取值依赖 GitHub，不做硬断言；npm 钩子的真实 `npm uninstall` 接线**已于 v4.15.0 轮经 registry 验证：npm 11.19.0 不执行 preuninstall，机制无效，详见上表**。
 
 ---
 
