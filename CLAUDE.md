@@ -85,7 +85,7 @@ npm run build
 ## 数据与并发
 
 - `readSettings()` 每次读磁盘；同一操作需一致视图时显式传递快照，不加进程级缓存
-- 依赖当前值的写入使用 `updateSettings(mutate)`：持锁读最新、计算补丁、原子写；空补丁不写文件
+- 依赖当前值的写入使用 `updateSettings(mutate)`：持锁读最新、计算补丁、原子写；空补丁不写文件。写盘成功后才该发生的文件副作用（如 removeSubscription 删原始 yaml）走第二个参数 postCommit——放 mutator 里会先于落盘执行（写失败留下不一致），放锁外则回到 TOCTOU
 - `writeSettings` 只用于单键/整值替换，undefined 表示删除键；订阅列表通过 `getSubscriptions(snapshot)` 读取并过滤结构错误
 - mutator 必须同步，不得重入 updateSettings/writeSettings；并发测试要用 spawn 并行启动，spawnSync 顺序运行无法验证并发
 - settings 损坏先备份 `.bak` 再回退默认值；订阅缓存读改写也必须持锁
@@ -94,6 +94,9 @@ npm run build
 - 进程退出轮询必须 async + sleep，让 SIGINT 能被处理；只有同步文件锁内部等待使用同步睡眠
 - URL 按整条处理，不按逗号拆分；展示时脱敏并清除终端控制字符
 - `writeFileSync` 的 mode 只在创建时生效；可能已存在的 sudo 脚本需显式 chmod
+- `atomicWriteFileSync` 写临时文件后 fsync、rename 后 fsync 父目录：进程崩溃由 rename 原子性兜底，OS 崩溃/掉电的窗口收窄到 fsync 返回之后（macOS 严格落盘需 F_FULLFSYNC，Node 无 API，已知边界）；崩溃遗留的 `*.tmp` 由 main 开头的 `cleanupStaleTmpFiles` 按龄清扫（只动超过 1 小时的）
+- 覆写合并层拦 `__proto__` 键：对象字面赋值对它走原型 setter，合并结果原型被静默换掉后 dumpYaml 抛裸异常；订阅侧解析出的 own `__proto__` 不经赋值点、原样透传（内核按未知键忽略）
+- kill 前逐 pid 复核命令行（`isMihomoProcess`）：探测到发信号之间隔着 ps 查询，pid 复用时盲目 SIGKILL 会误杀无关进程；复核不匹配按「无事可做」计成功
 
 ## 配置与覆写
 
