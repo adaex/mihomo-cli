@@ -191,3 +191,58 @@ describe('doctor：npm 查询与本地检查并行', () => {
     }
   });
 });
+
+describe('doctor：内核版本查询超时不拖住进程退出', () => {
+  // 回归：此前 withTimeout 只弃掉 promise，子进程的 stdio 管道仍占住事件循环——
+  // gh 挂住时 doctor 报告打完后还要等满子进程自身超时（GH_API_TIMEOUT 10s）才退，
+  // CI 里表现为「体检结论已打印却拿不到退出码」。修复后 abort 信号把子进程一并杀掉
+  it('gh 查询挂住 → 4s 预算内中止子进程，体检照常完成且进程及时退出', () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-doctor-ghbin-'));
+    const timeline = path.join(binDir, 'timeline.log');
+    try {
+      // 桩 gh：--version 正常应答（hasGh 探测要过），api 查询挂 30s 不响应
+      fs.writeFileSync(
+        path.join(binDir, 'gh'),
+        [
+          '#!/bin/sh',
+          '[ "$1" = "--version" ] && { echo "gh version 2.0.0"; exit 0; }',
+          `echo "gh start $(date +%s)" > ${JSON.stringify(timeline)}`,
+          'sleep 30',
+          `echo "gh end $(date +%s)" >> ${JSON.stringify(timeline)}`,
+          'exit 0',
+          '',
+        ].join('\n'),
+        { mode: 0o755 },
+      );
+
+      const started = Date.now();
+      const r = spawnSync(process.execPath, ['--import', 'tsx', ENTRY, 'doctor'], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH}`,
+          MIHOMO_CLI_DIR: dataDir,
+          MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(dataDir)}`,
+          NO_COLOR: '1',
+        },
+        timeout: 60_000,
+      });
+      const elapsed = Date.now() - started;
+      const output = `${r.stdout || ''}${r.stderr || ''}`;
+
+      // doctor 本身必须跑完（abort 只影响版本查询这一项，降级为 skip）
+      assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
+      assert.match(output, /内核版本|可更新/, `内核版本检查应在场: ${output}`);
+
+      // 子进程被中途杀掉：桩的 end 时间戳不该出现（sleep 未跑完）
+      const marks = fs.existsSync(timeline) ? fs.readFileSync(timeline, 'utf8') : '';
+      assert.ok(marks.includes('gh start'), `桩 gh 应被调用: ${marks}`);
+      assert.ok(!marks.includes('gh end'), `挂住的 gh 子进程应被 abort 杀掉而非跑满 sleep: ${marks}`);
+
+      // 进程及时退出：修复前要等满弃置子进程的 10s 自身超时；4s abort + 检查余量给 9s
+      assert.ok(elapsed < 9_000, `doctor 应在 abort 后及时退出（实际 ${elapsed}ms）`);
+    } finally {
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+});

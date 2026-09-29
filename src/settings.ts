@@ -38,7 +38,11 @@ export function readSettings(): Settings {
     // 是同一类「文件不可用」，处置也该一样（doctor 的设置文件检查已能识别这种形态，
     // 但 doctor 是可选的，读路径自己不能装作没看见）
     return backupCorruptSettings(`内容不是对象（当前是${Array.isArray(parsed) ? '数组' : parsed === null ? 'null' : typeof parsed}）`);
-  } catch {
+  } catch (e) {
+    // existsSync 与 readFileSync 之间文件被并发删除（如另一终端 reset settings）：
+    // 这是「文件没了」的正常形态不是损坏，回退默认即可，误报「格式损坏」会把
+    // 排查方向指去不存在的损坏
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {};
     return backupCorruptSettings('格式损坏');
   }
 }
@@ -61,8 +65,14 @@ export function writeSettings(settings: Partial<Settings>): Settings {
 /**
  * 持锁读取最新值、计算补丁并原子写回。mutator 必须同步，不能再调用写设置函数：锁不可重入
  * 不缓存读取结果并不能代替这把锁，否则并发的读改写仍会丢失对方的更新
+ *
+ * postCommit（可选）：**写盘成功后、仍持锁时**执行的副作用，如 removeSubscription
+ * 删原始配置文件。挪进 mutator 会执行在写盘之前——写失败（磁盘满/权限）时副作用
+ * 已落地而设置没变，留下「条目在、文件已删」的不一致；挪到锁外又会重新引入
+ * 与并发同键操作的 TOCTOU（removeSubscription 注释里写明的正是这个）。空补丁
+ * 不写文件，postCommit 也不执行——没有提交就没有「提交后」动作
  */
-export function updateSettings(mutate: (current: Settings) => Partial<Settings>): Settings {
+export function updateSettings(mutate: (current: Settings) => Partial<Settings>, postCommit?: () => void): Settings {
   ensureDirs();
   return withFileLock(PATHS.settingsLock, () => {
     const current = readSettings();
@@ -73,6 +83,8 @@ export function updateSettings(mutate: (current: Settings) => Partial<Settings>)
       if (value === undefined) delete merged[key];
     }
     atomicWriteFileSync(PATHS.settingsFile, JSON.stringify(merged, null, 2), { mode: 0o600 });
+    // 写盘成功后、仍持锁时执行的副作用（为什么不能挪进 mutator 或锁外，见函数头注释）
+    postCommit?.();
     return merged as Settings;
   });
 }
@@ -339,30 +351,35 @@ export function removeSubscription(name: string): string | null {
   let switchedTo: string | null = null;
   let found = false;
 
-  updateSettings(settings => {
-    const subs = getSubscriptions(settings);
-    const idx = subs.findIndex(s => s.name === name);
-    if (idx < 0) return {};
-    found = true;
+  updateSettings(
+    settings => {
+      const subs = getSubscriptions(settings);
+      const idx = subs.findIndex(s => s.name === name);
+      if (idx < 0) return {};
+      found = true;
 
-    subs.splice(idx, 1);
-    const updates: Partial<Settings> = { subscriptions: subs };
+      subs.splice(idx, 1);
+      const updates: Partial<Settings> = { subscriptions: subs };
 
-    if (settings.active_subscription === name) {
-      switchedTo = subs.length > 0 ? subs[0].name : null;
-      updates.active_subscription = switchedTo ?? undefined;
-    }
+      if (settings.active_subscription === name) {
+        switchedTo = subs.length > 0 ? subs[0].name : null;
+        updates.active_subscription = switchedTo ?? undefined;
+      }
 
-    // 在锁内删原始配置：锁外 rm 与并发 sub add 同名存在 TOCTOU——
-    // A 删 foo（锁内提交）→ B 加 foo（锁内提交 + 下载写 foo.yaml）→ A 锁外 rm 删掉 B 刚写的配置
-    try {
-      fs.rmSync(getSubscriptionRawConfigPath(name), { force: true });
-    } catch {
-      /* 名字非法时跳过文件清理 */
-    }
-
-    return updates;
-  });
+      return updates;
+    },
+    () => {
+      // 删原始配置放在 postCommit（写盘成功后、仍持锁）：放 mutator 里会先于设置落盘——
+      // 写失败时 yaml 已删而条目还在，与刚执行的 remove 矛盾；放锁外又与并发 sub add
+      // 同名存在 TOCTOU——A 删 foo（提交）→ B 加 foo（提交 + 下载写 foo.yaml）→
+      // A 锁外 rm 删掉 B 刚写的配置
+      try {
+        fs.rmSync(getSubscriptionRawConfigPath(name), { force: true });
+      } catch {
+        /* 名字非法时跳过文件清理 */
+      }
+    },
+  );
 
   if (!found) return null;
 

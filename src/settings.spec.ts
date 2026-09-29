@@ -410,3 +410,86 @@ describe('settings.json 为非对象时同样备份并告警', () => {
     assert.equal(warned.trim(), '');
   });
 });
+
+describe('removeSubscription：数据最终状态（子进程真实模块）', () => {
+  const settingsModuleUrl = pathToFileURL(path.resolve('src/settings.ts')).href;
+  const pathsModuleUrl = pathToFileURL(path.resolve('src/paths.ts')).href;
+
+  it('remove 后订阅条目删除、原始配置文件删除、活跃订阅切换到剩余条目', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-remove-'));
+    try {
+      const code = `
+        const fs = await import('node:fs');
+        const nodePath = await import('node:path');
+        const m = await import(${JSON.stringify(settingsModuleUrl)});
+        const paths = await import(${JSON.stringify(pathsModuleUrl)});
+        fs.mkdirSync(nodePath.dirname(paths.PATHS.settingsFile), { recursive: true });
+        fs.writeFileSync(paths.PATHS.settingsFile, JSON.stringify({
+          active_subscription: 'a',
+          subscriptions: [
+            { name: 'a', url: 'https://example.com/a' },
+            { name: 'b', url: 'https://example.com/b' },
+          ],
+        }));
+        const rawA = nodePath.join(paths.DIRS.subscriptions, 'a.yaml');
+        fs.mkdirSync(nodePath.dirname(rawA), { recursive: true });
+        fs.writeFileSync(rawA, 'proxies: []');
+        const switched = m.removeSubscription('a');
+        const settings = JSON.parse(fs.readFileSync(paths.PATHS.settingsFile, 'utf8'));
+        process.stdout.write('SWITCHED:' + String(switched) + '\\n');
+        process.stdout.write('NAMES:' + settings.subscriptions.map(s => s.name).join(',') + '\\n');
+        process.stdout.write('ACTIVE:' + String(settings.active_subscription) + '\\n');
+        process.stdout.write('RAW_EXISTS:' + String(fs.existsSync(rawA)) + '\\n');
+      `;
+      const r = spawnSync(process.execPath, ['--import', 'tsx', '-e', code], {
+        encoding: 'utf8',
+        env: { ...process.env, MIHOMO_CLI_DIR: dir },
+      });
+      assert.equal(r.status, 0, r.stderr || r.stdout);
+      assert.match(r.stdout, /SWITCHED:b/);
+      assert.match(r.stdout, /NAMES:b/);
+      assert.match(r.stdout, /ACTIVE:b/);
+      assert.match(r.stdout, /RAW_EXISTS:false/, '原始配置文件应随 remove 删除（postCommit 副作用）');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('remove 不存在的订阅：不动设置、不执行删除副作用', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-remove-'));
+    try {
+      const code = `
+        const fs = await import('node:fs');
+        const nodePath = await import('node:path');
+        const m = await import(${JSON.stringify(settingsModuleUrl)});
+        const paths = await import(${JSON.stringify(pathsModuleUrl)});
+        fs.mkdirSync(nodePath.dirname(paths.PATHS.settingsFile), { recursive: true });
+        fs.writeFileSync(paths.PATHS.settingsFile, JSON.stringify({
+          active_subscription: 'a',
+          subscriptions: [{ name: 'a', url: 'https://example.com/a' }],
+        }));
+        // 文件名与传给 remove 的名字一致——remove 内部删的就是 subscriptions/<name>.yaml
+        const ghost = nodePath.join(paths.DIRS.subscriptions, 'missing.yaml');
+        fs.mkdirSync(nodePath.dirname(ghost), { recursive: true });
+        fs.writeFileSync(ghost, 'proxies: []');
+        const result = m.removeSubscription('missing');
+        process.stdout.write('GHOST_EXISTS:' + String(fs.existsSync(ghost)) + '\\n');
+        const settings = JSON.parse(fs.readFileSync(paths.PATHS.settingsFile, 'utf8'));
+        process.stdout.write('RESULT:' + String(result) + '\\n');
+        process.stdout.write('NAMES:' + settings.subscriptions.map(s => s.name).join(',') + '\\n');
+      `;
+      const r = spawnSync(process.execPath, ['--import', 'tsx', '-e', code], {
+        encoding: 'utf8',
+        env: { ...process.env, MIHOMO_CLI_DIR: dir },
+      });
+      assert.equal(r.status, 0, r.stderr || r.stdout);
+      assert.match(r.stdout, /RESULT:null/);
+      assert.match(r.stdout, /NAMES:a/);
+      // 时序判别：未命中不产生补丁，删除副作用不得执行——rm 若在 mutator 里
+      //（写盘之前）就会先删掉文件；postCommit 语义下它与提交绑定
+      assert.match(r.stdout, /GHOST_EXISTS:true/, '空补丁不得执行删除副作用');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

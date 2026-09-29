@@ -96,8 +96,17 @@ export function ensureDirs(): void {
 }
 
 /**
- * 原子写文件：先写同目录临时文件再 rename（POSIX 下 rename 原子）。
- * 避免写入中途崩溃/磁盘满导致目标文件被截断为空或半截内容。
+ * 原子写文件：写同目录临时文件 → fsync → rename → fsync 目录。
+ *
+ * 保证范围分两层：
+ * - **进程崩溃**：rename 原子（POSIX），目标文件要么旧要么新，不会截断半截——
+ *   这是本函数最初防的形态
+ * - **OS 崩溃/掉电**：无 fsync 时 rename 的元数据可先于数据块持久化，目标可能
+ *   变空或半截（POSIX 不提供保证）。写前 fsync 临时文件 + rename 后 fsync 父目录
+ *   把该窗口收窄到「fsync 返回后的掉电」。macOS 上严格落盘需 F_FULLFSYNC（Node
+ *   无 API），普通 fsync 只到页缓存刷写——已知边界，接受：settings/cache 丢回
+ *   上次成功写的状态可用，比静默截断强
+ *
  * 临时名带 pid + 进程内自增序号：同一进程并发写同一目标（如 Promise.all 更新缓存）
  * 时各自落到独立临时文件，避免同名临时文件互相踩踏导致内容交错或 rename ENOENT。
  */
@@ -105,8 +114,25 @@ let atomicWriteSeq = 0;
 export function atomicWriteFileSync(filePath: string, content: string, options?: { mode?: number }): void {
   const tmp = `${filePath}.${process.pid}.${atomicWriteSeq++}.tmp`;
   try {
-    fs.writeFileSync(tmp, content, options);
+    const fd = fs.openSync(tmp, 'w', options?.mode ?? 0o600);
+    try {
+      fs.writeFileSync(fd, content);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(tmp, filePath);
+    // 持久化 rename 本身：目录项变更不 fsync 会随掉电回滚，目标退回旧内容甚至消失
+    try {
+      const dirFd = fs.openSync(path.dirname(filePath), 'r');
+      try {
+        fs.fsyncSync(dirFd);
+      } finally {
+        fs.closeSync(dirFd);
+      }
+    } catch {
+      /* 目录不可打开/fsync 不可用时退化到 rename-only：写本身已成功 */
+    }
   } catch (e) {
     try {
       fs.unlinkSync(tmp);
@@ -119,6 +145,29 @@ export function atomicWriteFileSync(filePath: string, content: string, options?:
 
 export function rmrf(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true });
+}
+
+/**
+ * 清扫崩溃遗留的原子写临时文件（`<目标>.<pid>.<n>.tmp`）。
+ * 正常路径用后即删；进程在写与 rename 之间被杀时残留，`dir open root` 会把垃圾
+ * 展示给用户。只删修改时间超过 1 小时的——正在进行的原子写（别的进程刚创建的
+ * tmp）绝不能碰。幂等、容错（清扫失败不影响命令本身），main 每次执行顺带跑一次
+ */
+export function cleanupStaleTmpFiles(): void {
+  try {
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    for (const entry of fs.readdirSync(USER_DATA_DIR)) {
+      if (!entry.endsWith('.tmp')) continue;
+      const full = path.join(USER_DATA_DIR, entry);
+      try {
+        if (fs.statSync(full).mtimeMs < cutoff) fs.rmSync(full, { force: true });
+      } catch {
+        /* 单个文件失败跳过 */
+      }
+    }
+  } catch {
+    /* 目录不可读时无事可做 */
+  }
 }
 
 /**

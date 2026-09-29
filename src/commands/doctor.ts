@@ -18,21 +18,14 @@ import type { KernelUpdateInfo } from '../types.js';
 import { assertKnownFlags, assertPositionalCount, formatRelativeTime } from '../utils.js';
 import { getLatestNpmVersion } from './update.js';
 
-/** 限时等待：GitHub 查询在 doctor 里只给数秒，超时按「不可达」降级为 skip，不拖慢体检 */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('timeout')), ms);
-    promise.then(
-      v => {
-        clearTimeout(timer);
-        resolve(v);
-      },
-      e => {
-        clearTimeout(timer);
-        reject(e as Error);
-      },
-    );
-  });
+/** 限时等待：GitHub 查询在 doctor 里只给数秒，超时按「不可达」降级为 skip，不拖慢体检。
+ * 用 AbortSignal 而非单纯弃掉 promise：弃置后子进程的 stdio 管道仍占住事件循环，
+ * 报告打完后进程要等满子进程自身超时（curl --max-time 120s）才退——abort 会把
+ * 子进程一并杀掉（checkUpdate 把 signal 透传给 gh/curl/直连三路） */
+function withTimeout<T>(promise: (signal: AbortSignal) => Promise<T>, ms: number): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return promise(controller.signal).finally(() => clearTimeout(timer));
 }
 
 type CheckStatus = 'ok' | 'warn' | 'fail' | 'skip';
@@ -91,15 +84,14 @@ async function collectChecks(): Promise<Check[]> {
   }
   const kernelVersionPromise: Promise<KernelUpdateInfo | null> = hasKernel()
     ? withTimeout(
-        checkUpdate({
-          proxy: kernelProxyPort !== null ? `http://127.0.0.1:${kernelProxyPort}` : null,
-          useGh: kernelProxyPort === null && hasGh(),
-        }),
+        signal =>
+          checkUpdate({
+            proxy: kernelProxyPort !== null ? `http://127.0.0.1:${kernelProxyPort}` : null,
+            useGh: kernelProxyPort === null && hasGh(),
+            signal,
+          }),
         4_000,
-      ).then(
-        v => v,
-        () => null,
-      )
+      ).catch(() => null)
     : Promise.resolve(null);
 
   // === 内核 ===

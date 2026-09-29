@@ -123,6 +123,42 @@ describe('配置构建保留用户的节点和分流语义', () => {
     const { config } = buildConfig(dumpYaml({ 'proxy-groups': groups }), 'mixed');
     assert.deepEqual(config['proxy-groups'], groups);
   });
+
+  // 回归：`result[key] = value` 对 __proto__ 走原型 setter，合并结果的原型被静默换掉，
+  // dumpYaml 抛裸 YAMLException（带堆栈按程序 bug 渲染）。修复后合并层拦成可读 CliError
+  it('覆写嵌套层出现 __proto__ 键 → 可读 CliError 而非 dumpYaml 裸异常', () => {
+    fs.writeFileSync(path.join(tmpDir, 'overwrite.yaml'), 'dns:\n  __proto__:\n    evil: true\n  enable: true\n');
+    try {
+      // 复现要求订阅侧有同名映射（dns），深度合并才会走危险赋值路径
+      assert.throws(
+        () => buildConfig(dumpYaml({ dns: { enable: false } }), 'mixed'),
+        (e: unknown) => {
+          assert.ok(e instanceof CliError, `应为 CliError，实际 ${(e as Error).constructor.name}: ${(e as Error).message}`);
+          assert.match((e as Error).message, /__proto__/);
+          return true;
+        },
+      );
+    } finally {
+      fs.rmSync(path.join(tmpDir, 'overwrite.yaml'));
+    }
+  });
+
+  it('~key 元素补丁里的 __proto__ 字段同样被拦（递归合并共用同一入口）', () => {
+    fs.writeFileSync(path.join(tmpDir, 'overwrite.yaml'), '~proxy-groups:\n  - {name: A, __proto__: {evil: true}}\n');
+    try {
+      assert.throws(() => buildConfig(dumpYaml({ 'proxy-groups': [{ name: 'A', proxies: ['DIRECT'] }] }), 'mixed'), /__proto__/);
+    } finally {
+      fs.rmSync(path.join(tmpDir, 'overwrite.yaml'));
+    }
+  });
+
+  // 负向对照：订阅侧的 __proto__（解析器 own property）不经合并赋值、原样透传，
+  // dumpYaml 不炸（实测）、内核按未知键忽略——拦的只是覆写侧的主动写键
+  it('订阅侧 __proto__ 原样透传，不影响构建与序列化', () => {
+    const { config } = buildConfig('__proto__:\n  evil: true\nlog-level: info\n', 'mixed');
+    assert.equal(config['log-level'], 'info');
+    assert.doesNotThrow(() => dumpYaml(config));
+  });
 });
 
 describe('系统锁定项：订阅自带的端口与控制面字段不进运行配置', () => {

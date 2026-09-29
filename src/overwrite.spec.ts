@@ -1006,3 +1006,16 @@ describe('summarizeMatch 回显用户写的原键名（经 listOverwriteFile）'
     }
   });
 });
+
+describe('match 的 url-domain 通配符拦截', () => {
+  // 回归：url-domain 只做字面后缀比对，值含通配符恒不命中——文件静默对任何订阅
+  // 都不生效且零提示。订阅名 glob 推广后这是自然的误写方向
+  it('url-domain 值含 * 或 ? → 报错并说明只做字面后缀比对', () => {
+    assert.throws(() => normalizeMatch({ 'url-domain': '*.example.com' }, 'overwrite.yaml'), /url-domain 不支持通配符/);
+    assert.throws(() => normalizeMatch({ 'url-domain': ['corp.com', 'gh?.com'] }, 'overwrite.yaml'), /gh\?\.com/);
+  });
+
+  it('纯字面 url-domain 不受影响', () => {
+    assert.deepEqual(normalizeMatch({ 'url-domain': 'corp.com' }, 'overwrite.yaml'), { 'url-domain': ['corp.com'] });
+  });
+});

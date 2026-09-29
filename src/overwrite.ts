@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import * as yaml from 'js-yaml';
+import { YAML_MAX_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
 import { USER_DATA_DIR } from './paths.js';
 import { readSettings, writeSettings } from './settings.js';
@@ -164,6 +165,20 @@ function mergeConfigLevel(target: unknown, override: unknown, collectors: MergeC
       assertValidParsedKey(rawKey, { key, forceOverwrite, arrayPrepend, arrayAppend, arrayMergeByName, arrayMergeOnly });
     } else if (isOperatorShapedNestedKey(rawKey)) {
       noteOperatorShapedKey(collectors, rawKey);
+    }
+
+    // `__proto__` 键在对象字面赋值（下方所有 result[key] = ...）里走的是原型 setter
+    // 而非建键：合并结果的原型被静默换成覆写写的值，随后 dumpYaml 抛裸
+    // YAMLException「unacceptable kind of an object to dump」（带堆栈按程序 bug
+    // 渲染，实测复现：`dns: {__proto__: {evil: true}, enable: true}` 覆写进任何带
+    // dns 的订阅即炸），用户无从知道源头是覆写。正常 mihomo 配置没有这个键，
+    // 在操作符解析之后拦，顺带覆盖 `__proto__!` 等操作符形态。订阅侧解析出的
+    // own `__proto__` 不经本函数（无赋值动作），原样透传、内核按未知键忽略
+    if (key === '__proto__') {
+      throw new CliError('覆写里出现了 "__proto__" 键', {
+        label: '覆写配置错误',
+        hint: ['正常 mihomo 配置没有这个键，请检查覆写文件的内容与来源。'],
+      });
     }
 
     const existingValue = result[key];
@@ -378,6 +393,20 @@ export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch |
       result.subscription = arr;
       result.subscriptionKey = key;
       continue;
+    }
+    // url-domain 只做字面后缀比对，不含通配语义（通配只有订阅名键支持）——值里
+    // 出现 `*`/`?` 恒不命中，文件会静默对任何订阅都不生效。订阅名 glob 让人
+    // 很自然地以为 url-domain 也能通配，零提示的静默全不命中会被当成 bug
+
+    // url-domain 只做字面后缀比对，不含通配语义（通配只有订阅名键支持）——值里
+    // 出现 `*`/`?` 恒不命中，文件会静默对任何订阅都不生效。订阅名 glob 让人
+    // 很自然地以为 url-domain 也能通配，零提示的静默全不命中会被当成 bug
+    if (key === 'url-domain') {
+      const wildcard = arr.find(v => v.includes('*') || v.includes('?'));
+      if (wildcard) {
+        problems.push(`url-domain 不支持通配符（当前值 "${wildcard}"），只做字面后缀比对`);
+        continue;
+      }
     }
     (result as Record<string, string[]>)[key] = arr;
   }
@@ -654,7 +683,7 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
     try {
       const content = fs.readFileSync(filePath, 'utf8');
       // 别名上限防 YAML 炸弹 DoS（同 config.ts SAFE_YAML_LOAD_OPTIONS，此处内联避免与 config 循环依赖）
-      const parsed = yaml.load(content, { maxAliases: 200 }) as Record<string, unknown> | null;
+      const parsed = yaml.load(content, { maxAliases: YAML_MAX_ALIASES }) as Record<string, unknown> | null;
       // 顶层数组/标量不是合法覆写文件：曾只 warn 一行就跳过，与语法错同族的静默失效，
       // 统一收进 broken（启动硬失败、诊断面可见）
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {

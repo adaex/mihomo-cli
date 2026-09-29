@@ -251,6 +251,12 @@ export interface ReleaseQueryOptions {
   proxy: string | null;
   /** 无代理可用时才走 gh api 查询（见 getLatestRelease）；代理可用（显式 --proxy 或本机在跑）时应为 false */
   useGh: boolean;
+  /**
+   * 中止信号（doctor 传入）：弃掉 promise 不够——子进程的 stdio 管道会把事件循环
+   * 占住，doctor 报告打完后进程还要等满子进程自身超时（curl 的 --max-time 120s）
+   * 才退。abort 经 execFile 的 signal 把子进程一并杀掉，管道即刻释放
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -267,11 +273,12 @@ export function buildGhApiReleaseArgs(repo: string): string[] {
  * withTimeout 弃掉 promise 后继续占住事件循环、推迟进程退出，故给远小于 HTTP 超时的值 */
 const GH_API_TIMEOUT = 10_000;
 
-async function getLatestReleaseViaGh(repo: string): Promise<GitHubRelease> {
+async function getLatestReleaseViaGh(repo: string, signal?: AbortSignal): Promise<GitHubRelease> {
   const result = await execFileAsync('gh', buildGhApiReleaseArgs(repo), {
     encoding: 'utf8',
     maxBuffer: 50 * 1024 * 1024,
     timeout: GH_API_TIMEOUT,
+    signal,
   });
   return pickLatestRelease(JSON.parse(result.stdout) as GitHubRelease[]);
 }
@@ -291,8 +298,12 @@ async function getLatestRelease(repo: string, opts: ReleaseQueryOptions = { prox
 
   if (opts.useGh) {
     try {
-      return await getLatestReleaseViaGh(repo);
-    } catch {
+      return await getLatestReleaseViaGh(repo, opts.signal);
+    } catch (e) {
+      // 调用方主动中止不是「gh 不可用」：带着已 abort 的信号去回退 curl/直连只会
+      // 再吃一次同样的中止（或更糟——curl 路径对 AbortError 的翻译不认识），
+      // 直接把中止往上抛，让调用方的 catch 降级
+      if (opts.signal?.aborted) throw e;
       /* 回退到代理/直连路径 */
     }
   }
@@ -306,6 +317,7 @@ async function getLatestRelease(repo: string, opts: ReleaseQueryOptions = { prox
         encoding: 'utf8',
         maxBuffer: 50 * 1024 * 1024,
         timeout: KERNEL_HTTP_TIMEOUT + 10_000,
+        signal: opts.signal,
       });
       stdout = result.stdout;
     } catch (e) {
@@ -326,7 +338,7 @@ async function getLatestRelease(repo: string, opts: ReleaseQueryOptions = { prox
     return pickLatestRelease(releases);
   }
 
-  const response = await HTTP_CLIENT.get<GitHubRelease[]>(url, { responseType: 'json' });
+  const response = await HTTP_CLIENT.get<GitHubRelease[]>(url, { responseType: 'json', signal: opts.signal });
   return pickLatestRelease(response.data);
 }
 

@@ -7,7 +7,7 @@ import { printStatus } from './commands/status.js';
 import { DEFAULT_MIXED_PORT, MIN_NODE_VERSION } from './constants.js';
 import { CliError, errorMessage } from './errors.js';
 import { isSilentSigint } from './lifecycle.js';
-import { ensureDirs, PATHS } from './paths.js';
+import { cleanupStaleTmpFiles, ensureDirs, PATHS } from './paths.js';
 import { assertKnownFlags, assertPositionalCount, proxyEnvPointsAtSelf, suggestSimilar } from './utils.js';
 
 process.on('SIGINT', () => {
@@ -168,6 +168,8 @@ function assertSupportedPlatform(commandName: string): void {
 
 async function main(): Promise<void> {
   clearProxyEnv();
+  // 崩溃遗留的原子写临时文件（*.tmp）顺带清扫：幂等容错，只动超过 1 小时的旧残留
+  cleanupStaleTmpFiles();
 
   const args = process.argv.slice(2);
 
