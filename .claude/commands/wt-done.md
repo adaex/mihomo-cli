@@ -19,3 +19,4 @@ description: worktree 改动合并进 main 并就地收尾清理
 - **多个并行 worktree 分支都往 CHANGELOG/CLAUDE.md 写条目时**，逐个 cherry-pick 会反复撞同一处冲突：解冲突时保留双方条目，Unreleased 的综述行与测试计数由**最后一个合并的人**统一改成当前真实值——分支里写的计数只反映它自己的基线。发布前用 `git log v上版..main --oneline` 逐条核对 Unreleased 覆盖面，别信中间状态的计数（v4.9.0 发布前这样查出过缺 11 条）
 - worktree 隔离会话里，带 heredoc / `&&` 组合的复杂 git 命令会被 harness 拒绝：提交信息先写临时文件再 `git commit -F`，多步操作拆成单条命令执行
 - 同样被拒的还有 `HOME=... cmd`（改 git 配置位置）与把运行时变量拼进命令（`sed -n "$(grep -n …)"`、`FOO=$(mktemp -d) … npx …`）。要验证依赖 `HOME` 或临时目录的行为，**写成 `*.spec.ts` 用 `spawnSync` 传 env**——比在 shell 里凑一次性命令更好，还顺带留下回归测试
+- **会话里有后台代理并行改同一工作区时，提交前先 `git status` 逐文件核对改动归属**，别把代理已完成未提交的工作混进自己的提交（git add -A 是重灾区）；已混入就如实在提交消息里注明，或 reset 后重新分提交
