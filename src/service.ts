@@ -505,22 +505,25 @@ export interface RootResidueCleanupContext {
 /**
  * 把 cleanupAll 的 root 清理结果包成 CliError——纯函数，供测试。
  * 统一说清三件关键事实：主体动作已完成到哪一步、root 残留还在（带 PID）、重试入口。
- * sudo 取消（sudoError 是 SudoAuthError）label 用「已取消」；其余失败保留原始消息。
- * remaining 为空但 sudoError 非空 = 仅 root 属主 pid 文件残留。
+ * sudo 取消（scriptError/pidError 是 SudoAuthError）label 用「已取消」；其余失败保留
+ * 原始消息（scriptError 优先——它先于 pid 收口发生）。remaining 为空时的归因按字段
+ * 分开：pidError = pid 文件残留，仅 scriptError = 进程在死亡等待内自行退光、清理没走完。
  */
-export function buildRootResidueCleanupError(result: Pick<CleanupResult, 'remaining' | 'sudoError'>, ctx: RootResidueCleanupContext): CliError {
-  const cancelled = result.sudoError instanceof SudoAuthError;
+export function buildRootResidueCleanupError(result: Pick<CleanupResult, 'remaining' | 'scriptError' | 'pidError'>, ctx: RootResidueCleanupContext): CliError {
+  const { scriptError, pidError } = result;
+  const cancelled = scriptError instanceof SudoAuthError || pidError instanceof SudoAuthError;
   const hasKernelResidue = result.remaining.length > 0;
-  const hint = [
-    ctx.mainOutcome,
-    hasKernelResidue ? `root 残留内核仍在运行（PID ${result.remaining.join(', ')}），可能继续占用代理端口` : `root 属主的 pid 文件未被清理: ${PATHS.pidFile}`,
-    `重新运行可再次尝试清理: ${ctx.retryCommand}`,
-  ];
-  hint.push(hasKernelResidue ? '手动清理: sudo pkill -9 mihomo' : `手动清理: sudo rm -f ${PATHS.pidFile}`);
+  const residueHint = hasKernelResidue
+    ? `root 残留内核仍在运行（PID ${result.remaining.join(', ')}），可能继续占用代理端口`
+    : pidError
+      ? `root 属主的 pid 文件未被清理: ${PATHS.pidFile}`
+      : 'root 残留清理未完成，进程目前已不在（死亡等待内自行退出，非 sudo 清理）';
+  const hint = [ctx.mainOutcome, residueHint, `重新运行可再次尝试清理: ${ctx.retryCommand}`];
+  hint.push(hasKernelResidue || !pidError ? '手动清理: sudo pkill -9 mihomo' : `手动清理: sudo rm -f ${PATHS.pidFile}`);
   if (cancelled) {
     return new CliError('管理员密码未输入或有误，root 残留未被清理', { label: '已取消', hint });
   }
-  return new CliError(result.sudoError?.message ?? 'root 残留未清理干净', { label: '清理残留进程失败', hint });
+  return new CliError(scriptError?.message ?? pidError?.message ?? 'root 残留未清理干净', { label: '清理残留进程失败', hint });
 }
 
 /**
@@ -531,23 +534,25 @@ export function buildRootResidueCleanupError(result: Pick<CleanupResult, 'remain
  */
 /**
  * 残留清理结果的三档处置（纯判据，供测试——真实 root/非 TTY 场景无法黑盒构造）：
- * - 'throw'：root 清理没走通且进程仍在（remaining + sudoError），主体动作结果要说清
- * - 'warn'：仅 root 属主 pid 文件没清掉（sudoError、无残留进程），无害不拦命令
- * - 'ok'：无问题；用户态残留（remaining、无 sudoError）也归这档——交各命令外层
+ * - 'throw'：root 清理没走通且进程仍在（remaining + 提权错误），主体动作结果要说清
+ * - 'warn'：无残留进程但有提权错误（pid 文件没删掉，或进程自行退光而清理没走完），
+ *   无害不拦命令
+ * - 'ok'：无问题；用户态残留（remaining、无提权错误）也归这档——交各命令外层
  *   既有的复核（cmdStop 抛、cmdUninstall 提示、start 健康确认），本层只管 root
  */
 export type ResidueCleanupVerdict = 'ok' | 'warn' | 'throw';
-export function classifyResidueCleanup(result: Pick<CleanupResult, 'remaining' | 'sudoError'>): ResidueCleanupVerdict {
-  if (result.remaining.length > 0 && result.sudoError) return 'throw';
-  if (result.sudoError) return 'warn';
+export function classifyResidueCleanup(result: Pick<CleanupResult, 'remaining' | 'scriptError' | 'pidError'>): ResidueCleanupVerdict {
+  const hasSudoError = result.scriptError !== null || result.pidError !== null;
+  if (result.remaining.length > 0 && hasSudoError) return 'throw';
+  if (hasSudoError) return 'warn';
   return 'ok';
 }
 
 /**
  * 服务路径的残留内核收口。唯一实现是 process-stop 的 cleanupAll
  * （用户态逐 pid 复核 / root 一次 sudo 脚本 + 死亡等待），抛错/警告判据见
- * classifyResidueCleanup——旧服务路径（killResidualKernels）无进程时从不为 pid
- * 文件弹密码，这里保持，避免非 TTY 的 `mihomo stop` 被一个无害残留挡成 exit 1
+ * classifyResidueCleanup。无进程时 cleanupAll 不碰 pid 文件（不为无害残留弹密码），
+ * 非 TTY 的 `mihomo stop` 不会被一个无害残留挡成 exit 1
  */
 async function cleanupKernelsOrThrow(ctx: RootResidueCleanupContext): Promise<void> {
   const result = await cleanupAll();

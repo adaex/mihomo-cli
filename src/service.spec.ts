@@ -572,25 +572,27 @@ describe('isValidServiceLabel：全仓唯一挡住 root 任意路径写的校验
  * - root 进程没杀掉（sudo 取消/失败）必须抛（start/stop/uninstall 旧版就抛）
  * - 仅 root pid 文件没清掉（无进程、非 TTY/取消）只警告：旧 killResidualKernels
  *   无进程直接返回，从不为它弹密码，非 TTY 的 stop 不能被无害文件挡成 exit 1
- * - 用户态残留（无 sudoError）不在本层抛：cmdStop/cmdUninstall/start 外层各有处置
+ * - 用户态残留（无提权错误）不在本层抛：cmdStop/cmdUninstall/start 外层各有处置
  */
 describe('classifyResidueCleanup：三档处置', () => {
   it('干净 → ok', () => {
-    assert.equal(classifyResidueCleanup({ remaining: [], sudoError: null }), 'ok');
+    assert.equal(classifyResidueCleanup({ remaining: [], scriptError: null, pidError: null }), 'ok');
   });
 
   it('root 清理失败且进程仍在 → throw', () => {
-    assert.equal(classifyResidueCleanup({ remaining: [4321], sudoError: new SudoAuthError() }), 'throw');
-    assert.equal(classifyResidueCleanup({ remaining: [4321], sudoError: new Error('pkill 退出码异常') }), 'throw');
+    assert.equal(classifyResidueCleanup({ remaining: [4321], scriptError: new SudoAuthError(), pidError: null }), 'throw');
+    assert.equal(classifyResidueCleanup({ remaining: [4321], scriptError: new Error('pkill 退出码异常'), pidError: null }), 'throw');
   });
 
-  it('仅 root pid 文件清理失败（无残留进程）→ warn，不拦命令', () => {
-    assert.equal(classifyResidueCleanup({ remaining: [], sudoError: new SudoAuthError() }), 'warn');
-    assert.equal(classifyResidueCleanup({ remaining: [], sudoError: new Error('删除 pid 文件失败') }), 'warn');
+  it('无残留进程但有提权错误（pid 文件或清理未走完）→ warn，不拦命令', () => {
+    assert.equal(classifyResidueCleanup({ remaining: [], scriptError: null, pidError: new SudoAuthError() }), 'warn');
+    assert.equal(classifyResidueCleanup({ remaining: [], scriptError: null, pidError: new Error('删除 pid 文件失败') }), 'warn');
+    assert.equal(classifyResidueCleanup({ remaining: [], scriptError: new SudoAuthError(), pidError: null }), 'warn');
+    assert.equal(classifyResidueCleanup({ remaining: [], scriptError: new Error('终止残留内核失败（pkill 退出码异常）'), pidError: null }), 'warn');
   });
 
-  it('用户态残留进程（无 sudoError）→ ok，交外层命令复核', () => {
-    assert.equal(classifyResidueCleanup({ remaining: [4321], sudoError: null }), 'ok');
+  it('用户态残留进程（无提权错误）→ ok，交外层命令复核', () => {
+    assert.equal(classifyResidueCleanup({ remaining: [4321], scriptError: null, pidError: null }), 'ok');
   });
 });
 
@@ -598,7 +600,7 @@ describe('buildRootResidueCleanupError', () => {
   const ctx = { mainOutcome: '服务已停止，登录自启已关闭', retryCommand: 'mihomo stop' };
 
   it('sudo 取消 → label「已取消」，hint 说清主体动作已完成、残留 PID 与重试入口', () => {
-    const err = buildRootResidueCleanupError({ remaining: [4321, 8765], sudoError: new SudoAuthError() }, ctx);
+    const err = buildRootResidueCleanupError({ remaining: [4321, 8765], scriptError: new SudoAuthError(), pidError: null }, ctx);
     assert.ok(err instanceof CliError);
     assert.equal(err.label, '已取消');
     assert.equal(err.message, '管理员密码未输入或有误，root 残留未被清理');
@@ -621,17 +623,17 @@ describe('buildRootResidueCleanupError', () => {
   });
 
   it('脚本失败（非取消）→ label「清理残留进程失败」，保留 runSudoScript 的原始消息', () => {
-    const err = buildRootResidueCleanupError({ remaining: [4321], sudoError: new Error('终止残留内核失败（pkill 退出码异常）') }, ctx);
+    const err = buildRootResidueCleanupError({ remaining: [4321], scriptError: new Error('终止残留内核失败（pkill 退出码异常）'), pidError: null }, ctx);
     assert.equal(err.label, '清理残留进程失败');
     assert.equal(err.message, '终止残留内核失败（pkill 退出码异常）');
     assert.ok(err.hint.some(l => l.includes('PID 4321')));
   });
 
   it('无 root 进程（仅 pid 文件）时残留描述与手动命令切换为 pid 文件版', () => {
-    // remaining 为空但 sudoError 非空 = 仅 root 属主 pid 文件残留；
+    // remaining 为空、仅 pidError = root 属主 pid 文件残留；
     // 重试入口对它同样成立，但手动命令不再是 pkill
     const startCtx = { mainOutcome: '服务尚未启动', retryCommand: 'mihomo start' };
-    const err = buildRootResidueCleanupError({ remaining: [], sudoError: new SudoAuthError() }, startCtx);
+    const err = buildRootResidueCleanupError({ remaining: [], scriptError: null, pidError: new SudoAuthError() }, startCtx);
     assert.equal(err.label, '已取消');
     assert.ok(err.hint.some(l => l.startsWith('root 属主的 pid 文件未被清理')));
     assert.ok(
@@ -639,6 +641,22 @@ describe('buildRootResidueCleanupError', () => {
       'pid 文件残留的手动命令是 rm 而非 pkill',
     );
     assert.ok(err.hint.some(l => l.includes('mihomo start')));
+  });
+
+  it('进程自行退光、清理脚本未走完（仅 scriptError）→ 归因「清理未完成」而非 pid 文件', () => {
+    // sudo 被取消后进程在死亡等待内退光：remaining 空、scriptError 非空——
+    // 此时 pid 文件可能根本没出过问题，提示不许把它说成 pid 文件残留
+    const err = buildRootResidueCleanupError({ remaining: [], scriptError: new SudoAuthError(), pidError: null }, ctx);
+    assert.equal(err.label, '已取消');
+    assert.ok(
+      err.hint.some(l => l.includes('清理未完成，进程目前已不在')),
+      '归因是清理未走完，不是 pid 文件',
+    );
+    assert.ok(
+      err.hint.some(l => l.startsWith('手动清理: sudo pkill -9 mihomo')),
+      '无 pid 文件证据时手动命令给 pkill（幂等，覆盖「其实还有进程」的误判）',
+    );
+    assert.ok(!err.hint.some(l => l.startsWith('手动清理: sudo rm -f')), '不该引导用户去删可能不存在的 pid 文件');
   });
 });
 

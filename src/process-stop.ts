@@ -64,10 +64,7 @@ export function clearPid(): PidCleanupOutcome {
     // （只置 error/signal），失败结果必须显式检查，不能只 try/catch 同步异常
     const result = spawnSync('sudo', ['rm', '-f', PATHS.pidFile], { stdio: 'inherit', timeout: SUDO_TIMEOUT_MS });
     if (result.status === 1) return 'cancelled';
-    if (result.error || result.status !== 0) {
-      console.warn('警告: root 属主的 pid 文件未能清理（sudo 失败或已取消），下次 stop 会再次尝试');
-      return 'failed';
-    }
+    if (result.error || result.status !== 0) return 'failed';
     return null;
   }
   try {
@@ -128,26 +125,31 @@ export function buildKernelCleanupScript(): string {
 /**
  * 清理全部主实例内核并等待死亡，是所有停止/卸载/重置路径的唯一入口。
  *
+ * - 零进程：直接返回，**不碰 pid 文件**——root 属主的文件要弹密码，而没有任何
+ *   进程读它，为无害残留提权不值得（服务路径的 stop/uninstall 旧语义即不动它）。
+ *   游离 stop 的零进程分支自行调用 clearPid，那里的提权是既有行为
  * - 无 root 进程：≤3 个逐 pid 复核命令行后 SIGKILL（防 pid 复用误杀），更多走批量 pkill
  * - 有 root 进程：一次 sudo 脚本（pkill + rm pid）；sudo 非 TTY/取消/失败不抛，
- *   经返回值的 sudoError 与 remaining 交给调用方按各自语境包装
+ *   经返回值的 scriptError/pidError 与 remaining 交给调用方按各自语境包装
  * - 发信号后**轮询等待死亡**（最多 5s）再复核 pgrep：root 进程被信号终止后由
  *   launchd 收养/收割，立即复核可能仍列到濒死 pid，误报「部分进程未终止」
  */
 export async function cleanupAll(): Promise<CleanupResult> {
   const pids = getMihomoPids();
   if (pids.length === 0) {
-    return { killed: 0, failed: 0, remaining: [], sudoError: pidCleanupError(clearPid()) };
+    return { killed: 0, failed: 0, remaining: [], scriptError: null, pidError: null };
   }
 
   let killedCount = 0;
   const failedPids: number[] = [];
-  let sudoError: Error | null = null;
+  let scriptError: Error | null = null;
 
-  if (pids.some(p => isProcessRoot(p))) {
+  const rootPids = pids.filter(isProcessRoot);
+  if (rootPids.length > 0) {
     // root 属主进程用户态 kill 不掉；sudo 脚本的 pkill 同时覆盖用户态主实例，
-    // 故不再分别处理。先给一句人话预告再弹英文 Password:，与 TUN/legacy 路径同款
-    console.log(`检测到 root 属主的内核残留（PID ${pids.join(', ')}），清理需要一次管理员密码`);
+    // 故不再分别处理。先给一句人话预告再弹英文 Password:，与 TUN/legacy 路径同款；
+    // 预告只列 root 属主的 PID（sudo 的动因），用户态游离内核混在其中时全列会失实
+    console.log(`检测到 root 属主的内核残留（PID ${rootPids.join(', ')}），清理需要一次管理员密码`);
     try {
       runSudoScript(buildKernelCleanupScript(), {
         action: '清理残留进程',
@@ -158,7 +160,7 @@ export async function cleanupAll(): Promise<CleanupResult> {
     } catch (e) {
       // 取消/密码错误（SudoAuthError）与脚本失败都不抛：remaining 复核与本字段
       // 交给调用方按各自语境包装（stop 报残留、服务路径报「已取消」）
-      sudoError = e as Error;
+      scriptError = e as Error;
     }
   } else if (pids.length > BATCH_KILL_THRESHOLD) {
     // 批量 pkill 失败（退 2/3）时不能照记 killedCount，由调用方按 remaining 复核
@@ -190,11 +192,12 @@ export async function cleanupAll(): Promise<CleanupResult> {
   }
 
   // sudo 脚本已自行 rm pid；其余路径在此收口（root 属主 pid 文件残留会再提一次权，
-  // 但脚本成功时文件已不存在，clearPid 直接返回）。脚本错误优先于 pid 删除错误
+  // 但脚本成功时文件已不存在，clearPid 直接返回）。两类错误各自独立带出：
+  // 进程死光但脚本没走完（scriptError）与仅 pid 文件没删掉（pidError）归因不同，
+  // 合并成一个字段会让调用方的提示说错事
   const pidError = pidCleanupError(clearPid());
-  if (!sudoError) sudoError = pidError;
 
-  return { killed: killedCount, failed: failedPids.length, remaining: getMihomoPids(), sudoError };
+  return { killed: killedCount, failed: failedPids.length, remaining: getMihomoPids(), scriptError, pidError };
 }
 
 export async function stop(): Promise<StopResult> {
@@ -208,9 +211,15 @@ export async function stop(): Promise<StopResult> {
   }
 
   const result = await cleanupAll();
-  if (result.remaining.length === 0 && result.sudoError) {
-    // 进程都清干净了，sudo 错误只可能来自随后的 root pid 文件删除：警告不改变停止结论
-    warnPidCleanupFailed(result.sudoError);
+  if (result.remaining.length === 0) {
+    // 进程都清干净了，两类收尾错误都不改变停止结论，但归因必须分开：
+    // pidError 是文件残留（下次 stop 再试）；scriptError 是清理脚本没走完——
+    // 进程是在死亡等待内自行退光的，不是被 sudo 清掉的，用户应知道区别
+    warnPidCleanupFailed(result.pidError);
+    if (result.scriptError) {
+      const reason = result.scriptError instanceof SudoAuthError ? 'sudo 已取消或密码错误' : 'sudo 脚本执行失败';
+      console.warn(colors.yellow(`警告: root 残留清理未完成（${reason}），进程目前已不在；再发现残留可重试 mihomo stop`));
+    }
   }
 
   const remaining = getMihomoPids();

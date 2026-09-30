@@ -111,6 +111,31 @@ describe('声明个数内的合法形态不触发参数错误', () => {
     assert.match(output, /没有订阅/);
   });
 
+  it('裸 sub remove（无名称）在空环境报「没有订阅」而非「请指定名称」', () => {
+    // 环境里没有订阅时，引导用户补名称是在指一条不存在的路；与 use/update 同口径
+    const { status, output } = run(['sub', 'remove']);
+    assert.notEqual(status, 0);
+    assert.match(output, /没有订阅/);
+    assert.doesNotMatch(output, /请指定要删除的订阅名称/);
+  });
+
+  it('sub add 的裸 - 名称被拒：建出后 remove/use 都无法指定它（getNonFlagArg 会跳过）', () => {
+    // 裸 - 逃过未知选项拦截（argv 解析显式豁免），SAFE_NAME_RE 又放行——
+    // 唯一能挡住的是 add 入口的名称守卫；此形态建库即死胡同，只剩 reset 能收拾
+    const { status, output } = run(['sub', 'add', 'https://example.com/sub', '-']);
+    assert.notEqual(status, 0);
+    assert.match(output, /名称不能以 "-" 开头/);
+    assert.equal(fs.existsSync(path.join(dataDir, 'settings.json')), false, '拒绝必须发生在入库之前');
+  });
+
+  it('sub add 的 -my-sub 名称在 argv 层按未知选项拒绝（守卫只兜裸 - 这种漏网形态）', () => {
+    // 分工：- 前缀 token 由未知选项拦截，裸 - 因 argv 解析豁免漏到 handler——
+    // 两道防线各锁一端，缺任一端都能建出 remove/use 无法指定的订阅
+    const { status, output } = run(['sub', 'add', 'https://example.com/sub', '-my-sub']);
+    assert.notEqual(status, 0);
+    assert.match(output, /未知的选项: -my-sub/);
+  });
+
   it('sub add url name（两个位置参数）到达 URL 校验', () => {
     const { status, output } = run(['sub', 'add', 'not-a-url', 'n']);
     assert.notEqual(status, 0);

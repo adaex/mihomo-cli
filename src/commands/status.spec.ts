@@ -4,9 +4,8 @@ import { shortOverwriteName } from './status.js';
 
 /**
  * 覆写短名的展示口径：主文件（YAML 与 JS 脚本三扩展）显示「主文件」，
- * 扩展文件显示功能段。26.9.93 引入 JS 脚本后此处一度只剥 yaml 扩展名，
- * overwrite.js 显示成 js、overwrite.dns.js 带 .js 尾巴，且无测试挡住——
- * 用例锁全所有受支持文件名形态。
+ * 扩展文件显示功能段。用例必须锁全所有受支持文件名形态——漏一种扩展，
+ * 该形态就会带着扩展名尾巴显示或归错段。
  */
 describe('shortOverwriteName', () => {
   const cases: Array<[string, string]> = [

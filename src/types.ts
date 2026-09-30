@@ -190,11 +190,17 @@ export interface CleanupResult {
   /** 死亡等待与复核后仍在的主实例 PID */
   remaining: number[];
   /**
-   * root 清理（pkill 脚本或 root 属主 pid 文件删除）的提权/脚本错误：
-   * SudoAuthError = 取消或密码错误（调用方按「已取消」包装），其余为脚本失败。
-   * null = 未提权或提权成功。remaining 为空但本字段非空 = 仅 pid 文件残留
+   * root 清理 sudo 脚本（pkill + rm pid 文件）的提权/脚本错误。SudoAuthError =
+   * 取消或密码错误（调用方按「已取消」包装），其余为脚本失败；null = 未提权或成功。
+   * remaining 为空但本字段非空 = 进程在死亡等待内自行退光、清理未走完——归因是
+   * 「清理未完成」而非 pid 文件残留（那是 pidError 的事），两者不许再混用
    */
-  sudoError: Error | null;
+  scriptError: Error | null;
+  /**
+   * root 属主 pid 文件删除的提权错误。只有用户态清理路径的末尾收口会产出
+   * （sudo 脚本自带 rm pid，成功时无文件可清）；null = 无文件、已清或清理成功
+   */
+  pidError: Error | null;
 }
 
 export interface StaleState {

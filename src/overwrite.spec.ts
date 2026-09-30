@@ -17,7 +17,7 @@ after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
 /**
  * 经真实合并入口跑单个覆写片段：多文件合并的唯一生产入口是 applyOverwrite
- * （mergeConfigLevel 是私有实现，曾导出的 deepMergeWithOverrides 是测试专用的第二入口，已删）。
+ * （mergeConfigLevel 是私有实现）。
  */
 function mergeOnce(base: unknown, override: Record<string, unknown>): Record<string, unknown> {
   const file: OverwriteFileEntry = { name: 'overwrite.yaml', path: path.join(tmpDir, 'overwrite.yaml'), config: override };

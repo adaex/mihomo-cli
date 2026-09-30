@@ -119,8 +119,7 @@ describe('withFileLock', () => {
   it('等待者绝不强夺新鲜锁：锁龄未到阈值只能睡等持有者释放', () => {
     // 强夺的唯一依据是锁龄：等待者排了多久都不参与判定。子进程在主进程持锁期间
     // 忙等多轮（每轮 20ms，120ms 覆盖 6 个重试轮），锁始终新鲜（默认 staleMs=10s），
-    // 任何一轮抢进临界区都是回归。旧实现曾有「等待超时就无条件 rmSync 强夺」的
-    // deadline 兜底，已连同其零行为残留一并删除——本用例锁住删后语义不回潮
+    // 任何一轮抢进临界区都是回归——等待超时本身永远不构成强夺理由
     const ready = path.join(tmpDir, 'waiter-ready');
     const entered = path.join(tmpDir, 'waiter-entered-at');
     const child = spawn(

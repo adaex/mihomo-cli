@@ -79,6 +79,16 @@ function assertValidParsedKey(rawKey: string, parsed: ParsedOverrideKey): void {
 }
 
 /**
+ * 数组拼接误用报错里的目标值类型描述。文件级（BASE_CONFIG 默认值）与合并级
+ * （订阅/前序覆写写入的现值）两处检查共用——各写一份会漂移出两种报错口径
+ */
+function describeValueKind(value: unknown): string {
+  if (value === null) return 'null';
+  if (typeof value === 'object') return '映射';
+  return `标量（${typeof value}）`;
+}
+
+/**
  * 单层合并。`parseOperators` 仅顶层（覆写文件直接键）为 true，递归点一律传 false：
  * 嵌套层的键**按字面处理**（`+x`/`x!`/`x+` 不再是操作符），语义可预测——内层键若随
  * 操作符解析，mihomo 原生通配键（如 nameserver-policy 的 `+.corp.example.com`）
@@ -137,13 +147,10 @@ function mergeConfigLevel(target: unknown, override: unknown, parseOperators: bo
       // assertFileLevelOperatorRules 静态拦截——BASE_CONFIG 在合并之后才注入，
       // 这里读不到它
       if (existingValue !== undefined && !Array.isArray(existingValue)) {
-        throw new CliError(
-          `覆写键 "${rawKey}" 的数组拼接语义只适用于数组，但 "${key}" 当前是${existingValue === null ? ' null' : typeof existingValue === 'object' ? '映射' : `标量（${typeof existingValue}）`}`,
-          {
-            label: '覆写配置错误',
-            hint: [`+${key} / ${key}+ 用于向数组前置/追加元素（如 rules+）。`, `若要替换非数组的 ${key}，请直接写 ${key}: <值>。`],
-          },
-        );
+        throw new CliError(`覆写键 "${rawKey}" 的数组拼接语义只适用于数组，但 "${key}" 当前是 ${describeValueKind(existingValue)}`, {
+          label: '覆写配置错误',
+          hint: [`+${key} / ${key}+ 用于向数组前置/追加元素（如 rules+）。`, `若要替换非数组的 ${key}，请直接写 ${key}: <值>。`],
+        });
       }
       const existingArr = Array.isArray(existingValue) ? existingValue : [];
       const overrideArr = Array.isArray(value) ? value : [value];
@@ -512,8 +519,7 @@ function assertFileLevelOperatorRules(config: Record<string, unknown>, fileName:
 
     const base = BASE_CONFIG[parsed.key];
     if (base === undefined || Array.isArray(base)) continue;
-    const kind = base === null ? 'null' : typeof base === 'object' ? '映射' : `标量（${typeof base}）`;
-    throw new CliError(`覆写文件 "${fileName}" 的键 "${rawKey}" 用了数组拼接，但系统配置 "${parsed.key}" 的默认值是${kind}、不是数组`, {
+    throw new CliError(`覆写文件 "${fileName}" 的键 "${rawKey}" 用了数组拼接，但系统配置 "${parsed.key}" 的默认值是 ${describeValueKind(base)}、不是数组`, {
       label: '覆写配置错误',
       hint: [
         `+${parsed.key} / ${parsed.key}+ 用于向数组前置/追加元素（如 rules+）；系统默认的 ${parsed.key} 不是数组，拼接只会产出内核无法解析的配置。`,

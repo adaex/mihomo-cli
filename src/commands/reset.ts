@@ -130,6 +130,13 @@ export async function cmdReset(args: string[]): Promise<void> {
         hint: ['请手动运行: sudo pkill -9 mihomo'],
       });
     }
+    // remaining 复核已空、但 sudo 没走通（取消/非 TTY/脚本失败）：重置继续走，
+    // 但 root 侧可能仍有未清的残留，静默会让用户以为全部清干净了
+    const cleanupError = cleanup.scriptError ?? cleanup.pidError;
+    if (cleanupError) {
+      console.warn(colors.yellow('警告: root 残留清理未完成（sudo 取消、失败或不可用），可能仍有残留进程或 pid 文件'));
+      console.warn(colors.gray('重试清理: mihomo stop'));
+    }
     // 与 cmdStop 的提前返回同族：serviceActive 为假时上面的 stopService/uninstallService
     // 一个都没跑，没有 disable 可执行，但这里即将删掉 runtime/config.yaml 或 kernel/——
     // 并发的慢速 start 若看不到变化，就会 bootstrap 一个内核已被删除的 plist，

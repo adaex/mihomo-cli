@@ -106,7 +106,8 @@ describe('cleanupAll 真实杀进程', () => {
     assert.equal(result.killed, 1);
     assert.equal(result.failed, 0);
     assert.deepEqual(result.remaining, []);
-    assert.equal(result.sudoError, null, '用户态清理不应产生 sudo 错误');
+    assert.equal(result.scriptError, null, '用户态清理不应产生 sudo 脚本错误');
+    assert.equal(result.pidError, null, '用户态 pid 文件无需提权');
     assert.equal(getMihomoPids().length, 0, '进程必须真的没了，不是「调用没报错」');
     assert.ok(isDead(pid), '桩进程应已不存在（僵尸也算死，kill -0 在这里会骗人）');
   });
@@ -139,11 +140,26 @@ describe('cleanupAll 真实杀进程', () => {
     assert.equal(result.failed, 0);
   });
 
-  it('清掉 pid 文件（残留会让后续 start 撞上死胡同）', async () => {
+  it('清掉 pid 文件（有进程路径的末尾收口；残留会让后续 start 撞上死胡同）', async () => {
+    spawnFakeKernel();
+    waitForPids(1);
     fs.writeFileSync(PATHS.pidFile, '99999');
     const result = await cleanupAll();
     assert.equal(fs.existsSync(PATHS.pidFile), false);
-    assert.equal(result.sudoError, null, '用户态 pid 文件无需提权');
+    assert.equal(result.pidError, null, '用户态 pid 文件无需提权');
+  });
+
+  it('零进程时不碰 pid 文件（root 属主的文件要弹密码，无进程读它时不值得提权）', async () => {
+    fs.writeFileSync(PATHS.pidFile, '99999');
+    const result = await cleanupAll();
+    assert.equal(result.killed, 0);
+    assert.equal(fs.existsSync(PATHS.pidFile), true, 'cleanupAll 零进程分支不得动 pid 文件');
+    assert.equal(result.scriptError, null);
+    assert.equal(result.pidError, null);
+    // 文件由 stop() 的零进程分支负责清（游离路径的既有行为）
+    const stopResult = await stop();
+    assert.equal(stopResult.notRunning, true);
+    assert.equal(fs.existsSync(PATHS.pidFile), false);
   });
 });
 
@@ -184,10 +200,12 @@ describe('stop 真实停止', () => {
     assert.equal(fs.existsSync(PATHS.pidFile), false);
   });
 
-  it('无进程时报 notRunning 而非谎报杀掉了什么', async () => {
+  it('无进程时报 notRunning 而非谎报杀掉了什么；用户态 pid 文件顺手清掉', async () => {
+    fs.writeFileSync(PATHS.pidFile, '99999');
     const result = await stop();
     assert.equal(result.success, true);
     assert.equal(result.notRunning, true);
+    assert.equal(fs.existsSync(PATHS.pidFile), false, '游离 stop 的零进程分支要清用户态 pid 文件');
   });
 
   // stop 会 rmrf runtime/，后续用例依赖 configFile 存在
