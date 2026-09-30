@@ -7,7 +7,7 @@ import { colors } from '../colors.js';
 import { getConfigInfo, getKernelVersion, hasKernel } from '../config.js';
 import { DEFAULT_MIXED_PORT, VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
-import { formatRelativeTime } from '../format.js';
+import { formatDate, formatRelativeTime } from '../format.js';
 import { checkUpdate, hasGh } from '../kernel.js';
 import { PATHS, USER_DATA_DIR } from '../paths.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
@@ -146,9 +146,11 @@ async function collectChecks(): Promise<Check[]> {
       if (cached?.updated_at) {
         const rel = formatRelativeTime(cached.updated_at);
         if (isSubscriptionStale(cached)) {
-          push('订阅新鲜度', 'warn', `${rel ?? '未知'}前更新，已超过 ${resolveUpdateInterval(cached.update_interval)} 小时间隔`, 'mihomo sub update');
+          // stale 判据要求 updated_at 不晚于当前时间，此时 rel 必非 null（?? 仅为类型兜底）
+          push('订阅新鲜度', 'warn', `${rel ?? '未知'}更新，已超过 ${resolveUpdateInterval(cached.update_interval)} 小时间隔`, 'mihomo sub update');
         } else {
-          push('订阅新鲜度', 'ok', `${rel ?? '未知'}前更新`);
+          // rel 为 null 只可能是未来/非法时间戳（时钟偏移或缓存被手改），如实标注
+          push('订阅新鲜度', 'ok', rel ? `${rel}更新` : `更新时间记录异常（${formatDate(cached.updated_at)}）`);
         }
       }
     }
