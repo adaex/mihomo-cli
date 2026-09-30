@@ -171,9 +171,11 @@ export function cleanupStaleTmpFiles(): void {
       continue; // 目录不存在/不可读时无事可做
     }
     for (const entry of entries) {
-      // 原子写临时文件认 .tmp 后缀；内核临时目录认 mkdtemp 的 .tmp- 前缀
+      // 原子写临时文件认 .tmp 后缀（四个目录都可能有）；.tmp- 前缀目录**只认
+      // kernel/**——mkdtemp 的下载临时目录只建在那里，前缀不能在全数据目录通用，
+      // 否则根目录将来出现别的 .tmp- 设施会被误扫
       const isAtomicTmpFile = entry.endsWith('.tmp');
-      const isKernelTmpDir = entry.startsWith('.tmp-');
+      const isKernelTmpDir = dir === DIRS.kernel && entry.startsWith('.tmp-');
       if (!isAtomicTmpFile && !isKernelTmpDir) continue;
       const full = path.join(dir, entry);
       try {
