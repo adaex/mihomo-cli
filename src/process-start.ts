@@ -12,8 +12,7 @@ import type { StartResult } from './types.js';
 /**
  * TUN 内核的启动（临时 sudo 脚本，不走 launchd）。
  *
- * Mixed 模式**没有**用户态启动路径了：它由 launchd 服务托管（service.ts），
- * 此前的 startMixedMode（detached spawn + pid 文件）已随 v4.1.0 删除。
+ * Mixed 模式**没有**用户态启动路径：它由 launchd 服务托管（service.ts）。
  * TUN 保持临时进程语义——本就需要提权，且用完即走，交给 launchd 托管没有意义。
  *
  * 停止与清理在 process-stop.ts，探测在 process-probe.ts。
@@ -113,7 +112,7 @@ export async function startTun(): Promise<StartResult> {
   // 终端 start（mixed）把服务拉起的话，不但脚本的 pkill 会无差别杀掉它、KeepAlive
   // 拉回后与 root TUN 内核抢同一组端口，**轮转还会先把在跑服务的 mihomo.log rename
   // 进归档**（launchd fd 继续写归档，`logs 0` 从此看不到服务的新日志）——检出即
-  // 中止，日志未动、服务的运行不动。此前轮转排在本复核之前，正是这个更贵的形态。
+  // 中止，日志未动、服务的运行不动。故校验与复核都必须排在轮转之前。
   // 复核点到 pkill 执行之间仍隔着 sudo 密码窗口，无法归零（pkill 在 root 脚本内，
   // 进不了锁）；那一侧由 stop epoch 防线兜底：TUN 分支过守卫后已 bump，start 的
   // enable+bootstrap 在锁内必读到变化而放弃——与 kickstart 60s 锁外交错同一级别的

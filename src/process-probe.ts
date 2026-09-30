@@ -68,7 +68,7 @@ export function isProcessRoot(pid: number): boolean {
  * 实测报 `Cannot compile regular expression ... (repetition-operator operand invalid)` 并以
  * **退出码 2** 结束——而 pgrep 无匹配也只是非 0,pkill 更是全程无副作用地返回,于是
  * `getMihomoPids()` 恒为空、`pkill -9 -f` 一个进程都不杀,`stop` 照常打印「已停止」。
- * 这就是「报告成功前必须确认事情真的成立」在本仓的第四例(v4.2.1 修)。
+ * 这正是「探测失败 ≠ 目标不存在」的典型案例。
  */
 const BINARY_ALTERNATION = `(${escapeRegExp(PATHS.serviceBinary)}|${escapeRegExp(PATHS.mihomoBinary)})`;
 export const MAIN_INSTANCE_PATTERN = `${BINARY_ALTERNATION}.*${escapeRegExp(PATHS.configFile)}`;
@@ -112,9 +112,9 @@ export function isMihomoProcess(pid: number): boolean {
  * 查询所有主实例 PID。
  *
  * **pgrep 的退出码 0/1 之外一律抛错,不能吞成空数组**:`2` 是正则编译失败、`3` 是 fatal error,
- * 两者都表示「这次探测根本没跑成」,而非「没有进程」。历史上 `(?:a|b)` 的 ERE 语法错误
- * 就是被这里的 `return []` 吞掉的——`stop` 因此认为无事可做、`start` 认为没有残留,
- * 内核一直在跑而 CLI 全程报告成功。宁可报错让用户看见,也不能让探测失败伪装成「不在运行」。
+ * 两者都表示「这次探测根本没跑成」,而非「没有进程」。探测失败伪装成「不在运行」时，
+ * stop 会认为无事可做、start 会认为没有残留，内核一直在跑而 CLI 全程报告成功。
+ * 宁可报错让用户看见,也不能让探测失败伪装成「不在运行」。
  */
 export function getMihomoPids(): number[] {
   const result = spawnSync('pgrep', ['-f', MAIN_INSTANCE_PATTERN], { encoding: 'utf8', timeout: 10_000 });
@@ -168,7 +168,7 @@ export function checkStaleState(): StaleState {
 
 function getProcessInfo(pid: number): ProcessInfo | null {
   try {
-    // 一次 ps 同时取 rss 与 uid（此前分两次调用，同一 pid 查两遍）
+    // 一次 ps 同时取 rss 与 uid
     const result = spawnSync('ps', ['-p', String(pid), '-o', 'rss=,uid='], { encoding: 'utf8', timeout: 5000 });
     const psOutput = (result.stdout || '').trim();
     if (!psOutput) return null;

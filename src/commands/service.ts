@@ -89,8 +89,8 @@ export async function cmdInstall(args: string[]): Promise<void> {
   }
 
   if (wasRunning) {
-    // bootstrap 返回 0 ≠ 内核活着（v4.2.0 实测的崩溃循环形态）：
-    // 重装恢复运行与 start 走同一套健康确认，缺了它就是「已按原状态重新启动」的静默谎报
+    // bootstrap 返回 0 ≠ 内核活着（崩溃循环形态）：重装恢复运行与 start 走同一套
+    // 健康确认，缺了它就是「已按原状态重新启动」的静默谎报
     try {
       await runtime.assertServiceHealthy('恢复运行失败');
     } catch (e) {

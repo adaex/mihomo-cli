@@ -21,10 +21,8 @@ export type CommandGroup = 'control' | 'interface' | 'subscription' | 'config' |
 /**
  * 一条帮助用法行：命令签名与说明分开存放。
  *
- * **不要合成一个字符串**：合成后对齐只能靠手写空格，加命令或改签名长度就会错位
- * （历史上「控制」组与其余组的说明列曾分别落在第 34 与第 30 列，
- * `subscription add <url> [name]` 更是直接溢出）。分开后由 printHelp
- * 按当前最长签名统一 padEnd，对齐永远自洽。
+ * **不要合成一个字符串**：合成后对齐只能靠手写空格，加命令或改签名长度就会错位。
+ * 分开后由 printHelp 按当前最长签名统一 padEnd，对齐永远自洽。
  */
 export interface UsageLine {
   signature: string;

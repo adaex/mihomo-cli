@@ -102,8 +102,7 @@ export async function cmdStart(args: string[]): Promise<void> {
       // 订阅更新（约 10s）与 sudo 密码窗口（最长 60s）两个慢速阶段，期间另一终端
       // start 的话，其锁内会读到计数变化而放弃 enable+bootstrap；没有这道 bump，
       // start 起的服务会被 TUN 脚本的 pkill 杀掉、KeepAlive 拉回后与 root TUN 内核
-      // 抢同一组端口。mixed 侧的六条防线（v4.7.5–4.7.7）全在防「stop 被 start 覆盖」，
-      // 这个反方向此前裸奔
+      // 抢同一组端口。mixed 侧防「stop 被 start 覆盖」的防线（D2）管不到这个反方向
       recordServiceStopped();
     }
   } else if (!serviceBefore.installed) {

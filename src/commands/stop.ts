@@ -24,8 +24,8 @@ export async function cmdStop(args: string[]): Promise<void> {
   // 不接受位置参数（`stop tun` 之类的写法此前被静默忽略）；校验先于任何服务操作
   assertPositionalCount(args, 0, 1, 'mihomo stop');
   // 遗留 root daemon 带 KeepAlive：不清理它，下面杀掉的内核约 10s 后就被拉回，
-  // 「已停止」即成谎报（与 v4.2.2 修的 gui/0 缺陷同一签名，幽灵换成 legacy daemon）。
-  // detectLegacySystemInstall 只查 plist 文件，不要求任务在跑，幂等清理无副作用
+  // 「已停止」即成谎报。detectLegacySystemInstall 只查 plist 文件，不要求任务在跑，
+  // 幂等清理无副作用
   if (detectLegacySystemInstall()) {
     console.log(colors.yellow('检测到旧版本安装的系统级服务（root LaunchDaemon），停止前需清理'));
     console.log(colors.gray('  清理需要一次管理员密码（删除 root 拥有的文件）'));

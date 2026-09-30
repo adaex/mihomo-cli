@@ -216,7 +216,7 @@ export async function printStatus(args: string[] = []): Promise<void> {
 
   if (info) {
     // 控制器口一并展示：改过 ports.controller 后，托管 UI 默认连 9090 必然连不上，
-    // 而端口此前在任何只读界面都看不到（README 承诺「status 会显示实际端口」）
+    // 只读界面必须能看到实际端口（README 承诺「status 会显示实际端口」）
     const controllerSuffix = controllerPort !== null ? `，控制器 ${controllerPort}` : '';
     if (info.tun) {
       // TUN 模式由虚拟网卡接管全局流量；mixed-port 仍在监听可作备用入口，一并标注
@@ -348,7 +348,7 @@ function printServiceLines(service: ReturnType<typeof getServiceStatus>, legacy:
     printAutoStart(service);
   }
 
-  // 旧版本（v4.0 及更早）的 root LaunchDaemon 会与用户级服务抢端口，且用户态动不了它
+  // 旧版本（v4.0 及更早）的 root LaunchDaemon 会与用户级服务抢端口，且用户态动不了它（D1）
   if (legacy) {
     console.log(colors.yellow('  异常: 检测到旧版本的系统级服务（root LaunchDaemon）'));
     console.log(colors.gray('  它会抢占同一组端口，清理: mihomo uninstall（需一次管理员密码）'));

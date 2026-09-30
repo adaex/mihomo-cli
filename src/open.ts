@@ -5,11 +5,8 @@ import { setSilentSigint } from './lifecycle.js';
 /**
  * 打开 URL 或文件（macOS `open`）。ui/dir/log 三处共用的薄封装。
  *
- * **无返回值**：`open` 是 detached spawn，失败（ENOENT、目标不存在、用户无默认程序）
- * 全部发生在本函数返回之后，只能被 `child.on('error')` 收到并吞掉——此前它返回
- * `boolean` 并恒为 `true`，四个调用点的 `if (!success) 请手动打开…` 全是死代码，
- * 反而让人误以为失败真能被检出。
- *
+ * **无返回值、不检出失败**：`open` 是 detached spawn，失败（ENOENT、目标不存在、
+ * 用户无默认程序）全部发生在本函数返回之后，只能被 `child.on('error')` 收到。
  * 真要检出失败得改用 `spawnSync` 并解析退出码，但那会为一个「非阻塞的顺手操作」
  * 引入同步等待；macOS 上 `open` 本就存在（平台守卫已保证），故选择不检出。
  * 调用方一律**无条件打印地址/路径**，用户即便没弹出窗口也能自己点开。

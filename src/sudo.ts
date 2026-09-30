@@ -35,9 +35,8 @@ interface SudoScriptOptions {
 
 /**
  * sudo 退出码 → Error 的纯映射（runSudoScript 的可测内核）：
- * - 1 = sudo 鉴权取消/密码错误 → SudoAuthError。**即便 codeMessages 登记了 1 也不让**，
- *   退出码 1 不归脚本——legacy-cleanup 脚本曾用 exit 1 报 bootout 真实失败，
- *   被这里映射成「已取消或密码错误」，用户密码明明输对了
+ * - 1 = sudo 鉴权取消/密码错误 → SudoAuthError。**即便 codeMessages 登记了 1 也不让**——
+ *   退出码 1 不归脚本，脚本内部失败必须约定 ≥2，否则真实失败会被映射成「已取消」
  * - null = sudo 进程被信号终止
  * - 其余非零码先查 codeMessages（脚本内部失败，约定 ≥2），未登记的落到「动作失败（退出码 N）」
  */

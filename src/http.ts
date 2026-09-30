@@ -6,7 +6,7 @@ import type { HttpClient, HttpClientOptions, HttpResponse } from './types.js';
 const MAX_RESPONSE_BYTES = 50 * 1024 * 1024;
 /**
  * 错误响应体只读取用于诊断的前缀（64KB）。错误体不参与业务解析，
- * 无需完整读入——此前 !ok 分支直接 await response.json() 完全绕过大小上限，
+ * 必须限量读入——!ok 分支若直接 await response.json() 会完全绕过大小上限，
  * 服务端返回超大错误体即可撑爆内存（实测 60MB 错误体使 RSS 增长 300MB+）。
  */
 const MAX_ERROR_BODY_BYTES = 64 * 1024;

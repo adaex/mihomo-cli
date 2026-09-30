@@ -125,7 +125,7 @@ export async function cmdKernel(args: string[]): Promise<void> {
       }
     } else if (apiProxy) {
       // 显式镜像 + 版本查询经代理失败：镜像按设计绝不碰 API，失败与镜像无关，
-      // 只提示检查代理本身（此前此类用户只剩裸「更新失败」，没有任何出路）
+      // 只提示检查代理本身
       hint.push('', '提示: 版本查询（GitHub API）经代理失败，可检查代理是否可用；镜像只作用于内核下载，与查询无关');
     } else if (useGh) {
       // useGh 意味着 gh 认证通道已先试过、失败才回退直连——两边都不通

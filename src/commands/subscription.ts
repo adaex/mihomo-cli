@@ -323,9 +323,9 @@ const REMOVE_FLAGS: readonly string[] = ['-y', '--yes'];
 
 /**
  * 把选项校验包进子命令 handler：分发命中后先按**该子命令**的白名单校验再执行。
- * 白名单必须只含 handler 真正消费的选项——此前白名单挂在分发前、对全组放行，
+ * 白名单必须只含 handler 真正消费的选项——挂在分发前对全组放行时，
  * `sub add <url> <name> -y` 被接受但 add 根本不读 -y（选项被静默忽略），
- * 正是 assertKnownFlags 文档注释要防的「用户以为选项生效了，实际行为完全没变」。
+ * 正是 assertKnownFlags 要防的「用户以为选项生效了，实际行为完全没变」。
  * add/update 不消费任何选项，白名单为空。
  */
 function withKnownFlags(usage: string, known: readonly string[], handler: (args: string[]) => void | Promise<void>): (args: string[]) => Promise<void> {
@@ -335,9 +335,8 @@ function withKnownFlags(usage: string, known: readonly string[], handler: (args:
   };
 }
 
-// list 刻意不注册：裸 `sub` 就是列表（fallback），与 `dir` / `ow` 同口径。
-// v3.11.0 已删掉 `dir list` / `ow list`，若这里保留 `sub list`，同一批命令
-// 一半能敲 list 一半不能，用户只能靠试。
+// list 刻意不注册：裸 `sub` 就是列表（fallback），与 `dir` / `ow` 同口径——
+// 同一批命令一半能敲 list 一半不能，用户只能靠试
 export const SUBCOMMANDS: SubCommand[] = [
   { name: 'add', handler: withKnownFlags('sub add <url> [name]', [], subAdd) },
   { name: 'update', handler: withKnownFlags('sub update [name]', [], subUpdate) },
@@ -353,7 +352,6 @@ export async function cmdSubscription(args: string[]): Promise<void> {
     fallback: printSubscriptionList,
     onUnknown: action => {
       // 选项出现在子命令位置：裸 sub 是只读列表、不消费任何选项，按未知选项报错
-      // （此前由分发前的全组白名单拦下这类输入，白名单下沉后在这里保持同一口径）
       if (action.startsWith('-')) {
         throw new CliError(`未知的选项: ${action}`, {
           label: '参数错误',

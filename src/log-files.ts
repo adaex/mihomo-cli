@@ -21,10 +21,8 @@ const LOG_TAIL_LINES = 15;
  *
  * 序号后缀由同秒二次轮转产生（`rotateLog` 与 `restartService` 的 copy-truncate 都会加），
  * 而「start 失败后立即重试」正是它最常出现的场景——也正是用户最需要翻日志的时候。
- *
- * 此前 cleanupOldLogs 与 listLogs 各写一份正则，只有前者认序号后缀：于是 `.N.log`
- * 会被按时清理（不堆积），却永远不出现在 `logs` 列表里 → `logs <编号>` 拿不到它，
- * 用户只能自己进目录翻。判据收成一份，两边不可能再漂移。
+ * 清理（cleanupOldLogs）与列表（listLogs）必须共用本判据：只认序号的清理会把
+ * `.N.log` 按时清掉却永远不进 `logs` 列表，用户拿不到它只能自己进目录翻。
  *
  * 捕获组 1 是时间戳（listLogs 不用，但保留以便按时间解析）。
  */
@@ -47,8 +45,8 @@ export function getLogPath(): string {
 /**
  * 读日志末尾若干行，用于把内核的失败原因直接呈现在错误里。
  *
- * 服务启动失败时，用户唯一能看到的线索就在这里（TUN 的 sudo 脚本本就 `tail -25`，
- * 服务路径此前什么都不给，只报一句「已启动」——见 waitServiceHealthy）。
+ * 服务启动失败时，用户唯一能看到的线索就在这里（见 waitServiceHealthy——
+ * 没有这道确认时用户只拿到一句谎报的「已启动」）。
  * 只读尾部 64KB：崩溃循环下日志可能很大，全量读入没有必要。
  */
 export function readLogTail(): string[] {
@@ -94,18 +92,17 @@ const MAX_ARCHIVE_SEQ = 1000;
  *
  * 返回时该名字已被本进程以空占位文件占住：`openSync` 的 `wx`（O_EXCL）标志让
  * 「名字可用」与「名字归我」在同一次系统调用内判定（与 withFileLock 的锁同一范式）。
- * 此前是 existsSync 判否后返回，跨进程是 TOCTOU：两个 CLI 进程同秒轮转
- * （双终端 start、start + tun）都判否并选中同一归档名，后到的 renameSync/copyFileSync
- * 在 POSIX 上静默覆盖先到者——一份历史日志无提示丢失。序号后缀只防同进程先后两次
- * 同秒轮转，防不了跨进程；占位才防得住。
+ * existsSync 判否后返回是 TOCTOU：两个 CLI 进程同秒轮转（双终端 start、start + tun）
+ * 都判否并选中同一归档名，后到的 renameSync/copyFileSync 在 POSIX 上静默覆盖先到者——
+ * 一份历史日志无提示丢失。序号后缀只防同进程先后两次同秒轮转，防不了跨进程；占位才防得住。
  *
  * 调用方随后的 renameSync/copyFileSync 对已存在目标是原子替换/覆写，直接盖掉占位
  * 即可——service.ts 的 copy-truncate（restartService）与本文件的 rotateLog 都无需
  * 感知此语义。若覆写失败，占位残留为空归档文件：仍被 isArchiveLogFilename 认得、
  * 随保留期清理，也不影响后续分配（占名只烧掉一个名字，不存在等锁问题）。
  *
- * 导出供 service.ts 的 copy-truncate 轮转复用（运行中不能 rename，见 restartService）：
- * 此前两处各写一份同样的 while 循环，命名规则漂移就会让归档被静默覆盖或列不出来。
+ * 导出供 service.ts 的 copy-truncate 轮转复用（运行中不能 rename，见 restartService）——
+ * 归档命名规则只此一份，两处各写一份就会在漂移后互相覆盖或列不出来。
  */
 export function allocateArchivePath(): string {
   const timestamp = formatLocalTimestamp();
