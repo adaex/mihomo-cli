@@ -116,12 +116,11 @@ describe('withFileLock', () => {
     assert.ok(childAcquiredAt >= releasedAt, '子进程必须在主进程放锁之后才拿到锁');
   });
 
-  it('deadline 到点也不抢新鲜锁：过了等待上限仍须等持有者释放', () => {
-    // 旧实现的 deadline 兜底：等待超过上限就无条件 rmSync 强夺 + 立即重试（不睡眠）。
-    // 能等到超时的场景，锁多半是新鲜的——持有者刚换人（另一个等待者按陈旧路径
-    // 强夺成功），无条件强夺删掉的就是人家几毫秒前才建的锁。这里把等待者的
-    // deadline 缩放到 30ms，让它在主进程持锁期间烧完，固化修复语义：
-    // deadline 过线不是强夺新鲜锁的理由，只能继续睡等持有者释放。
+  it('等待者绝不强夺新鲜锁：锁龄未到阈值只能睡等持有者释放', () => {
+    // 强夺的唯一依据是锁龄：等待者排了多久都不参与判定。子进程在主进程持锁期间
+    // 忙等多轮（每轮 20ms，120ms 覆盖 6 个重试轮），锁始终新鲜（默认 staleMs=10s），
+    // 任何一轮抢进临界区都是回归。旧实现曾有「等待超时就无条件 rmSync 强夺」的
+    // deadline 兜底，已连同其零行为残留一并删除——本用例锁住删后语义不回潮
     const ready = path.join(tmpDir, 'waiter-ready');
     const entered = path.join(tmpDir, 'waiter-entered-at');
     const child = spawn(
@@ -135,24 +134,23 @@ describe('withFileLock', () => {
          fs.writeFileSync(${JSON.stringify(ready)}, '1');
          withFileLock(${JSON.stringify(lockPath)}, () => {
            fs.writeFileSync(${JSON.stringify(entered)}, String(Date.now()));
-         }, { deadlineMs: 30 });`,
+         });`,
       ],
       { stdio: 'ignore' },
     );
 
     let releasedAt = 0;
     withFileLock(lockPath, () => {
-      // 等子进程就位（写出 ready 后立刻进 withFileLock），确保它的 deadline
-      // 是在主进程持锁期间烧完的，而不是压根还没开始等
+      // 等子进程就位（写出 ready 后立刻进 withFileLock），确保它的忙等
+      // 发生在主进程持锁期间，而不是压根还没开始等
       const readyDeadline = Date.now() + 5000;
       while (!fs.existsSync(ready) && Date.now() < readyDeadline) {
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
       }
       assert.equal(fs.existsSync(ready), true, '子进程未就位');
-      // 子进程的 deadline（30ms）此刻已烧完，而锁对它仍新鲜（默认 staleMs=10s）。
-      // 旧实现会在这段窗口里的某个重试轮 rmSync 抢进临界区
+      // 子进程已忙等多个重试轮，而锁对它仍新鲜（默认 staleMs=10s），不得抢进
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 120);
-      assert.equal(fs.existsSync(entered), false, 'deadline 过线后子进程不得抢进新鲜锁');
+      assert.equal(fs.existsSync(entered), false, '等待者不得抢进新鲜锁');
       releasedAt = Date.now();
     });
 
@@ -166,19 +164,18 @@ describe('withFileLock', () => {
     assert.ok(Number(fs.readFileSync(entered, 'utf8')) >= releasedAt, '子进程必须在主进程放锁之后才拿到锁');
   });
 
-  it('双等待者临界区不重叠：deadline 各自过线也只等对方释放，绝不删对方刚建的锁', async () => {
-    // 缺陷的最小复现编排（三进程）：A（父进程直接造的锁）持有后一直不释放，
-    // 模拟持锁进程已死；B、C 两个等待者先后排队，各自带着早已烧完的 deadline。
-    // B 的 staleMs 较短，到点按陈旧路径强夺 A 的锁进入；C 的 staleMs 拉到远超
-    // 整个时间线——它没有陈旧路径可走，只能等 B 释放，而它的 deadline 早已
-    // 过线。旧实现此刻会删掉 B 刚建几毫秒的新鲜锁抢进临界区（实测 B/C 临界区
-    // 重叠 1.24s）。B 与 C 的 staleMs 错开还避免了两人在陈旧边界同时强夺的
-    // 竞态，让「B 强夺、C 等待」这条路径确定可测。
+  it('双等待者临界区不重叠：只按锁龄排队，绝不删等待者同伴刚建的锁', async () => {
+    // 三进程编排：A（父进程直接造的锁）持有后一直不释放，模拟持锁进程已死；
+    // B、C 两个等待者先后排队。B 的 staleMs 较短，到点按陈旧路径强夺 A 的锁进入；
+    // C 的 staleMs 拉到远超整个时间线——它没有陈旧路径可走，只能等 B 释放。
+    // 旧实现的 deadline 兜底此刻会删掉 B 刚建几毫秒的新鲜锁抢进临界区
+    // （实测 B/C 临界区重叠 1.24s）。B 与 C 的 staleMs 错开还避免了两人在陈旧
+    // 边界同时强夺的竞态，让「B 强夺、C 等待」这条路径确定可测
     const createdA = Date.now();
     fs.writeFileSync(lockPath, 'A-token');
 
     // 等待者子进程：记录进入/退出临界区的时刻（跨进程可见的文件信号）
-    const spawnWaiter = (tag: string, holdMs: number, staleMs: number, deadlineMs: number) =>
+    const spawnWaiter = (tag: string, holdMs: number, staleMs: number) =>
       spawn(
         process.execPath,
         [
@@ -191,12 +188,12 @@ describe('withFileLock', () => {
              fs.writeFileSync(${JSON.stringify(path.join(tmpDir, `${tag}-enter`))}, String(Date.now()));
              Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${holdMs});
              fs.writeFileSync(${JSON.stringify(path.join(tmpDir, `${tag}-exit`))}, String(Date.now()));
-           }, { staleMs: ${staleMs}, deadlineMs: ${deadlineMs} });`,
+           }, { staleMs: ${staleMs} });`,
         ],
         { stdio: 'ignore' },
       );
 
-    const children = [spawnWaiter('B', 150, 250, 80), spawnWaiter('C', 60, 2000, 80)];
+    const children = [spawnWaiter('B', 150, 250), spawnWaiter('C', 60, 2000)];
     const exits = children.map(
       child =>
         new Promise<number | null>(resolve => {
@@ -235,10 +232,7 @@ describe('withFileLock', () => {
 
     assert.ok(bEnter < bExit && cEnter < cExit, '进入时刻必须早于退出时刻（标记文件损坏？）');
     assert.ok(bEnter >= createdA + 250, `B 只能经陈旧强夺进入：最早也得等 A 的锁龄超过 B 的 staleMs(250ms)，实际提前到 ${bEnter - createdA}ms`);
-    assert.ok(
-      bExit <= cEnter || cExit <= bEnter,
-      `两个等待者的临界区重叠：B [${bEnter}, ${bExit}]，C [${cEnter}, ${cExit}]（deadline 过线者删掉了对方刚建的新鲜锁）`,
-    );
+    assert.ok(bExit <= cEnter || cExit <= bEnter, `两个等待者的临界区重叠：B [${bEnter}, ${bExit}]，C [${cEnter}, ${cExit}]（等待者删掉了同伴刚建的新鲜锁）`);
   });
 });
 

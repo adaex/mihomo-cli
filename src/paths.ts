@@ -199,11 +199,10 @@ const LOCK_RETRY_MS = 20;
  * 陈旧锁（持有超过 LOCK_STALE_MS，说明持锁进程已崩溃）会被强夺，避免一次崩溃
  * 让后续所有命令永久卡死——宁可退回到无锁时的竞态，也不能把 CLI 锁死。
  *
- * **强夺的唯一依据是锁龄，没有「等太久也强夺」的旁路**：等待者各自有 deadline，
- * 但 deadline 只说明「我等超了」，说明不了「锁无人持有」——能等到超时的场景，
- * 锁多半刚被另一个等待者按陈旧路径强夺，无条件强夺删掉的就是人家几毫秒前才建
- * 的新鲜锁（实测 B/C 临界区重叠 1.24s，见 withFileLock 内 deadline 分支的注释）。
- * 活性由锁龄保证：任何锁持有超 LOCK_STALE_MS 必然变陈旧、可被强夺，等待者
+ * **强夺的唯一依据是锁龄，没有「等太久也强夺」的旁路**：等待时长只说明「我等久了」，
+ * 说明不了「锁无人持有」——能等到超时的场景，锁多半刚被另一个等待者按陈旧路径
+ * 强夺，无条件强夺删掉的就是人家几毫秒前才建的新鲜锁（实测 B/C 临界区重叠 1.24s）。
+ * 活性同样由锁龄保证：任何锁持有超 LOCK_STALE_MS 必然变陈旧、可被强夺，等待者
  * 不会无限期卡住。
  *
  * `fn` 必须是同步的：持锁期间插入 await 会把锁按住整个异步等待，
@@ -218,13 +217,12 @@ export function withFileLock<T>(
   lockPath: string,
   fn: () => T,
   /**
-   * 仅供测试把时间缩放到毫秒级（deadline 与 LOCK_STALE_MS 都是 10s 常量，真实
-   * 等待太慢）；生产调用方不传，语义与默认常量完全一致。
+   * 仅供测试把锁龄阈值缩放到毫秒级（LOCK_STALE_MS 是 10s 常量，真实等待太慢）；
+   * 生产调用方不传，语义与默认常量完全一致。
    */
-  opts?: { staleMs?: number; deadlineMs?: number },
+  opts?: { staleMs?: number },
 ): T {
   const staleMs = opts?.staleMs ?? LOCK_STALE_MS;
-  const deadline = Date.now() + (opts?.deadlineMs ?? LOCK_STALE_MS);
   const token = `${process.pid}-${process.hrtime.bigint()}`;
   let fd: number | null = null;
 
@@ -264,27 +262,6 @@ export function withFileLock<T>(
           /* ignore：另一个进程可能同时在强夺 */
         }
         continue;
-      }
-      if (Date.now() > deadline) {
-        // 兜底：等太久也只强夺**陈旧**锁，绝不删除新鲜锁（判据见函数头注释——
-        // deadline 只说明「我等超了」，说明不了「锁无人持有」；无条件删会把
-        // 另一个等待者刚强夺到手的新锁再抢走，破坏的是等待者之间的互斥）。
-        // 活性不靠这条兜底：陈旧检查每轮都在跑，锁超龄必可强夺。过线后重新核对
-        // 锁龄，锁新鲜就落到睡眠重试，绝不热循环。
-        let deadlineStale = false;
-        try {
-          deadlineStale = Date.now() - fs.statSync(lockPath).mtimeMs > staleMs;
-        } catch {
-          // 锁文件刚被持有者释放，下一轮就能拿到
-        }
-        if (deadlineStale) {
-          try {
-            fs.rmSync(lockPath, { force: true });
-          } catch {
-            /* ignore：另一个进程可能同时在强夺 */
-          }
-          continue;
-        }
       }
       sleepSyncMs(LOCK_RETRY_MS);
     }
