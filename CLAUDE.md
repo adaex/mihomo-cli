@@ -33,7 +33,7 @@ macOS 命令行客户端，TypeScript ESM，Node.js >= 22.22.1。入口 `src/ind
 npm run dev && npm run typecheck && npm test && npm run check && npm run build
 ```
 
-- Biome 管格式与 import 排序；worktree 里显式 `npx biome check src/` 并确认实际检查了文件，不接受 `Checked 0 files`
+- Biome 管格式与 import 排序；worktree 里显式 `npx biome check src/` 并确认实际检查了文件，不接受 `Checked 0 files`；`npm run check` 只在 error 级失败，warn 级不拦——别只看退出码
 - 测试用 node:test + tsx，命名 `*.spec.ts`；验证行为与数据最终状态，不用实现清单断言代替
 - 修完必做反向验证（还原修复、确认用例转红），规则见 decisions.md D11；预测落空处是认知与实现的偏差点，补不变量用例挡在结构层
 - 真实 sudo/TUN 与永久污染 launchd disabled 表的用例不自动执行，理由见 CODE_REVIEW

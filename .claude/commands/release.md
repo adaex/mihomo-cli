@@ -17,7 +17,7 @@ argument-hint: [版本号]
 - [ ] 所有新增功能已在 `README.md` 中说明
 - [ ] 命令列表与 `src/commands/registry.ts` 实际注册一致
 - [ ] `CHANGELOG.md` 顶部已添加新版本记录，且每条控制在 1–3 句（见「CHANGELOG 写多长」）
-- [ ] 若本轮改了 `CODE_REVIEW.md` 涉及的代码，同步更新该文档（验证范围、结果与未处理项）
+- [ ] 若本轮改了 CODE_REVIEW 记录的结论或边界涉及的代码，同步更新该文档对应节
 - [ ] 版本号定得对：序号 = registry 全部版本数 + 1（`npm view mihomo-cli versions --json` 数组长度 + 1），年.月 按发布当日日历
 - [ ] `git log vX.Y.Z(上一个)..main` 过一遍——**发布区间可能含上轮遗留的未发布提交**，CHANGELOG 要覆盖它们，不只是本次会话做的事
 
