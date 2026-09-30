@@ -618,6 +618,12 @@ console.log('LOG_INTACT:' + intact);
  * print 报未装载（disabled 形态的真失败，必须仍报错——负向对照，锁死不吸收半边）。
  */
 const FAKE_LAUNCHCTL_BOOTSTRAP = `
+# slow 模式：全部命令先睡 FAKE_DELAY 秒再返回——模拟病态慢的 launchctl。
+# 锁内被测的是 enable/bootstrap（+失败分支的 print）三个动词；锁外的 bootout 与
+# waitUntilUnloaded 轮询同样会睡，只拉长锁外阶段、不影响持锁时长测量
+if [ "$FAKE_MODE" = 'slow' ]; then
+  sleep "$FAKE_DELAY"
+fi
 case "$1" in
   bootstrap)
     if [ "$FAKE_MODE" = 'never-load' ] || [ -f "$FAKE_STATE" ]; then
@@ -663,6 +669,8 @@ fs.writeFileSync(PATHS.userAgentPlist, 'stub');
 fs.mkdirSync(path.dirname(PATHS.configFile), { recursive: true });
 fs.writeFileSync(PATHS.configFile, 'mixed-port: 17890\\n');
 
+// 先报锁路径（父进程据此测持锁时长），再走真实 startService
+console.log('LOCK:' + PATHS.serviceLock);
 try {
   const r = await startService(0);
   console.log('RESULT:started=' + r.started);
@@ -714,5 +722,60 @@ describe('并发同向 start：bootstrap 撞已装载按幂等成功（exit 5 �
     assert.equal(results.length, 1);
     assert.notEqual(results[0].status, 0, `应非 0 退出，stdout: ${results[0].stdout}`);
     assert.match(results[0].stdout, /RESULT:error=启动服务失败（launchctl 退出码 5）/, `stdout: ${results[0].stdout}`);
+  });
+
+  // 与 stop 侧对称的持锁预算时序用例（第四轮复查批补 3s 统一后的行为面）：
+  // 慢 launchctl 桩下 startService 的「快速失败」与「慢而成功」两态
+  async function runBootstrapSlow(delaySeconds: number): Promise<{ status: number | null; stdout: string; stderr: string; lockHoldMs: number }> {
+    const fixture = makeFixture('mihomo-startbudget');
+    const script = writeScript(fixture.fakeBin, 'start-service-slow.mts', startServiceProbeScript());
+    writeFakeLaunchctl(fixture.fakeBin, FAKE_LAUNCHCTL_BOOTSTRAP);
+    const env = {
+      ...process.env,
+      MIHOMO_CLI_DIR: fixture.dataDir,
+      MIHOMO_CLI_DAEMON_LABEL: fixture.label,
+      HOME: fixture.fakeHome,
+      PATH: `${fixture.fakeBin}:${process.env.PATH}`,
+      FAKE_STATE: path.join(fixture.fakeBin, 'loaded.state'),
+      FAKE_MODE: 'slow',
+      FAKE_DELAY: String(delaySeconds),
+      MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1',
+      NO_COLOR: '1',
+    };
+    try {
+      const run = spawnScript(script, env);
+      const lockLine = await run.firstLine;
+      assert.match(lockLine, /^LOCK:/, `子进程应先报锁路径，实际: ${JSON.stringify(lockLine)}`);
+      const lockHoldMs = measureLockHold(lockLine.slice('LOCK:'.length));
+      const [result, hold] = await Promise.all([run.done, lockHoldMs]);
+      return { ...result, lockHoldMs: hold };
+    } finally {
+      cleanupFixture(fixture);
+    }
+  }
+
+  // 场景 A：launchctl 每次调用 4s——高于锁内单次预算 3s（旧默认 5s 时代 enable/bootstrap
+  // 慢而成功、失败分支三次 15s 必破强夺线）。统一 3s 后第一次锁内调用即超时：锁 ~3s
+  // 释放、start 如实报错——病态系统上快速失败好过持锁超时效掉并发防线（stop 侧同论证）
+  it('launchctl 慢到超预算 → 第一次锁内调用快速失败，持锁不过强夺阈值', async () => {
+    const result = await runBootstrapSlow(4);
+
+    assert.notEqual(result.status, 0, '超预算的 launchctl 应让 start 报错而非慢慢熬完');
+    assert.match(result.stdout, /RESULT:error=启用服务失败/, `失败应指向第一个锁内调用，stdout: ${result.stdout}`);
+    assert.ok(
+      result.lockHoldMs < LOCK_STALE_MS,
+      `最坏持锁必须低于强夺阈值 ${LOCK_STALE_MS}ms（实测 ${result.lockHoldMs}ms），否则并发 stop 会强夺进入、epoch 判据被绕过`,
+    );
+  });
+
+  // 场景 B（最坏形态）：launchctl 慢但在预算内（2.0s < 3s），锁内调用全部走完。
+  // sleep 取 2.0s 不贴边：实测持锁含子进程调用开销，开销在并行负载下可膨胀数倍，
+  // 贴边会让「持锁 < 强夺阈值」的断言在高负载下假失败（与 stop 侧同因）
+  it('慢而成功的 launchctl 走完全程，最坏持锁仍低于强夺阈值', async () => {
+    const result = await runBootstrapSlow(2.0);
+
+    assert.equal(result.status, 0, `预算内的慢调用应全部成功，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.match(result.stdout, /RESULT:started=true/, `start 应成功，stdout: ${result.stdout}`);
+    assert.ok(result.lockHoldMs < LOCK_STALE_MS, `最坏持锁必须低于强夺阈值 ${LOCK_STALE_MS}ms（实测 ${result.lockHoldMs}ms）`);
   });
 });
