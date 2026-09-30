@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [26.9.93] - 2026-09-30
 
 ### 破坏性变更（覆写 DSL 裁边）
 
@@ -19,6 +19,7 @@
 ### 内部
 
 - CODE_REVIEW.md 从「历轮审查流水 + 现行边界」重组为纯现行边界文档（实测结论 / 未覆盖与待复核 / 已评估未采纳 / 自动化测试边界 / 平台实测备忘 / 流程教训六节）。367 行压到 121 行，流水里散落的现行结论（判定不修三项、原子写 fsync 的文件系统边界、文件锁 inode 缺口、订阅侧 `__proto__` 刻意不拦、remove 时序修复无自动化回归、pkill 自匹配对照实验、doctor 性能口径与网络取值不硬断言、顶层未知键无内核兜底、JSON stdout 契约、计时/负载/locale/spawnSync 死锁测试方法论）已并入对应节，历轮验证过程看 git 历史与当轮 CHANGELOG；release.md 的文档分工表与同步检查项、CLAUDE.md 的 Biome warn 级提醒同步更新。
+- 结构整理一批（无用户可见行为变化）：`utils.ts` 按领域拆分为 argv/format/suggest/text/kernel-args 模块；重大决策论证从 CLAUDE.md 分层到 `docs/decisions.md`（D1–D11）；源码注释瘦身（历史叙事归 CHANGELOG/decisions，注释只留判据与契约）；并发停止基线统一由 main() 命令入口捕获为进程状态（D2/D4，取代参数透传）；内核版本探测移除进程内缓存。
 
 ## [26.9.92] - 2026-09-30
 
