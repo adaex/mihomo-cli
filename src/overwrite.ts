@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 
 import * as yaml from 'js-yaml';
-import { LOCKED_CONFIG_KEYS, YAML_MAX_ALIASES } from './constants.js';
+import { BASE_CONFIG, LOCKED_CONFIG_KEYS, YAML_MAX_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
 import { USER_DATA_DIR } from './paths.js';
 import { readSettings, writeSettings } from './settings.js';
@@ -79,14 +79,6 @@ function assertValidParsedKey(rawKey: string, parsed: ParsedOverrideKey): void {
 }
 
 /**
- * 深度合并覆写到目标配置（顶层入口：DSL 操作符**只在本层解析**）。
- * 仅供单次合并与测试使用；多文件按序合并走 applyOverwrite。
- */
-export function deepMergeWithOverrides(target: unknown, override: unknown): Record<string, unknown> {
-  return mergeConfigLevel(target, override, true);
-}
-
-/**
  * 单层合并。`parseOperators` 仅顶层（覆写文件直接键）为 true，递归点一律传 false：
  * 嵌套层的键**按字面处理**（`+x`/`x!`/`x+` 不再是操作符），语义可预测——内层键若随
  * 操作符解析，mihomo 原生通配键（如 nameserver-policy 的 `+.corp.example.com`）
@@ -139,7 +131,11 @@ function mergeConfigLevel(target: unknown, override: unknown, parseOperators: bo
 
     if (arrayPrepend || arrayAppend) {
       // +key/key+ 是数组拼接语义，目标已存在且非数组时报错而非静默包成数组
-      // （`log-level+: debug` 会把字符串 log-level 变成 ["debug"]，mihomo 无法解析）
+      // （`log-level+: debug` 会把字符串 log-level 变成 ["debug"]，mihomo 无法解析）。
+      // 这里判的是**合并期才看得见的目标值**：订阅自带的同键标量、前一个覆写文件
+      // 刚写入的非数组值。系统默认值（BASE_CONFIG）里的非数组键在文件加载阶段由
+      // assertFileLevelOperatorRules 静态拦截——BASE_CONFIG 在合并之后才注入，
+      // 这里读不到它
       if (existingValue !== undefined && !Array.isArray(existingValue)) {
         throw new CliError(
           `覆写键 "${rawKey}" 的数组拼接语义只适用于数组，但 "${key}" 当前是${existingValue === null ? ' null' : typeof existingValue === 'object' ? '映射' : `标量（${typeof existingValue}）`}`,
@@ -483,6 +479,39 @@ function assertNoMetadataKeyLookalikes(config: Record<string, unknown>, fileName
 }
 
 /**
+ * 文件级（不依赖订阅内容）的操作符校验，在 readOverwriteFiles 加载阶段执行一次，
+ * 让诊断路径（ow/status）与合并路径（start/config/doctor）看到同一份坏文件：
+ *
+ * - **操作符形态**（`~`/尖括号/空键/互斥修饰）：只在合并期抛的话，诊断旁路根本不合并，
+ *   坏文件会被当成「已生效」列在 status/applied 里，而启动硬失败——同一文件两处结论
+ * - **数组操作符命中系统默认的非数组键**（如 `log-level+`）：BASE_CONFIG 在合并
+ *   **之后**才注入，合并期看不到它，`log-level+: x` 会先产出 `log-level: [x]`，
+ *   随后标量默认值又因「键已存在」被跳过，非法数组一路存活到内核 `-t`——README
+ *   承诺的「作用于标量直接报错」在这个最常见的反例上恰好不生效
+ *
+ * 依赖订阅当前值才能判的冲突（订阅自带同键标量、跨文件的同键冲突）仍由
+ * mergeConfigLevel 的运行时检查兜底——`ow` 列表不绑定订阅，静态判不了。
+ */
+function assertFileLevelOperatorRules(config: Record<string, unknown>, fileName: string): void {
+  for (const rawKey of Object.keys(config)) {
+    const parsed = parseOverrideKey(rawKey);
+    assertValidParsedKey(rawKey, parsed);
+    if (!parsed.arrayPrepend && !parsed.arrayAppend) continue;
+
+    const base = BASE_CONFIG[parsed.key];
+    if (base === undefined || Array.isArray(base)) continue;
+    const kind = base === null ? 'null' : typeof base === 'object' ? '映射' : `标量（${typeof base}）`;
+    throw new CliError(`覆写文件 "${fileName}" 的键 "${rawKey}" 用了数组拼接，但系统配置 "${parsed.key}" 的默认值是${kind}、不是数组`, {
+      label: '覆写配置错误',
+      hint: [
+        `+${parsed.key} / ${parsed.key}+ 用于向数组前置/追加元素（如 rules+）；系统默认的 ${parsed.key} 不是数组，拼接只会产出内核无法解析的配置。`,
+        `若要覆盖 ${parsed.key}，请直接写 ${parsed.key}: <值>（要整块替换可用 ${parsed.key}!: <值>）。`,
+      ],
+    });
+  }
+}
+
+/**
  * 规整文件内的 `enabled` 元数据键：缺省（未写）即启用。
  *
  * **只认真布尔**：YAML 1.2 core schema 里 `no` / `off` 解析成**字符串**而非布尔
@@ -600,6 +629,7 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
         // 「停用期间藏着错误、一启用就炸」
         const { match, enabled, ...config } = parsed;
         assertNoMetadataKeyLookalikes(config, file);
+        assertFileLevelOperatorRules(config, file);
         ok.push({ name: file, path: filePath, config, match: normalizeMatch(match, file), enabled: normalizeEnabled(enabled, file) });
       } else if (parsed !== null) {
         const shape = Array.isArray(parsed) ? '数组' : typeof parsed;

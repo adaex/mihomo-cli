@@ -468,7 +468,7 @@ export default function (config, ctx) {
 | `ctx.subscription.url` | 订阅原始 URL |
 | `ctx.subscription.host` | 预解析的 URL hostname（解析失败为空串），按域名限定作用域时用它 |
 | `ctx.mode` | 本次构建的运行模式：`'mixed'` 或 `'tun'` |
-| `ctx.warn(message)` | 发一条提示进 warnings 通道，`status` / `doctor` / `config` 的输出可见 |
+| `ctx.warn(message)` | 发一条提示进 warnings 通道，`config` / `doctor` / `start` 的输出可见（`status` 走诊断旁路、不执行脚本，看不到） |
 
 约定与边界：
 
@@ -476,8 +476,8 @@ export default function (config, ctx) {
 - **全信任**：脚本以你的用户身份运行（和 `.zshrc` 一个待遇），不做沙箱与超时——别装来路不明的覆写脚本
 - **改不动系统锁定项**：`mixed-port`、`external-controller`、`allow-lan` 等入站与控制面键由 CLI 管理，脚本设置了会被剥除并提示（与 YAML 覆写同一条边界）
 - **脚本先于 YAML 执行**：脚本看到的是订阅原始配置，读不到 YAML 覆写注入的内容；需要脚本处理 YAML 注入项时，把那段逻辑也写进脚本
-- **只读命令也会执行脚本**：`status` / `doctor` / `config` 走同一条构建路径，脚本顶层别写副作用（顶层只定义函数，变换都在导出函数里做）
-- 脚本抛错或语法错误与坏 YAML 文件同款姿态：`ow` / `status` 里「加载失败」可见，`start` / `doctor` 硬失败并带文件名
+- **只读命令也会加载脚本**：`ow` / `status` 扫描文件时会加载脚本，模块顶层代码随之执行（顶层只定义函数，变换都在导出函数里做）；导出的变换函数在 `config` / `doctor` / `start` 构建时才调用，`status` 不调用、也不显示它的 `ctx.warn`
+- 加载失败（语法错误、缺少导出、顶层抛错）与坏 YAML 同款姿态：`ow` / `status` 里「加载失败」可见，`config` / `start` / `doctor` 硬失败并带文件名；变换函数执行中抛错只在后三者报出（`ow` / `status` 不执行函数体）
 - 脚本受 `mihomo ow off` 全局开关管理；想临时停用单个脚本，改个扩展名（如 `.bak`）即可
 
 ### 作用域限定（match）

@@ -49,6 +49,9 @@ function printOverwriteList(): void {
         const num = seq < 10 ? ` ${seq}` : `${seq}`;
         console.log(`  ${num}. ${colors.red(b.name)} ${colors.red('[加载失败]')}`);
         console.log(colors.red(`    ${b.message}`));
+        // hint 是可执行的修复/迁移指引（改 JS 脚本、match 示例、加引号等），
+        // 与 message 一起在诊断界面出齐，不留到启动硬失败才可见
+        for (const line of b.hint) console.log(colors.gray(`    ${line}`));
       });
       console.log('');
     }

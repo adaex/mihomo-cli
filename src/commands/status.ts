@@ -88,8 +88,10 @@ function buildStatusJson(args: {
       // 全局关闭时 buildConfig 不加载任何覆写，applied 必须空——只滤 enabled/match
       // 会列出「生效文件」，与同一份 JSON 里的 enabled:false 自相矛盾
       applied: args.overwriteEnabled ? args.overwriteFiles.filter(f => f.enabled && f.matched !== false).map(f => f.name) : [],
-      // 加载失败的文件不属于 files/applied（既没合并也无法判 enabled/match），单列 errors
-      errors: args.overwriteBroken.map(b => ({ name: b.name, message: b.message })),
+      // 加载失败的文件不属于 files/applied（既没合并也无法判 enabled/match），单列 errors。
+      // hint 必须带出：最有用的迁移指引（已移除操作符改 JS、*edu 加引号等）都在里面，
+      // 只给 message 等于把可执行的修复步骤扔在启动硬失败那一条路径上
+      errors: args.overwriteBroken.map(b => ({ name: b.name, message: b.message, hint: b.hint })),
     },
     service: {
       installed: args.service.installed,
@@ -276,9 +278,13 @@ export async function printStatus(args: string[] = []): Promise<void> {
  * `^overwrite\.?` 会把那个点一起吃掉，剩下的 `yaml` 非空、`|| '主文件'` 永不触发——
  * 主文件被显示成 `yaml`（实测），既不是文件名也不是任何有意义的标识，多文件时
  * 还与扩展文件并列成 `(yaml, dns)`，看不出谁是主文件。
+ *
+ * 扩展名必须同时覆盖 YAML 与 JS 脚本三扩展（.js/.mjs/.cjs）：只剥 yaml 时
+ * 主脚本 `overwrite.js` 会显示成 `js`、扩展脚本 `overwrite.dns.js` 带个 `.js` 尾巴，
+ * 与 YAML 侧「主文件 / 功能名」的口径不一致（脚本功能随 26.9.93 引入，此处漏改）。
  */
-function shortOverwriteName(name: string): string {
-  return name.replace(/\.ya?ml$/, '').replace(/^overwrite\.?/, '') || '主文件';
+export function shortOverwriteName(name: string): string {
+  return name.replace(/\.(?:ya?ml|m?js|cjs)$/, '').replace(/^overwrite\.?/, '') || '主文件';
 }
 
 /**
@@ -328,9 +334,11 @@ function printOverwriteLines(
     console.log(colors.gray(`  ${shortOverwriteName(f.name)} 不适用于当前订阅${activeSub ? ` ${activeSub.name}` : ''}（${scope}）`));
   }
 
-  // 加载失败的文件不参与任何分类，红字给出原因；start 会硬失败，这里只负责让它可见
+  // 加载失败的文件不参与任何分类，红字给出原因、灰字给出修复指引；
+  // start 会硬失败，这里负责让原因与指引在自查界面就可见（不用先撞一次启动）
   for (const b of broken) {
     console.log(colors.red(`  ${b.message}`));
+    for (const line of b.hint) console.log(colors.gray(`  ${line}`));
   }
 }
 

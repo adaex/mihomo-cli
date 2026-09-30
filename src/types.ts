@@ -377,7 +377,13 @@ export interface StatusJson {
    * 恒为空数组（那时 buildConfig 压根不加载覆写），再滤掉文件级 `enabled: false`，
    * 最后按当前活跃订阅的 match 过滤。无活跃订阅时判不了 match，不额外收窄
    */
-  overwrite: { enabled: boolean; files: string[]; applied: string[]; errors: { name: string; message: string }[] };
+  overwrite: {
+    enabled: boolean;
+    files: string[];
+    applied: string[];
+    /** hint 是可执行的迁移/修复指引（如已移除操作符的改写示例），诊断界面与 JSON 都必须带出 */
+    errors: { name: string; message: string; hint: string[] }[];
+  };
   service: {
     installed: boolean;
     loaded: boolean;
