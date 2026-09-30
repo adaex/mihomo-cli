@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import { assertKnownFlags } from '../argv.js';
 import { colors } from '../colors.js';
-import { clearKernelVersionCache } from '../config.js';
 import { CliError } from '../errors.js';
 import { isOverwriteFilename } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
@@ -174,7 +173,6 @@ export async function cmdReset(args: string[]): Promise<void> {
       return patch;
     });
   }
-  if (ids.has('kernel')) clearKernelVersionCache();
   ensureDirs();
   const labels = targets.filter(t => deleted.has(t.id)).map(t => t.label);
   console.log(labels.length > 0 ? colors.green(`已重置: ${labels.join('、')}`) : '没有需要重置的内容');

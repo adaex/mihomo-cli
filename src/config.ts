@@ -451,33 +451,20 @@ export function hasKernel(): boolean {
   return fs.existsSync(PATHS.mihomoBinary);
 }
 
-let kernelVersionCache: string | null = null;
-let kernelVersionCached = false;
-
+/**
+ * 内核版本探测。CLI 是短进程、调用点全在展示路径（status/doctor/help/kernel），
+ * 每次直接 spawn 一次 `mihomo -v`（本地毫秒级）——不做进程内缓存：
+ * 缓存需要失效协议（下载/reset 换掉内核后要记得清），省一次重复探测的收益不抵这层状态。
+ */
 export function getKernelVersion(): string | null {
-  if (!hasKernel()) {
-    kernelVersionCache = null;
-    kernelVersionCached = false;
-    return null;
-  }
-  if (kernelVersionCached) return kernelVersionCache;
+  if (!hasKernel()) return null;
   try {
     const result = spawnSync(PATHS.mihomoBinary, ['-v'], { encoding: 'utf8', timeout: 5000 });
     const output = `${result.stdout || ''}${result.stderr || ''}`.trim();
-    if (output) {
-      const match = output.match(/v?[\d]+\.[\d]+\.[\d]+/);
-      kernelVersionCache = match ? match[0] : output.split('\n')[0];
-    } else {
-      kernelVersionCache = 'unknown';
-    }
+    if (!output) return 'unknown';
+    const match = output.match(/v?[\d]+\.[\d]+\.[\d]+/);
+    return match ? match[0] : output.split('\n')[0];
   } catch {
-    kernelVersionCache = 'unknown';
+    return 'unknown';
   }
-  kernelVersionCached = true;
-  return kernelVersionCache;
-}
-
-export function clearKernelVersionCache(): void {
-  kernelVersionCache = null;
-  kernelVersionCached = false;
 }

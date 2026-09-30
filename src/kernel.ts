@@ -4,7 +4,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { compareVersions } from 'compare-versions';
-import { clearKernelVersionCache, getKernelVersion } from './config.js';
+import { getKernelVersion } from './config.js';
 import { VERSION } from './constants.js';
 import { createHttpClient, createHttpError } from './http.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
@@ -561,8 +561,6 @@ export async function downloadKernel(
     const targetPath = PATHS.mihomoBinary;
     fs.renameSync(foundBinary, targetPath);
     fs.chmodSync(targetPath, 0o755);
-
-    clearKernelVersionCache();
 
     return { version: latest.tag_name, path: targetPath };
   } finally {
