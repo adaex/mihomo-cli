@@ -24,9 +24,9 @@ withFileLock 要求临界区同步（持锁期间 await 等于按住锁等到强
 
 后果：kickstart（60s 超时）刻意留锁外，其并发窗口由健康确认失败后复读 epoch 兜住；预算关系由 service-concurrency.spec 的常量断言锁死，新增锁内 launchctl 调用前先改测试。曾评估过异步锁/信号量方案，未采纳：临界区内容必须保持同步可推理，当前预算模型已被测试锁定，换锁机制等于重写整条防线。
 
-## D4 并发基线的快照在命令开头取，以参数透传，函数内不现取
+## D4 并发基线在命令入口捕获为进程状态，消费点读同一份，不做参数透传
 
-start/install/restart 都依赖「命令开始时的 epoch」做并发判定。危害窗口是「产生 wasRunning 的那次状态读取」到锁内判定之间：stop 在自己的锁内先递增、之后才 waitUntilUnloaded，存在「已递增而 launchctl print 仍报 running」的区间，函数内现取的基线必然已包含对方的递增，并发隐形。故快照取在命令第一步、免费且不必推理「哪个窗口才有害」，并以必填参数透传到消费点——可选默认值会让新调用方静默退化。
+start/install/restart 都依赖「命令开始时的 epoch」做并发判定。危害窗口是「产生 wasRunning 的那次状态读取」到锁内判定之间：stop 在自己的锁内先递增、之后才 waitUntilUnloaded，存在「已递增而 launchctl print 仍报 running」的区间，函数内现取的基线必然已含对方的递增，并发隐形。故基线必须取在命令第一步——如今是 `main()` 在分发前调 `captureStopEpochBaseline()` 存入 service 模块状态，此后锁内判定、热重载后复读、健康确认后复读都读同一份 `stopEpochBaseline()`，不再跨层透传参数（透传时代的教训：可选默认值让新调用方静默退化，5+ 消费点每次都要记得传）。未捕获时（测试直接调 service 函数）退化为当前值，即不判并发。
 
 ## D5 入站端口与整个控制面是系统锁定项，订阅与覆写不可设置
 

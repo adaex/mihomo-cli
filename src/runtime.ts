@@ -12,6 +12,7 @@ import {
   restartService,
   shouldAbortStartOnDisable,
   startService,
+  stopEpochBaseline,
   waitServiceHealthy,
 } from './service.js';
 import type { ProcessInfo, ServiceStatus } from './types.js';
@@ -111,13 +112,11 @@ export function restartModeOnChange(): RuntimeMode | null {
  * （详见 waitServiceHealthy）。热重载路径无需确认：它没有重启进程，且配置被拒时会
  * 回退到 kickstart（走确认分支）。
  *
- * @param stopEpochBefore 命令开始时的停止计数快照（`readStopEpoch()`），透传给
- *   `startService` / `restartService` 判定「本次执行期间是否有人 stop 过」（D4：
- *   必填、不在函数内现取——慢速阶段若已过去，期间发生的 stop 会被算进基线）。
- *   TUN 分支不消费它（TUN 侧的并发防线是命令层的 bump + startTun 复核），
- *   保留形参是为了调用方无需分支
+ * 并发基线是命令入口捕获的进程基线（service.ts 的 captureStopEpochBaseline，D4）：
+ * `startService` / `restartService` 内部与下方健康确认后的复读都读同一份，
+ * 无需透传。TUN 分支不消费基线（TUN 侧的并发防线是命令层的 bump + startTun 复核）。
  */
-export async function launchOrRestart(mode: RuntimeMode, stopEpochBefore: number): Promise<number | null> {
+export async function launchOrRestart(mode: RuntimeMode): Promise<number | null> {
   if (mode === 'tun') {
     const result = await startTun();
     return result.pid;
@@ -130,9 +129,9 @@ export async function launchOrRestart(mode: RuntimeMode, stopEpochBefore: number
   let hotReloaded = false;
   let started: boolean;
   if (status.running && !status.disabled) {
-    ({ hotReloaded, started } = await restartService(stopEpochBefore));
+    ({ hotReloaded, started } = await restartService());
   } else {
-    ({ started } = await startService(stopEpochBefore));
+    ({ started } = await startService());
   }
 
   // 被并发的 stop 取消。必须单独成一条错误：落进 assertServiceHealthy 会报
@@ -149,7 +148,7 @@ export async function launchOrRestart(mode: RuntimeMode, stopEpochBefore: number
     // 覆盖不到这段。
     // 判据仍是唯一那份 shouldAbortStartOnDisable，只是多一个消费点：只在**失败之后**复读，
     // 绝不改写健康的结果，也绝不在计数未变时吞掉真实死因
-    if (shouldAbortStartOnDisable(stopEpochBefore, readStopEpoch())) throw cancelledByConcurrentStop();
+    if (shouldAbortStartOnDisable(stopEpochBaseline(), readStopEpoch())) throw cancelledByConcurrentStop();
     throw e;
   }
 }

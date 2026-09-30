@@ -69,7 +69,7 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 - 依赖现值的写入走 `updateSettings(mutator, postCommit?)`：持锁、同步 mutator、写盘成功后才做文件副作用
 - 跨进程锁只在数据根目录、以 `Lock` 结尾命名（paths.spec 按约定枚举断言）；会被 rmrf 的目录不放任何有生命周期的文件（锁、stage、epoch）
 - 原子写 = 临时文件 + fsync + rename + fsync 父目录；崩溃遗留 `*.tmp` 由守卫之后按龄清扫
-- 并发判据唯一：`shouldAbortStartOnDisable`（epoch）与 `describeExitCause`，调用点不散写第二份比较（D2/D3/D4）
+- 并发判据唯一：`shouldAbortStartOnDisable`（epoch）与 `describeExitCause`，调用点不散写第二份比较；基线由 main() 捕获为进程状态（D2/D4）
 
 **配置与覆写**
 - 入站与控制面锁定清单的唯一真相是 `LOCKED_CONFIG_KEYS`；判定判据与上游核对方法见 D5，完整性由 `config-inbound-snapshot.spec.ts` 兜底

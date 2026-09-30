@@ -587,14 +587,14 @@ function killResidualKernels(ctx: RootResidueCleanupContext): void {
  * （安装本身已成功）。调用方必须据此跳过健康确认——否则会对着一个本就不该启动的服务
  * 报「恢复运行失败」，把用户的 stop 说成故障。
  *
- * @param stopEpochBefore 命令开始时的停止计数快照，取自 cmdInstall 的第一步
- *   （D4：不能在本函数内现取——stop 在自己的锁内先递增、之后才 waitUntilUnloaded，
- *   函数内现取的基线必然已含对方的递增，并发隐形）。
- *   **自我中止的雷**：本快照只被 `wasRunning` 恢复分支消费，而首装的
+ * @param wasRunning 重装前是否在运行。恢复分支的并发判据读进程基线
+ *   （captureStopEpochBaseline，main() 在命令入口捕获）——不在此现取：
+ *   stop 在自己的锁内先递增、之后才 waitUntilUnloaded，现取的基线必然已含对方的递增。
+ *   **自我中止的雷**：本基线只被 `wasRunning` 恢复分支消费，而首装的
  *   `disableServiceAutoStart()` 在互斥的另一条分支上；若将来在恢复分支之前新增任何
  *   递增，install 就会检出自己的 bump 并取消自己的恢复。
  */
-export async function installService(wasRunning: boolean, stopEpochBefore: number): Promise<{ restoreSkipped: boolean }> {
+export async function installService(wasRunning: boolean): Promise<{ restoreSkipped: boolean }> {
   assertServiceLabelSafe();
   ensureDirs();
   ensureServiceSymlink();
@@ -627,9 +627,9 @@ export async function installService(wasRunning: boolean, stopEpochBefore: numbe
     if (wasRunning) {
       // 并发的 stop 若在重装期间跑完（重装含 bootout + 等待，有真实窗口），这里的
       // enable+bootstrap 会把它的成果覆盖掉。判据共用 shouldAbortStartOnDisable——
-      // **别在这里散写别的判据**；基线是命令层传入的快照，不在此处现取
+      // **别在这里散写别的判据**；基线是命令入口捕获的进程基线，不在此处现取
       withFileLock(PATHS.serviceLock, () => {
-        if (shouldAbortStartOnDisable(stopEpochBefore, readStopEpoch())) {
+        if (shouldAbortStartOnDisable(stopEpochBaseline(), readStopEpoch())) {
           restoreSkipped = true;
           return;
         }
@@ -673,6 +673,26 @@ export function readStopEpoch(): number {
   } catch {
     return 0;
   }
+}
+
+/**
+ * 本进程的并发判定基线。CLI 是单命令进程：main() 在命令入口 capture 一次，
+ * 此后本进程所有消费点（锁内判定、热重载后复读、健康确认后复读）读同一份——
+ * 停止计数的「命令开始时」基线是进程级事实，不需要跨层参数透传（docs/decisions.md D4）。
+ * 未捕获时（测试直接调 service 函数、不经 main）stopEpochBaseline 退化为当前值，
+ * 即不判并发——调用方要判并发须先 capture。
+ */
+let stopEpochBaselineCaptured: number | null = null;
+
+/** 捕获当前停止计数为本进程的并发判定基线（命令入口调一次）。返回捕获值。 */
+export function captureStopEpochBaseline(): number {
+  stopEpochBaselineCaptured = readStopEpoch();
+  return stopEpochBaselineCaptured;
+}
+
+/** 并发判定基线：命令入口捕获的值；未捕获时退化为当前值（不判并发）。 */
+export function stopEpochBaseline(): number {
+  return stopEpochBaselineCaptured ?? readStopEpoch();
 }
 
 /**
@@ -724,10 +744,9 @@ export function shouldAbortStartOnDisable(stopEpochBefore: number, stopEpochNow:
 /**
  * 启动服务并开启自启。返回 `started=false` 表示被**并发的 stop** 取消（见
  * `shouldAbortStartOnDisable`）——调用方必须把它当失败处理，不能继续报「已启动」。
- *
- * @param stopEpochBefore 命令开始时（订阅更新等慢速阶段**之前**）的停止计数快照，
- *   取自 `cmdStart` 开头（D4：不能在本函数内现取——那时慢速阶段已经过去，
- *   期间发生的 stop 就被算进「基线」了）。
+ * 并发基线是命令入口捕获的进程基线（stopEpochBaseline，main() 调
+ * captureStopEpochBaseline）——不能在此现取：那时订阅更新等慢速阶段已经过去，
+ * 期间发生的 stop 就被算进「基线」了。
  *
  * 顺序关键：`enable` 必须在 `bootstrap` **之前**——bootstrap 一个 disabled 的
  * label 是硬失败 `Bootstrap failed: 5`（实测，不是「加载了但不启动」）。而 `stop` 恒置
@@ -739,7 +758,7 @@ export function shouldAbortStartOnDisable(stopEpochBefore: number, stopEpochNow:
  * 只是幂等空操作，计数变化会在锁内被检出并中止启动（这正是用计数而非 disable 位快照
  * 的价值：不必靠扩大临界区来防这个窗口）。
  */
-export async function startService(stopEpochBefore: number): Promise<{ started: boolean }> {
+export async function startService(): Promise<{ started: boolean }> {
   assertServiceLabelSafe();
   ensureServiceSymlink();
 
@@ -779,10 +798,10 @@ export async function startService(stopEpochBefore: number): Promise<{ started: 
   rotateAndCleanupLogs();
 
   // 跨进程锁：串行化 enable/bootstrap 与 stop 的 bootout/disable/递增。锁内读停止计数，
-  // 与命令开始前的快照比对——变了就是期间有人 stop 过，放弃启动
+  // 与命令入口的基线比对——变了就是期间有人 stop 过，放弃启动
   let started = true;
   withFileLock(PATHS.serviceLock, () => {
-    if (shouldAbortStartOnDisable(stopEpochBefore, readStopEpoch())) {
+    if (shouldAbortStartOnDisable(stopEpochBaseline(), readStopEpoch())) {
       started = false;
       return;
     }
@@ -1074,19 +1093,17 @@ export function concludeHotReload(stopEpochBefore: number, stopEpochNow: number)
  * enable+bootstrap 回退（锁内判据），或热重载成功后的复读（concludeHotReload）——
  * 与 `startService` 的 `started` 同名同义。此时 `hotReloaded` 无意义，
  * 调用方必须先判 `started`，不能继续报「已启动」。
- *
- * @param stopEpochBefore 命令开始时的停止计数快照。两条出口都消费它：热重载成功后经
- *   concludeHotReload 复读（热重载探测有真实耗时窗口），kickstart 失败的 enable+bootstrap
- *   回退在锁内复读（热重载探测加 kickstart 最长可达 60s）——期间的并发 stop 会被
- *   这两条出口覆盖掉
+ * 基线是命令入口捕获的进程基线（stopEpochBaseline），两条出口都消费它：热重载成功后的
+ * 复读（热重载探测有真实耗时窗口），kickstart 失败的 enable+bootstrap 回退在锁内复读
+ * （热重载探测加 kickstart 最长可达 60s）——期间的并发 stop 只有它们兜得住。
  */
-export async function restartService(stopEpochBefore: number): Promise<{ hotReloaded: boolean; started: boolean }> {
+export async function restartService(): Promise<{ hotReloaded: boolean; started: boolean }> {
   if (!isServiceInstalled()) {
     throw new CliError('服务未安装，无法重启', { hint: '安装服务: mihomo install' });
   }
 
   if (!logOversized() && (await tryHotReload())) {
-    return concludeHotReload(stopEpochBefore, readStopEpoch());
+    return concludeHotReload(stopEpochBaseline(), readStopEpoch());
   }
 
   if (logOversized()) {
@@ -1115,7 +1132,7 @@ export async function restartService(stopEpochBefore: number): Promise<{ hotRelo
     // 终态与用户最后一条命令相反。判据共用 shouldAbortStartOnDisable——
     // **别在这里散写别的判据**
     withFileLock(PATHS.serviceLock, () => {
-      if (shouldAbortStartOnDisable(stopEpochBefore, readStopEpoch())) {
+      if (shouldAbortStartOnDisable(stopEpochBaseline(), readStopEpoch())) {
         started = false;
         return;
       }

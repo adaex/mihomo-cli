@@ -14,6 +14,7 @@ import {
   readStopEpoch,
   SERVICE_BINARY_NAME,
   shouldAbortStartOnDisable,
+  stopEpochBaseline,
   uninstallService,
 } from '../service.js';
 
@@ -63,18 +64,16 @@ export async function cmdInstall(args: string[]): Promise<void> {
     throw new CliError('未找到内核', { hint: '下载内核: mihomo kernel' });
   }
 
-  // 停止计数的快照必须取在这里——**任何慢速阶段之前**，与 cmdStart 同一约定。
-  // 下面的 handleLegacyInstall 可能卡在交互式 sudo 密码输入上（时长无上界），
-  // installService 内部又有 bootout + 等待卸载（最多 5s）；取晚了，这些窗口里
-  // 发生的 stop 就被算进基线，重装的恢复运行会把它覆盖掉
-  const stopEpochBefore = readStopEpoch();
-
+  // 并发判定基线由 main() 在命令入口捕获（service.ts captureStopEpochBaseline），
+  // 必须早于任何慢速阶段：下面的 handleLegacyInstall 可能卡在交互式 sudo 密码输入上
+  // （时长无上界），installService 内部又有 bootout + 等待卸载（最多 5s）；基线取晚了，
+  // 这些窗口里发生的 stop 就被算进基线，重装的恢复运行会把它覆盖掉
   await handleLegacyInstall();
 
   // 重装保持原运行状态：不这么做的话，「代理开着时更新内核后重装」会静默把代理关掉
   const wasRunning = getServiceStatus().running;
 
-  const { restoreSkipped } = await installService(wasRunning, stopEpochBefore);
+  const { restoreSkipped } = await installService(wasRunning);
 
   console.log(`${colors.green('已安装服务')}`);
   console.log(colors.gray(`  plist: ${PATHS.userAgentPlist}`));
@@ -98,7 +97,7 @@ export async function cmdInstall(args: string[]): Promise<void> {
       // 与 launchOrRestart 同族：bootstrap 之后的健康观察窗（1.2–3s）完全在锁外，
       // 期间的并发 stop 会把任务 bootout，健康确认于是失败。此时报「恢复运行失败」
       // 是把用户自己的 stop 说成故障，必须复读计数区分——判据仍是那唯一一份
-      if (shouldAbortStartOnDisable(stopEpochBefore, readStopEpoch())) {
+      if (shouldAbortStartOnDisable(stopEpochBaseline(), readStopEpoch())) {
         printRestoreSkipped();
         return;
       }

@@ -153,7 +153,7 @@ function hotReloadScript(): string {
 import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from ${MODULES.paths};
-import { recordServiceStopped } from ${MODULES.service};
+import { captureStopEpochBaseline, recordServiceStopped } from ${MODULES.service};
 import { launchOrRestart } from ${MODULES.runtime};
 
 const server = http.createServer((req, res) => {
@@ -178,9 +178,11 @@ fs.mkdirSync(path.dirname(PATHS.userAgentPlist), { recursive: true });
 fs.writeFileSync(PATHS.userAgentPlist, 'stub');
 fs.writeFileSync(PATHS.settingsFile, JSON.stringify({ ports: { mixed: 17890, controller: port } }));
 fs.writeFileSync(PATHS.serviceStopEpoch, '5');
+// 基线在此捕获（命令入口的等价位置）：BUMP 发生在捕获之后，计数变化才会被判定为并发
+captureStopEpochBaseline();
 
 try {
-  const pid = await launchOrRestart('mixed', 5);
+  const pid = await launchOrRestart('mixed');
   console.log('RESULT:pid=' + pid);
 } catch (e) {
   console.log('RESULT:error=' + (e instanceof Error ? e.message : String(e)));
@@ -289,6 +291,7 @@ exit 0
     return `import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from ${MODULES.paths};
+import { captureStopEpochBaseline } from ${MODULES.service};
 import { launchOrRestart } from ${MODULES.runtime};
 
 fs.writeFileSync(process.env.PID_FILE as string, String(process.pid));
@@ -296,8 +299,11 @@ fs.mkdirSync(path.dirname(PATHS.userAgentPlist), { recursive: true });
 fs.writeFileSync(PATHS.userAgentPlist, 'stub');
 fs.writeFileSync(PATHS.settingsFile, JSON.stringify({ ports: { mixed: 17890, controller: 19090 } }));
 
+// epoch 文件不存在（首启形态），基线捕获为 0；全程无并发 stop，应正常完成
+captureStopEpochBaseline();
+
 try {
-  const pid = await launchOrRestart('mixed', 0);
+  const pid = await launchOrRestart('mixed');
   console.log('RESULT:pid=' + pid);
 } catch (e) {
   console.log('RESULT:error=' + (e instanceof Error ? e.message : String(e)));
@@ -669,10 +675,12 @@ fs.writeFileSync(PATHS.userAgentPlist, 'stub');
 fs.mkdirSync(path.dirname(PATHS.configFile), { recursive: true });
 fs.writeFileSync(PATHS.configFile, 'mixed-port: 17890\\n');
 
-// 先报锁路径（父进程据此测持锁时长），再走真实 startService
+// 先报锁路径（父进程据此测持锁时长），再走真实 startService。
+// 未显式 captureStopEpochBaseline：基线退化为 startService 调用时的当前值
+// （epoch 文件不存在 = 0），锁内复读同值，不触发并发取消——本场景只验幂等撞车
 console.log('LOCK:' + PATHS.serviceLock);
 try {
-  const r = await startService(0);
+  const r = await startService();
   console.log('RESULT:started=' + r.started);
 } catch (e) {
   console.log('RESULT:error=' + (e instanceof Error ? e.message : String(e)));

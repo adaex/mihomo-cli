@@ -9,6 +9,7 @@ import { DEFAULT_MIXED_PORT, MIN_NODE_VERSION } from './constants.js';
 import { CliError, errorMessage } from './errors.js';
 import { isSilentSigint } from './lifecycle.js';
 import { cleanupStaleTmpFiles, ensureDirs, PATHS } from './paths.js';
+import { captureStopEpochBaseline } from './service.js';
 import { suggestSimilar } from './suggest.js';
 import { proxyEnvPointsAtSelf } from './system-proxy.js';
 
@@ -206,6 +207,9 @@ async function main(): Promise<void> {
     // 放守卫与豁免判定之后——豁免免掉的是副作用面（不建目录、不碰数据目录），
     // 清扫是删除动作，同样不该在守卫拒绝（旧平台/root）或 help/version 时执行
     cleanupStaleTmpFiles();
+    // 捕获并发判定基线（stopEpochBaseline）：必须早于命令的一切慢速阶段与状态观察，
+    // 命令入口是满足该约束的最早且唯一的公共点（D4）。纯读 epoch 文件，无副作用
+    captureStopEpochBaseline();
   }
 
   // meta 不接受选项；help 可带一个命令名（help <命令>），version 不带任何位置参数

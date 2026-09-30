@@ -4,14 +4,7 @@ import { hasKernel } from '../config.js';
 import { DEFAULT_AUTO_UPDATE_TIMEOUT } from '../constants.js';
 import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
-import {
-  cleanupLegacyInstallOrThrow,
-  detectLegacySystemInstall,
-  disableServiceAutoStart,
-  getServiceStatus,
-  readStopEpoch,
-  recordServiceStopped,
-} from '../service.js';
+import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, disableServiceAutoStart, getServiceStatus, recordServiceStopped } from '../service.js';
 import { getPorts } from '../settings.js';
 import * as subscription from '../subscription.js';
 import { printSystemProxyHint } from '../system-proxy.js';
@@ -50,16 +43,11 @@ export async function cmdStart(args: string[]): Promise<void> {
   const skipUpdate = hasFlag(args, '-s', '--no-update');
   const updateTimeout = parseIntArg(args, '-u', '--update-timeout', DEFAULT_AUTO_UPDATE_TIMEOUT);
 
-  // 停止计数的快照必须取在这里——**订阅自动更新等慢速阶段之前，且不晚于本命令赖以决策的
-  // 第一次观察**（下面的 getServiceStatus 有两次 launchctl 调用，取在它之后就有一个虽小
-  // 但真实的窗口，期间跑完的 stop 会被算进基线）。取晚了并发判定即失效，
-  // 见 service.ts 的 shouldAbortStartOnDisable。
-  //
-  // 下面 TUN 分支的 disableServiceAutoStart() 会 bump，且 bump 之后 TUN 分支不消费
-  // 本快照（走 startTun()，两个分支互斥）。**若将来 TUN 分支之后还要走
-  // launchOrRestart('mixed')，这里就会检出自己的 bump 并自我取消。**
-  const stopEpochBefore = readStopEpoch();
-
+  // 并发判定的基线由 main() 在命令入口捕获（service.ts captureStopEpochBaseline），
+  // 不在这里取：它必须早于订阅自动更新等慢速阶段、且不晚于本命令第一次状态观察，
+  // main() 的入口位置天然满足。注意 TUN 分支的 disableServiceAutoStart() 会 bump，
+  // 且 bump 之后 TUN 分支不消费基线（走 startTun()，两个分支互斥）。**若将来 TUN 分支
+  // 之后还要走 launchOrRestart('mixed')，就会检出这个 bump 并自我取消。**
   const serviceBefore = getServiceStatus();
 
   if (targetMode === 'tun') {
@@ -141,9 +129,7 @@ export async function cmdStart(args: string[]): Promise<void> {
   console.log([colors.cyan(modeLabel), sub.name, subscription.formatProxySummary(configInfo)].join(' · '));
 
   try {
-    // 传 stopEpochBefore：取自命令开头（订阅自动更新等慢速阶段**之前**），
-    // 用于判定本次执行期间是否有另一终端跑过 stop
-    const pid = await runtime.launchOrRestart(targetMode, stopEpochBefore);
+    const pid = await runtime.launchOrRestart(targetMode);
     console.log(`${colors.green('已启动')}${pid ? ` (PID ${pid})` : ''}`);
   } catch (e) {
     const lines = (e as Error).message.split('\n');
