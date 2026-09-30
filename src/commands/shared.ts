@@ -1,7 +1,7 @@
 import readline from 'node:readline';
+import { extractStartOptions } from '../argv.js';
 import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
-import { extractStartOptions } from '../utils.js';
 import { cmdStart } from './start.js';
 
 /**

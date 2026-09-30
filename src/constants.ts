@@ -5,7 +5,7 @@ const pkg = require('../package.json');
 
 /**
  * YAML 别名上限（防 billion-laughs 类 DoS）。config.ts 与 overwrite.ts 的两处
- * yaml.load 共用——此前各自内联 200，改一处忘另一处会让两条解析路径的防护漂移
+ * yaml.load 共用同一常量，改一处忘另一处会让两条解析路径的防护漂移。
  */
 export const YAML_MAX_ALIASES = 200;
 
@@ -72,10 +72,10 @@ export const UI_URLS: Record<string, string> = {
  * 抛出可读错误——不能在模块顶层抛：constants 在 import 阶段求值，早于 index.ts 的
  * main().catch 注册，抛出会直接打印堆栈而绕过统一收口。
  *
- * **值与环境变量名都保持 `daemon` 字样不变**（v4.1.0 只改常量名不改值）：改了值会让老用户
- * v4.0 及更早装的 /Library/LaunchDaemons/com.mihomo-cli.daemon.plist 变成新 CLI 看不见的幽灵，
- * 而它带 KeepAlive 会持续拉起内核，用户没有任何途径卸载它。保持不变则 detectInstalledDomain()
- * 天然识别出旧的系统级安装并可直接接管。
+ * **值与环境变量名都保持 `daemon` 字样不变**：改了值会让老用户 v4.0 及更早装的
+ * /Library/LaunchDaemons/com.mihomo-cli.daemon.plist 变成新 CLI 看不见的幽灵，而它带
+ * KeepAlive 会持续拉起内核，用户没有任何途径卸载它。保持不变则遗留系统级安装天然
+ * 可被识别与清理（D1）。
  */
 export const DEFAULT_SERVICE_LABEL = 'com.mihomo-cli.daemon';
 
@@ -144,8 +144,7 @@ export const BASE_CONFIG: Record<string, unknown> = {
 
 // === 订阅更新默认值 ===
 
-/** 默认更新间隔（小时）。此前对 GitHub 订阅设过更短的 6h，但国内直连 GitHub 更难，
- * 更频繁地撞墙只产生失败噪音，故统一 12h */
+/** 默认更新间隔（小时）：国内直连 GitHub 更难，更频繁的更新只会产生撞墙失败噪音 */
 export const DEFAULT_UPDATE_INTERVAL_HOURS = 12;
 /** 启动时自动更新订阅的默认超时（毫秒），超时后使用缓存配置 */
 export const DEFAULT_AUTO_UPDATE_TIMEOUT = 10_000;

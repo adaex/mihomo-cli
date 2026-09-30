@@ -9,8 +9,8 @@ import { CliError } from './errors.js';
 import { applyOverwrite, describeOverwriteScope, loadOverwriteFile, parseOverrideKey, selectActiveOverwriteFiles } from './overwrite.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
 import { getPorts, readSettings } from './settings.js';
+import { sanitizeTerminal } from './text.js';
 import type { BuildConfigResult, ConfigInfo, OverwriteScope } from './types.js';
-import { sanitizeTerminal } from './utils.js';
 
 /**
  * 安全 YAML 解析选项:限制别名展开次数,防御远程订阅/覆写里的 YAML 别名炸弹(alias bomb)DoS。
@@ -21,27 +21,10 @@ export const SAFE_YAML_LOAD_OPTIONS: yaml.LoadOptions = { maxAliases: YAML_MAX_A
 
 /**
  * 系统锁定的入站/控制面键：只允许来自 settings 或系统约束，订阅与覆写显式提供时
- * 一律剥除（buildConfig）。新增入站/控制器键时加在这里——redir/tproxy、
- * external-controller-tls/-unix/-cors、tuic-server、external-doh-server、
- * ss-config/vmess-config、listeners/tunnels、allow-lan 与鉴权家族
- * （bind-address/authentication/skip-auth-prefixes/lan-*-ips）都曾是漏网之鱼。
- * 对应上游 mihomo `config/config.go` 的 General 段（端口家族 + ExternalController* +
- * ExternalUI* + Secret + ExternalDohServer + TuicServer + ShadowSocksConfig/VmessConfig）
- * 与 RawConfig 的 Listeners/Tunnels。
- *
- * 核对方法不是按键名眼熟程度挑，而是看上游 `config.Inbound` 结构体的字段全集与
- * `hub/executor.updateListeners()` 里逐个 ReCreate* 的入参——凡进得去那份名单的
- * 都能开监听。tuic-server/ss-config/vmess-config 是该结构体里并列的三个字段，
- * listeners/tunnels 则由同一个 updateListeners() 的 PatchInboundListeners /
- * ReCreateTunnels 消费。**该字段全集有一份带上游版本号的快照**，与本表的差集必须
- * 逐项写明理由，见 `config-inbound-snapshot.spec.ts`——漏键从此是测试失败而非复审运气。
- *
- * 刻意不在内的（每一条都要有理由，「待定」等于放行）：
- * - `iptables`：Linux 专用的系统集成开关，非监听、darwin 内核无该路径
- * - `inbound-tfo` / `inbound-mptcp`：TCP Fast Open 与 MPTCP 的传输层 socket 选项，
- *   不开监听、不改绑定地址、不绕鉴权——信任边界不是配置洁癖
- * - `tun`：不由本表管，而是按启动模式整段接管（tun 模式写 TUN_CONFIG，mixed 模式
- *   `delete withOverwrites.tun`），订阅同样改不了
+ * 一律剥除（buildConfig）。判据与「刻意不锁」的清单见 docs/decisions.md D5——
+ * 新增入站/控制器键时按同一判据核对（上游 `config.Inbound` 字段全集 +
+ * `hub/executor.updateListeners()` 的逐个消费，不是按键名眼熟程度），并把
+ * 不在表内的键的理由写进 config-inbound-snapshot.spec 的 NOT_IN_LOCKED_TABLE。
  */
 export const LOCKED_CONFIG_KEYS = [
   'mixed-port',
@@ -74,15 +57,11 @@ export const LOCKED_CONFIG_KEYS = [
   // `{type: socks, listen: 0.0.0.0, port: 18080}` 即在全网卡开出无鉴权 SOCKS 入站；
   // `tunnels` 声明本地端口到目标地址的直通转发，同样自带监听地址。两者与上面三个
   // 入站服务端满足完全相同的判据（订阅可指定监听地址、不经 genAddr、allow-lan 管不到），
-  // 只因在上游是 RawConfig 顶层字段而非 Inbound 结构体成员，此前被记成「未定的产品决策」
-  // 挂了三个版本——而「待定」在实现上等于放行：实测订阅里写 listeners 会原样进运行配置，
-  // 与 README「入站默认关闭 / 入站与控制面由本工具独占」的承诺直接冲突。
+  // 只因在上游是 RawConfig 顶层字段而非 Inbound 结构体成员而容易被漏看。
   // 需要额外入站的用户改由本机另起实例，不接受远端订阅投递
   'listeners',
   'tunnels',
-  // 局域网暴露与入站鉴权：上游 `config.Inbound` 里与上面几个并列的字段，只因形态是
-  // 布尔/字符串而非映射或 URL 被漏看了五轮（与 ss-config 当年被漏的原因一模一样）。
-  // 实测链条（v1.19.30）：
+  // 局域网暴露与入站鉴权：实测链条（v1.19.30）：
   // - `listener.genAddr(host, port, allowLan)` 在 allowLan 为真、bind-address 为默认
   //   `"*"` 时返回 `":%d"`，即**全网卡监听**——订阅一行 `allow-lan: true` 就把 Mixed
   //   端口挪出回环；bind-address 则直接指定监听地址
@@ -95,10 +74,9 @@ export const LOCKED_CONFIG_KEYS = [
   // 根本不读它），锁它是为了消除「两个键配合才危险」这种要跨键推理的组合。
   //
   // allow-lan 恒为 false 由下方 systemConfig 写入（**不在 BASE_CONFIG**，理由同
-  // mixed-port：锁定项是「恒定此值」，不是「用户没写时的默认」）。需要局域网入站的
-  // 用户请在本机另起一个 mihomo 实例，不通过订阅投递。
-  // 代价：剥除来源盲，故覆写也不能再给 Mixed 端口设 authentication——缓解是
-  // allow-lan 已强制 false、Mixed 只在回环，残余威胁面是同机其他进程（见 CODE_REVIEW）
+  // mixed-port：锁定项是「恒定此值」，不是「用户没写时的默认」）。剥除来源盲，
+  // 故覆写也不能再给 Mixed 端口设 authentication——缓解是 allow-lan 已强制 false、
+  // Mixed 只在回环，残余威胁面是同机其他进程（见 CODE_REVIEW）
   'allow-lan',
   'bind-address',
   'authentication',
@@ -113,15 +91,9 @@ export function loadYamlSafe(content: string): unknown {
 }
 
 /**
- * 解析配置内容（订阅 YAML 或 JSON）为顶层映射。
- *
- * **只走 YAML 解析器，没有独立的 JSON 分支**：YAML 1.2 是 JSON 的超集，标准 JSON
- * （含 tab 缩进、长整数、嵌套数组）实测全部由 `loadYamlSafe` 正常解析。
- * 此前额外挂了个 `JSON.parse` 回退，实际唯一能走到那里的输入是**重复键 JSON**
- * （`{"a":1,"a":2}` —— YAML 明确报错，JSON.parse 静默取最后一个值）：
- * 那条回退把「坏数据」变成了「静默接受」，方向正好是错的。订阅里出现重复键
- * 意味着上游生成有问题，取哪个值都是猜，必须报错让用户看见。
- *
+ * 解析配置内容（订阅 YAML 或 JSON）为顶层映射。**只走 YAML 解析器，不设独立 JSON 分支**
+ * （论证见 docs/decisions.md D6）：重复键 JSON 是 YAML 明确报错、JSON.parse 静默取最后
+ * 一个值，回退 JSON 分支会把「坏数据」变成「静默接受」。
  * 只接受对象：标量/数组不是合法配置（`proxies` 等段都挂在顶层映射下）。
  */
 export function parseConfigContent(content: string, errorMsg?: string): Record<string, unknown> {
@@ -146,11 +118,10 @@ export function parseConfigContent(content: string, errorMsg?: string): Record<s
 
 /**
  * 统一的 YAML 序列化选项:2 空格缩进、不折行。
- * 用默认 DUMP_SCHEMA(不显式指定 schema):对歧义标量(on/off/yes/no/y/n/true/null 等)加引号。
- * 关键原因:节点名/分组名等 string 字段的值可能恰好是 `on`/`off`。裸输出 `name: on` 在 mihomo
- * (go-yaml v3,仅 typed bool 才认 1.1 布尔)下虽仍读作字符串,但流经 PyYAML 等 YAML 1.1 工具会被
- * 误解析成布尔 true,造成静默的配置损坏。加引号后在 1.1/1.2 解析器下含义唯一,mihomo 处理带引号
- * 字符串无副作用。(此前用 CORE_SCHEMA 省引号,反而丢了这层跨解析器安全。)
+ * 用默认 DUMP_SCHEMA(不显式指定 schema):对歧义标量(on/off/yes/no/y/n/true/null 等)加引号——
+ * 节点名/分组名的值可能恰好是 `on`/`off`，裸输出 `name: on` 在 mihomo 下虽仍读作字符串,
+ * 但流经 PyYAML 等 YAML 1.1 工具会被误解析成布尔 true,造成静默的配置损坏。
+ * 加引号后在 1.1/1.2 解析器下含义唯一。
  */
 export function dumpYaml(obj: unknown): string {
   return yaml.dump(obj, { indent: 2, lineWidth: -1 });
@@ -159,10 +130,8 @@ export function dumpYaml(obj: unknown): string {
 /**
  * 校验 dns 段是映射。非映射（`dns: true`、`dns: [...]`）会让下游的
  * `'enable' in subDns` / 展开运算符抛裸 TypeError 或静默产出垃圾配置。
- *
- * **两条路径共用**：TUN 分支在读 `dns.enable` 前先调（早于合并，报错指向订阅原值），
- * mixed 路径由 `assertConfigShape` 兜底——此前只有 TUN 有守卫（v4.2.3 顺手修的），
- * mixed 下同样的订阅笔误照样抛裸 TypeError。
+ * TUN 分支在读 `dns.enable` 前先调（早于合并，报错指向订阅原值），
+ * mixed 路径由 `assertConfigShape` 兜底——两条路径都要走到这里。
  */
 function assertDnsShape(dnsRaw: unknown): void {
   if (dnsRaw === undefined || dnsRaw === null) return;
@@ -266,24 +235,10 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   }
 
   // 系统锁定项：入站端口与整个控制面只能来自 settings 与系统约束，订阅/覆写（远端不可信
-  // 内容）显式设置时一律剥除。端口经 settings.ports（getPorts）解析——默认 7890/9090，
-  // 可在 settings.json 覆盖（与其他代理工具共存的逃生口）。
-  //
-  // 控制器家族一个都不能漏：external-controller-tls 可在 0.0.0.0 再开一个控制器（配合顶层
-  // tls 段给证书）、-unix 可在任意路径建 socket 控制器、-doh 让控制器对外提供 DoH 解析、
-  // -cors 直接放宽浏览器跨域，tuic-server 是自带证书字段的完整入站代理——而订阅自带的
-  // secret 同在此处被剥除、默认又不设密钥，额外入站将无鉴权或变开放代理，打破
-  // 「控制器仅监听本机回环、入站由 mixed/tun 托管」的信任边界（上游 config.go 逐个核对）。
-  // -pipe 仅 Windows 内核识别，一并剥除保持跨平台输出一致。
-  // allow-lan 与鉴权家族（bind-address/authentication/skip-auth-prefixes/lan-*-ips）
-  // 自 v4.13.0 起同锁：allow-lan 一行即让 genAddr 从回环变成全网卡，而 skip-auth-prefixes
-  // 能把唯一的补偿防线 authentication 整个废掉（见 LOCKED_CONFIG_KEYS 的注释）。
-  // allow-lan 恒为 false，由下方 systemConfig 无条件写入。
-  // listeners/tunnels 已随 v4.12.0 进入本清单：它们自带监听地址、不经 genAddr，与 ss/vmess/tuic 同判据。
-  // 剥除对订阅与覆写一视同仁（都不进终态）；但告警只对**生效的覆写文件**——
-  // 机场订阅几乎必带 mixed-port/port 等端口段，系统约束接管订阅入站是核心设计、
-  // 用户没有行动手段，逐条告警只会刷屏；亲手写覆写文件的高级用户才会以为这些键
-  // 生效，提示才有意义。同时识别操作符形式（+secret / tls! 解析后的规范键）
+  // 内容）显式设置时一律剥除；告警只对**生效的覆写文件**——机场订阅几乎必带 mixed-port/port
+  // 等端口段，系统约束接管订阅入站是核心设计、用户没有行动手段，逐条告警只会刷屏；亲手写
+  // 覆写文件的高级用户才会以为这些键生效，提示才有意义。同时识别操作符形式（+secret /
+  // tls! 解析后的规范键）。清单与判据见 LOCKED_CONFIG_KEYS / D5。
   for (const file of overwriteFiles) {
     const hit = new Set<string>();
     for (const rawKey of Object.keys(file.config)) {
@@ -317,8 +272,8 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   systemConfig['allow-lan'] = false;
   const controllerSecret = settings.controller_secret;
   if (controllerSecret !== undefined) {
-    // 与 getPorts 同族：手改 settings.json 写成数字/布尔时，内核 -t 可能拒绝也可能强转，
-    // 而 config 展示命令不跑内核校验——在唯一消费点明确报错，脱敏出口也据此可依赖字符串类型
+    // 与 getPorts 同族：非字符串在唯一消费点明确报错（fail-closed），
+    // 脱敏出口也据此可依赖字符串类型
     if (typeof controllerSecret !== 'string') {
       throw new CliError('settings.json 的 controller_secret 需为字符串', {
         label: '配置错误',
@@ -423,13 +378,13 @@ export function buildKernelRejectHint(detail: string, overwriteSummaries: string
 }
 
 /**
- * 由内核检查节点、分组引用与规则语义，不在 CLI 中维护另一份配置修复器
- * 临时配置只用于 -t，成功后调用方才替换运行时配置；成功或失败都会清理临时文件
+ * 由内核检查节点、分组引用与规则语义，不在 CLI 中维护另一份配置修复器。
+ * 临时配置只用于 -t，成功后调用方才替换运行时配置；成功或失败都会清理临时文件。
  *
  * overwriteSummaries 由调用方从 buildConfig 的结果透传（见 BuildConfigResult）：
  * 本函数不自行 loadOverwriteFile——它拿不到 scope 无从按作用域过滤，且违反
- * 「覆写的加载与筛选由调用方完成」的分工。参数必填、不给默认值：透传快照的可选默认值
- * 会让新调用方静默丢覆写清单（CLAUDE.md「透传快照的参数一律必填」的成文教训）。
+ * 「覆写的加载与筛选由调用方完成」的分工。参数必填、不给默认值：透传快照的
+ * 可选默认值会让新调用方静默丢覆写清单。
  */
 export async function validateConfigWithKernel(config: Record<string, unknown>, overwriteSummaries: string[]): Promise<void> {
   if (!hasKernel()) throw new CliError('未找到内核', { hint: '下载内核: mihomo kernel' });

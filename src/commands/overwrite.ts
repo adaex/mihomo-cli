@@ -1,8 +1,9 @@
 import path from 'node:path';
+import { assertKnownFlags, assertPositionalCount, assertRestartOptionValues } from '../argv.js';
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { isOverwriteEnabled, listOverwriteFile, setOverwriteEnabled } from '../overwrite.js';
-import { assertKnownFlags, assertPositionalCount, assertRestartOptionValues, suggestSimilar } from '../utils.js';
+import { suggestSimilar } from '../suggest.js';
 import { dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 function printOverwriteList(): void {

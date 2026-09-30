@@ -1,10 +1,10 @@
+import { assertKnownFlags, assertPositionalCount } from '../argv.js';
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { getMihomoPids } from '../process-probe.js';
 import { stop } from '../process-stop.js';
 import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, getServiceStatus, recordServiceStopped, stopService } from '../service.js';
 import type { StopResult } from '../types.js';
-import { assertKnownFlags, assertPositionalCount } from '../utils.js';
 
 /** 检查停止结果：若有进程未终止则报错并退出。 */
 export function handleStopResult(result: StopResult): void {

@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-
+import { assertKnownFlags, extractStartOptions, parseIntArg } from './argv.js';
 import { FLAGS, matchValueFlagToken, VALUE_FLAGS } from './flags.js';
-import { assertKnownFlags, extractStartOptions, parseIntArg } from './utils.js';
 
 describe('flags 单一登记表派生', () => {
   it('VALUE_FLAGS 恰好包含全部带值选项的各形式', () => {

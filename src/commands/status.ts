@@ -1,23 +1,15 @@
+import { assertKnownFlags, assertPositionalCount, hasFlag } from '../argv.js';
 import { colors } from '../colors.js';
 import { getConfigInfo, getKernelVersion, hasKernel } from '../config.js';
 import { VERSION } from '../constants.js';
+import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic } from '../format.js';
 import { listOverwriteFile } from '../overwrite.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
-import { getPorts, getSubscriptionsWithCache } from '../settings.js';
+import { getPorts, getSubscriptionsWithCache, subscriptionUrgency } from '../settings.js';
 import { formatProxySummary, getActiveSubscription, isSubscriptionStale, resolveUpdateInterval } from '../subscription.js';
 import type { OverwriteFileInfo, ProxyProbeResult, StatusJson, SubscriptionUrgency } from '../types.js';
-import {
-  assertKnownFlags,
-  assertPositionalCount,
-  formatDate,
-  formatRelativeTime,
-  formatTimestamp,
-  formatTraffic,
-  hasFlag,
-  subscriptionUrgency,
-} from '../utils.js';
 
 /** 运行中但代理不通时的归因提示（订阅过期/流量用尽优先，其余归到节点） */
 function connectivityHint(urgency: SubscriptionUrgency): string {

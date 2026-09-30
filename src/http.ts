@@ -1,6 +1,6 @@
 import { VERSION } from './constants.js';
+import { formatBytes } from './format.js';
 import type { HttpClient, HttpClientOptions, HttpResponse } from './types.js';
-import { formatBytes } from './utils.js';
 
 /** HTTP 响应体大小上限（50MB）：订阅/内核产物远小于此，超限视为异常（劫持/故障）并中止，防 OOM。 */
 const MAX_RESPONSE_BYTES = 50 * 1024 * 1024;

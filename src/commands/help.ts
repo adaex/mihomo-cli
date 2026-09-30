@@ -2,10 +2,11 @@ import { colors } from '../colors.js';
 import { getKernelVersion, hasKernel } from '../config.js';
 import { VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
+import { displayWidth, padEndDisplay } from '../format.js';
 import { USER_DATA_DIR } from '../paths.js';
 import { getServiceStatus } from '../service.js';
 import { getSubscriptions } from '../settings.js';
-import { displayWidth, padEndDisplay, suggestSimilar } from '../utils.js';
+import { suggestSimilar } from '../suggest.js';
 import type { Command, CommandGroup, UsageLine } from './registry.js';
 
 /**

@@ -1,9 +1,10 @@
+import { assertKnownFlags, assertPositionalCount, getNonFlagArg, hasFlag, parseIntArg } from '../argv.js';
 import { CliError } from '../errors.js';
 import { matchValueFlagToken } from '../flags.js';
+import { formatBytes, formatDate } from '../format.js';
 import { getLogPath, listLogs } from '../log-files.js';
 import { openLogFile, viewLogWithTail } from '../open.js';
 import type { LogEntry } from '../types.js';
-import { assertKnownFlags, assertPositionalCount, formatBytes, formatDate, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
 
 export function cmdLogs(args: string[]): void {
   assertKnownFlags(args, ['-f', '--follow', '-n', '--lines', '-o', '--open'], 'logs [-f] [-n N] [编号] [-o]');

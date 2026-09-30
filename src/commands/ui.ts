@@ -1,11 +1,11 @@
 import { spawnSync } from 'node:child_process';
+import { assertKnownFlags, assertPositionalCount, getNonFlagArg, hasFlag } from '../argv.js';
 import { colors } from '../colors.js';
 import { UI_URLS } from '../constants.js';
 import { CliError } from '../errors.js';
 import { openUrl } from '../open.js';
 import { getRunningState } from '../runtime.js';
 import { getPorts, readSettings } from '../settings.js';
-import { assertKnownFlags, assertPositionalCount, getNonFlagArg, hasFlag } from '../utils.js';
 
 /**
  * 解析 UI 名称：未传参取默认 zash，传参就小写归一（与启动模式/目录目标/reset 同口径）。

@@ -1,11 +1,11 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { compareVersions } from 'compare-versions';
+import { assertKnownFlags, assertPositionalCount } from '../argv.js';
 import { colors } from '../colors.js';
 import { PKG_NAME, VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
 import { withSpinner } from '../spinner.js';
-import { assertKnownFlags, assertPositionalCount } from '../utils.js';
 
 const execFileAsync = promisify(execFile);
 /** npm view 查询最新版的超时：网络不佳时降级为直接安装，不让用户干等 */

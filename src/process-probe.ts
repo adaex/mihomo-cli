@@ -3,8 +3,8 @@ import fs from 'node:fs';
 
 import { CliError } from './errors.js';
 import { PATHS } from './paths.js';
+import { escapeRegExp } from './text.js';
 import type { ProcessInfo, ProcessStatus, StaleState } from './types.js';
-import { escapeRegExp } from './utils.js';
 
 /**
  * 进程探测：ps/pgrep 查询、pid 文件、运行状态。只读、无副作用，是启停与状态展示的共同底层。

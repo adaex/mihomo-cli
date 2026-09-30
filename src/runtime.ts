@@ -20,9 +20,8 @@ import type { ProcessInfo, ServiceStatus } from './types.js';
  * 运行时门面：收敛「launchd 服务(Mixed) vs 临时进程(TUN)」双轨的差异。
  *
  * 服务由 launchd 托管、不写 pidFile，状态查询走 launchctl；TUN 是 sudo 起的临时进程、
- * 写 pidFile，状态查询走 ps/pgrep。命令层若各自分支处理，极易重复与不一致
- * （历史上两分支输出就已分叉）。本模块把这几类差异各收敛为一个函数，
- * 命令层只调门面、不再关心底层是哪种运行时。
+ * 写 pidFile，状态查询走 ps/pgrep。命令层若各自分支处理，极易重复与不一致。
+ * 本模块把这几类差异各收敛为一个函数，命令层只调门面、不再关心底层是哪种运行时。
  *
  * 依赖方向：runtime → config/service/process（单向，三者均不反向依赖 runtime，无循环）。
  */
@@ -108,16 +107,15 @@ export function restartModeOnChange(): RuntimeMode | null {
  *   mixed → 已在跑走 restartService(优先热重载，免密)；否则 startService(enable + bootstrap)
  *   tun   → startTun()
  *
- * Mixed 路径必须做健康确认：`launchctl bootstrap` 成功只代表任务被装载，不代表进程活着。
- * 内核因坏配置立即退出时 KeepAlive 会反复拉起，而此前只固定 sleep 500ms 取一次 pid
- * 就报「已启动」——用户以为代理开着，实际完全没有代理。详见 waitServiceHealthy。
- * 热重载路径无需确认：它没有重启进程，且配置被拒时会回退到 kickstart（走确认分支）。
+ * Mixed 路径必须做健康确认：`launchctl bootstrap` 成功只代表任务被装载，不代表进程活着
+ * （详见 waitServiceHealthy）。热重载路径无需确认：它没有重启进程，且配置被拒时会
+ * 回退到 kickstart（走确认分支）。
  *
  * @param stopEpochBefore 命令开始时的停止计数快照（`readStopEpoch()`），透传给
- *   `startService` / `restartService` 判定「本次执行期间是否有人 stop 过」。
- *   **必填**：可选默认值会让新调用方静默退化成「只防本函数执行期间的 stop」，
- *   而这正是本仓反复栽的「防线只铺一条路径」。TUN 分支不消费它（TUN 侧的并发防线是
- *   命令层的 bump + startTun 复核，见 cmdStart/startTun），保留形参是为了调用方无需分支
+ *   `startService` / `restartService` 判定「本次执行期间是否有人 stop 过」（D4：
+ *   必填、不在函数内现取——慢速阶段若已过去，期间发生的 stop 会被算进基线）。
+ *   TUN 分支不消费它（TUN 侧的并发防线是命令层的 bump + startTun 复核），
+ *   保留形参是为了调用方无需分支
  */
 export async function launchOrRestart(mode: RuntimeMode, stopEpochBefore: number): Promise<number | null> {
   if (mode === 'tun') {
@@ -147,9 +145,8 @@ export async function launchOrRestart(mode: RuntimeMode, stopEpochBefore: number
   } catch (e) {
     // 健康确认失败有两种成因，报错必须区分：内核真崩了，还是「期间有人 stop 把它 bootout 了」。
     // 后者报「内核未能进入运行状态」+ 日志尾部会把用户指向完全错误的方向——而 bootstrap
-    // 之后到健康确认结束有 1.2–3s（SERVICE_OBSERVE_MS + GRACE）**完全在锁外**，
-    // v4.7.7 的防线只覆盖了锁内那一瞬。
-    //
+    // 之后到健康确认结束有 1.2–3s（SERVICE_OBSERVE_MS + GRACE）**完全在锁外**，锁内判据
+    // 覆盖不到这段。
     // 判据仍是唯一那份 shouldAbortStartOnDisable，只是多一个消费点：只在**失败之后**复读，
     // 绝不改写健康的结果，也绝不在计数未变时吞掉真实死因
     if (shouldAbortStartOnDisable(stopEpochBefore, readStopEpoch())) throw cancelledByConcurrentStop();
@@ -179,12 +176,10 @@ function cancelledByConcurrentStop(): CliError {
  * 确认服务真正跑起来了，否则抛出带日志尾部的 CliError。
  *
  * 崩溃循环下必须报错而非报成功：KeepAlive 会每隔约 10s 重新拉起坏内核，日志被刷爆，
- * 而用户拿到的是「已启动 (PID xxx)」。日志尾部直接附在错误里——那是用户唯一的线索
- * （TUN 的启动脚本本就 `tail -25`，服务路径此前什么都不给）。
+ * 而用户拿到的是「已启动 (PID xxx)」。日志尾部直接附在错误里——那是用户唯一的线索。
  *
  * 导出供 cmdInstall 的重装恢复路径共用：那里同样 bootstrap 后就打印
- * 「已按原状态重新启动」，缺这道确认就是 v4.2.0 修过的「bootstrap 返回 0 ≠ 内核活着」
- * 的漏网分支。
+ * 「已按原状态重新启动」，缺这道确认就是「bootstrap 返回 0 ≠ 内核活着」的漏网分支。
  *
  * 死因文案走 `describeExitCause`（service.ts 的唯一判据），**不能自己拼
  * `退出码 ${exitCode}`**：信号死亡时 launchd 不写 last exit code，exitCode 为 null，

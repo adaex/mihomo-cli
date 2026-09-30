@@ -14,7 +14,7 @@ process.env.MIHOMO_CLI_DIR = tmpDir;
 const { allocateArchivePath, isArchiveLogFilename } = await import('./log-files.js');
 const { CliError } = await import('./errors.js');
 const { DIRS, PATHS } = await import('./paths.js');
-const { formatLocalTimestamp } = await import('./utils.js');
+const { formatLocalTimestamp } = await import('./format.js');
 
 after(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });

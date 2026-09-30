@@ -36,10 +36,9 @@ function clearRuntime(): void {
 export function clearPid(): void {
   if (!fs.existsSync(PATHS.pidFile)) return;
   if (isPidFileOwnedByRoot()) {
-    // sudo 分支引用 SUDO_TIMEOUT_MS（与 runSudoScript / killAllMihomo 同一常量）：
-    // 此前自抄 10s——密码输得慢的用户提示被杀、rm 从未执行，正是 killAllMihomo
-    // 注释里立项防过的写法。spawnSync 超时不抛异常（只置 error/signal），
-    // 失败结果必须显式检查，不能只 try/catch 同步异常
+    // sudo 分支引用 SUDO_TIMEOUT_MS（与 runSudoScript / killAllMihomo 同一常量，
+    // 不自抄一份——抄的短了会把密码输入提示杀掉、rm 从未执行）。spawnSync 超时
+    // 不抛异常（只置 error/signal），失败结果必须显式检查，不能只 try/catch 同步异常
     const result = spawnSync('sudo', ['rm', '-f', PATHS.pidFile], { stdio: 'inherit', timeout: SUDO_TIMEOUT_MS });
     if (result.error || result.status !== 0) {
       console.warn('警告: root 属主的 pid 文件未能清理（sudo 失败或已取消），下次 stop 会再次尝试');
@@ -65,10 +64,9 @@ function killProcess(pid: number): boolean {
 /**
  * 批量终止内核。**返回值是「pkill 真的跑成功了」，不是「调用没抛异常」**。
  *
- * 早先无条件 `return true`，于是 pkill 因 pattern 编译失败退 2 时（v4.2.1 那个 bug），
- * `cleanupAll` 照样把 `killedCount` 记成全部、`stop` 照样打印「已停止」。
  * pkill 的退出码：0 = 有匹配且已发信号，1 = 无匹配（此时本就无事可做，算成功），
- * 2 = 语法/正则错误，3 = 内部错误——后两者是「这次调用根本没执行」，必须报 false。
+ * 2 = 语法/正则错误，3 = 内部错误——后两者是「这次调用根本没执行」，必须报 false，
+ * 否则 pattern 编译失败时调用方照样把 killedCount 记成全部、stop 照样打印「已停止」。
  *
  * 注意 sudo 分支：退出码 1 在这里有歧义（sudo 鉴权失败也是 1），但 pkill 无匹配同样是 1，
  * 两者都不该让调用方误以为杀干净了。真正的把关在调用方——`cleanupAll` 之后会重新
@@ -77,8 +75,8 @@ function killProcess(pid: number): boolean {
 function killAllMihomo(forceSudo = false): boolean {
   const pattern = MAIN_INSTANCE_PATTERN;
   const argv: [string, string[]] = forceSudo ? ['sudo', ['pkill', '-9', '-f', pattern]] : ['pkill', ['-9', '-f', pattern]];
-  // sudo 分支引用 SUDO_TIMEOUT_MS（与 runSudoScript 同一常量）：spawnSync 超时会把密码提示
-  // 连同整个 sudo+pkill 一起杀掉。此前自抄的 15s 意味着密码输得慢的用户被杀掉提示、
+  // sudo 分支引用 SUDO_TIMEOUT_MS（与 runSudoScript 同一常量，不自抄一份）：spawnSync 超时
+  // 会把密码提示连同整个 sudo+pkill 一起杀掉，密码输得慢的用户会看到提示被杀、
   // pkill 从未执行，stop 随后报「部分进程未终止」——PID 列表属实，原因却是密码没输完。
   // 免密分支维持 10s（无交互，只受系统负载影响）
   const options = forceSudo ? { stdio: 'inherit' as const, timeout: SUDO_TIMEOUT_MS } : { timeout: 10_000 };
@@ -115,8 +113,8 @@ export async function cleanupAll(forceSudo = false): Promise<CleanupResult> {
     }
   } else {
     if (pids.length > BATCH_KILL_THRESHOLD) {
-      // 与 sudo 分支同构：批量 pkill 失败时不能照记 killedCount。
-      // 早先无视返回值直接记全部，pkill 编译失败（退 2）时统计与事实完全相反
+      // 与 sudo 分支同构：批量 pkill 失败（退 2/3）时不能照记 killedCount，
+      // 返回值不ok就全部计入 failed，由调用方复核
       if (killAllMihomo(false)) {
         killedCount = pids.length;
       } else {

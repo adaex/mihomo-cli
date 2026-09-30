@@ -1,3 +1,4 @@
+import { assertKnownFlags, assertPositionalCount, getNonFlagArg, hasFlag, parseIntArg } from '../argv.js';
 import { colors } from '../colors.js';
 import { hasKernel } from '../config.js';
 import { DEFAULT_AUTO_UPDATE_TIMEOUT } from '../constants.js';
@@ -15,7 +16,6 @@ import { getPorts } from '../settings.js';
 import * as subscription from '../subscription.js';
 import { printSystemProxyHint } from '../system-proxy.js';
 import type { PreparedConfig } from '../types.js';
-import { assertKnownFlags, assertPositionalCount, getNonFlagArg, hasFlag, parseIntArg } from '../utils.js';
 
 import { printStatus } from './status.js';
 

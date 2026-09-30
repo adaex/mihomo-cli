@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { compareVersions } from 'compare-versions';
+import { assertKnownFlags, assertPositionalCount } from './argv.js';
 import { stderrColors } from './colors.js';
 import { printCommandHelp, printShortHelp } from './commands/help.js';
 import { allCommandTokens, findCommand } from './commands/registry.js';
@@ -8,7 +9,8 @@ import { DEFAULT_MIXED_PORT, MIN_NODE_VERSION } from './constants.js';
 import { CliError, errorMessage } from './errors.js';
 import { isSilentSigint } from './lifecycle.js';
 import { cleanupStaleTmpFiles, ensureDirs, PATHS } from './paths.js';
-import { assertKnownFlags, assertPositionalCount, proxyEnvPointsAtSelf, suggestSimilar } from './utils.js';
+import { suggestSimilar } from './suggest.js';
+import { proxyEnvPointsAtSelf } from './system-proxy.js';
 
 process.on('SIGINT', () => {
   // 走 stderr：status --json / config --json 探测期间按 Ctrl+C 时，stdout 必须保持
@@ -24,7 +26,7 @@ process.on('SIGTERM', () => {
 });
 
 process.on('uncaughtException', (e: unknown) => {
-  // 非 Error 抛出（throw 'str' 等）此前渲染成「未捕获的异常: undefined」，与 unhandledRejection 的兜底口径对齐
+  // 非 Error 抛出（throw 'str' 等）也要渲染出可用信息，与 unhandledRejection 的兜底口径对齐
   console.error(`\n未捕获的异常: ${errorMessage(e)}`);
   if (e instanceof Error && e.stack) {
     console.error(e.stack.split('\n').slice(1).join('\n'));
@@ -77,22 +79,18 @@ function clearProxyEnv(): void {
  * root 守卫：以 `sudo mihomo …` 运行会让所有服务操作静默失效，必须挡在最前面。
  *
  * 服务是**用户级 LaunchAgent**，域为 `gui/<uid>`。sudo 下 `process.getuid()` 是 0，
- * 于是域变成 `gui/0`——一个不存在的域，实测 launchctl 一律返回 **125**（`Bad request`），
- * 而不是「未找到」。后果全线静默（v4.2.2 实测）：
- *
- * - `runLaunchctl` 把 125 与「未装载」一视同仁 → `loaded/running` 恒 false
- * - `stopService` 的每条命令都带 `|| true`，125 被吞，脚本退 0 → CLI 报「已停止」
- * - 实际只有 `killResidualKernels()` 生效，而 plist 的 `KeepAlive` 是 true —— 实测约 10s
- *   节流后 launchd 把内核拉了回来（pid 变化可见）。用户看到的是「停了一下又活了」，
- *   且自启也没关掉（`disable` 同样失败）
+ * 域变成 `gui/0`——一个不存在的域，实测 launchctl 一律返回 **125**（`Bad request`），
+ * 而不是「未找到」。后果全线静默：查询把 125 当「未装载」→ loaded/running 恒 false；
+ * stop 的脚本吞掉 125 退 0 → CLI 报「已停止」而 KeepAlive 约 10s 后把内核拉回；
+ * install 装到错误的域；disable 同样失败，自启也关不掉。
  *
  * 不做「读 SUDO_UID 回落到真实用户域」的自动降级：sudo 下 `HOME` 等环境变量是否保留
  * 取决于 sudoers 配置，静默改域只会让「数据目录用 root 的、服务装用户的」这类错位更难查。
  * 明确报错、让用户去掉 sudo 才是唯一不会出错的路径。
  *
- * 豁免纯信息命令，以及 TUN 自身——`tun` 内部本就用 `sudo` 起内核（`runSudoScript`），
- * 但那是 CLI 自己按需提权，与用户在外面套一层 sudo 不同：后者会把整个 CLI 连同
- * 服务操作、数据目录写入一起变成 root 身份。
+ * TUN 自身豁免：`tun` 内部本就用 `sudo` 起内核（runSudoScript），但那是 CLI 自己按需
+ * 提权，与用户在外面套一层 sudo 不同：后者会把整个 CLI 连同服务操作、数据目录写入
+ * 一起变成 root 身份。
  */
 /**
  * 守卫豁免命令：纯信息命令不碰服务、目录与提权，root 与非 macOS 下都安全。
@@ -210,15 +208,14 @@ async function main(): Promise<void> {
     cleanupStaleTmpFiles();
   }
 
-  // meta 不接受选项；help 可带一个命令名（help <命令>），version 不带任何位置参数。
-  // 此前 help extra 直接报「多余的参数」，命令级帮助没有入口
+  // meta 不接受选项；help 可带一个命令名（help <命令>），version 不带任何位置参数
   if (command.group === 'meta') {
     assertKnownFlags(args.slice(1), [], command.name);
     assertPositionalCount(args, command.name === 'help' ? 1 : 0, 1, `mihomo ${command.name}`);
   }
 
-  // 命令级帮助：`<命令> -h|--help|help` 是最自然的试法，此前三路全报错
-  // （未知选项 / 未知子命令 / 多余位置参数）。在分发前统一拦截、渲染该命令自己的用法
+  // 命令级帮助：`<命令> -h|--help|help` 是最自然的试法。在分发前统一拦截、
+  // 渲染该命令自己的用法
   if (command.group !== 'meta' && (args[1] === '-h' || args[1] === '--help' || args[1] === 'help')) {
     printCommandHelp(command);
     return;

@@ -1,24 +1,15 @@
 import { spawnSync } from 'node:child_process';
 
+import { assertKnownFlags, assertPositionalCount, assertRestartOptionValues, getNonFlagArg, hasFlag } from '../argv.js';
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { START_RESTART_FLAGS } from '../flags.js';
+import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic } from '../format.js';
 import * as runtime from '../runtime.js';
 import { addSubscription, getSubscriptions, getSubscriptionsWithCache, maskUrl, removeSubscription, setDefaultSubscription } from '../settings.js';
 import { withSpinner } from '../spinner.js';
 import * as subscription from '../subscription.js';
-import {
-  assertKnownFlags,
-  assertPositionalCount,
-  assertRestartOptionValues,
-  formatDate,
-  formatRelativeTime,
-  formatTimestamp,
-  formatTraffic,
-  getNonFlagArg,
-  hasFlag,
-  suggestSimilar,
-} from '../utils.js';
+import { suggestSimilar } from '../suggest.js';
 import { confirmOrThrow, confirmPrompt, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
 
 /** 订阅内容更新后，运行中的实例仍用旧配置，提示重启生效。

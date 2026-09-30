@@ -152,7 +152,7 @@ describe('downloadSubscription：缓存写失败的回滚与错误包装', () =>
       "fs.mkdirSync(dir + '/subscriptions/cache.json', { recursive: true });",
       `const { downloadSubscription } = await import(${JSON.stringify(subscriptionPath)});`,
       'try {',
-      '  await downloadSubscription(`http://127.0.0.1:${port}/sub`, \'probe\');',
+      "  await downloadSubscription(`http://127.0.0.1:${port}/sub`, 'probe');",
       "  console.log('RESULT:NO-THROW');",
       '} catch (e) {',
       "  console.log('RESULT:' + JSON.stringify({ name: e.name, message: e.message }));",

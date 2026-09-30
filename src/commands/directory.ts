@@ -1,8 +1,9 @@
+import { assertKnownFlags, assertPositionalCount } from '../argv.js';
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { openUrl } from '../open.js';
 import { DIRECTORY_TARGETS, USER_DATA_DIR } from '../paths.js';
-import { assertKnownFlags, assertPositionalCount, suggestSimilar } from '../utils.js';
+import { suggestSimilar } from '../suggest.js';
 import { dispatchSubcommand, type SubCommand } from './shared.js';
 
 function openDirectory(args: string[]): void {

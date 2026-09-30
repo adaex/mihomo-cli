@@ -14,6 +14,7 @@ import {
   saveSubscriptionRawConfig,
 } from './settings.js';
 import { withSpinner } from './spinner.js';
+import { sanitizeTerminal } from './text.js';
 import type {
   AutoUpdateResult,
   ConfigSummary,
@@ -25,7 +26,6 @@ import type {
   TryUpdateResult,
   UserInfo,
 } from './types.js';
-import { sanitizeTerminal } from './utils.js';
 
 /** 取有效更新间隔（小时）：缓存值需为正整数，否则回退默认值。 */
 export function resolveUpdateInterval(cachedInterval?: number | null): number {
@@ -62,8 +62,8 @@ export function isValidHttpUrl(url: string): boolean {
 /**
  * 解析 `Subscription-Userinfo` 头。**只接受有限非负数，其余按「该字段缺失」处理**
  * （不落盘），而不是塞 0 或原样收下：
- * - `expire=abc` 此前塞 0，而 `formatTimestamp(0)` 特判返回「永久」——垃圾值被
- *   展示成「永久有效」，正好是最误导用户的方向
+ * - `expire=abc` 塞 0 会被 `formatTimestamp(0)` 特判展示成「永久有效」——垃圾值正好
+ *   落在最误导用户的方向
  * - `total=1e999` 是 Infinity，`JSON.stringify` 写成 `"total":null`
  * - `upload=-5` 原样入库会让用量百分比失真
  *
@@ -278,9 +278,7 @@ export async function downloadSubscription(url: string, subName = 'default', sig
   } catch (e) {
     // 订阅文件与缓存是两个写操作，任何一步失败都该回到起点：留着刚写的新 yaml，
     // 「更新失败」的回执与「配置已变」的终态矛盾（下次 start 实际会用这次失败的
-    // 配置）。回滚删除后，缓存里 updated_at 未推进、下次 start 的自动更新会重下；
-    // 错误包装成 CliError——此前裸 Node errno（如 cache.json 被手改成目录的 EISDIR）
-    // 没有标签与排查指引
+    // 配置）。回滚删除后，缓存里 updated_at 未推进、下次 start 的自动更新会重下。
     try {
       removeSubscriptionRawConfig(subName);
     } catch {
@@ -362,7 +360,7 @@ export function needsAutoUpdate(sub: SubscriptionWithCache): boolean {
   // needsAutoUpdate 恒 false —— 订阅从此永不自动更新，静默过期到失联。
   // 视为「缓存不可信」立即更新，顺带把 updated_at 纠正回当前时间。
   if (lastUpdate > Date.now()) return true;
-  // 防御历史坏缓存：update_interval 为 0/负数/非数时回退默认值
+  // update_interval 为 0/负数/非数时回退默认值
   const intervalHours = resolveUpdateInterval(sub.update_interval);
   const intervalMs = intervalHours * 60 * 60 * 1000;
   return Date.now() - lastUpdate > intervalMs;

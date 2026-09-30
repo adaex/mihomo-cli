@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { detectSystemProxy, parseScutilProxy, summarizeSystemProxy } from './system-proxy.js';
+import { detectSystemProxy, parseScutilProxy, proxyEnvPointsAtSelf, summarizeSystemProxy } from './system-proxy.js';
 
 /** 本机实测的未配置形态：只有 ExceptionsList/FTPPassive，无任何代理键 */
 const EMPTY_DICT = `<dictionary> {
@@ -138,5 +138,57 @@ describe('detectSystemProxy（真实 scutil 调用）', () => {
     assert.notEqual(s, null);
     assert.equal(typeof s?.matched, 'boolean');
     assert.ok(Array.isArray(s?.active));
+  });
+});
+
+describe('proxyEnvPointsAtSelf：只认指向本机 Mixed 端口的代理 env', () => {
+  it('本机回环 + 自己的端口才判定为自代理', () => {
+    for (const url of ['http://127.0.0.1:7890', 'http://localhost:7890', 'socks5://127.0.0.1:7890', '127.0.0.1:7890']) {
+      assert.equal(proxyEnvPointsAtSelf(url, 7890), true, url);
+    }
+  });
+
+  it('裸 localhost:端口也判自代理（curl/gh 认这个形态，漏掉即死锁清除失效）', () => {
+    // `new URL('localhost:7890')` 不抛异常而 hostname 为空串（localhost 被当 scheme），
+    // 不补协议重解析就会漏判——export https_proxy=localhost:7890 的用户在 start/kernel
+    // 重启内核后照样经死代理出网，正是本函数唯一要防的死锁形态
+    assert.equal(proxyEnvPointsAtSelf('localhost:7890', 7890), true);
+    assert.equal(proxyEnvPointsAtSelf('LOCALHOST:7890', 7890), true, 'scheme 与 host 均忽略大小写');
+    assert.equal(proxyEnvPointsAtSelf('localhost:7890', 17890), false, '端口不是自己的仍保留');
+  });
+
+  it('未指定地址族写法（0.0.0.0 / :: 及 URL parser 归一变体）也判自代理', () => {
+    // macOS 上 connect 到 0.0.0.0 会路由到回环监听器（实测 TCP connect 成功），
+    // curl 同样认这些代理形态——漏判让 https_proxy=http://0.0.0.0:7890 逃过自代理
+    // 清除，重启先停内核后 update/kernel 必成死锁（与裸 localhost 同族漏网）。
+    // URL parser 已把 0、00.0.0.0 归一为 0.0.0.0，[::0]/[::] 归一为 [::]
+    for (const url of ['http://0.0.0.0:7890', 'http://0:7890', 'http://00.0.0.0:7890', 'http://[::]:7890', 'http://[::0]:7890']) {
+      assert.equal(proxyEnvPointsAtSelf(url, 7890), true, url);
+    }
+    assert.equal(proxyEnvPointsAtSelf('http://0.0.0.0:7890', 17890), false, '端口不是自己的仍保留');
+    assert.equal(proxyEnvPointsAtSelf('http://[::]:7890', 17890), false, 'IPv6 形态同样按端口判');
+  });
+
+  it('企业代理、别的工具与无端口形态一律保留（不能误伤 env 代理出网）', () => {
+    for (const url of [
+      'http://corp-proxy.internal:8080',
+      'http://127.0.0.1:1087', // 别的代理工具占用的相邻端口
+      'http://192.168.1.10:7890', // 同端口但非本机
+      'http://localhost', // 无端口
+      'socks5://[::1]:7891',
+    ]) {
+      assert.equal(proxyEnvPointsAtSelf(url, 7890), false, url);
+    }
+  });
+
+  it('自定义 Mixed 端口后按新端口判定', () => {
+    assert.equal(proxyEnvPointsAtSelf('http://127.0.0.1:17890', 17890), true);
+    assert.equal(proxyEnvPointsAtSelf('http://127.0.0.1:7890', 17890), false);
+  });
+
+  it('垃圾值不判为自代理（保守保留，交给下游报错而非静默清除）', () => {
+    for (const v of ['', 'not a url', '!!!']) {
+      assert.equal(proxyEnvPointsAtSelf(v, 7890), false, JSON.stringify(v));
+    }
   });
 });

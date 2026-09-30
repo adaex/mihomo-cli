@@ -8,8 +8,8 @@ import { clearKernelVersionCache, getKernelVersion } from './config.js';
 import { VERSION } from './constants.js';
 import { createHttpClient, createHttpError } from './http.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
+import { escapeRegExp } from './text.js';
 import type { GitHubAsset, GitHubRelease, KernelUpdateInfo } from './types.js';
-import { escapeRegExp } from './utils.js';
 
 const GITHUB_REPO = 'MetaCubeX/mihomo';
 const KERNEL_HTTP_TIMEOUT = 120_000;
@@ -33,12 +33,9 @@ const ALLOWED_ASSET_HOSTS = new Set(['github.com', 'api.github.com', 'objects.gi
 /**
  * 校验 release 资产的下载地址确实指向 GitHub，且是 https。
  *
- * 为什么必须有：`withMirror` 对非 github 的 URL **原样放行**，故一个被篡改的
- * `browser_download_url` 能让 CLI 下载任意二进制。该产物随后被 `chmod 755`，
- * 并在 TUN / 系统级服务下**以 root 运行**——这是比「无 checksum」更实际的缺口
- * （上游 release 确实不提供 checksums，无法做哈希校验，故把来源钉死是主要防线）。
- * API 不经过镜像（代理开着时仅经本机代理转发，TLS 端到端，响应仍来自 GitHub），
- * 已消除镜像伪造该字段的路径，此校验是纵深防御的第二道。
+ * `withMirror` 对非 github 的 URL **原样放行**，故一个被篡改的 `browser_download_url`
+ * 能让 CLI 下载任意二进制——该产物随后被 `chmod 755` 并在 TUN / 系统级服务下**以 root
+ * 运行**。上游 release 不提供 checksums，把来源钉死是主要防线（完整论证见 D8）。
  *
  * 校验必须针对**加镜像前**的上游 URL：加了前缀后整串以镜像域名开头，无从判断来源。
  * gh 通道不使用该 URL（gh 按 tag + 资产名自行解析），校验照跑——验证 API 响应未被篡改。
@@ -124,12 +121,10 @@ export function findMatchingAsset(assets: GitHubAsset[], platform: string, arch:
   if (matchingAssets.length === 1) return matchingAssets[0];
 
   // 标准版是精确形态 `mihomo-<platform>-<arch>-vX.Y.Z`（版本号收尾，无任何后缀变体）。
-  // 之前只黑名单排除 -go/-compatible，漏了 GOAMD64 微架构变体 -v1/-v2/-v3——它们同样
-  // 以版本号结尾、能通过旧判据，而按名称排序 `-`(0x2D) < `.`(0x2E) 使
-  // `mihomo-darwin-amd64-v1-v1.19.30.gz` 排在标准版之前被 find 优先选中——
-  // Intel Mac 上每次更新都静默装上性能最低档的 baseline 构建，下载/大小校验/自检全过。
-  // 精确匹配形态可一并排除一切后缀变体，无需逐个枚举。
-  // 无标准版时回退 matchingAssets[0]，仍能装上可用内核。
+  // GOAMD64 微架构变体 -v1/-v2/-v3 同样以版本号结尾，按名称排序时 `-`(0x2D) < `.`(0x2E)
+  // 使 `mihomo-darwin-amd64-v1-v1.19.30.gz` 排在标准版之前被 find 优先选中——Intel Mac 会
+  // 静默装上性能最低档的 baseline 构建，下载/大小校验/自检全过。精确匹配形态可一并排除
+  // 一切后缀变体，无需逐个枚举。无标准版时回退 matchingAssets[0]，仍能装上可用内核。
   const standardAsset = matchingAssets.find(a => new RegExp(`^${escapeRegExp(prefix)}-v?\\d+\\.\\d+\\.\\d+$`).test(a.name.slice(0, -3)));
 
   return standardAsset || matchingAssets[0];
@@ -166,14 +161,13 @@ export function pickLatestRelease(releases: GitHubRelease[]): GitHubRelease {
 
 /**
  * 构造代理路径查询 release API 的 curl 参数。纯函数，参数数组单测锁死（口径同 buildKernelCurlArgs）：
- * - URL 直指 api.github.com 且居末位——API 绝不经过镜像（镜像可伪造 browser_download_url）
+ * - URL 直指 api.github.com 且居末位——API 绝不经过镜像（镜像可伪造 browser_download_url，D8）
  * - `-x <proxy>`：curl 的代理传输层（本机混合端口或显式 --proxy），TLS 端到端，响应仍来自 GitHub
  * - `--proto '=https'` / `--proto-redir '=https'`：全链路强制 https，与下载通道同防线
- * - `--fail-with-body` + `-w '\n%{http_code}'`：此前 4xx（api.github.com 未认证限流 60 次/时，
- *   403 常见）时 curl 退出码为 0，JSON 错误对象一路流到 pickLatestRelease 才抛出笼统的
- *   「无法获取版本信息」，与直连路径「HTTP 403 + 原因」的诊断不等价；现在非 2xx 在
- *   curl 层就失败（退出码 22），错误体与状态码随 stdout 带回，由 translateReleaseApiCurlError
- *   组装成与直连路径同形态的 HTTP 错误
+ * - `--fail-with-body` + `-w '\n%{http_code}'`：4xx（未认证限流 60 次/时，403 常见）时 curl
+ *   退出码仍为 0，JSON 错误对象会一路流到 pickLatestRelease 才抛笼统的「无法获取版本信息」；
+ *   非 2xx 必须在 curl 层就失败（退出码 22），错误体与状态码随 stdout 带回，
+ *   由 translateReleaseApiCurlError 组装成与直连路径同形态的 HTTP 错误
  */
 export function buildReleaseApiCurlArgs(proxy: string, url: string): string[] {
   return [
@@ -284,14 +278,11 @@ async function getLatestReleaseViaGh(repo: string, signal?: AbortSignal): Promis
 }
 
 /**
- * 拉取 release 列表。**绝不经过镜像**：镜像只作用于产物下载，API 若走镜像，
- * `browser_download_url` 就完全由镜像说了算（见 assertTrustedAssetUrl 的说明）。
- * gh 与代理由调用方按环境二选一为首选（代理可用直接走代理；无代理才 gh 认证——
- * 限流 5000 次/时 vs 未认证 60 次/时，未认证直连的 403 rate limit 几乎都发生在
- * 共享出口 IP 上），失败（未登录/网络不通）静默回退到代理/直连——回退也可能失败，
- * 但那与无 gh 时的现状一致，不会更糟。
- * 代理路径经 curl 转发（fetch 不支持 HTTP 代理的 CONNECT），本地代理只是传输层，
- * TLS 端到端，响应仍来自 GitHub。
+ * 拉取 release 列表。**绝不经过镜像**：API 若走镜像，`browser_download_url` 就完全由
+ * 镜像说了算（见 assertTrustedAssetUrl / D8）。gh 与代理由调用方按环境二选一为首选
+ * （代理可用直接走代理；无代理才 gh 认证——限流 5000 次/时 vs 未认证 60 次/时），
+ * 失败静默回退到代理/直连。代理路径经 curl 转发（fetch 不支持 HTTP 代理的 CONNECT），
+ * 本地代理只是传输层，TLS 端到端，响应仍来自 GitHub。
  */
 async function getLatestRelease(repo: string, opts: ReleaseQueryOptions = { proxy: null, useGh: false }): Promise<GitHubRelease> {
   const url = `https://api.github.com/repos/${repo}/releases`;
@@ -436,9 +427,8 @@ export async function downloadKernel(
   // 下载 URL：仅 mirror 通道套前缀；gh 通道不用 URL（gh 按 tag + 资产名自行解析）
   const downloadUrl = channel.kind === 'mirror' ? withMirror(asset.browser_download_url, channel.mirror) : asset.browser_download_url;
 
-  // 下载、解压、自检都在临时目录里完成，自检通过后才原子替换旧内核。
-  // 此前先删旧内核再自检，自检失败时系统无内核可用（KeepAlive 崩溃循环）；
-  // 且解压直接在 DIRS.kernel 里进行会选中旧内核造成假「已更新」。
+  // 下载、解压、自检都在临时目录里完成，自检通过后才原子替换旧内核——
+  // 自检失败时系统必须仍有旧内核可用（先删后验会变成 KeepAlive 崩溃循环）；
   // 临时目录建在 DIRS.kernel 内（同文件系统，rename 原子），只含本次下载的产物。
   const tempDir = fs.mkdtempSync(path.join(DIRS.kernel, '.tmp-'));
   // basename 剥离 asset.name 里的任何目录成分：API 响应/镜像若被篡改带 ../ 可写出临时目录外
@@ -514,10 +504,9 @@ export async function downloadKernel(
       throw new Error('下载失败: 文件未生成');
     }
 
-    // 比对 API 声明的资产大小：`asset.size` 此前只用于显示。不匹配说明下载被截断
-    // （网络中断留下半个文件）或内容被替换。无 checksum 可校验时这是唯一的完整性信号——
-    // 强度有限（攻击者可填充到同样字节数），但能挡住截断与不等长的偷换。
-    // 要求精确相等：release 资产是不可变的，字节数不该有任何偏差。
+    // 比对 API 声明的资产大小：不匹配说明下载被截断或内容被替换。无 checksum 可校验时
+    // 这是唯一的完整性信号——强度有限（攻击者可填充到同样字节数），但能挡住截断与
+    // 不等长的偷换。要求精确相等：release 资产是不可变的，字节数不该有任何偏差。
     if (Number.isFinite(asset.size) && asset.size > 0) {
       const actual = fs.statSync(tempPath).size;
       if (actual !== asset.size) {

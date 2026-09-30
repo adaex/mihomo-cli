@@ -1,10 +1,12 @@
 import { spawnSync } from 'node:child_process';
 
 import { colors } from './colors.js';
-import { isLoopbackHost } from './utils.js';
 
 /**
- * 系统代理（macOS 系统设置 → 网络 → 代理）的只读检测与提示。
+ * 代理指向判定与系统代理（macOS 系统设置 → 网络 → 代理）的只读检测与提示。
+ *
+ * env 自代理判定（proxyEnvPointsAtSelf）与系统代理指向判定（entryMatches）共用
+ * isLoopbackHost——本机语义两边一致，不各自维护清单，任何一边扩集都同时生效。
  *
  * Mixed 不自动设置系统代理是产品边界，本模块只做「检测 + 告知」：让 start 结束时的
  * 提示变准——已指向 Mixed 端口就一句确认，指向别处或未设置才给出可粘贴的设置命令。
@@ -16,6 +18,44 @@ import { isLoopbackHost } from './utils.js';
  *
  * 解析纯函数与 spawn 分离：spec 只测解析，不依赖本机代理状态。
  */
+
+/**
+ * 回环/本机主机名判定，忽略大小写：127.0.0.1、localhost、::1，
+ * 以及未指定地址族写法 0.0.0.0 与 ::——macOS 上 connect 到它们会路由到
+ * 本机监听器（0.0.0.0 实测 TCP connect 成功），curl 同样认这些代理形态。
+ */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.toLowerCase();
+  return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '0.0.0.0' || h === '::';
+}
+
+/**
+ * 判定一个代理环境变量的值（http_proxy/https_proxy/all_proxy，大小写两种形式）
+ * 是否指向**本机自己的 Mixed 端口**——这是唯一必须清除的形态：下载订阅/内核时
+ * 流量经自己的代理，而重启过程中旧内核会先被停掉，形成下载死锁（见 docs/decisions.md D9）。
+ *
+ * 指向其他任何地址（企业网络的 env 代理、别的代理工具）都必须保留。
+ * 接受的形态：`http://127.0.0.1:7890`、`socks5://localhost:7890`、无协议的裸
+ * `127.0.0.1:7890` 与裸 `localhost:7890`（all_proxy 常见写法，补协议再解析——
+ * `new URL('localhost:7890')` 不抛异常、把 localhost 当 scheme、hostname 为空串，
+ * 不补协议恰好漏判，而 curl/gh 都认这个形态）。无端口或解析失败一律不判为自代理。
+ */
+export function proxyEnvPointsAtSelf(value: string, selfPort: number): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+    if (parsed.hostname === '') parsed = new URL(`http://${value}`);
+  } catch {
+    try {
+      parsed = new URL(`http://${value}`);
+    } catch {
+      return false;
+    }
+  }
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
+  if (!isLoopbackHost(host)) return false;
+  return Number.parseInt(parsed.port, 10) === selfPort;
+}
 
 /** 一个启用中的代理条目（host + port） */
 export interface ProxyDictEntry {

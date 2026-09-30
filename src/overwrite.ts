@@ -58,9 +58,7 @@ export function parseOverrideKey(key: string): ParsedOverrideKey {
       arrayMergeOnly = true;
       actualKey = actualKey.slice(1);
     }
-    // `~<key>` / `~?<key>`：操作符与尖括号转义的组合。解包必须在剥掉 `~`/`?` 之后
-    // 再试一次——此前只在剥 `~` 之前匹配过，`~<weird>` 会残留尖括号成键名 `<weird>`，
-    // 与 `+<+dns>` / `<+dns>+` / `<+dns>!` 的组合形态不自洽
+    // `~<key>` / `~?<key>`：操作符与尖括号转义的组合，解包必须在剥掉 `~`/`?` 之后再试
     if (/^<[^>]+>$/.test(actualKey)) {
       actualKey = actualKey.slice(1, -1);
     }
@@ -79,11 +77,10 @@ export function parseOverrideKey(key: string): ParsedOverrideKey {
 }
 
 /**
- * 校验解析结果：操作符修饰互斥、键名非空。
- *
- * 解析器对互斥组合不报错、静默按分支优先级取其一（`~dns!` 按 ~ 合并、显式的 ! 整体覆盖
- * 被忽略；`+rules+` 按前置处理），用户无法预期结果。本仓一贯原则是矛盾输入显式报错。
- * `~?` 是 `~` 的一个变体（未命中策略），不算两个操作符。
+ * 校验解析结果：操作符修饰互斥、键名非空。解析器对互斥组合不报错、静默按分支优先级
+ * 取其一（`~dns!` 按 ~ 合并、显式的 ! 整体覆盖被忽略；`+rules+` 按前置处理），
+ * 用户无法预期结果——矛盾输入一律显式报错。
+ * `~?` 是 `~` 的变体（未命中策略），不算两个操作符。
  * 另：裸 `+:` / `~:` / `!:` 解析出空键名，不能产出空字符串顶层键（内核静默忽略，笔误零反馈）。
  */
 function assertValidParsedKey(rawKey: string, parsed: ParsedOverrideKey): void {
@@ -121,16 +118,13 @@ export function deepMergeWithOverrides(target: unknown, override: unknown, skipp
 
 /**
  * 单层合并。`parseOperators` 仅顶层（覆写文件直接键）为 true，递归点一律传 false：
+ * 嵌套层的键**按字面处理**（`+x`/`~x`/`x!`/`x+`/`<x>` 不再是操作符），与移植路径一致、
+ * 语义可预测——内层键若随操作符解析，mihomo 原生通配键（如 nameserver-policy 的
+ * `+.corp.example.com`）会被剥成 `.corp.example.com`，通配匹配静默失效。
+ * 嵌套数组要改就写全量值（整组覆盖）。
  *
- * 嵌套层的键**按字面处理**，`+x`/`~x`/`x!`/`x+`/`<x>` 不再是操作符。此前内层键随
- * 订阅形态漂移——目标已有同名映射时递归进下一层、内层键继续被当 DSL 解析，mihomo
- * 原生通配键（如 nameserver-policy/hosts 的 `+.corp.example.com`）会被剥成
- * `.corp.example.com` 并把标量包成数组，`-t` 照样通过、通配匹配静默失效；目标没有
- * 该键时整棵值移植、内层键又是字面。同一文件在不同订阅上行为不同不可接受，故收口
- * 为「字面」，与移植路径一致、语义可预测。嵌套数组要改就写全量值（整组覆盖）。
- *
- * 字面层形似操作符的键（不太可能是 mihomo 原生键的形态）记入 operatorShapedKeys，
- * 由 applyOverwrite → buildConfig 汇总成告警，每文件每键只记一次。
+ * 字面层形似操作符的键记入 operatorShapedKeys，由 applyOverwrite → buildConfig
+ * 汇总成告警，每文件每键只记一次。
  */
 function mergeConfigLevel(target: unknown, override: unknown, collectors: MergeCollectors, parseOperators: boolean): Record<string, unknown> {
   let t = target as Record<string, unknown>;
@@ -168,12 +162,10 @@ function mergeConfigLevel(target: unknown, override: unknown, collectors: MergeC
     }
 
     // `__proto__` 键在对象字面赋值（下方所有 result[key] = ...）里走的是原型 setter
-    // 而非建键：合并结果的原型被静默换成覆写写的值，随后 dumpYaml 抛裸
-    // YAMLException「unacceptable kind of an object to dump」（带堆栈按程序 bug
-    // 渲染，实测复现：`dns: {__proto__: {evil: true}, enable: true}` 覆写进任何带
-    // dns 的订阅即炸），用户无从知道源头是覆写。正常 mihomo 配置没有这个键，
-    // 在操作符解析之后拦，顺带覆盖 `__proto__!` 等操作符形态。订阅侧解析出的
-    // own `__proto__` 不经本函数（无赋值动作），原样透传、内核按未知键忽略
+    // 而非建键：合并结果的原型被静默换掉，随后 dumpYaml 抛裸异常按程序 bug 渲染
+    // （实测：`dns: {__proto__: {evil: true}, enable: true}` 覆写进任何带 dns 的订阅即炸），
+    // 用户无从知道源头是覆写。在操作符解析之后拦，顺带覆盖 `__proto__!` 等操作符形态。
+    // 订阅侧解析出的 own `__proto__` 不经本函数（无赋值动作），原样透传、内核按未知键忽略
     if (key === '__proto__') {
       throw new CliError('覆写里出现了 "__proto__" 键', {
         label: '覆写配置错误',
@@ -184,10 +176,10 @@ function mergeConfigLevel(target: unknown, override: unknown, collectors: MergeC
     const existingValue = result[key];
 
     if (arrayMergeByName) {
-      // ~key 只对「按 name 索引的数组」有意义。目标已存在且不是数组时，此前会静默包成
-      // 单元素数组（`~dns: {enable: true}` 把映射 dns 变成 [{enable:true}]，丢掉原有字段，
-      // 且 mihomo 要求 dns 是映射 → 生成非法配置）。改为报错，避免静默损坏。
-      // 目标不存在（undefined）时放行：那是「新增数组」的正常用法。
+      // ~key 只对「按 name 索引的数组」有意义：目标已存在且不是数组时报错，
+      // 不能静默包成单元素数组（`~dns: {enable: true}` 会把映射 dns 变成 [{enable:true}]，
+      // 丢掉原有字段，且 mihomo 要求 dns 是映射）。目标不存在（undefined）时放行：那是
+      // 「新增数组」的正常用法。
       if (existingValue !== undefined && !Array.isArray(existingValue)) {
         throw new CliError(
           `覆写键 "${rawKey}" 的 ~ 语义只适用于数组，但 "${key}" 当前是${existingValue === null ? ' null' : typeof existingValue === 'object' ? '映射' : `标量（${typeof existingValue}）`}`,
@@ -225,7 +217,7 @@ function mergeConfigLevel(target: unknown, override: unknown, collectors: MergeC
 
     if (arrayPrepend || arrayAppend) {
       // 同 ~key：+key/key+ 是数组拼接语义，目标已存在且非数组时报错而非静默包成数组
-      // （`log-level+: debug` 曾把字符串 log-level 变成 ["debug"]，mihomo 无法解析）
+      // （`log-level+: debug` 会把字符串 log-level 变成 ["debug"]，mihomo 无法解析）
       if (existingValue !== undefined && !Array.isArray(existingValue)) {
         throw new CliError(
           `覆写键 "${rawKey}" 的数组拼接语义只适用于数组，但 "${key}" 当前是${existingValue === null ? ' null' : typeof existingValue === 'object' ? '映射' : `标量（${typeof existingValue}）`}`,
@@ -338,8 +330,8 @@ const SUBSCRIPTION_KEYS = ['name', 'subscription'] as const;
  *
  * `name` 与 `subscription` 是同义键，归一到 `subscription` 单一字段——判据
  * （matchesScope）因此只有一处，不必在两个键上各写一遍匹配逻辑。用户写的原键名
- * 存进 `subscriptionKey` 供展示回显。两者同时出现直接报错（本仓一贯：矛盾输入
- * 不静默按优先级取其一，同 assertValidParsedKey）。
+ * 存进 `subscriptionKey` 供展示回显。两者同时出现直接报错（矛盾输入不静默取其一，
+ * 同 assertValidParsedKey）。
  *
  * **fail closed**：match 块存在（哪怕写错）而解析不出任何有效条件时抛错，
  * 不能静默降级成「全局生效」——用户写了 match 显然想限定作用域，键名打错
@@ -350,12 +342,8 @@ const SUBSCRIPTION_KEYS = ['name', 'subscription'] as const;
 export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch | undefined {
   // undefined = 没写 match 键，全局生效是文档承诺的默认行为。
   // null = **写了 `match:` 但值为空**——最常见成因是条件块缩进笔误（`match:` 下面的
-  // `name: edu*` 顶了格，js-yaml 解析成 match: null + 顶层垃圾键）。它与键名打错
-  // （下方「未知键」分支）是同族输入，按本函数 fail-closed 的自我承诺必须报错，
-  // 不能静默降级成全局生效：用户写了 match 显然想限定作用域，笔误后文件反而
-  // 应用到**所有**订阅，是比「报错挡住启动」严重得多的静默失效。
-  // 调用侧（readOverwriteFiles）经解构传值，未写该键时恰为 undefined、写空值时
-  // 恰为 null——YAML 层不会产出 undefined，两种形态在这里天然可区分
+  // `name: edu*` 顶了格，js-yaml 解析成 match: null + 顶层垃圾键）。与键名打错同族，
+  // 按本函数 fail-closed 的承诺必须报错。YAML 层不会产出 undefined，两种形态天然可区分。
   if (raw === undefined) return undefined;
   if (raw === null) {
     throw new CliError(`覆写文件 "${fileName}" 的 match 为空`, {
@@ -396,8 +384,8 @@ export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch |
     }
 
     // url-domain 只做字面后缀比对，不含通配语义（通配只有订阅名键支持）——值里
-    // 出现 `*`/`?` 恒不命中，文件会静默对任何订阅都不生效。订阅名 glob 让人
-    // 很自然地以为 url-domain 也能通配，零提示的静默全不命中会被当成 bug
+    // 出现 `*`/`?` 恒不命中，文件会静默对任何订阅都不生效，零提示的静默全不命中
+    // 会被当成 bug，故显式报错
     if (key === 'url-domain') {
       const wildcard = arr.find(v => v.includes('*') || v.includes('?'));
       if (wildcard) {
@@ -465,20 +453,15 @@ function hostMatchesDomain(host: string, domain: string): boolean {
 }
 
 /**
- * 订阅名 glob 匹配：`*` 任意多字符、`?` 单字符，其余字符字面。
- *
- * **不走正则**，用双指针贪心回溯（记住最后一个 `*` 的位置，失配时回到那里让它多吃一个
- * 字符）。最初的实现是「转义成正则再 test」，实测有灾难性回溯：`*a` 重复 20 次的 pattern
- * 配 64 个 `a` 的订阅名要跑 **70 秒**——而 64 正是 SAFE_NAME_RE 允许的长度上限，
- * 即在完全合法的输入范围内就能把 CLI 挂死（覆写文件虽是用户自己写的，但把自己写挂
- * 且毫无提示，与「宁可报错也不静默失效」的取向相悖）。本实现最坏 O(n×m)，同一组
- * 输入 0ms；与旧正则版做过 30 万组差分测试（name 限 SAFE_NAME_RE 字符集）结果全一致。
+ * 订阅名 glob 匹配：`*` 任意多字符、`?` 单字符，其余字符字面。**不走正则**，用双指针
+ * 贪心回溯（最坏 O(n×m)）：「转义成正则再 test」在合法输入内就有灾难性回溯
+ * （`*a`×20 的 pattern 配 64 字符订阅名实测 70 秒，而 64 正是 SAFE_NAME_RE 的上限）。
  *
  * - **全串匹配**：`edu*` 不命中 `xedu1`。前缀式半匹配会让作用域悄悄放宽。
- * - **无通配字符时退化为精确比对**：老写法 `subscription: home` 行为完全不变（向后兼容）。
- * - 大小写不敏感，与 findSubscriptionFuzzy（`sub use` 口径）及此前的精确比对一致；
- *   用双 toLowerCase 而非正则 `i` flag，避免 Unicode 大小写折叠与订阅名白名单
- *   （SAFE_NAME_RE 含中文）产生口径差异。
+ * - **无通配字符时退化为精确比对**：老写法 `subscription: home` 行为不变（向后兼容）。
+ * - 大小写不敏感，与 findSubscriptionFuzzy（`sub use` 口径）一致；用双 toLowerCase
+ *   而非正则 `i` flag，避免 Unicode 大小写折叠与订阅名白名单（SAFE_NAME_RE 含中文）
+ *   产生口径差异。
  * - 逐 UTF-16 码元比较：SAFE_NAME_RE 只允许 BMP 汉字、无代理对，故 `?` = 一个字符。
  *   若将来放开 emoji 等星平面字符，`?` 的语义要重新评估。
  */
@@ -527,10 +510,10 @@ function matchesScope(match: OverwriteMatch | undefined, scope?: OverwriteScope)
 
   if (match.subscription) {
     const names = Array.isArray(match.subscription) ? match.subscription : [match.subscription];
-    // 大小写不敏感 + glob：与 findSubscriptionFuzzy（sub use/test/... 的解析口径）一致。
-    // 订阅名允许大写（SAFE_NAME_RE 含 \w），此前精确比对会让 `match: {subscription: home}`
-    // 匹配不上订阅 Home，而 `sub use home` 却能切过去——同一名称两套规则，是配置陷阱。
-    // 用户写 name 还是 subscription 都归一到本字段，故通配对两种写法同样生效
+    // 大小写不敏感 + glob：与 findSubscriptionFuzzy（sub use 的解析口径）一致——
+    // 同一名称不能有两套匹配规则（`match: {subscription: home}` 与 `sub use home`
+    // 必须指向同一订阅）。用户写 name 还是 subscription 都归一到本字段，
+    // 故通配对两种写法同样生效
     if (!scope?.subName) return false;
     const subName = scope.subName;
     if (!names.some(n => nameMatchesPattern(subName, n))) return false;
@@ -556,9 +539,9 @@ function matchesScope(match: OverwriteMatch | undefined, scope?: OverwriteScope)
  * 命中当前订阅作用域（无 match 即全局）。
  *
  * 两道过滤**刻意合在一个出口**，不拆成并列的两个导出函数：调用方只要漏调其中一个，
- * 被停用的文件就会照常合并进配置、还会出现在「当前生效的覆写文件」清单里，而这种
- * 缺口在本仓的并发防线上反复出现过（见 CLAUDE.md launchd 段：消费点不止一处，
- * 连修三版仍留缺口）。新增筛选维度请继续加在本函数内。
+ * 被停用的文件就会照常合并进配置、还会出现在「当前生效的覆写文件」清单里——
+ * 消费点不止一处的防线，历史上反复出现「只补了当时那条路径」的缺口。
+ * 新增筛选维度请继续加在本函数内。
  */
 export function selectActiveOverwriteFiles(files: OverwriteFileEntry[], scope?: OverwriteScope): OverwriteFileEntry[] {
   return files.filter(f => f.enabled !== false && matchesScope(f.match, scope));
@@ -568,19 +551,16 @@ export function selectActiveOverwriteFiles(files: OverwriteFileEntry[], scope?: 
 const METADATA_KEYS = new Set(['match', 'enabled']);
 
 /**
- * 元数据键不接受操作符修饰，也不接受大小写/空白变体。
- *
- * 两类都会造成同一种静默失效——文件没被停用，键还被当普通配置写进运行配置，
- * 而内核对未知顶层键宽松、`-t` 不会替我们拦下，用户零反馈：
+ * 元数据键不接受操作符修饰，也不接受大小写/空白变体。两类都会造成同一种静默失效——
+ * 文件没被停用、键被当普通配置写进运行配置，而内核对未知顶层键宽松、`-t` 不会拦下：
  *
  * - **操作符**：剥离发生在解构（早于 mergeConfigLevel 的操作符解析），`enabled!: false`
- *   会被 parseOverrideKey 规范成键 `enabled` 落进最终配置。`match!` 同理（存量洞，一并堵上）。
- *   尖括号转义 `<enabled>` 同样被拦（解析后键名也等于 `enabled`）：代价是没有「写一个
- *   真名为 enabled 的配置键」的逃生口，但 mihomo 顶层没有这个键，暂无实际影响。
+ *   会被 parseOverrideKey 规范成键 `enabled` 落进最终配置。尖括号转义 `<enabled>` 同样被拦
+ *   （解析后键名也等于 `enabled`）：代价是没有「写真名为 enabled 的配置键」的逃生口，
+ *   但 mihomo 顶层没有这个键，暂无实际影响。
  * - **大小写/空白**：YAML 键大小写敏感，`Enabled: false` 既不是元数据键（不停用文件）
  *   又不是任何 mihomo 原生键（纯噪音）。判据是「小写去空白后等于元数据键、但原样不等于」——
- *   与 isOverwriteFilenameTypo 同一思路（只认整体近失，不做模糊猜测）。mihomo 顶层
- *   不存在 Enabled/Match 之类的键，故这种写法必然是笔误，报错不会误伤。
+ *   与 isOverwriteFilenameTypo 同一思路（只认整体近失，不做模糊猜测）。
  */
 function assertNoMetadataKeyLookalikes(config: Record<string, unknown>, fileName: string): void {
   for (const rawKey of Object.keys(config)) {
@@ -614,7 +594,7 @@ function assertNoMetadataKeyLookalikes(config: Record<string, unknown>, fileName
  * **只认真布尔**：YAML 1.2 core schema 里 `no` / `off` 解析成**字符串**而非布尔
  * （实测 js-yaml 5.3.0：`enabled: no` → `"no"`、`enabled:` → null、`enabled: 0` → 0），
  * 按 truthy 判断会让 `enabled: no` 悄悄保持启用——用户以为停用了、配置却照常生效，
- * 是本功能最容易踩的坑，故非布尔一律报错并指明要写 `false`。
+ * 故非布尔一律报错并指明要写 `false`。
  */
 function normalizeEnabled(raw: unknown, fileName: string): boolean {
   if (raw === undefined) return true;
@@ -660,9 +640,9 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
   if (!fs.existsSync(USER_DATA_DIR)) return { ok, broken };
 
   const entries = fs.readdirSync(USER_DATA_DIR);
-  // 码点序，不用 localeCompare：后者随系统 locale 漂移（实测同一组中文文件名在
-  // en/zh_CN/ja 下三种顺序），而排序即合并顺序——不同机器合并出不同运行配置，
-  // 全程静默。排序是合并语义的一部分，不是展示细节。
+  // 码点序，不用 localeCompare：后者随系统 locale 漂移（同一组中文文件名在
+  // en/zh_CN/ja 下三种顺序），而排序即合并顺序——不同机器合并出不同运行配置，全程静默。
+  // 排序是合并语义的一部分，不是展示细节。
   const files = entries.filter(isOverwriteFilename).sort((a, b) => {
     if (a === 'overwrite.yaml') return -1;
     if (b === 'overwrite.yaml') return 1;
@@ -684,11 +664,10 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
       const content = fs.readFileSync(filePath, 'utf8');
       // 别名上限防 YAML 炸弹 DoS（同 config.ts SAFE_YAML_LOAD_OPTIONS，此处内联避免与 config 循环依赖）
       const parsed = yaml.load(content, { maxAliases: YAML_MAX_ALIASES }) as Record<string, unknown> | null;
-      // 顶层数组/标量不是合法覆写文件：曾只 warn 一行就跳过，与语法错同族的静默失效，
-      // 统一收进 broken（启动硬失败、诊断面可见）
+      // 顶层数组/标量不是合法覆写文件，与语法错同族的静默失效，统一收进 broken
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         // match / enabled 是元数据键：抽成结构化字段并从 config 剥离，确保它们永不进入
-        // 最终 mihomo 配置（内核对未知顶层键宽松、`-t` 不会替我们拦下，剥离是本 CLI 的责任）。
+        // 最终 mihomo 配置（内核对未知顶层键宽松，剥离是本 CLI 的责任）。
         // 被停用的文件同样完整加载并校验 match：`ow` 列表要显示它的作用域，且避免
         // 「停用期间藏着错误、一启用就炸」
         const { match, enabled, ...config } = parsed;
@@ -711,9 +690,9 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
 }
 
 /**
- * 合并路径的加载出口：**任何坏文件都硬失败**，由 main().catch 统一渲染完整原因。
- * 语义错（enabled: no / match 拼错）一直如此；语法错曾是 warn 一行后跳过、退出码 0，
- * 启动照常成功但覆写根本没参与合并——「以为生效了」比报错危险，故与语义错同等级别。
+ * 合并路径的加载出口：**任何坏文件都硬失败**，由 main().catch 统一渲染完整原因
+ * （warn+退出 0 会让启动成功但覆写没参与合并，「以为生效了」比报错危险）。
+ * 双路径的完整论证见 docs/decisions.md D7。
  */
 export function loadOverwriteFile(): OverwriteFileEntry[] {
   const { ok, broken } = readOverwriteFiles();

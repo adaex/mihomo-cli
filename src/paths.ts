@@ -60,23 +60,17 @@ export const PATHS = {
    * 各锁的可达竞态路径：
    * - serviceLock：慢速 start（订阅更新约 10s）持锁期间另一终端 stop
    * - subscriptionCacheLock：慢速 `sub update`（并行下载、逐条回写缓存）期间另一终端 `reset`
-   *   ——v4.7.4 把 serviceLock 移出 runtime/ 时漏了这条同族路径，锁文件当时还在
-   *   `subscriptions/cache.json.lock`，随 `rmrf(DIRS.subscriptions)` 一起消失
    */
   settingsLock: path.join(USER_DATA_DIR, 'settings.lock'),
   subscriptionCacheLock: path.join(USER_DATA_DIR, 'subscription-cache.lock'),
   serviceLock: path.join(USER_DATA_DIR, 'service.lock'),
   /**
-   * 「服务被要求停止」的单调计数（`service.ts` 的 `bumpStopEpoch`/`readStopEpoch`）。
+   * 「服务被要求停止」的单调计数（`service.ts` 的 `bumpStopEpoch`/`readStopEpoch`，
+   * 为什么用计数而非 disable 位见 docs/decisions.md D2）。
    *
-   * 为什么需要它：判断「本次 start 执行**期间**是否有人 stop 过」，launchd 自身给不出答案——
-   * disable 位只有当前值，没有写入时间，而它又是**持久**的（上次 stop 留下的与刚刚新置的
-   * 完全同形）。只比对 disable 位的前后快照，在「上次也 stop 过」时两边都是 true，
-   * 并发 stop 就此隐形（v4.7.6 的残留缺口）。计数值变了则一定有人 stop 过，与位的当前值无关。
-   *
-   * 与锁同放 USER_DATA_DIR 根下，理由相同：`runtime/` 等目录会被 `rmrf`，
-   * 文件消失即读作 0，会让「期间发生过 stop」丢失。命名**刻意不以 `Lock` 结尾**——
-   * 它不是锁，不该进 `paths.spec.ts` 那条锁位置断言的枚举。
+   * 与锁同放 USER_DATA_DIR 根下：`runtime/` 等目录会被 `rmrf`，文件消失即读作 0，
+   * 会让「期间发生过 stop」丢失。命名**刻意不以 `Lock` 结尾**——它不是锁，
+   * 不该进 `paths.spec.ts` 那条锁位置断言的枚举。
    */
   serviceStopEpoch: path.join(USER_DATA_DIR, 'service-stop-epoch'),
   // 用户级 LaunchAgent（默认）：gui/<uid> 域，全程免 sudo。随 homedir 走
@@ -107,8 +101,7 @@ export function ensureDirs(): void {
  * 原子写文件：写同目录临时文件 → fsync → rename → fsync 目录。
  *
  * 保证范围分两层：
- * - **进程崩溃**：rename 原子（POSIX），目标文件要么旧要么新，不会截断半截——
- *   这是本函数最初防的形态
+ * - **进程崩溃**：rename 原子（POSIX），目标文件要么旧要么新，不会截断半截
  * - **OS 崩溃/掉电**：无 fsync 时 rename 的元数据可先于数据块持久化，目标可能
  *   变空或半截（POSIX 不提供保证）。写前 fsync 临时文件 + rename 后 fsync 父目录
  *   把该窗口收窄到「fsync 返回后的掉电」。macOS 上严格落盘需 F_FULLFSYNC（Node
@@ -193,19 +186,14 @@ export const LOCK_STALE_MS = 10_000;
 const LOCK_RETRY_MS = 20;
 
 /**
- * 跨进程互斥执行 `fn`（同一 `lockPath` 一把锁）。
+ * 跨进程互斥执行 `fn`（同一 `lockPath` 一把锁）。锁位置由 PATHS 集中决定、
+ * 显式传锁文件路径——锁绝不能与数据文件同目录（数据目录会被 reset/stop 整删，
+ * 见 PATHS 里锁常量的注释）。
  *
- * **参数是锁文件本身的路径，不是被保护的数据文件**：早先传数据文件、内部拼
- * `${filePath}.lock`，于是锁必然与数据同目录——而 `cache.json` 住在
- * `subscriptions/` 里，`reset subs` 的 `rmrf` 会把别人正持着的锁一起删掉
- * （见 PATHS 里锁常量的注释）。改为显式传锁路径后，锁的位置由 PATHS 集中决定，
- * 不再被数据文件的位置绑死。
- *
- * 为什么必须有：`settings.json` 的读-改-写此前无任何跨进程保护，两个 CLI 进程
- * （慢速 `sub add` 跨网络下载期间用户在另一个终端操作，是日常场景）会各自读到旧
- * 全量、各自写回，后写者把先写者的条目整块抹掉——**而先写者已经打印了「已添加」**。
- * 实测 6 个并发 `sub add` 丢 3 条。
- * 仅靠「写前重读盘」不够：读与写之间仍有窗口，实测仍丢 3 条。
+ * 为什么必须有：`settings.json` 的读-改-写若无跨进程保护，两个 CLI 进程（慢速
+ * `sub add` 跨网络下载期间用户在另一个终端操作，是日常场景）会各自读到旧全量、
+ * 各自写回，后写者把先写者的条目整块抹掉——**而先写者已经打印了「已添加」**
+ * （实测 6 个并发 `sub add` 丢 3 条；仅靠「写前重读盘」不够，读与写之间仍有窗口）。
  *
  * 用 `O_EXCL` 建锁文件（POSIX 下创建即原子，NFS 外均可靠），忙等到拿到为止。
  * 陈旧锁（持有超过 LOCK_STALE_MS，说明持锁进程已崩溃）会被强夺，避免一次崩溃
@@ -278,17 +266,11 @@ export function withFileLock<T>(
         continue;
       }
       if (Date.now() > deadline) {
-        // 兜底：等太久也只强夺**陈旧**锁，绝不删除新鲜锁。
-        // deadline 只说明「我等超了」，说明不了「锁无人持有」——能等到超时的
-        // 场景，锁多半刚被另一个等待者按陈旧路径强夺，那是一把几毫秒前才建的
-        // 新鲜锁。旧实现在这里无条件 rmSync + continue（还不睡眠），等于谁等得
-        // 久谁有理，破坏的是**等待者之间**的互斥（三进程实测：A 持锁 12s，B 于
-        // 10.24s 走陈旧路径强夺进入，C 于 10.7s 过自己的 deadline、删掉 B 刚建
-        // 的锁并于 11.01s 进入，B/C 临界区重叠 1.24s；真实触发面是 service.lock
-        // 的慢速 start 期间另一终端 stop + 第三个终端 install/stop）。活性不靠
-        // 这条兜底：上面的陈旧检查每轮都在跑，任何锁持有超 staleMs 必然变陈旧、
-        // 可被强夺，等待者不会无限期卡住。过线后重新核对锁龄，锁新鲜就落到下面
-        // 的睡眠重试——持有者是刚获锁的同伴，继续等它释放或变陈旧，绝不热循环。
+        // 兜底：等太久也只强夺**陈旧**锁，绝不删除新鲜锁（判据见函数头注释——
+        // deadline 只说明「我等超了」，说明不了「锁无人持有」；无条件删会把
+        // 另一个等待者刚强夺到手的新锁再抢走，破坏的是等待者之间的互斥）。
+        // 活性不靠这条兜底：陈旧检查每轮都在跑，锁超龄必可强夺。过线后重新核对
+        // 锁龄，锁新鲜就落到睡眠重试，绝不热循环。
         let deadlineStale = false;
         try {
           deadlineStale = Date.now() - fs.statSync(lockPath).mtimeMs > staleMs;

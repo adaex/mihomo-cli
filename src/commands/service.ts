@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { assertKnownFlags, assertPositionalCount } from '../argv.js';
 import { colors } from '../colors.js';
 import { hasKernel } from '../config.js';
 import { CliError } from '../errors.js';
@@ -15,7 +16,6 @@ import {
   shouldAbortStartOnDisable,
   uninstallService,
 } from '../service.js';
-import { assertKnownFlags, assertPositionalCount } from '../utils.js';
 
 /**
  * 服务的安装与卸载。启停在 start.ts / stop.ts。

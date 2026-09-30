@@ -6,7 +6,28 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { pathToFileURL } from 'node:url';
 
-import { maskUrl } from './settings.js';
+import { maskUrl, subscriptionUrgency } from './settings.js';
+
+describe('subscriptionUrgency', () => {
+  const now = Date.now();
+  it('已过期优先判定', () => {
+    assert.equal(subscriptionUrgency({ expire: Math.floor(now / 1000) - 100, total: 100, upload: 50, download: 50 }, now), 'expired');
+  });
+
+  it('流量用尽', () => {
+    assert.equal(subscriptionUrgency({ total: 100, upload: 60, download: 40 }, now), 'traffic-exhausted');
+  });
+
+  it('7 天内到期', () => {
+    assert.equal(subscriptionUrgency({ expire: Math.floor(now / 1000) + 3 * 86_400 }, now), 'expiring');
+  });
+
+  it('永久（expire=0）与不限量不误报', () => {
+    assert.equal(subscriptionUrgency({ expire: 0 }, now), null);
+    assert.equal(subscriptionUrgency({}, now), null);
+    assert.equal(subscriptionUrgency({ expire: Math.floor(now / 1000) + 365 * 86_400 }, now), null);
+  });
+});
 
 describe('maskUrl', () => {
   it('遮蔽 query 中的 token 类参数', () => {

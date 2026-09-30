@@ -6,8 +6,8 @@ import { DIRS, ensureDirs, PATHS } from './paths.js';
 import { checkStaleState, getPid, isRunning, MAIN_INSTANCE_PATTERN } from './process-probe.js';
 import { getServiceStatus } from './service.js';
 import { runSudoScript } from './sudo.js';
+import { shellQuote } from './text.js';
 import type { StartResult } from './types.js';
-import { shellQuote } from './utils.js';
 
 /**
  * TUN 内核的启动（临时 sudo 脚本，不走 launchd）。

@@ -2,9 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { CliError } from './errors.js';
+import { formatLocalTimestamp } from './format.js';
 import { DIRS, PATHS } from './paths.js';
 import type { LogList } from './types.js';
-import { formatLocalTimestamp } from './utils.js';
 
 /**
  * mihomo 日志文件的轮转、清理与列表。与进程启停解耦：

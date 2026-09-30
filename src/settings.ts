@@ -3,7 +3,7 @@ import path from 'node:path';
 import { CONTROLLER_PORT, DEFAULT_MIXED_PORT } from './constants.js';
 import { CliError } from './errors.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './paths.js';
-import type { Settings, Subscription, SubscriptionCache, SubscriptionCacheEntry, SubscriptionWithCache } from './types.js';
+import type { Settings, Subscription, SubscriptionCache, SubscriptionCacheEntry, SubscriptionUrgency, SubscriptionWithCache } from './types.js';
 
 /**
  * 备份损坏的 settings.json 并告警，返回默认设置。
@@ -26,17 +26,16 @@ function backupCorruptSettings(reason: string): Settings {
   return {};
 }
 
-/** 每次读取磁盘；同一操作需要一致视图时由调用方显式传递这份快照 */
+/** 每次读取磁盘；同一操作需要一致视图时由调用方显式传递这份快照（D10） */
 export function readSettings(): Settings {
   if (!fs.existsSync(PATHS.settingsFile)) return {};
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(PATHS.settingsFile, 'utf8'));
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Settings;
-    // **JSON 合法但不是对象**（`[1,2,3]`、`"str"`、`42`、`null`）同样走备份+告警：
-    // 此前这条路径直接 `return {}`，既不备份也不出声，而下一次 updateSettings 会把
-    // 文件整个覆盖成默认内容——用户的原件无声无息地没了。与下面的解析失败分支
-    // 是同一类「文件不可用」，处置也该一样（doctor 的设置文件检查已能识别这种形态，
-    // 但 doctor 是可选的，读路径自己不能装作没看见）
+    // **JSON 合法但不是对象**（`[1,2,3]`、`"str"`、`42`、`null`）与解析失败是同一类
+    // 「文件不可用」：下一次 updateSettings 会把文件整个覆盖成默认内容，用户的原件会
+    // 无声无息地没了，故同样走备份+告警（doctor 的设置文件检查能识别这种形态，
+    // 但读路径自己不能装作没看见）
     return backupCorruptSettings(`内容不是对象（当前是${Array.isArray(parsed) ? '数组' : parsed === null ? 'null' : typeof parsed}）`);
   } catch (e) {
     // existsSync 与 readFileSync 之间文件被并发删除（如另一终端 reset settings）：
@@ -206,10 +205,9 @@ export function readSubscriptionCache(): SubscriptionCache {
     try {
       const content = fs.readFileSync(PATHS.subscriptionsCacheFile, 'utf8');
       const parsed = JSON.parse(content) as unknown;
-      // JSON 合法但不是对象（数组/标量/null）与解析失败是同一类「文件不可用」，
-      // 处置也该一样（备份+告警）——与 readSettings 对 settings.json 的处理对齐：
-      // 此前这条路径直接返回空缓存，既不备份也不出声，而下一次写缓存会把文件整个
-      // 覆盖成新内容，用户的原件无声无息地没了
+      // JSON 合法但不是对象（数组/标量/null）与解析失败是同一类「文件不可用」，处置一致
+      // （备份+告警，与 readSettings 对齐）：下一次写缓存会把文件整个覆盖，用户的原件
+      // 无声无息地没了
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         return backupCorruptSubscriptionCache(`内容不是对象（当前是${Array.isArray(parsed) ? '数组' : parsed === null ? 'null' : typeof parsed}）`);
       }
@@ -257,15 +255,13 @@ function writeSubscriptionCache(cache: SubscriptionCache): void {
  * 单进程内的并行更新（autoUpdateStaleSubscription 的 Promise.all）靠「全程同步、
  * 读写之间无 await」即可安全，但那只在进程内成立：cache.json 与 settings.json 一样
  * 会被多个 CLI 进程同时写（一个终端 `sub update` 并行下载各自回写，另一个终端
- * `start` 又触发自动更新），裸读-改-写下后写者会整块覆盖先写者的条目。
- * 实测 2 进程各写 30 条丢 1 条、4 进程各写 30 条丢 7 条。
+ * `start` 又触发自动更新），裸读-改-写下后写者会整块覆盖先写者的条目
+ * （实测 2 进程各写 30 条丢 1 条、4 进程各写 30 条丢 7 条；丢的是 `updated_at` →
+ * needsAutoUpdate 恒 true → 该订阅每次 start 都重新下载）。故与 settings.json 同构，
+ * 把整个读-改-写圈进锁里。
  *
- * 丢的是 `updated_at` → `needsAutoUpdate` 恒 true → 该订阅每次 `start` 都重新下载，
- * 且流量/到期展示一并消失。故与 settings.json 同构，把整个读-改-写圈进锁里。
- *
- * 锁文件用 `PATHS.subscriptionCacheLock`（USER_DATA_DIR 根下），**不能放在
- * `subscriptions/` 里**：`reset subs` 会 `rmrf` 整个目录，把别人正持着的锁一起带走
- * （见 paths.ts 锁常量的注释）。
+ * 锁文件在 USER_DATA_DIR 根下，**不能放在 `subscriptions/` 里**：`reset subs` 会
+ * `rmrf` 整个目录，把别人正持着的锁一起带走（见 paths.ts 锁常量的注释）。
  */
 export function saveSubscriptionCache(subName: string, data: Partial<SubscriptionCacheEntry>): void {
   ensureDirs();
@@ -289,6 +285,22 @@ function deleteSubscriptionCache(subName: string): void {
   });
 }
 
+/**
+ * 订阅缓存的紧急度判定，status 着色与「代理不通」归因共用同一口径。
+ * expire 为 unix 秒，0/缺省 = 永久；total 缺省 = 不限量。
+ * 优先级：已过期 > 流量用尽 > 7 天内到期。
+ */
+export function subscriptionUrgency(
+  entry: { expire?: number; upload?: number; download?: number; total?: number },
+  nowMs: number = Date.now(),
+): SubscriptionUrgency {
+  if (entry.expire !== undefined && entry.expire > 0 && entry.expire * 1000 < nowMs) return 'expired';
+  const used = (entry.upload || 0) + (entry.download || 0);
+  if (entry.total !== undefined && entry.total > 0 && used >= entry.total) return 'traffic-exhausted';
+  if (entry.expire !== undefined && entry.expire > 0 && entry.expire * 1000 - nowMs < 7 * 86_400_000) return 'expiring';
+  return null;
+}
+
 // === Subscription list ===
 
 function isValidSubscription(s: unknown): s is Subscription {
@@ -296,7 +308,7 @@ function isValidSubscription(s: unknown): s is Subscription {
 }
 
 /**
- * 订阅列表的唯一读取入口。住在 settings.ts 而非订阅命令层：subscription.ts（核心）、
+ * 订阅列表的唯一读取入口，住在 settings.ts 而非订阅命令层：subscription.ts、
  * config.ts、status 等多处都要读。
  *
  * 非数组一律视为空列表：字段被手改成非数组（如 `{"subscriptions":"oops"}`）时，

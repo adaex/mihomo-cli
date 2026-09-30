@@ -1,12 +1,13 @@
+import { assertPositionalCount } from '../argv.js';
 import { colors } from '../colors.js';
 import { AVAILABLE_MIRRORS } from '../constants.js';
 import { CliError } from '../errors.js';
 import { VALUE_FLAGS } from '../flags.js';
 import * as kernel from '../kernel.js';
+import { parseMirrorArg, parseProxyArg } from '../kernel-args.js';
 import { getRunningState } from '../runtime.js';
 import { getPorts } from '../settings.js';
 import { withSpinner } from '../spinner.js';
-import { assertPositionalCount, parseMirrorArg, parseProxyArg } from '../utils.js';
 
 /**
  * kernel 的位置参数口径：`--mirror` 的值（如 `--mirror cdn` 的 cdn）不算位置参数。

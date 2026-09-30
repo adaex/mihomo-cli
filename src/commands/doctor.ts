@@ -2,11 +2,12 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 
 import { compareVersions } from 'compare-versions';
-
+import { assertKnownFlags, assertPositionalCount } from '../argv.js';
 import { colors } from '../colors.js';
 import { getConfigInfo, getKernelVersion, hasKernel } from '../config.js';
 import { DEFAULT_MIXED_PORT, VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
+import { formatRelativeTime } from '../format.js';
 import { checkUpdate, hasGh } from '../kernel.js';
 import { PATHS, USER_DATA_DIR } from '../paths.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
@@ -15,7 +16,6 @@ import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } fro
 import { getPorts, getSubscriptionsWithCache, isValidSettingsContent, readSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription, isSubscriptionStale, prepareConfigForStart, resolveUpdateInterval } from '../subscription.js';
 import type { KernelUpdateInfo } from '../types.js';
-import { assertKnownFlags, assertPositionalCount, formatRelativeTime } from '../utils.js';
 import { getLatestNpmVersion } from './update.js';
 
 /** 限时等待：GitHub 查询在 doctor 里只给数秒，超时按「不可达」降级为 skip，不拖慢体检。

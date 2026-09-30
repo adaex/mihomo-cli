@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { assertKnownFlags } from '../argv.js';
 import { colors } from '../colors.js';
 import { clearKernelVersionCache } from '../config.js';
 import { CliError } from '../errors.js';
@@ -9,7 +10,6 @@ import { cleanupAll } from '../process-stop.js';
 import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, getServiceStatus, recordServiceStopped, stopService, uninstallService } from '../service.js';
 import { updateSettings } from '../settings.js';
 import type { ResetTarget, Settings } from '../types.js';
-import { assertKnownFlags } from '../utils.js';
 import { confirmOrThrow } from './shared.js';
 
 /** 目标表只描述数据；服务操作与设置更新由 cmdReset 分阶段处理 */
