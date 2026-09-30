@@ -16,7 +16,7 @@ process.env.MIHOMO_CLI_DIR = tmpDir;
 
 const { PATHS, DIRS } = await import('./paths.js');
 const { getMihomoPids, isRunning, MAIN_INSTANCE_PATTERN } = await import('./process-probe.js');
-const { cleanupAll, stop, clearPid } = await import('./process-stop.js');
+const { buildKernelCleanupScript, cleanupAll, stop, clearPid } = await import('./process-stop.js');
 const { SUDO_TIMEOUT_MS } = await import('./sudo.js');
 
 /**
@@ -106,6 +106,7 @@ describe('cleanupAll 真实杀进程', () => {
     assert.equal(result.killed, 1);
     assert.equal(result.failed, 0);
     assert.deepEqual(result.remaining, []);
+    assert.equal(result.sudoError, null, '用户态清理不应产生 sudo 错误');
     assert.equal(getMihomoPids().length, 0, '进程必须真的没了，不是「调用没报错」');
     assert.ok(isDead(pid), '桩进程应已不存在（僵尸也算死，kill -0 在这里会骗人）');
   });
@@ -140,8 +141,32 @@ describe('cleanupAll 真实杀进程', () => {
 
   it('清掉 pid 文件（残留会让后续 start 撞上死胡同）', async () => {
     fs.writeFileSync(PATHS.pidFile, '99999');
-    await cleanupAll();
+    const result = await cleanupAll();
     assert.equal(fs.existsSync(PATHS.pidFile), false);
+    assert.equal(result.sudoError, null, '用户态 pid 文件无需提权');
+  });
+});
+
+/**
+ * root 残留清理脚本的退出码协议（与 legacy 清理脚本同款）：脚本内部失败用 2，
+ * 1 留给 sudo 鉴权取消/密码错误（runSudoScript 的映射依赖这个分工）；
+ * pkill 与 rm pid 必须在同一次 sudo 内完成，只弹一次密码。
+ */
+describe('buildKernelCleanupScript：root 残留清理脚本协议', () => {
+  const script = buildKernelCleanupScript();
+
+  it('一次脚本同时 pkill 与 rm pid 文件（只弹一次密码）', () => {
+    assert.match(script, /pkill -9 -f/);
+    assert.match(script, /rm -f .*pid/);
+  });
+
+  it('pkill 异常退出（2/3）报 exit 2，脚本内不出现裸 exit 1', () => {
+    assert.match(script, /exit 2/);
+    assert.doesNotMatch(script, /\bexit 1\b/);
+  });
+
+  it('pkill 无匹配（退出码 1）按成功处理', () => {
+    assert.match(script, /\[\s*\$rc -le 1\s*\]/);
   });
 });
 

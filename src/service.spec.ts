@@ -569,7 +569,7 @@ describe('buildRootResidueCleanupError', () => {
   const ctx = { mainOutcome: '服务已停止，登录自启已关闭', retryCommand: 'mihomo stop' };
 
   it('sudo 取消 → label「已取消」，hint 说清主体动作已完成、残留 PID 与重试入口', () => {
-    const err = buildRootResidueCleanupError(new SudoAuthError(), ctx, [4321, 8765]);
+    const err = buildRootResidueCleanupError({ remaining: [4321, 8765], sudoError: new SudoAuthError() }, ctx);
     assert.ok(err instanceof CliError);
     assert.equal(err.label, '已取消');
     assert.equal(err.message, '管理员密码未输入或有误，root 残留未被清理');
@@ -592,17 +592,17 @@ describe('buildRootResidueCleanupError', () => {
   });
 
   it('脚本失败（非取消）→ label「清理残留进程失败」，保留 runSudoScript 的原始消息', () => {
-    const err = buildRootResidueCleanupError(new Error('终止残留内核失败（pkill 退出码异常）'), ctx, [4321]);
+    const err = buildRootResidueCleanupError({ remaining: [4321], sudoError: new Error('终止残留内核失败（pkill 退出码异常）') }, ctx);
     assert.equal(err.label, '清理残留进程失败');
     assert.equal(err.message, '终止残留内核失败（pkill 退出码异常）');
     assert.ok(err.hint.some(l => l.includes('PID 4321')));
   });
 
   it('无 root 进程（仅 pid 文件）时残留描述与手动命令切换为 pid 文件版', () => {
-    // 仅 pid 文件残留只可能来自 start 路径（killResidualKernels 仅在有 root 进程时提权），
+    // remaining 为空但 sudoError 非空 = 仅 root 属主 pid 文件残留；
     // 重试入口对它同样成立，但手动命令不再是 pkill
     const startCtx = { mainOutcome: '服务尚未启动', retryCommand: 'mihomo start' };
-    const err = buildRootResidueCleanupError(new SudoAuthError(), startCtx, []);
+    const err = buildRootResidueCleanupError({ remaining: [], sudoError: new SudoAuthError() }, startCtx);
     assert.equal(err.label, '已取消');
     assert.ok(err.hint.some(l => l.startsWith('root 属主的 pid 文件未被清理')));
     assert.ok(

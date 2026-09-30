@@ -6,11 +6,11 @@ import { isValidServiceLabel, RAW_SERVICE_LABEL_INPUT, SERVICE_BINARY_NAME, SERV
 import { CliError } from './errors.js';
 import { allocateArchivePath, cleanupOldLogs, rotateAndCleanupLogs } from './log-files.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './paths.js';
-import { getMihomoPids, isMihomoProcess, isPidFileOwnedByRoot, isProcessRoot, MAIN_INSTANCE_PATTERN } from './process-probe.js';
+import { cleanupAll } from './process-stop.js';
 import { getPorts, readSettings } from './settings.js';
 import { runSudoScript, SudoAuthError } from './sudo.js';
 import { shellQuote } from './text.js';
-import type { ServiceStatus } from './types.js';
+import type { CleanupResult, ServiceStatus } from './types.js';
 import { sleep } from './utils.js';
 
 /**
@@ -196,8 +196,15 @@ function isServiceDisabledInLaunchd(timeoutMs: number = LAUNCHCTL_TIMEOUT_MS): b
  * `rm` 掉 plist 后任务仍处 bootstrapped 状态，KeepAlive 会继续把内核拉起。
  * 只看文件的话 status 谎报「未安装」、uninstall 直接返回不执行 bootout，
  * 用户陷入「代理停不掉且 CLI 说没装」的死胡同（实测可复现）。
+ *
+ * @param options.withDisabled 是否查 print-disabled。健康轮询（waitServiceHealthy）
+ *   每 100ms 调一次、只消费 state/pid/死因，从不读 disabled，关掉它每轮少一个
+ *   spawnSync（最坏 31 轮 = 31 次白跑的整张 disabled 表 dump，且 spawnSync 阻塞
+ *   事件循环，launchctl 卡顿时轮询期间 Ctrl-C 无响应）。默认 true：状态快照的
+ *   其余消费点（status/doctor/命令分支）都要 disabled 字段
  */
-export function getServiceStatus(): ServiceStatus {
+export function getServiceStatus(options: { withDisabled?: boolean } = {}): ServiceStatus {
+  const withDisabled = options.withDisabled !== false;
   const installed = isServiceInstalled();
   const print = runLaunchctl(['print', serviceTarget()]);
   assertLaunchctlQueryOk(print.status, 'print');
@@ -210,7 +217,9 @@ export function getServiceStatus(): ServiceStatus {
   const { state, pid, lastExitCode, lastTerminatingSignal } = loaded
     ? parseServicePrint(print.stdout)
     : { state: null, pid: null, lastExitCode: null, lastTerminatingSignal: null };
-  const disabled = isServiceDisabledInLaunchd();
+  // withDisabled=false 时给 false 占位：该快照只供给不读 disabled 的健康轮询，
+  // 绝不能流进 status/命令分支（那些调用点都走默认 withDisabled=true）
+  const disabled = withDisabled ? isServiceDisabledInLaunchd() : false;
 
   return { installed, loaded, running: state === 'running', pid, disabled, lastExitCode, lastTerminatingSignal };
 }
@@ -237,12 +246,16 @@ export interface ServiceHealth {
 export async function waitServiceHealthy(): Promise<ServiceHealth> {
   const deadline = Date.now() + SERVICE_OBSERVE_MS;
   const graceDeadline = deadline + SERVICE_HEALTH_GRACE_MS;
-  let last = getServiceStatus();
+  // 健康判定只消费 state/pid/死因，不读 disabled——轮询里关掉 print-disabled，
+  // 每轮少一个阻塞事件循环的 spawnSync（见 getServiceStatus 的 withDisabled）。
+  // do/while 先 sleep 再查：循环外不取首次快照——它在第一轮 sleep 后必被覆盖，
+  // 查了也没人读
+  let last: ServiceStatus;
 
   // 第一阶段：观察满窗口。期间检出崩溃立即返回，否则以窗口结束时的状态为准
-  while (Date.now() < deadline) {
+  do {
     await sleep(SERVICE_HEALTH_INTERVAL_MS);
-    last = getServiceStatus();
+    last = getServiceStatus({ withDisabled: false });
 
     if (isCrashed(last)) {
       return { healthy: false, crashed: true, pid: null, exitCode: last.lastExitCode, terminatingSignal: last.lastTerminatingSignal };
@@ -251,14 +264,14 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
       // 已卸载（被外部 bootout，或 plist 装不进来），继续等无意义
       return { healthy: false, crashed: false, pid: null, exitCode: last.lastExitCode, terminatingSignal: last.lastTerminatingSignal };
     }
-  }
+  } while (Date.now() < deadline);
 
   if (last.running) return { healthy: true, crashed: false, pid: last.pid, exitCode: null, terminatingSignal: null };
 
   // 第二阶段：窗口结束仍未 running（慢机器上内核起得慢，或正在 spawn 重试），再宽限一会儿
   while (Date.now() < graceDeadline) {
     await sleep(SERVICE_HEALTH_INTERVAL_MS);
-    last = getServiceStatus();
+    last = getServiceStatus({ withDisabled: false });
 
     if (isCrashed(last)) {
       return { healthy: false, crashed: true, pid: null, exitCode: last.lastExitCode, terminatingSignal: last.lastTerminatingSignal };
@@ -479,29 +492,6 @@ export async function waitUntilUnloaded(target: string = serviceTarget()): Promi
   });
 }
 
-/**
- * 以 root 清理残留内核与 root 属主的 pid 文件。
- * **只在确实存在 root 残留时调用**——正常的用户级路径不应因此弹密码。
- * root 残留的唯一来源是 `tun`（sudo 起的内核）与系统级服务。
- */
-function cleanupRootResidue(): void {
-  const rootPids = getMihomoPids().filter(isProcessRoot);
-  if (rootPids.length === 0 && !isPidFileOwnedByRoot()) return;
-
-  const script = [
-    '#!/bin/bash',
-    // pkill 退出码 2/3 是 pattern 编译失败等探测性错误，不能当「没有进程」吞掉
-    // （与 killAllMihomo 只收 0/1 同一原则）
-    `pkill -9 -f ${shellQuote(MAIN_INSTANCE_PATTERN)} 2>/dev/null`,
-    'rc=$?',
-    '[ $rc -le 1 ] || exit 2',
-    `rm -f ${shellQuote(PATHS.pidFile)}`,
-    'exit 0',
-    '',
-  ].join('\n');
-  runSudoScript(script, { action: '清理残留进程', file: 'cleanup-residue.sh', codeMessages: { 2: '终止残留内核失败（pkill 退出码异常）' } });
-}
-
 /** root 残留清理失败包装的上下文：主体动作进行到哪一步、重试入口，三个调用点各不相同 */
 export interface RootResidueCleanupContext {
   /** 主体动作的结果描述，如「服务已停止，登录自启已关闭」；start 路径是「服务尚未启动」 */
@@ -511,69 +501,36 @@ export interface RootResidueCleanupContext {
 }
 
 /**
- * 把 root 残留清理（经 runSudoScript）抛出的普通 Error 包成 CliError——纯函数，供测试。
+ * 把 cleanupAll 的 root 清理结果包成 CliError——纯函数，供测试。
  * 统一说清三件关键事实：主体动作已完成到哪一步、root 残留还在（带 PID）、重试入口。
- * sudo 取消（SudoAuthError）label 用「已取消」；其余失败保留原始消息。
+ * sudo 取消（sudoError 是 SudoAuthError）label 用「已取消」；其余失败保留原始消息。
+ * remaining 为空但 sudoError 非空 = 仅 root 属主 pid 文件残留。
  */
-export function buildRootResidueCleanupError(e: Error, ctx: RootResidueCleanupContext, rootPids: number[]): CliError {
-  const cancelled = e instanceof SudoAuthError;
-  const hasKernelResidue = rootPids.length > 0;
+export function buildRootResidueCleanupError(result: Pick<CleanupResult, 'remaining' | 'sudoError'>, ctx: RootResidueCleanupContext): CliError {
+  const cancelled = result.sudoError instanceof SudoAuthError;
+  const hasKernelResidue = result.remaining.length > 0;
   const hint = [
     ctx.mainOutcome,
-    hasKernelResidue ? `root 残留内核仍在运行（PID ${rootPids.join(', ')}），可能继续占用代理端口` : `root 属主的 pid 文件未被清理: ${PATHS.pidFile}`,
+    hasKernelResidue ? `root 残留内核仍在运行（PID ${result.remaining.join(', ')}），可能继续占用代理端口` : `root 属主的 pid 文件未被清理: ${PATHS.pidFile}`,
     `重新运行可再次尝试清理: ${ctx.retryCommand}`,
   ];
   hint.push(hasKernelResidue ? '手动清理: sudo pkill -9 mihomo' : `手动清理: sudo rm -f ${PATHS.pidFile}`);
   if (cancelled) {
     return new CliError('管理员密码未输入或有误，root 残留未被清理', { label: '已取消', hint });
   }
-  return new CliError(e.message, { label: '清理残留进程失败', hint });
-}
-
-/** 错误处理路径上的残留探测：探测再失败也不能让它替换掉正要渲染的清理失败本身 */
-function currentRootResiduePids(): number[] {
-  try {
-    return getMihomoPids().filter(isProcessRoot);
-  } catch {
-    return [];
-  }
+  return new CliError(result.sudoError?.message ?? 'root 残留未清理干净', { label: '清理残留进程失败', hint });
 }
 
 /**
- * cleanupRootResidue 的「失败即 CliError」版本：runSudoScript 的普通 Error 统一经
- * buildRootResidueCleanupError 包装（同族范式见 cleanupLegacyInstallOrThrow——那里同样
- * 是为了不让 sudo 取消/非 TTY 带着堆栈按「未预期错误」渲染）。探测已抛 CliError 时透传。
+ * 服务路径的残留内核收口：唯一实现是 process-stop 的 cleanupAll
+ * （用户态逐 pid 复核 / root 一次 sudo 脚本 + 死亡等待），这里只负责把失败按
+ * 服务语境包装——主体动作已完成到哪一步、残留还在、如何重试。
+ * 与游离内核路径（cmdStop → stop()）共用同一套杀进程与死亡等待，不再各维护一份。
  */
-function cleanupRootResidueOrThrow(ctx: RootResidueCleanupContext): void {
-  try {
-    cleanupRootResidue();
-  } catch (e) {
-    if (e instanceof CliError) throw e;
-    throw buildRootResidueCleanupError(e as Error, ctx, currentRootResiduePids());
-  }
-}
-
-/**
- * 终止残留内核。用户态进程直接 kill；有 root 残留才提一次权。
- * 失败经 ctx 包装成 CliError：说清主体动作已完成、残留还在、如何重试。
- */
-function killResidualKernels(ctx: RootResidueCleanupContext): void {
-  const pids = getMihomoPids();
-  if (pids.length === 0) return;
-
-  const rootPids = pids.filter(isProcessRoot);
-  for (const pid of pids) {
-    if (rootPids.includes(pid)) continue;
-    // 发信号前复核命令行（isMihomoProcess）：探测到现在隔着逐 pid 的 ps 查询，
-    // 目标自行退出且 pid 被复用时盲目 SIGKILL 会误杀无关进程
-    if (!isMihomoProcess(pid)) continue;
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {
-      /* ignore：可能已自行退出 */
-    }
-  }
-  if (rootPids.length > 0) cleanupRootResidueOrThrow(ctx);
+async function cleanupKernelsOrThrow(ctx: RootResidueCleanupContext): Promise<void> {
+  const result = await cleanupAll();
+  if (result.remaining.length === 0 && !result.sudoError) return;
+  throw buildRootResidueCleanupError(result, ctx);
 }
 
 /**
@@ -787,7 +744,7 @@ export async function startService(): Promise<{ started: boolean }> {
   }
 
   // tun 残留是 root 属主，会与服务抢端口；有才清（这是唯一可能弹密码的地方），无则免密
-  cleanupRootResidueOrThrow({ mainOutcome: '服务尚未启动', retryCommand: 'mihomo start' });
+  await cleanupKernelsOrThrow({ mainOutcome: '服务尚未启动', retryCommand: 'mihomo start' });
 
   bootoutService();
   await waitUntilUnloaded();
@@ -869,7 +826,7 @@ export async function stopService(): Promise<void> {
 
   // bootout 通常已终止托管内核；tun 起的 root 内核与手动残留在此收口。
   // 重跑 stop 即可重试清理：此时服务已停，cmdStop 走「游离内核」路径再次提权
-  killResidualKernels({ mainOutcome: '服务已停止，登录自启已关闭', retryCommand: 'mihomo stop' });
+  await cleanupKernelsOrThrow({ mainOutcome: '服务已停止，登录自启已关闭', retryCommand: 'mihomo stop' });
 }
 
 /**
@@ -901,13 +858,14 @@ export async function uninstallService(): Promise<void> {
     throw new CliError(`删除 plist 失败（${PATHS.userAgentPlist}）: ${(e as Error).message}`);
   }
 
-  // disable 位残留表里是刻意的（见函数头注释），但必须确认它真的是 disabled——
-  // enable 位还开着的话，plist 被别的途径放回（重装、备份恢复）即自启
-  disableServiceAutoStart();
+  // disable 位已在上面的锁内由 disableServiceAutoStart 写入并经 print-disabled 复核
+  // （同 stopService），中间只隔 rm plist——不触碰 disabled 表，第二次调用必然成功，
+  // 是纯冗余，还让一次 uninstall 双递增 epoch。位刻意不清（launchctl 无清除动词，
+  // 见函数头注释）；plist 被别的途径放回时，残留的 disabled 位正是想要的语义
 
   // 重试入口是 stop 而非 uninstall：卸载完成后重跑 uninstall 会因「未安装且未装载」
   // 幂等返回，不会重试残留清理；stop 的游离内核路径（cleanupAll）才会再次提权
-  killResidualKernels({ mainOutcome: '服务已卸载', retryCommand: 'mihomo stop' });
+  await cleanupKernelsOrThrow({ mainOutcome: '服务已卸载', retryCommand: 'mihomo stop' });
 
   // 符号链是本工具装的，卸载时一并清掉（内核本体保留，那是 kernel 命令的资产）
   try {

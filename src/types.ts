@@ -185,8 +185,16 @@ export interface StopResult {
 
 export interface CleanupResult {
   killed: number;
+  /** 用户态逐个 kill 的失败数（root 路径与批量 pkill 不产出逐项失败） */
   failed: number;
+  /** 死亡等待与复核后仍在的主实例 PID */
   remaining: number[];
+  /**
+   * root 清理（pkill 脚本或 root 属主 pid 文件删除）的提权/脚本错误：
+   * SudoAuthError = 取消或密码错误（调用方按「已取消」包装），其余为脚本失败。
+   * null = 未提权或提权成功。remaining 为空但本字段非空 = 仅 pid 文件残留
+   */
+  sudoError: Error | null;
 }
 
 export interface StaleState {
