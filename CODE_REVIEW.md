@@ -21,7 +21,11 @@
 | 镜像用户的版本查询失败提示压制 | 提示补给的 else if 以 !mirrorInfo.mirror 为条件：显式 --mirror + 无代理 + 直连 API 不通（正是需要镜像的网络）时，限流提示与镜像/代理建议全跳过，只剩裸「更新失败: fetch failed」——压制条件本意是「别再建议镜像」，把 gh 认证/--proxy 出路一起吞了。拆成 apiProxy / useGh / 镜像三档指引。CLI 级用例（--mirror cdn --proxy 127.0.0.1:1 连接即拒、不依赖外网），反向验证转红 |
 | 判定不修/记录 | ① remove/add 并发同名订阅可留孤儿 yaml：subAdd 下载刻意不持锁（60s），A remove 提交时 B 的 yaml 未写出则 postCommit rm 落空、B 随后写盘——终态「无条目有孤儿文件」，grep 证实无 subscriptions/ 目录枚举消费方，仅 dir open subs 可见；修复需下载后二次确认归属，收益不抵复杂度。② stop 游离路径批量 pkill 理论上可杀并发 start 刚拉起的内核（B 读 status 未装载 → A bootstrap 起内核 → B 读 pids 命中 → pkill，KeepAlive 拉回而此路径不 bootout）——与已接受的「探测与动作隔次查询」同族、方向相反，触发需精确交错。两项均记录在「未覆盖与待复核」 |
 | **复查补记**（第四轮修复合入后对 b3ed5db 的再审查，同批修正） | ① **bootstrap 幂等的 print 复读打破了锁内预算立项**：exit 5 时锁内新增一次默认 5s 调用，最坏 15s > LOCK_STALE_MS（10s）——修复处理的撞车场景本身必然走这条慢路径，而立项注释把「强夺 = 停止计数判据整体绕过」写得很死。修法：start/stop 两侧锁内调用统一 SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS（3s），start 侧正常两次 6s、失败分支三次 9s，收回阈值内；立项注释、CLAUDE.md 预算句同步改写。**测试缺口同批补**：stop 侧早有「3×3<10」断言，start 侧破坏无任何测试挡着（靠复查人工算出）——补对称断言「失败分支 3×3<10」，反向验证（常量改回 5s）两侧齐红。② **缓存失败回滚的 hint 命令级错位**：hint 写「可重试: mihomo sub update」，但 add 路径失败后条目已回滚删除，照做只得「没有订阅」——而 update 路径根本不显示 hint（printUpdateResult 只取 error 首行）。中性化为「订阅文件已随失败回滚删除」。③ reset.ts 两处注释在反向验证的删除/恢复循环中各残留一份副本（删除串与插入串不对称所致）——biome/typecheck/测试都不挡注释重复，diff 精读抓出 |
-| 全量验证 | typecheck / **730 测试**（714 → 730，+16）/ Biome（85+ 文件，非 0）/ build 全绿。13 项修复的反向验证逐项还原转红后恢复；三进程 bootstrap 用例顺带坐实了 ensureServiceSymlink 竞态的历史存在（修复前该用例第一步即 EEXIST 裸错误）；复查批的预算断言反向验证（常量还原 5s）两侧齐红 |
+| 全量验证 | typecheck / **732 测试**（714 → 732，+18）/ Biome（85+ 文件，非 0）/ build 全绿。13 项修复的反向验证逐项还原转红后恢复；三进程 bootstrap 用例顺带坐实了 ensureServiceSymlink 竞态的历史存在（修复前该用例第一步即 EEXIST 裸错误）；复查批的预算断言反向验证（常量还原 5s）两侧齐红；start 侧慢 launchctl 时序用例（第六轮补）反向验证（enable 还原 5s）转红 |
+
+## 第六轮复查（剩余模块 + 交叉回归，零确认问题）
+
+第六轮换面：此前从未作为主角的剩余模块（lifecycle/spinner/proxy-probe/colors/log-files/open/constants，593 行全读）+ 前五轮修复的交叉回归（10 项逐消费方核对），独立复查**零确认问题**。要点：锁内 3s 化的实测余量两个数量级（launchctl print 20 次实测 max 22ms）；redact 参数化对 add/update 三处调用零影响；删 `reset config` 别名后全仓无残留合法用法引用；kernel 三档提示 8 种条件组合推演无漏洞。同批补 start 侧慢 launchctl 时序用例（停等对称面拉平），反向验证转红。
 
 ---
 
