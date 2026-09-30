@@ -143,6 +143,11 @@ export async function cmdKernel(args: string[]): Promise<void> {
     }
     throw new CliError(err.message, { label: '更新失败', hint });
   }
+  // 首选 gh 认证查询、实际却回退直连成功：spinner 说的是「gh 认证通道」，
+  // 不点明的话用户无法核对版本信息实际来自哪条路
+  if (info.ghFallbackToDirect) {
+    console.log(colors.gray('gh 查询不可用，已回退直连 GitHub API 获取版本信息'));
+  }
   console.log(`当前: ${info.current}`);
   console.log(`最新: ${info.latest}`);
 

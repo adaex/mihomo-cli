@@ -251,6 +251,8 @@ export interface ReleaseQueryOptions {
    * 才退。abort 经 execFile 的 signal 把子进程一并杀掉，管道即刻释放
    */
   signal?: AbortSignal;
+  /** gh 首选查询失败、改走回退路径（代理 curl / 直连 fetch）时回调一次 */
+  onGhFallback?: () => void;
 }
 
 /**
@@ -295,7 +297,9 @@ async function getLatestRelease(repo: string, opts: ReleaseQueryOptions = { prox
       // 再吃一次同样的中止（或更糟——curl 路径对 AbortError 的翻译不认识），
       // 直接把中止往上抛，让调用方的 catch 降级
       if (opts.signal?.aborted) throw e;
-      /* 回退到代理/直连路径 */
+      // gh 没走通（未登录/被墙/超时），回退代理或直连；通知调用方实际响应来源，
+      // spinner 文案与回退后的路径不能悄悄不一致
+      opts.onGhFallback?.();
     }
   }
 
@@ -335,7 +339,14 @@ async function getLatestRelease(repo: string, opts: ReleaseQueryOptions = { prox
 
 export async function checkUpdate(opts: ReleaseQueryOptions): Promise<KernelUpdateInfo> {
   const currentVersion = getKernelVersion();
-  const latest = await getLatestRelease(GITHUB_REPO, opts);
+  // gh 首选但失败回退直连时（无代理可用才会首选 gh；回退目标即直连 fetch），
+  // 让命令层知道实际响应没走 gh，补一行说明
+  let ghFallbackToDirect = false;
+  const optsWithFallbackNote: ReleaseQueryOptions = {
+    ...opts,
+    onGhFallback: opts.useGh && !opts.proxy ? () => (ghFallbackToDirect = true) : undefined,
+  };
+  const latest = await getLatestRelease(GITHUB_REPO, optsWithFallbackNote);
   const latestVersion = latest.tag_name;
 
   let needsUpdate = false;
@@ -357,6 +368,7 @@ export async function checkUpdate(opts: ReleaseQueryOptions): Promise<KernelUpda
     needsUpdate,
     assets: latest.assets,
     release: latest,
+    ghFallbackToDirect,
   };
 }
 
