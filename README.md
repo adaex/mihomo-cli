@@ -9,7 +9,7 @@
 - 🌐 **订阅管理** - 添加/更新订阅，支持流量统计和到期时间显示
 - 🔄 **自动更新** - 启动时自动检查并更新过期订阅
 - 🔍 **模糊匹配** - `sub use` / `update` / `remove` 均支持订阅名称模糊匹配（大小写不敏感）
-- 📝 **覆写配置** - 在订阅基础上进行自定义覆写，支持强制覆盖、数组合并、按 name 就地 patch、按订阅名通配限定作用域、单文件启停
+- 📝 **覆写配置** - 在订阅基础上进行自定义覆写：YAML 声明式覆盖/前插/追加，JS 脚本自由编程化处理，按订阅名/域名限定作用域，单文件启停
 - 🔄 **智能重启** - `sub use` 切换订阅、`ow on/off` 切换覆写后自动重启
 - 🚀 **进程管理** - 启动/停止/切换模式，自动清理残留进程
 - 🛡️ **服务托管** - 基于 launchd，崩溃/登录自动拉起，代理后台常驻；日常 `start`/`stop` **全程免密**
@@ -404,45 +404,78 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 
 ### 使用方法
 
-1. 在 `~/.mihomo-cli/` 目录下创建覆写文件：
+1. 在 `~/.mihomo-cli/` 目录下创建覆写文件，两类按需混用：
    - `overwrite.yaml` — 主覆写文件（只认 `.yaml`；写成 `overwrite.yml` 不会被加载，CLI 会打一行提示）
    - `overwrite.dns.yaml` — 按功能拆分的扩展文件（`overwrite.*.yaml` / `overwrite.*.yml` 格式）
-2. `overwrite.yaml` 始终最先加载，扩展文件按文件名排序加载
+   - `overwrite.js` / `overwrite.*.js`（或 `.mjs` / `.cjs`）— JS 覆写脚本，可做任意编程化处理（见下文「JS 覆写脚本」）
+2. 加载顺序：YAML 全部在前（`overwrite.yaml` 最先，扩展文件按文件名排序），JS 脚本在后（`overwrite.js` 最先，扩展脚本按文件名排序）——声明式基底，程序化后处理
 3. 覆写**默认即启用**，放好文件后重启生效（`mihomo start`）；如曾 `ow off` 禁用过，用 `mihomo ow on` 重新启用（会自动重启）
 
-### 特殊语法
+### 特殊语法（YAML）
 
-覆写配置支持以下特殊操作符，**只在覆写文件的顶层生效**：
+YAML 覆写支持以下操作符，**只在覆写文件的顶层生效**：
 
 | 语法     | 作用                                      | 示例                 |
 | -------- | ----------------------------------------- | -------------------- |
 | `key!`   | 强制覆盖整个对象（不深度合并）            | `dns!`: { ... }      |
 | `+key`   | 数组前置插入                              | `+proxies`: [...]    |
 | `key+`   | 数组追加                                  | `rules+`: [...]      |
-| `~key`   | 按 `name` 就地合并数组元素，**找不到则追加** | `~proxies`: [...]  |
-| `~?key`  | 按 `name` 就地合并，**找不到则忽略**（不新增） | `~?proxy-groups`: [...] |
-| `<+key>` | 顶层键名以 `+`/`~` 等符号开头时转义（仅顶层需要，见下文） | `<+dns>`: { ... } |
 
-操作符可与转义组合（如 `+<+dns>` 前置到名为 `+dns` 的键、`~<weird>` 按 name 合并名为 `weird` 的数组）。
+普通键（无操作符）对映射做逐键深度合并、对数组整体替换。带条件的修改（按 `name` 找元素、改部分字段、找不到时跳过或追加之类）不设操作符——那是有逻辑的变换，写 JS 脚本表达（见下文），意图直接写在代码里。
 
-**嵌套层（映射里的映射）的键一律按字面名合并**，`+`/`~`/`!` 在那里不是操作符——mihomo 原生配置的键名本来就可能带这些符号（如 `nameserver-policy`、`hosts` 里的 `+.域名` 通配键），直接照写即可，不需要也不能用 `<...>` 转义：
+> 历史版本曾有 `~key` / `~?key`（按 name 合并数组元素）与 `<key>` 尖括号转义，已移除：现在写这些形态会直接报错并提示改用 JS 脚本，不会被静默当成字面键名。
+
+**嵌套层（映射里的映射）的键一律按字面名合并**，`+` / `!` 在那里不是操作符——mihomo 原生配置的键名本来就可能带这些符号（如 `nameserver-policy`、`hosts` 里的 `+.域名` 通配键），直接照写即可：
 
 ```yaml
 dns:
   nameserver-policy:
     '+.corp.example.com': 'https://dns.corp.example.com/dns-query'
 hosts:
-  '+.google.cn': 8.8.8.8   # 嵌套层不需要转义；写成 <+.google.cn> 会连尖括号原样进配置、永不匹配
+  '+.google.cn': 8.8.8.8
 ```
 
-嵌套映射的普通键仍逐键深度合并；要改嵌套的数组（如 `dns.nameserver`）请写全量值（普通键整体替换）。嵌套层出现形似操作符的键名（如 `~x`、`x+`）时会提示一行「已按字面处理」——若那是 mihomo 原生键可忽略（`+.` 开头的通配域名不提示）。
+嵌套映射的普通键仍逐键深度合并；要改嵌套的数组（如 `dns.nameserver`）请写全量值（普通键整体替换）。
 
-`~key` 与 `~?key` 都用于**只修改数组里某一个元素的部分字段**，而不动其余元素、也不必复制整个元素，以 `name` 为主键匹配。两者只在「找不到同名元素」时不同：
+> `+key` / `key+` 是**数组语义**：若目标键已存在且不是数组（如 `log-level+` 作用于字符串），会直接报错而非静默包成单元素数组——后者会生成 mihomo 无法解析的配置。要覆盖非数组值请用 `key!`（强制覆盖）或直接写 `key`（深度合并）。
 
-- **`~key` 追加**——补丁本身就是个完整元素时用它，比如下文 ssh 出口那节用 `~proxies` 新增一个 socks5 节点。
-- **`~?key` 忽略**——补丁只带 `name` 和一两个要改的字段时用它，表达「订阅下发了这个元素我才改它」。典型场景：同一机场的多条订阅套餐不同，`Developer` 分组只在其中一条里有；用 `~key` 会把补丁追加成一个缺 `type` 的残缺分组，内核直接拒绝加载整份配置（`ProxyGroup Developer: '' has unset fields: type`），用 `~?key` 则在没有该分组的订阅上自动跳过。被跳过时会打印一行提示，避免与「分组名拼错」混淆。
+### JS 覆写脚本
 
-> `~key` / `~?key` / `+key` / `key+` 都是**数组语义**：若目标键已存在且不是数组（如 `~dns` 作用于映射、`log-level+` 作用于字符串），会直接报错而非静默包成单元素数组——后者会丢掉原有字段并生成 mihomo 无法解析的配置。要覆盖非数组值请用 `key!`（强制覆盖）或直接写 `key`（深度合并）。
+YAML 操作符只保留最简单的三种，其余一律写脚本自由处理。脚本是一个默认导出的函数，**就地修改**传入的 `config`（订阅 + YAML 覆写合并后的结果），返回值忽略：
+
+```js
+// ~/.mihomo-cli/overwrite.custom.js
+export default function (config, ctx) {
+  // 把订阅下发的 Developer 分组默认选中改为 TW Fixed IP；
+  // 该分组不存在时跳过并提示（不用为它改 match 作用域）
+  const groups = config['proxy-groups'] || [];
+  const developer = groups.find(g => g && g.name === 'Developer');
+  if (developer) {
+    developer['default-selected'] = 'TW Fixed IP';
+  } else {
+    ctx.warn('当前订阅无 Developer 分组，跳过 default-selected 注入');
+  }
+}
+```
+
+`ctx` 提供的上下文：
+
+| 字段 | 内容 |
+| ---- | ---- |
+| `ctx.subscription.name` | 当前订阅名 |
+| `ctx.subscription.url` | 订阅原始 URL |
+| `ctx.subscription.host` | 预解析的 URL hostname（解析失败为空串），按域名限定作用域时用它 |
+| `ctx.mode` | 本次构建的运行模式：`'mixed'` 或 `'tun'` |
+| `ctx.warn(message)` | 发一条提示进 warnings 通道，`status` / `doctor` / `config` 的输出可见 |
+
+约定与边界：
+
+- **必须同步**：返回 Promise 会报错。脚本是纯数据变换，没有要等网络的场景
+- **全信任**：脚本以你的用户身份运行（和 `.zshrc` 一个待遇），不做沙箱与超时——别装来路不明的覆写脚本
+- **改不动系统锁定项**：`mixed-port`、`external-controller`、`allow-lan` 等入站与控制面键由 CLI 管理，脚本设置了会被剥除并提示（与 YAML 覆写同一条边界）
+- **只读命令也会执行脚本**：`status` / `doctor` / `config` 走同一条构建路径，脚本顶层别写副作用（顶层只定义函数，变换都在导出函数里做）
+- 脚本抛错或语法错误与坏 YAML 文件同款姿态：`ow` / `status` 里「加载失败」可见，`start` / `doctor` 硬失败并带文件名
+- 脚本受 `mihomo ow off` 全局开关管理；想临时停用单个脚本，改个扩展名（如 `.bak`）即可
 
 ### 作用域限定（match）
 
@@ -450,25 +483,22 @@ hosts:
 
 | 匹配键        | 作用                          |
 | ------------- | ----------------------------- |
-| `name`         | 按订阅名匹配，支持 `*` / `?` 通配（大小写不敏感，与 `sub use` 口径一致） |
-| `subscription` | `name` 的同义写法，能力完全相同；两者不可同时出现 |
-| `url-domain`   | 按订阅 URL 的 hostname 后缀匹配（大小写不敏感） |
+| `name`         | 按订阅名匹配，支持尾部 `*`（前缀）与头部 `*`（后缀）两种通配（大小写不敏感，与 `sub use` 口径一致） |
+| `url-domain`   | 按订阅 URL 的 hostname 后缀匹配（字面比对，无通配） |
 
-订阅名支持 shell 风格通配，**全串匹配**：
+订阅名只支持两种通配形态，其余（多 `*`、中间 `*`、`?`、单独 `*`）报错——更复杂的匹配写 JS 脚本（`ctx.subscription.name` 自己判）：
 
 | 写法 | 命中 | 不命中 |
 | ---- | ---- | ------ |
-| `edu*` | `edu1`、`edu2`、`edu-hk` | `mini1`、`xedu1`（不是半匹配） |
-| `edu?` | `edu1`、`edu2` | `edu-hk`（`?` 只顶一个字符） |
-| `edu1` | `edu1` | `edu10`（不含通配符时就是精确匹配） |
-
-只有 `*` 和 `?` 是通配符，`.`、`+`、`[` 等字符一律按字面处理（不是正则）。
+| `edu*` | `edu1`、`edu2`、`edu-hk` | `mini1`、`xedu1`（前缀不越过串首） |
+| `"*edu"` | `miniedu` | `edu1`（后缀不越过串尾） |
+| `edu1` | `edu1` | `edu10`（无通配符时就是精确匹配） |
 
 > **以 `*` 开头的值必须加引号**：YAML 里 `*` 开头是别名语法，`name: *edu` 会解析失败、整个文件被跳过（CLI 会提示加引号）。写成 `name: "*edu"` 即可。结尾的 `*`（`edu*`）不受影响
 
-`match` 块**写错会直接报错**（键名拼错、值为空、空块、`name` 与 `subscription` 同时出现），而不是静默忽略后对所有订阅生效——写了 `match` 显然是想限定作用域，悄悄放宽比报错危险得多。
+`match` 块**写错会直接报错**（键名拼错、值为空、空块、写已移除的 `subscription` 键），而不是静默忽略后对所有订阅生效——写了 `match` 显然是想限定作用域，悄悄放宽比报错危险得多。历史写法 `subscription` 与 `name` 同义、已收掉，写它直接报错指明改写 `name`。
 
-> `url-domain` 命中该域名下的**所有**订阅。同一机场的多条订阅（如 `edu1`、`mini1`）URL 往往同域名，用 `url-domain` 会一并生效；要在同机场内按套餐区分，用 `name` 通配（如 `name: edu*`）。若只是担心某条订阅没有要改的分组，用 `~?key` 就够了（它会自动跳过），不必为此改作用域；`match` 应当按「这份覆写在语义上属于哪些订阅」来写。
+> `url-domain` 命中该域名下的**所有**订阅。同一机场的多条订阅（如 `edu1`、`mini1`）URL 往往同域名，用 `url-domain` 会一并生效；要在同机场内按套餐区分，用 `name: edu*`。若只是担心某条订阅没有要改的分组，在 JS 脚本里判（找不到就 `ctx.warn` 跳过），不必为此改作用域；`match` 应当按「这份覆写在语义上属于哪些订阅」来写。JS 脚本没有 match 机制——作用域判断写在脚本开头（`if (!ctx.subscription.name.startsWith('edu')) return;`）。
 
 `mihomo status` 会按当前活跃订阅区分「生效」与「不适用」，括号里只列本次真正参与合并的文件：
 
@@ -519,18 +549,35 @@ dns!:
 ```
 
 ```yaml
-# ~/.mihomo-cli/overwrite.glados.yaml
-# 只对该机场 edu 系列的订阅生效：把订阅下发的 Developer 分组默认选中改为 TW Fixed IP
-match:
-  name: edu*                      # edu1、edu2 命中；同机场的 mini1 不命中
-  url-domain: glados-config.com   # 与上一条同时满足才生效（AND）
+# ~/.mihomo-cli/overwrite.dns.yaml
+# dns! 强制覆盖整个对象（不与订阅的 dns 深度合并）
+dns!:
+  enable: true
+  enhanced-mode: fake-ip
+  nameserver:
+    - 223.5.5.5
 
-# 用 ~? 而非 ~：该机场的精简套餐没有 Developer 分组，
-# ~ 会把这段补丁追加成一个缺 type 的残缺分组、导致内核拒绝加载；
-# ~? 在没有该分组的订阅上自动跳过（并打印一行提示）
-~?proxy-groups:
-  - name: Developer
-    default-selected: TW Fixed IP
+# 将规则放到订阅规则之前，避免被已有 MATCH 提前匹配
++rules:
+  - 'DOMAIN-SUFFIX,example.com,DIRECT'
+```
+
+```js
+// ~/.mihomo-cli/overwrite.glados.js
+// 只对该机场 edu 系列的订阅生效：把订阅下发的 Developer 分组默认选中改为 TW Fixed IP。
+// 作用域与「分组不存在则跳过」都写在代码里——JS 脚本没有 match 机制
+export default function (config, ctx) {
+  const { name, host } = ctx.subscription;
+  if (!name.startsWith('edu')) return;                       // 同机场的 mini1 不命中
+  if (host !== 'glados-config.com' && !host.endsWith('.glados-config.com')) return;
+  const developer = (config['proxy-groups'] || []).find(g => g && g.name === 'Developer');
+  if (developer) {
+    developer['default-selected'] = 'TW Fixed IP';
+  } else {
+    // 精简套餐没有该分组：提示并跳过，不追加残缺分组
+    ctx.warn('当前订阅无 Developer 分组，跳过 default-selected 注入');
+  }
+}
 ```
 
 > 注：`default-selected` 由 mihomo 内核决定默认选中项，优先级低于 `store-selected` 缓存的历史选择。若之前手动选过、且开启了 `store-selected`，需 `mihomo reset data` 清缓存后才能看到默认值接管。
@@ -563,7 +610,7 @@ proxy-providers:
   - 'DOMAIN-SUFFIX,corp.example.com,SecondAirport'
 ```
 
-provider 节点与订阅节点同池参与分组选择；节点延迟与手动切换在 Web UI（`mihomo ui`）里操作。若想让订阅里已有的某个分组也纳入第二机场的节点，用 `~?proxy-groups` 按 name 就地 patch 该分组、加 `use` 字段（用 `~?` 而非 `~`：这是「改已有分组」，订阅里没有该分组时应跳过而不是新建一个残缺分组）
+provider 节点与订阅节点同池参与分组选择；节点延迟与手动切换在 Web UI（`mihomo ui`）里操作。若想让订阅里已有的某个分组也纳入第二机场的节点，写 JS 脚本按 name 找到该分组、加 `use` 字段（找不到时 `ctx.warn` 跳过——订阅里没有该分组时不该新建一个残缺分组）
 
 ### 用 ssh -D 做节点
 
@@ -571,7 +618,7 @@ provider 节点与订阅节点同池参与分组选择；节点延迟与手动�
 
 ```yaml
 # ~/.mihomo-cli/overwrite.ssh.yaml
-~proxies:
+'proxies+':
   - {name: SSH-work, type: socks5, server: 127.0.0.1, port: 1080}
 +rules:
   - DOMAIN-SUFFIX,example.internal,SSH-work
@@ -614,7 +661,7 @@ mihomo doctor
   当前生效的覆写文件:
     overwrite.glados.yaml (url-domain=glados-config.com)
     overwrite.seal.yaml (全局)
-  若报错的元素来自覆写追加（~key 未匹配到同名元素时会新增），改用 ~?key 可在缺少该元素的订阅上跳过。
+  若报错的元素来自覆写（YAML 追加或 JS 脚本注入），检查对应的覆写文件与脚本。
 
   请修正订阅或覆写；当前运行时配置未改动。
 ```

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### 破坏性变更（覆写 DSL 裁边）
+
+- **移除覆写操作符 `~key` / `~?key`（按 name 合并数组元素）与 `<key>` 尖括号转义**：`~` 是唯一「一句话说不清」的操作符（按 name 合并 + 「未命中追加/跳过」两态语义），历史上贡献过残缺分组事故；转义与配套的嵌套形似告警则服务不存在的键名形态。保留 `key!`（替换）、`+key`（前插）、`key+`（追加）三个纯数据操作符。**写这些旧形态现在直接报错并指向迁移路径，不会被静默当字面键名**。带条件的变换（按 name 找元素、改部分字段、找不到时跳过等）改用下面的 JS 脚本。
+- **`match` 的 `subscription` 同义键收掉**：只认 `name`（语义不变），写 `subscription` 报错指明改名。订阅名通配收窄为两种形态：尾部 `*`（前缀，`edu*`）与头部 `*`（后缀，`*edu`），其余（`?`、多 `*`、中间 `*`、单独 `*`）报错——通用 glob 匹配器已删（曾实测把 CLI 挂死 70 秒），复杂匹配写 JS 脚本。
+
+### 新增
+
+- **JS 覆写脚本**（`overwrite.js` / `overwrite.*.{js,mjs,cjs}`）：默认导出一个函数，就地修改订阅 + YAML 覆写合并后的配置，返回值忽略。`ctx` 提供 `subscription`（name/url/预解析 host）、`mode`（mixed/tun）与 `warn(message)`（提示进 status/doctor/config 的 warnings 通道）。约定：必须同步（返回 Promise 报错）、全信任不沙箱（同 `.zshrc`）、系统锁定项（端口/控制面/allow-lan 等）照样剥除并告警、`ow off` 全局开关同样管脚本、坏脚本与坏 YAML 文件同款姿态（诊断面「加载失败」可见、start/doctor 硬失败）。加载顺序：YAML 全部在前、脚本在后。
+- 迁移示例：原 `~?proxy-groups: [{name: Developer, default-selected: TW}]` 改为脚本 `(config['proxy-groups'] || []).find(g => g.name === 'Developer')` 后改字段、找不到 `ctx.warn` 跳过；原 `~proxies` 追加节点改 `'proxies+':`（数组追加）。README「覆写配置」章节已按新机制重写并附完整示例。
+
 ### 移除
 
 - 删除 npm preuninstall 钩子设施（`scripts/preuninstall.mjs`、`lifecycle-script.spec.ts`、package.json 的钩子与 files 条目）：npm 11.19.0 实测三个卸载场景均不执行 uninstall 生命周期脚本，机制自始无效，与 v4.13.0 删补全子系统同一判据（设施规模与真实使用面不匹配）；README 卸载段早已不依赖该提醒。

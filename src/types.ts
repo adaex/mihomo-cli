@@ -73,10 +73,9 @@ export interface BuildConfigResult {
   /**
    * 本次构建实际生效的覆写文件展示摘要（已按开关与 match 作用域筛选），
    * 形如 `overwrite.glados.yaml (url-domain=glados-config.com)`、`overwrite.seal.yaml (全局)`。
-   * 仅供内核校验失败时附在错误里定位根因——`~key` 未命中同名元素会追加新元素，
-   * 补丁落到不含该元素的订阅上就会造出缺必需字段的残缺项，而内核只报「哪个键坏了」，
-   * 不会说「它是覆写加进来的」。存摘要而非 OverwriteFileEntry：错误路径只需展示，
-   * 不该把整份覆写 config 拖进类型。
+   * 仅供内核校验失败时附在错误里定位根因——覆写追加的元素缺必需字段时内核只报
+   * 「哪个键坏了」，不会说「它是覆写加进来的」。存摘要而非 OverwriteFileEntry：
+   * 错误路径只需展示，不该把整份覆写 config 拖进类型。
    */
   overwriteSummaries: string[];
 }
@@ -96,10 +95,34 @@ export interface PreparedConfig {
 export interface OverwriteFileEntry {
   name: string;
   path: string;
-  config: Record<string, unknown>;
+  /** YAML 覆写文件的合并内容（match/enabled 元数据键已剥离）；脚本文件无此字段 */
+  config?: Record<string, unknown>;
+  /** JS 覆写脚本的默认导出函数；YAML 文件无此字段。两类文件二选一 */
+  transform?: OverwriteTransform;
   match?: OverwriteMatch;
-  /** 文件内 `enabled:` 元数据键的规整值；缺省即 true。false 表示不参与合并 */
+  /** 文件内 `enabled:` 元数据键的规整值；缺省即 true。false 表示不参与合并（仅 YAML 文件有意义） */
   enabled?: boolean;
+}
+
+/**
+ * JS 覆写脚本的变换函数：**就地修改**传入的 config，返回值忽略。必须同步——
+ * 返回 Promise 报错（buildConfig 是同步管线，纯转换也没有要等网络的场景）。
+ * 全信任模型：脚本以当前用户身份运行（同 .zshrc），不沙箱、不超时；
+ * 但它改不动系统锁定项——脚本执行后 LOCKED_CONFIG_KEYS 照常剥除（见 buildConfig）
+ */
+export type OverwriteTransform = (config: Record<string, unknown>, ctx: OverwriteScriptContext) => void;
+
+/** 传给覆写脚本的上下文 */
+export interface OverwriteScriptContext {
+  /**
+   * 当前订阅（与 match 同源的信息）。host 是预解析的 URL hostname（解析失败为空串），
+   * 脚本要按域名限定作用域时用它，不必自己 try URL
+   */
+  subscription: { name: string; url: string; host: string };
+  /** 本次构建的运行模式 */
+  mode: 'mixed' | 'tun';
+  /** 发一条告警进 warnings 通道（status / doctor / config 的输出可见） */
+  warn: (message: string) => void;
 }
 
 /** 加载失败（YAML 语法错/元数据键非法等）的覆写文件：诊断面要带着错误列出它 */
@@ -117,6 +140,8 @@ export interface BrokenOverwriteFile {
 export interface OverwriteFileInfo {
   name: string;
   path: string;
+  /** yaml = 声明式覆写（有 keys/作用域）；script = JS 脚本（无这两样，字段行显示占位） */
+  kind: 'yaml' | 'script';
   keys: string[];
   scope?: string;
   /** 该文件自身是否启用（文件内 `enabled` 键）；与 OverwriteListResult.enabled 的全局开关是两层 */
@@ -234,55 +259,19 @@ export interface ParsedOverrideKey {
   forceOverwrite: boolean;
   arrayPrepend: boolean;
   arrayAppend: boolean;
-  arrayMergeByName: boolean;
-  /**
-   * `~?key`：只改已有元素，按 name 匹配不到就**忽略该补丁**（`~key` 则追加）。
-   * 用于「订阅下发了这个分组我才改它」——补丁往往只带 name + 一两个字段，
-   * 被追加进去就是个缺 type 的残缺分组，内核直接拒绝加载整份配置。
-   */
-  arrayMergeOnly: boolean;
-}
-
-/** `~?key` 匹配不到同名元素而被跳过的补丁，供启动时告警 */
-export interface SkippedMerge {
-  /** 目标键，如 proxy-groups */
-  key: string;
-  /** 补丁的 name（无 name 时为占位串） */
-  name: string;
-  /** 来源覆写文件名，由 applyOverwrite 补上 */
-  file?: string;
-}
-
-/**
- * 嵌套层形似 DSL 操作符、已按字面键名处理的键，供启动时告警。
- * 操作符只在覆写文件顶层生效；嵌套层的 `~x`/`x!`/`x+`/`<...>` 等形态大概率是
- * 把顶层语法写进了嵌套层（用户以为操作符会生效），记一条提示。`+.` 开头不记：
- * 那是 mihomo 原生通配域名的常见形态。
- */
-export interface OperatorShapedKey {
-  /** 原样键名（含操作符形态，如 "+rules"） */
-  key: string;
-  /** 来源覆写文件名，由 applyOverwrite 补上 */
-  file?: string;
 }
 
 /** 覆写文件作用域限定：所列条件需同时满足（AND），条件值为数组时其内部为 OR。 */
 export interface OverwriteMatch {
   /**
-   * 按订阅名匹配，支持 `*`（任意多字符）/ `?`（单字符）通配，全串匹配、大小写不敏感；
-   * 无通配字符时即精确匹配。用户写的 `name` 与 `subscription` 同义，加载时**归一到本字段**，
-   * 判据（matchesScope）只读这一个键。
+   * 按订阅名匹配，大小写不敏感（与 `sub use` 的解析口径一致）。三种形态：
+   * 精确值、尾部单个 `*`（前缀，如 `edu*`）、头部单个 `*`（后缀，如 `*edu`）；
+   * 其余通配形态（多 `*`、中间 `*`、`?`）在加载时报错——通用匹配器已删，
+   * 更复杂的匹配写 JS 脚本（见 OverwriteTransform）
    */
-  subscription?: string | string[];
-  /** 按订阅 URL 的 hostname 后缀匹配 */
+  name?: string | string[];
+  /** 按订阅 URL 的 hostname 后缀匹配（字面比对，无通配） */
   'url-domain'?: string | string[];
-  /**
-   * 非条件字段：用户实际书写的订阅名键（`name` 或 `subscription`），仅供展示回显。
-   * 判据统一读 `subscription`，但 `ow list` 与内核拒绝提示按原键名显示——展示是给人
-   * 按图索骥用的，回显一个在文件里搜不到的键名会让人找不到源头。
-   * 新增条件键时记得同步 summarizeMatch 的跳过判断。
-   */
-  subscriptionKey?: 'name' | 'subscription';
 }
 
 /** 构建配置时的订阅上下文，用于按 match 过滤覆写文件 */

@@ -76,8 +76,11 @@ function run(args: string[]): { status: number | null; stdout: string; output: s
 
 describe('doctor：体检透传配置构建的 warnings', () => {
   it('校验通过但有合并提示时，warnings 逐条挂到配置构建项下', () => {
-    // 分组名拼错的 ~? 补丁会被跳过——正是 buildResult.warnings 要暴露、而 doctor 此前丢弃的信号
-    fs.writeFileSync(path.join(dataDir, 'overwrite.yaml'), '~?proxy-groups:\n  - { name: TYPO-GROUP, type: select, proxies: [HK-1] }\n');
+    // 覆写脚本 ctx.warn 的提示正是 buildResult.warnings 要暴露、而 doctor 此前丢弃的信号
+    fs.writeFileSync(
+      path.join(dataDir, 'overwrite.js'),
+      'export default function (config, ctx) { ctx.warn("分组 TYPO-GROUP 未匹配到当前订阅中的同名元素，已跳过"); }\n',
+    );
 
     const { stdout, output } = run(['doctor']);
     assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);

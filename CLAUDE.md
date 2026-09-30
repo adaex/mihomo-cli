@@ -16,7 +16,7 @@ macOS 命令行客户端，TypeScript ESM，Node.js >= 22.22.1。入口 `src/ind
 | `settings.ts` | 设置、订阅列表、订阅缓存与原始配置读写 |
 | `subscription.ts` | 订阅下载、更新、配置准备与提交 |
 | `config.ts` | YAML 解析、覆写与系统配置合并、内核原生校验 |
-| `overwrite.ts` | 覆写加载、作用域过滤与合并语法 |
+| `overwrite.ts` | 覆写加载（YAML + JS 脚本）、作用域过滤与合并语法 |
 | `runtime.ts` | Mixed 服务与 TUN 临时进程的运行时入口 |
 | `service.ts` | 用户级 LaunchAgent、健康确认、热重载、遗留 root 服务清理 |
 | `process-probe.ts` / `process-start.ts` / `process-stop.ts` | 进程探测、TUN 启动与清理 |
@@ -74,7 +74,8 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 **配置与覆写**
 - 入站与控制面锁定清单的唯一真相是 `LOCKED_CONFIG_KEYS`；判定判据与上游核对方法见 D5，完整性由 `config-inbound-snapshot.spec.ts` 兜底
 - 合并闸门唯一出口 `selectActiveOverwriteFiles`；加载双路径（合并硬失败/诊断旁路）见 D7
-- 覆写操作符只在顶层生效；`~key` 未命中即追加是承诺行为，「只改已有」用 `~?key`
+- 覆写操作符（`key!`/`+key`/`key+`）只在顶层生效；带条件的变换（按 name 合并数组元素等）一律写 JS 脚本（`export default (config, ctx) => {}`，就地修改、必须同步），脚本在 YAML 之后、剥锁定键之前执行，改不动系统锁定项（LOCKED_CONFIG_KEYS 对脚本输出一视同仁）；`~`/`~?`/`<x>` 与 match 的 `subscription` 键已移除，写这些形态显式报错给迁移指引，不许静默当字面键
+- match 的 name 只支持尾部 `*`（前缀）与头部 `*`（后缀）两种通配，其余报错——不引入通用匹配器（正则转义实现曾有灾难性回溯）；JS 脚本无 match 机制，作用域写在脚本里
 - 配置解析只走 YAML（D6）； Mixed 清 tun 字段，TUN 强制 dns.enable=true
 
 **launchd 与进程**

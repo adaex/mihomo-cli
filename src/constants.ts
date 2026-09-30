@@ -120,6 +120,76 @@ export const TUN_CONFIG = {
   },
 };
 
+/**
+ * 系统锁定的入站/控制面键：只允许来自 settings 或系统约束，订阅与覆写（YAML 与
+ * JS 脚本 alike）显式提供时一律剥除（buildConfig）。判据与「刻意不锁」的清单见
+ * docs/decisions.md D5——新增入站/控制器键时按同一判据核对（上游 `config.Inbound`
+ * 字段全集 + `hub/executor.updateListeners()` 的逐个消费，不是按键名眼熟程度），
+ * 并把不在表内的键的理由写进 config-inbound-snapshot.spec 的 NOT_IN_LOCKED_TABLE。
+ *
+ * 物理上住在本表而非 config.ts：overwrite.ts 的脚本执行要拿它做前后快照告警
+ * （脚本设置的锁定键剥除时提示，不静默），而 config.ts import overwrite.ts，
+ * 反向 import 会循环依赖。
+ */
+export const LOCKED_CONFIG_KEYS = [
+  'mixed-port',
+  'port',
+  'socks-port',
+  'redir-port',
+  'tproxy-port',
+  'external-controller',
+  'external-controller-tls',
+  'external-controller-unix',
+  'external-controller-pipe',
+  'external-controller-cors',
+  'external-controller-routing-mark',
+  'external-doh-server',
+  'external-ui',
+  'external-ui-name',
+  'external-ui-url',
+  'secret',
+  // 完整入站代理服务端（监听 + 认证 + 自带证书字段）：订阅借此可把本机变成开放代理，
+  // 比 redir/tproxy 严重得多，与「入站由 mixed/tun 托管」的产品边界直接冲突
+  'tuic-server',
+  // 同族的另外两个入站服务端，只是形态是一行 URL 而非映射，更易被忽略：
+  // 上游 ParseSSURL/ParseVmessURL 直接把 URL 的 host 当 Listen，New() 再对
+  // `strings.Split(Listen, ",")` 逐个 bind——**不经过 genAddr**，故 allow-lan 与
+  // bind-address 都管不到它们（那两个只作用于 HTTP/Socks/Redir/TProxy/Mixed）。
+  // 即订阅里一行 `ss-config: ss://aes-128-gcm:pass@0.0.0.0:8388` 就是全网卡开放代理
+  'ss-config',
+  'vmess-config',
+  // 通用入站声明：`listeners` 每个元素自带 type + listen，一条
+  // `{type: socks, listen: 0.0.0.0, port: 18080}` 即在全网卡开出无鉴权 SOCKS 入站；
+  // `tunnels` 声明本地端口到目标地址的直通转发，同样自带监听地址。两者与上面三个
+  // 入站服务端满足完全相同的判据（订阅可指定监听地址、不经 genAddr、allow-lan 管不到），
+  // 只因在上游是 RawConfig 顶层字段而非 Inbound 结构体成员而容易被漏看。
+  // 需要额外入站的用户改由本机另起实例，不接受远端订阅投递
+  'listeners',
+  'tunnels',
+  // 局域网暴露与入站鉴权：实测链条（v1.19.30）：
+  // - `listener.genAddr(host, port, allowLan)` 在 allowLan 为真、bind-address 为默认
+  //   `"*"` 时返回 `":%d"`，即**全网卡监听**——订阅一行 `allow-lan: true` 就把 Mixed
+  //   端口挪出回环；bind-address 则直接指定监听地址
+  // - `authentication` 是这种情况下唯一的补偿防线，而 `skip-auth-prefixes` 能把它废掉：
+  //   `listener/http/server.go` 的 accept 循环里
+  //   `if inbound.SkipAuthRemoteAddr(conn.RemoteAddr()) { store = authStore.Nil }`，
+  //   `0.0.0.0/0` 命中所有来源，鉴权 store 被换成空实现
+  // 即远端订阅三行 YAML = 全网卡无鉴权开放代理。lan-allowed-ips/lan-disallowed-ips
+  // 同属这套来源准入判定，一并锁死；bind-address 单看无害（allow-lan 为假时 genAddr
+  // 根本不读它），锁它是为了消除「两个键配合才危险」这种要跨键推理的组合。
+  //
+  // allow-lan 恒为 false 由 config.ts 的 systemConfig 写入（**不在 BASE_CONFIG**，
+  // 理由同 mixed-port：锁定项是「恒定此值」，不是「用户没写时的默认」）。剥除来源盲，
+  // 故覆写也不能再给 Mixed 端口设 authentication——缓解是 allow-lan 已强制 false、
+  // Mixed 只在回环，残余威胁面是同机其他进程（见 CODE_REVIEW）
+  'allow-lan',
+  'bind-address',
+  'authentication',
+  'skip-auth-prefixes',
+  'lan-allowed-ips',
+  'lan-disallowed-ips',
+] as const;
+
 export const BASE_CONFIG: Record<string, unknown> = {
   // 注意：mixed-port、external-controller 与 allow-lan 不在此表——前两个来自
   // settings.ports（getPorts），allow-lan 恒为 false，三者都由 config.ts 单独写入

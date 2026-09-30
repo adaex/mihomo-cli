@@ -4,7 +4,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import * as yaml from 'js-yaml';
-import { BASE_CONFIG, TUN_CONFIG, YAML_MAX_ALIASES } from './constants.js';
+import { BASE_CONFIG, LOCKED_CONFIG_KEYS, TUN_CONFIG, YAML_MAX_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
 import { applyOverwrite, describeOverwriteScope, loadOverwriteFile, parseOverrideKey, selectActiveOverwriteFiles } from './overwrite.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
@@ -19,71 +19,8 @@ import type { BuildConfigResult, ConfigInfo, OverwriteScope } from './types.js';
  */
 export const SAFE_YAML_LOAD_OPTIONS: yaml.LoadOptions = { maxAliases: YAML_MAX_ALIASES };
 
-/**
- * 系统锁定的入站/控制面键：只允许来自 settings 或系统约束，订阅与覆写显式提供时
- * 一律剥除（buildConfig）。判据与「刻意不锁」的清单见 docs/decisions.md D5——
- * 新增入站/控制器键时按同一判据核对（上游 `config.Inbound` 字段全集 +
- * `hub/executor.updateListeners()` 的逐个消费，不是按键名眼熟程度），并把
- * 不在表内的键的理由写进 config-inbound-snapshot.spec 的 NOT_IN_LOCKED_TABLE。
- */
-export const LOCKED_CONFIG_KEYS = [
-  'mixed-port',
-  'port',
-  'socks-port',
-  'redir-port',
-  'tproxy-port',
-  'external-controller',
-  'external-controller-tls',
-  'external-controller-unix',
-  'external-controller-pipe',
-  'external-controller-cors',
-  'external-controller-routing-mark',
-  'external-doh-server',
-  'external-ui',
-  'external-ui-name',
-  'external-ui-url',
-  'secret',
-  // 完整入站代理服务端（监听 + 认证 + 自带证书字段）：订阅借此可把本机变成开放代理，
-  // 比 redir/tproxy 严重得多，与「入站由 mixed/tun 托管」的产品边界直接冲突
-  'tuic-server',
-  // 同族的另外两个入站服务端，只是形态是一行 URL 而非映射，更易被忽略：
-  // 上游 ParseSSURL/ParseVmessURL 直接把 URL 的 host 当 Listen，New() 再对
-  // `strings.Split(Listen, ",")` 逐个 bind——**不经过 genAddr**，故 allow-lan 与
-  // bind-address 都管不到它们（那两个只作用于 HTTP/Socks/Redir/TProxy/Mixed）。
-  // 即订阅里一行 `ss-config: ss://aes-128-gcm:pass@0.0.0.0:8388` 就是全网卡开放代理
-  'ss-config',
-  'vmess-config',
-  // 通用入站声明：`listeners` 每个元素自带 type + listen，一条
-  // `{type: socks, listen: 0.0.0.0, port: 18080}` 即在全网卡开出无鉴权 SOCKS 入站；
-  // `tunnels` 声明本地端口到目标地址的直通转发，同样自带监听地址。两者与上面三个
-  // 入站服务端满足完全相同的判据（订阅可指定监听地址、不经 genAddr、allow-lan 管不到），
-  // 只因在上游是 RawConfig 顶层字段而非 Inbound 结构体成员而容易被漏看。
-  // 需要额外入站的用户改由本机另起实例，不接受远端订阅投递
-  'listeners',
-  'tunnels',
-  // 局域网暴露与入站鉴权：实测链条（v1.19.30）：
-  // - `listener.genAddr(host, port, allowLan)` 在 allowLan 为真、bind-address 为默认
-  //   `"*"` 时返回 `":%d"`，即**全网卡监听**——订阅一行 `allow-lan: true` 就把 Mixed
-  //   端口挪出回环；bind-address 则直接指定监听地址
-  // - `authentication` 是这种情况下唯一的补偿防线，而 `skip-auth-prefixes` 能把它废掉：
-  //   `listener/http/server.go` 的 accept 循环里
-  //   `if inbound.SkipAuthRemoteAddr(conn.RemoteAddr()) { store = authStore.Nil }`，
-  //   `0.0.0.0/0` 命中所有来源，鉴权 store 被换成空实现
-  // 即远端订阅三行 YAML = 全网卡无鉴权开放代理。lan-allowed-ips/lan-disallowed-ips
-  // 同属这套来源准入判定，一并锁死；bind-address 单看无害（allow-lan 为假时 genAddr
-  // 根本不读它），锁它是为了消除「两个键配合才危险」这种要跨键推理的组合。
-  //
-  // allow-lan 恒为 false 由下方 systemConfig 写入（**不在 BASE_CONFIG**，理由同
-  // mixed-port：锁定项是「恒定此值」，不是「用户没写时的默认」）。剥除来源盲，
-  // 故覆写也不能再给 Mixed 端口设 authentication——缓解是 allow-lan 已强制 false、
-  // Mixed 只在回环，残余威胁面是同机其他进程（见 CODE_REVIEW）
-  'allow-lan',
-  'bind-address',
-  'authentication',
-  'skip-auth-prefixes',
-  'lan-allowed-ips',
-  'lan-disallowed-ips',
-] as const;
+/** 锁定键清单的唯一真相源在 constants.ts（挪走理由见彼处注释）；此处 re-export 保持既有消费点不破 */
+export { LOCKED_CONFIG_KEYS };
 
 /** 统一入口:带别名上限的 yaml.load,替代裸 yaml.load。 */
 export function loadYamlSafe(content: string): unknown {
@@ -210,23 +147,24 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   const settings = readSettings();
   const allFiles = settings.overwrite_enabled !== false ? loadOverwriteFile() : [];
   const overwriteFiles = selectActiveOverwriteFiles(allFiles, scope);
-  const { config: withOverwrites, skipped: skippedMerges, operatorShapedKeys } = applyOverwrite(subscriptionConfig, overwriteFiles);
+  // 脚本执行需要 mode/scope 构造 ctx（订阅信息与运行模式），YAML 合并不用
+  const {
+    config: withOverwrites,
+    scriptWarnings,
+    scriptLockedHits,
+  } = applyOverwrite(subscriptionConfig, overwriteFiles, {
+    mode: mode === 'tun' ? 'tun' : 'mixed',
+    scope,
+  });
   const overwriteSummaries = overwriteFiles.map(describeOverwriteScope);
 
   const systemConfig: Record<string, unknown> = {};
   // 系统约束覆盖显式设置时告警，节点与分流规则保持用户给出的内容
-  const lockedWarnings: string[] = [];
-  // `~?key` 跳过的补丁：静默跳过与「分组名拼错」无法区分，用户会以为覆写生效了
-  for (const s of skippedMerges) {
-    lockedWarnings.push(`覆写 ~?${s.key} 的补丁 "${s.name}" 未匹配到当前订阅中的同名元素，已跳过${s.file ? `（${s.file}）` : ''}`);
-  }
-  // 嵌套层形似操作符的键：已按字面处理，但用户可能以为操作符会生效（如把 +rules 写进
-  // dns 里）；若是 mihomo 原生键则无碍，文案里说清可忽略。不承诺最终保留——后续文件的
-  // key! 整体覆盖可能让它从终态消失（收集发生在逐文件合并期）
-  for (const n of operatorShapedKeys) {
-    lockedWarnings.push(
-      `覆写${n.file ? `文件 ${n.file} 的` : ''}嵌套键 "${n.key}" 形似操作符，已按字面键名处理；操作符只在覆写文件顶层生效，若这是 mihomo 原生键可忽略本提示`,
-    );
+  const lockedWarnings: string[] = [...scriptWarnings];
+  // 脚本设置的锁定键与 YAML 覆写同款告警（剥除对脚本输出一视同仁，但不静默——
+  // 脚本作者会困惑「设置了怎么没生效」）
+  for (const hit of scriptLockedHits) {
+    lockedWarnings.push(renderLockedWarning(`覆写脚本 ${hit.file} 中的`, hit.keys));
   }
   for (const [key, value] of Object.entries(BASE_CONFIG)) {
     if (!(key in withOverwrites)) {
@@ -237,11 +175,12 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   // 系统锁定项：入站端口与整个控制面只能来自 settings 与系统约束，订阅/覆写（远端不可信
   // 内容）显式设置时一律剥除；告警只对**生效的覆写文件**——机场订阅几乎必带 mixed-port/port
   // 等端口段，系统约束接管订阅入站是核心设计、用户没有行动手段，逐条告警只会刷屏；亲手写
-  // 覆写文件的高级用户才会以为这些键生效，提示才有意义。同时识别操作符形式（+secret /
-  // tls! 解析后的规范键）。清单与判据见 LOCKED_CONFIG_KEYS / D5。
+  // 覆写文件/脚本的高级用户才会以为这些键生效，提示才有意义。同时识别操作符形式（+secret /
+  // tls! 解析后的规范键）。清单与判据见 LOCKED_CONFIG_KEYS / D5。脚本文件无 config
+  // 键，它的锁定键命中在 applyOverwrite 里经前后快照检出（脚本LockedHits）
   for (const file of overwriteFiles) {
     const hit = new Set<string>();
-    for (const rawKey of Object.keys(file.config)) {
+    for (const rawKey of Object.keys(file.config ?? {})) {
       if ((LOCKED_CONFIG_KEYS as readonly string[]).includes(rawKey)) hit.add(rawKey);
       const parsedKey = parseOverrideKey(rawKey).key;
       if (parsedKey !== rawKey && ((LOCKED_CONFIG_KEYS as readonly string[]).includes(parsedKey) || parsedKey === 'tls')) {
@@ -250,9 +189,7 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
       if (rawKey === 'tls') hit.add('tls');
     }
     if (hit.size > 0) {
-      lockedWarnings.push(
-        `覆写文件 ${file.name} 中的系统锁定项已忽略: ${[...hit].join('、')}（入站端口、控制面、控制器证书与局域网/入站鉴权由 mihomo-cli 管理；端口与 controller secret 在 settings.json 配置，入站固定只监听回环，需要局域网入站请在本机另起一个 mihomo 实例）`,
-      );
+      lockedWarnings.push(renderLockedWarning(`覆写文件 ${file.name} 中的`, [...hit]));
     }
   }
   for (const key of LOCKED_CONFIG_KEYS) {
@@ -334,6 +271,11 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   return { config: merged, warnings: lockedWarnings, overwriteSummaries };
 }
 
+/** 锁定键告警的统一文案（YAML 覆写与 JS 脚本共用一份，避免两处解释漂移） */
+function renderLockedWarning(source: string, keys: string[]): string {
+  return `${source}系统锁定项已忽略: ${keys.join('、')}（入站端口、控制面、控制器证书与局域网/入站鉴权由 mihomo-cli 管理；端口与 controller secret 在 settings.json 配置，入站固定只监听回环，需要局域网入站请在本机另起一个 mihomo 实例）`;
+}
+
 export function writeMihomoConfig(configObj: Record<string, unknown>): void {
   ensureDirs();
   const content = dumpYaml(configObj);
@@ -349,7 +291,7 @@ const HINT_INDENT = '  ';
  *
  * 覆写清单只在**非空**时附加：没有覆写文件、`ow off`、本次订阅没命中任何 match，
  * 三种情况下问题都必在订阅本身，多打一段「当前生效的覆写文件: 无」是纯噪音，
- * 还会把排查方向引偏。反之也不做「未命中即告警」：ssh -D 那类靠 `~proxies`
+ * 还会把排查方向引偏。反之也不做「未命中即告警」：ssh -D 那类靠 `+proxies`
  * 追加节点的正常用法每次 start 都会刷屏，而它并没有出错。
  */
 export function buildKernelRejectHint(detail: string, overwriteSummaries: string[], opts: { timedOut?: boolean } = {}): string[] {
@@ -364,7 +306,7 @@ export function buildKernelRejectHint(detail: string, overwriteSummaries: string
     hint.push('', `${HINT_INDENT}当前生效的覆写文件:`);
     // 文件名与 match 值都来自用户文件，同内核输出一样消毒，防 ESC 序列污染终端
     for (const summary of overwriteSummaries) hint.push(sanitizeTerminal(`${HINT_INDENT.repeat(2)}${summary}`));
-    hint.push(`${HINT_INDENT}若报错的元素来自覆写追加（~key 未匹配到同名元素时会新增），改用 ~?key 可在缺少该元素的订阅上跳过。`);
+    hint.push(`${HINT_INDENT}若报错的元素来自覆写（YAML 追加或 JS 脚本注入），检查对应的覆写文件与脚本。`);
   }
 
   hint.push(

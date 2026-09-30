@@ -107,7 +107,7 @@ describe('配置构建保留用户的节点和分流语义', () => {
   });
 
   it('覆写增加的节点遵守原有 include-all 和 exclude-filter，不额外排除', () => {
-    fs.writeFileSync(path.join(tmpDir, 'overwrite.yaml'), '~proxies:\n  - {name: local, type: socks5, server: 127.0.0.1, port: 1080}\n');
+    fs.writeFileSync(path.join(tmpDir, 'overwrite.yaml'), "'proxies+':\n  - {name: local, type: socks5, server: 127.0.0.1, port: 1080}\n");
     try {
       const groups = [{ name: 'AUTO', 'include-all': true, 'exclude-filter': '过期' }];
       const { config } = buildConfig(dumpYaml({ 'proxy-groups': groups, rules: ['MATCH,AUTO'] }), 'mixed');
@@ -143,10 +143,14 @@ describe('配置构建保留用户的节点和分流语义', () => {
     }
   });
 
-  it('~key 元素补丁里的 __proto__ 字段同样被拦（递归合并共用同一入口）', () => {
-    fs.writeFileSync(path.join(tmpDir, 'overwrite.yaml'), '~proxy-groups:\n  - {name: A, __proto__: {evil: true}}\n');
+  it('多级嵌套的 __proto__ 键同样被拦（递归合并共用同一入口）', () => {
+    fs.writeFileSync(path.join(tmpDir, 'overwrite.yaml'), 'dns:\n  nested:\n    __proto__:\n      evil: true\n');
     try {
-      assert.throws(() => buildConfig(dumpYaml({ 'proxy-groups': [{ name: 'A', proxies: ['DIRECT'] }] }), 'mixed'), /__proto__/);
+      // 订阅侧有同名嵌套映射，深度合并递归进第二层才会走危险赋值路径
+      assert.throws(
+        () => buildConfig(dumpYaml({ dns: { nested: { enable: false } } }), 'mixed'),
+        (e: unknown) => e instanceof CliError && /__proto__/.test((e as Error).message),
+      );
     } finally {
       fs.rmSync(path.join(tmpDir, 'overwrite.yaml'));
     }
@@ -426,7 +430,7 @@ describe('系统锁定项：订阅自带的端口与控制面字段不进运行�
 
   it('未命中当前订阅作用域的覆写文件不产生锁定告警', () => {
     const owPath = path.join(tmpDir, 'overwrite.other.yaml');
-    fs.writeFileSync(owPath, ['match:', '  subscription: other-sub', 'redir-port: 7893'].join('\n'));
+    fs.writeFileSync(owPath, ['match:', '  name: other-sub', 'redir-port: 7893'].join('\n'));
     try {
       const { warnings } = buildConfig(dumpYaml(BASE), 'mixed', { subName: 'demo', subUrl: 'https://example.com/x' });
       assert.deepEqual(warnings, []);
@@ -466,7 +470,7 @@ describe('buildKernelRejectHint：内核拒绝配置时的排查线索', () => {
       '  当前生效的覆写文件:',
       '    overwrite.glados.yaml (url-domain=glados-config.com)',
       '    overwrite.seal.yaml (全局)',
-      '  若报错的元素来自覆写追加（~key 未匹配到同名元素时会新增），改用 ~?key 可在缺少该元素的订阅上跳过。',
+      '  若报错的元素来自覆写（YAML 追加或 JS 脚本注入），检查对应的覆写文件与脚本。',
       '',
       '  请修正订阅或覆写；当前运行时配置未改动。',
       '  若订阅或覆写本身没有明显错误，也可能是内核版本过旧、不认识新配置键，可尝试: mihomo kernel',
@@ -519,7 +523,7 @@ describe('buildConfig 带出本次生效的覆写清单', () => {
 
   it('按 match 作用域过滤，顺序即合并顺序；未命中的订阅不列该文件', () => {
     fs.writeFileSync(path.join(tmpDir, OW_MAIN), 'log-level: warning\n');
-    fs.writeFileSync(path.join(tmpDir, OW_SCOPED), 'match:\n  url-domain: glados-config.com\n~proxy-groups:\n  - {name: Developer, default-selected: TW}\n');
+    fs.writeFileSync(path.join(tmpDir, OW_SCOPED), "match:\n  url-domain: glados-config.com\n'proxy-groups+':\n  - {name: Developer, default-selected: TW}\n");
     try {
       const hit = buildConfig(SUB, 'mixed', { subName: 'mini1', subUrl: 'https://update.glados-config.com/mihomo/x/y/z/glados.yaml' });
       assert.deepEqual(hit.overwriteSummaries, [`${OW_MAIN} (全局)`, `${OW_SCOPED} (url-domain=glados-config.com)`]);
@@ -558,13 +562,10 @@ describe('buildConfig 带出本次生效的覆写清单', () => {
   });
 
   it('enabled: false 的文件不合并、不进清单、不产生告警', () => {
-    // 三者都消费同一份筛选结果，故一并验证：停用的文件里即便写了锁定键与 ~?key 补丁，
-    // 也不该冒出「系统锁定项已忽略」或「未匹配到同名元素」的告警
+    // 筛选结果同时被合并与告警消费，故一并验证：停用的文件里即便写了锁定键，
+    // 也不该冒出「系统锁定项已忽略」的告警
     fs.writeFileSync(path.join(tmpDir, OW_MAIN), 'log-level: info\n');
-    fs.writeFileSync(
-      path.join(tmpDir, OW_SCOPED),
-      'enabled: false\nsecret: leaked\nlog-level: debug\n~?proxy-groups:\n  - {name: NoSuchGroup, default-selected: X}\n',
-    );
+    fs.writeFileSync(path.join(tmpDir, OW_SCOPED), 'enabled: false\nsecret: leaked\nlog-level: debug\n');
     try {
       const r = buildConfig(SUB, 'mixed', { subName: 'edu1', subUrl: 'https://update.glados-config.com/x' });
       assert.deepEqual(r.overwriteSummaries, [`${OW_MAIN} (全局)`]);
@@ -578,57 +579,67 @@ describe('buildConfig 带出本次生效的覆写清单', () => {
     }
   });
 
-  // 与上一条同一个现场：订阅里没有 Developer 分组。~key 追加出残缺分组交给内核拒绝，
-  // ~?key 则跳过并告警——用户不必为此改 match 作用域
-  it('~?key 未命中时跳过并产生告警，配置仍可用', () => {
-    fs.writeFileSync(path.join(tmpDir, OW_SCOPED), '~?proxy-groups:\n  - {name: Developer, default-selected: TW}\n');
+  // 原 `~?key` 的两个现场改由 JS 脚本承担（~ 操作符已移除），用例同时是新机制的迁移示例
+  it('脚本按 name 找分组：未找到时 ctx.warn 进 warnings，订阅分组不受影响', () => {
+    const OW_SCRIPT = 'overwrite.glados.js';
+    fs.writeFileSync(
+      path.join(tmpDir, OW_SCRIPT),
+      [
+        'export default function (config, ctx) {',
+        '  const groups = config["proxy-groups"] || [];',
+        '  const developer = groups.find(g => g && g.name === "Developer");',
+        '  if (developer) developer["default-selected"] = "TW Fixed IP";',
+        '  else ctx.warn("当前订阅无 Developer 分组，跳过 default-selected 注入");',
+        '}',
+      ].join('\n'),
+    );
     try {
       const { config, warnings } = buildConfig(SUB, 'mixed', { subName: 'mini1', subUrl: 'https://update.glados-config.com/x/glados.yaml' });
-      // 订阅原有分组不受影响，也没有多出缺 type 的残缺分组
       assert.deepEqual(config['proxy-groups'], [{ name: 'PROXY', type: 'select', proxies: ['DIRECT'] }]);
       assert.equal(warnings.length, 1);
       assert.match(warnings[0], /Developer/);
-      assert.match(warnings[0], /已跳过/);
-      assert.match(warnings[0], new RegExp(OW_SCOPED.replace('.', '\\.')));
+      assert.match(warnings[0], /跳过/);
+      assert.match(warnings[0], /overwrite\.glados\.js/);
     } finally {
-      fs.rmSync(path.join(tmpDir, OW_SCOPED));
+      fs.rmSync(path.join(tmpDir, OW_SCRIPT));
     }
   });
 
-  it('~?key 命中时正常合并且不告警', () => {
-    fs.writeFileSync(path.join(tmpDir, OW_SCOPED), '~?proxy-groups:\n  - {name: PROXY, default-selected: DIRECT}\n');
+  it('脚本命中分组时正常修改且不告警', () => {
+    // 独立文件名：require 模块缓存按路径键控，同路径改写内容会命中旧模块（生产短进程无此问题）
+    const OW_SCRIPT = 'overwrite.hit.js';
+    fs.writeFileSync(
+      path.join(tmpDir, OW_SCRIPT),
+      [
+        'export default function (config, ctx) {',
+        '  const groups = config["proxy-groups"] || [];',
+        '  const proxy = groups.find(g => g && g.name === "PROXY");',
+        '  if (proxy) proxy["default-selected"] = "DIRECT";',
+        '  else ctx.warn("当前订阅无 PROXY 分组");',
+        '}',
+      ].join('\n'),
+    );
     try {
       const { config, warnings } = buildConfig(SUB, 'mixed');
       assert.deepEqual(config['proxy-groups'], [{ name: 'PROXY', type: 'select', proxies: ['DIRECT'], 'default-selected': 'DIRECT' }]);
       assert.deepEqual(warnings, []);
     } finally {
-      fs.rmSync(path.join(tmpDir, OW_SCOPED));
+      fs.rmSync(path.join(tmpDir, OW_SCRIPT));
     }
   });
 
-  // 操作符只在覆写顶层生效：嵌套层的键按字面处理，形似操作符的形态进 warnings 提示
-  it('嵌套层形似操作符的键按字面保留并进 warnings（含文件名与键名）', () => {
-    fs.writeFileSync(path.join(tmpDir, OW_SCOPED), "dns:\n  nameserver-policy:\n    '~x': 'https://q.example.com/dns-query'\n");
+  it('脚本设置的锁定键被剥除且告警可见（安全边界对脚本输出一视同仁）', () => {
+    const OW_SCRIPT = 'overwrite.evil.js';
+    fs.writeFileSync(path.join(tmpDir, OW_SCRIPT), 'export default function (config) { config["allow-lan"] = true; }\n');
     try {
-      const subWithDns = dumpYaml({
-        // 订阅自带 nameserver-policy 映射，覆写的同名段才会走逐键合并（递归）路径，
-        // 嵌套键被实际遍历；订阅没有该段时整棵移植，键天然字面、不产生告警
-        dns: { enable: true, 'nameserver-policy': { 'geosite:cn': 'https://doh.pub/dns-query' } },
-        'proxy-groups': [{ name: 'PROXY', type: 'select', proxies: ['DIRECT'] }],
-        rules: ['MATCH,PROXY'],
-      });
-      const { config, warnings } = buildConfig(subWithDns, 'mixed');
-      assert.deepEqual((config.dns as Record<string, unknown>)['nameserver-policy'], {
-        'geosite:cn': 'https://doh.pub/dns-query',
-        '~x': 'https://q.example.com/dns-query',
-      });
+      const { config, warnings } = buildConfig(SUB, 'mixed');
+      assert.equal(config['allow-lan'], false, '剥除后由 systemConfig 恒定写 false');
       assert.equal(warnings.length, 1);
-      assert.match(warnings[0], /~x/);
-      assert.match(warnings[0], /字面/);
-      assert.match(warnings[0], /顶层/);
-      assert.match(warnings[0], new RegExp(OW_SCOPED.replace('.', '\\.')));
+      assert.match(warnings[0], /overwrite\.evil\.js/);
+      assert.match(warnings[0], /allow-lan/);
+      assert.match(warnings[0], /系统锁定项已忽略/);
     } finally {
-      fs.rmSync(path.join(tmpDir, OW_SCOPED));
+      fs.rmSync(path.join(tmpDir, OW_SCRIPT));
     }
   });
 });

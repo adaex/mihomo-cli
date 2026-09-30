@@ -5,7 +5,7 @@ import path from 'node:path';
 import { after, describe, it } from 'node:test';
 
 import { CliError } from './errors.js';
-import type { OverwriteFileEntry, OverwriteMatch, SkippedMerge } from './types.js';
+import type { OverwriteFileEntry, OverwriteMatch } from './types.js';
 
 // paths.ts 在 import 期求值 MIHOMO_CLI_DIR，故必须先设环境变量再动态 import（同 config.spec.ts）；
 // 本文件的 loadOverwriteFile 用例需要在受控数据目录里摆放覆写文件。
@@ -23,8 +23,6 @@ describe('parseOverrideKey', () => {
       forceOverwrite: false,
       arrayPrepend: false,
       arrayAppend: false,
-      arrayMergeByName: false,
-      arrayMergeOnly: false,
     });
   });
 
@@ -48,83 +46,16 @@ describe('parseOverrideKey', () => {
     assert.equal(r.arrayPrepend, false);
   });
 
-  it('~key 按 name 就地合并', () => {
-    const r = parseOverrideKey('~proxies');
-    assert.equal(r.key, 'proxies');
-    assert.equal(r.arrayMergeByName, true);
-    assert.equal(r.arrayMergeOnly, false);
-  });
-
-  it('~?key 按 name 合并且不新增', () => {
-    const r = parseOverrideKey('~?proxy-groups');
-    assert.equal(r.key, 'proxy-groups');
-    assert.equal(r.arrayMergeByName, true);
-    assert.equal(r.arrayMergeOnly, true);
-  });
-
-  it('<~?key> 转义：键名本身以 ~? 开头', () => {
-    const r = parseOverrideKey('<~?weird>');
-    assert.equal(r.key, '~?weird');
-    assert.equal(r.arrayMergeByName, false);
-    assert.equal(r.arrayMergeOnly, false);
-  });
-
-  it('<+key> 转义：键名本身以 + 开头', () => {
-    const r = parseOverrideKey('<+dns>');
-    assert.equal(r.key, '+dns');
-    assert.equal(r.arrayPrepend, false);
-    assert.equal(r.arrayAppend, false);
-  });
-
-  it('+<+key> 转义键名 + 前置语义', () => {
-    const r = parseOverrideKey('+<+dns>');
-    assert.equal(r.key, '+dns');
-    assert.equal(r.arrayPrepend, true);
-  });
-
-  it('<key>+ 转义键名 + 追加语义', () => {
-    const r = parseOverrideKey('<+dns>+');
-    assert.equal(r.key, '+dns');
-    assert.equal(r.arrayAppend, true);
-  });
-
-  it('key!（含尖括号转义）仍识别 forceOverwrite', () => {
-    const r = parseOverrideKey('<+dns>!');
-    assert.equal(r.key, '+dns');
-    assert.equal(r.forceOverwrite, true);
-  });
-
-  // 回归：尖括号解包此前只在剥 ~ 之前尝试一次，~<weird> 会解析成 mergeByName + 键名 <weird>
-  //（尖括号残留），与 +<+dns> / <+dns>+ / <+dns>! 的组合形态不自洽
-  it('~<key> 组合：按 name 合并 + 解包尖括号，键名不再残留尖括号', () => {
-    const r = parseOverrideKey('~<weird>');
-    assert.equal(r.key, 'weird');
-    assert.equal(r.arrayMergeByName, true);
-    assert.equal(r.arrayMergeOnly, false);
-  });
-
-  it('~?<key> 组合：按 name 合并 + 不新增 + 解包尖括号', () => {
-    const r = parseOverrideKey('~?<weird>');
-    assert.equal(r.key, 'weird');
-    assert.equal(r.arrayMergeByName, true);
-    assert.equal(r.arrayMergeOnly, true);
-  });
-
-  it('~<+key> 组合：转义以 + 开头的键名再按 name 合并', () => {
-    const r = parseOverrideKey('~<+dns>');
-    assert.equal(r.key, '+dns');
-    assert.equal(r.arrayMergeByName, true);
-  });
-
   it('互斥修饰的解析形态（报错在合并层，这里锁住各组合确实置出多个位）', () => {
-    // 这些组合是否报错由 deepMergeWithOverrides 的断言锁；这里确认解析结果本身
+    // 这些组合是否报错由 deepMergeWithOverrides 的断言锁；这里确认解析结果本身。
+    // 注意 `rules!+` 不在列：`!` 只在结尾识别，该形态解析为「追加到字面键 rules!」（历史行为）
     assert.equal(parseOverrideKey('+rules+').arrayPrepend && parseOverrideKey('+rules+').arrayAppend, true);
-    assert.equal(parseOverrideKey('~dns!').arrayMergeByName && parseOverrideKey('~dns!').forceOverwrite, true);
+    assert.equal(parseOverrideKey('rules+!').arrayAppend && parseOverrideKey('rules+!').forceOverwrite, true);
   });
 });
 
 describe('互斥操作符与空键：合并层显式报错，不静默按分支优先级取其一', () => {
-  for (const key of ['+rules+', '~dns!', '~?dns!', '<dns>+!', '~<dns>!', 'rules+!']) {
+  for (const key of ['+rules+', '+rules!', 'rules+!']) {
     it(`"${key}" 含互斥操作符 → CliError`, () => {
       assert.throws(
         () => deepMergeWithOverrides({ rules: ['A'], dns: {} }, { [key]: ['x'] }),
@@ -133,15 +64,13 @@ describe('互斥操作符与空键：合并层显式报错，不静默按分支�
     });
   }
 
-  it('合法的单一操作符组合不被误伤（~?、尖括号转义、+<+key> 等）', () => {
-    assert.doesNotThrow(() => deepMergeWithOverrides({}, { '~?proxy-groups': [{ name: 'G' }] }));
-    // ~<dns> 对不存在的目标走「新增数组」，不与既有映射冲突
-    assert.doesNotThrow(() => deepMergeWithOverrides({}, { '~<dns>': [{ name: 'x' }] }));
-    assert.doesNotThrow(() => deepMergeWithOverrides({ rules: [] }, { '+<+rules>': ['x'] }));
-    assert.doesNotThrow(() => deepMergeWithOverrides({ rules: [] }, { '<+rules>!': ['x'] }));
+  it('合法的单一操作符不被误伤', () => {
+    assert.doesNotThrow(() => deepMergeWithOverrides({ rules: [] }, { '+rules': ['x'] }));
+    assert.doesNotThrow(() => deepMergeWithOverrides({ rules: [] }, { 'rules+': ['x'] }));
+    assert.doesNotThrow(() => deepMergeWithOverrides({ dns: { a: 1 } }, { 'dns!': { b: 2 } }));
   });
 
-  for (const key of ['+', '~', '!', '~?']) {
+  for (const key of ['+', '!']) {
     it(`裸操作符 "${key}" 解析出空键名 → CliError`, () => {
       assert.throws(
         () => deepMergeWithOverrides({}, { [key]: 'x' }),
@@ -149,6 +78,35 @@ describe('互斥操作符与空键：合并层显式报错，不静默按分支�
       );
     });
   }
+});
+
+describe('已移除的操作符形态：显式报错给迁移指引，不当字面键静默落进配置', () => {
+  // ~（按 name 合并）与 <x>（尖括号转义）已随 DSL 裁剪移除。内核对未知顶层键宽容，
+  // 没有专属报错的话老写法会被当字面键静默写进运行配置——零反馈的语义消失
+  for (const key of ['~proxies', '~?proxy-groups', '~<weird>']) {
+    it(`"${key}" → 报已移除的 ~ 操作符并指向 JS 脚本`, () => {
+      assert.throws(
+        () => deepMergeWithOverrides({}, { [key]: [{ name: 'x' }] }),
+        e => e instanceof CliError && /已移除的 ~ 操作符/.test(e.message) && /JS 覆写脚本/.test((e as CliError).hint.join('\n')),
+      );
+    });
+  }
+
+  for (const key of ['<rules>', '<+dns>', '+<+dns>']) {
+    it(`"${key}" → 报已移除的尖括号转义`, () => {
+      assert.throws(
+        () => deepMergeWithOverrides({}, { [key]: ['x'] }),
+        e => e instanceof CliError && /已移除的尖括号转义/.test(e.message),
+      );
+    });
+  }
+
+  it('裸 ~ / ~? 同样被拦（不再走空键名分支）', () => {
+    assert.throws(
+      () => deepMergeWithOverrides({}, { '~': 'x' }),
+      e => e instanceof CliError && /已移除的 ~ 操作符/.test(e.message),
+    );
+  });
 });
 
 describe('deepMergeWithOverrides', () => {
@@ -178,66 +136,6 @@ describe('deepMergeWithOverrides', () => {
     const override = { 'rules+': ['X'] };
     const r = deepMergeWithOverrides(target, override);
     assert.deepEqual(r.rules, ['A', 'B', 'X']);
-  });
-
-  it('~key 就地 patch 同名元素、追加新元素', () => {
-    const target = {
-      proxies: [
-        { name: 'a', server: '1.1.1.1', port: 1 },
-        { name: 'b', port: 2 },
-      ],
-    };
-    const override = {
-      '~proxies': [
-        { name: 'a', port: 99 },
-        { name: 'c', port: 3 },
-      ],
-    };
-    const r = deepMergeWithOverrides(target, override);
-    assert.deepEqual(r.proxies, [
-      { name: 'a', server: '1.1.1.1', port: 99 },
-      { name: 'b', port: 2 },
-      { name: 'c', port: 3 },
-    ]);
-  });
-
-  it('~key 不得污染原 target 数组（禁止原地改写）', () => {
-    const original = [{ name: 'a', port: 1 }];
-    const target = { proxies: original };
-    deepMergeWithOverrides(target, { '~proxies': [{ name: 'a', port: 2 }] });
-    // 原数组元素必须保持不变
-    assert.deepEqual(original, [{ name: 'a', port: 1 }]);
-  });
-
-  // ~?key：只改已有、不新增。真实事故：机场的两条订阅 URL 同域名，覆写按 url-domain 生效，
-  // 其中一条没有 Developer 分组，~proxy-groups 的补丁被追加成缺 type 的残缺分组，
-  // 内核拒绝加载整份配置。用 ~? 表达「订阅下发了我才改」
-  it('~?key 命中同名元素时与 ~key 行为一致', () => {
-    const target = { 'proxy-groups': [{ name: 'Developer', type: 'select', proxies: ['A'] }] };
-    const r = deepMergeWithOverrides(target, { '~?proxy-groups': [{ name: 'Developer', 'default-selected': 'TW' }] });
-    assert.deepEqual(r['proxy-groups'], [{ name: 'Developer', type: 'select', proxies: ['A'], 'default-selected': 'TW' }]);
-  });
-
-  it('~?key 未命中同名元素时跳过，不追加残缺元素', () => {
-    const target = { 'proxy-groups': [{ name: 'Auto', type: 'url-test' }] };
-    const skipped: SkippedMerge[] = [];
-    const r = deepMergeWithOverrides(target, { '~?proxy-groups': [{ name: 'Developer', 'default-selected': 'TW' }] }, skipped);
-    assert.deepEqual(r['proxy-groups'], [{ name: 'Auto', type: 'url-test' }]);
-    assert.deepEqual(skipped, [{ key: 'proxy-groups', name: 'Developer' }]);
-  });
-
-  it('~?key 的目标键整体不存在时也跳过（不凭空造出数组）', () => {
-    const skipped: SkippedMerge[] = [];
-    const r = deepMergeWithOverrides({}, { '~?proxy-groups': [{ name: 'Developer' }] }, skipped);
-    assert.deepEqual(r['proxy-groups'], []);
-    assert.equal(skipped.length, 1);
-  });
-
-  it('~key 未命中仍追加（ssh 出口靠它新增节点，语义不受 ~? 影响）', () => {
-    const skipped: SkippedMerge[] = [];
-    const r = deepMergeWithOverrides({ proxies: [] }, { '~proxies': [{ name: 'SSH-work', type: 'socks5' }] }, skipped);
-    assert.deepEqual(r.proxies, [{ name: 'SSH-work', type: 'socks5' }]);
-    assert.deepEqual(skipped, []);
   });
 
   it('标量覆盖', () => {
@@ -296,18 +194,6 @@ describe('deepMergeWithOverrides 嵌套键一律字面（操作符只在顶层�
     const r = deepMergeWithOverrides(target, override);
     assert.deepEqual(r.dns, { enable: true, '+x': [1], '~x': [2], 'x!': [3], 'x+': [4] });
   });
-
-  it('~key 元素补丁的字段同样字面（元素字段不再当操作符解析）', () => {
-    const target = { 'proxy-groups': [{ name: 'G', type: 'select', proxies: ['A'] }] };
-    const r = deepMergeWithOverrides(target, { '~proxy-groups': [{ name: 'G', 'x+': [1] }] });
-    assert.deepEqual(r['proxy-groups'], [{ name: 'G', type: 'select', proxies: ['A'], 'x+': [1] }]);
-  });
-
-  it('~<key> 顶层组合在合并中生效：按 name 合并且键名不带尖括号', () => {
-    const target = { weird: [{ name: 'a', port: 1 }] };
-    const r = deepMergeWithOverrides(target, { '~<weird>': [{ name: 'a', port: 2 }] });
-    assert.deepEqual(r.weird, [{ name: 'a', port: 2 }]);
-  });
 });
 
 describe('matchesScope (经 selectActiveOverwriteFiles)', () => {
@@ -323,14 +209,14 @@ describe('matchesScope (经 selectActiveOverwriteFiles)', () => {
     assert.equal(selectActiveOverwriteFiles(files, { subName: 'x' }).length, 1);
   });
 
-  it('subscription 命中订阅名', () => {
-    const files = [mk({ subscription: ['home', 'work'] })];
+  it('name 命中订阅名', () => {
+    const files = [mk({ name: ['home', 'work'] })];
     assert.equal(selectActiveOverwriteFiles(files, { subName: 'work' }).length, 1);
     assert.equal(selectActiveOverwriteFiles(files, { subName: 'other' }).length, 0);
   });
 
-  it('subscription fail-closed：scope 缺 subName 不应用', () => {
-    const files = [mk({ subscription: ['home'] })];
+  it('name fail-closed：scope 缺 subName 不应用', () => {
+    const files = [mk({ name: ['home'] })];
     assert.equal(selectActiveOverwriteFiles(files, {}).length, 0);
   });
 
@@ -347,18 +233,16 @@ describe('matchesScope (经 selectActiveOverwriteFiles)', () => {
   });
 
   it('多条件 AND：全部满足才应用', () => {
-    const files = [mk({ subscription: ['home'], 'url-domain': ['example.com'] })];
+    const files = [mk({ name: ['home'], 'url-domain': ['example.com'] })];
     assert.equal(selectActiveOverwriteFiles(files, { subName: 'home', subUrl: 'https://example.com' }).length, 1);
     assert.equal(selectActiveOverwriteFiles(files, { subName: 'home', subUrl: 'https://other.com' }).length, 0);
     assert.equal(selectActiveOverwriteFiles(files, { subName: 'work', subUrl: 'https://example.com' }).length, 0);
   });
 });
 
-describe('deepMergeWithOverrides 数组语义误用（~key / +key 作用于非数组）', () => {
-  // 此前会静默包成单元素数组：~dns 把映射变成 [{...}] 并丢掉原字段，生成 mihomo 无法解析的配置
+describe('deepMergeWithOverrides 数组语义误用（+key / key+ 作用于非数组）', () => {
+  // 此前会静默包成单元素数组：log-level+ 把标量变成 ["debug"]，生成 mihomo 无法解析的配置
   const misuse: { label: string; base: Record<string, unknown>; override: Record<string, unknown> }[] = [
-    { label: '~key 作用于映射', base: { dns: { enable: false, listen: 'x' } }, override: { '~dns': { enable: true } } },
-    { label: '~key 作用于标量', base: { mode: 'rule' }, override: { '~mode': 'global' } },
     { label: 'key+ 作用于标量', base: { 'log-level': 'info' }, override: { 'log-level+': 'debug' } },
     { label: '+key 作用于映射', base: { dns: { a: 1 } }, override: { '+dns': [1] } },
   ];
@@ -375,10 +259,6 @@ describe('deepMergeWithOverrides 数组语义误用（~key / +key 作用于非�
       );
     });
   }
-
-  it('~key 目标不存在时放行（新增数组的正常用法）', () => {
-    assert.deepEqual(deepMergeWithOverrides({}, { '~proxies': [{ name: 'A' }] }), { proxies: [{ name: 'A' }] });
-  });
 
   it('+key 目标不存在时放行', () => {
     assert.deepEqual(deepMergeWithOverrides({}, { 'rules+': ['MATCH,DIRECT'] }), { rules: ['MATCH,DIRECT'] });
@@ -397,22 +277,22 @@ describe('matchesScope 订阅名大小写不敏感', () => {
   const file = (match: OverwriteMatch): OverwriteFileEntry => ({ name: 'overwrite.x.yaml', path: '/x', config: {}, match });
 
   it('match 值小写命中大写订阅名（与 sub use 的解析口径一致）', () => {
-    const files = [file({ subscription: 'home' })];
+    const files = [file({ name: 'home' })];
     assert.equal(selectActiveOverwriteFiles(files, { subName: 'Home' }).length, 1);
   });
 
   it('match 值大写命中小写订阅名', () => {
-    const files = [file({ subscription: 'HOME' })];
+    const files = [file({ name: 'HOME' })];
     assert.equal(selectActiveOverwriteFiles(files, { subName: 'home' }).length, 1);
   });
 
   it('名称不同仍不命中', () => {
-    const files = [file({ subscription: 'work' })];
+    const files = [file({ name: 'work' })];
     assert.equal(selectActiveOverwriteFiles(files, { subName: 'home' }).length, 0);
   });
 
   it('数组形式逐项大小写不敏感', () => {
-    const files = [file({ subscription: ['Work', 'home'] })];
+    const files = [file({ name: ['Work', 'home'] })];
     assert.equal(selectActiveOverwriteFiles(files, { subName: 'HOME' }).length, 1);
   });
 });
@@ -437,13 +317,21 @@ describe('normalizeMatch（match 块 fail-closed）', () => {
   });
 
   it('正常 match 块解析为条件', () => {
-    const match = normalizeMatch({ subscription: 'work', 'url-domain': ['corp.com', 'github.com'] }, 'overwrite.yaml');
-    // subscriptionKey 是展示用的原键名标记，不是条件（见 OverwriteMatch 注释）
-    assert.deepEqual(match, { subscription: ['work'], subscriptionKey: 'subscription', 'url-domain': ['corp.com', 'github.com'] });
+    const match = normalizeMatch({ name: 'work', 'url-domain': ['corp.com', 'github.com'] }, 'overwrite.yaml');
+    assert.deepEqual(match, { name: ['work'], 'url-domain': ['corp.com', 'github.com'] });
   });
 
-  it('name 归一到 subscription 字段并记下原键名', () => {
-    assert.deepEqual(normalizeMatch({ name: 'edu*' }, 'overwrite.yaml'), { subscription: ['edu*'], subscriptionKey: 'name' });
+  it('subscription 键已收掉：报错指明改写 name，不静默当未知键', () => {
+    // 同义双键留一套；当未知键报错会让人摸不着头脑，文案直接给改法
+    assert.throws(
+      () => normalizeMatch({ subscription: 'edu1' }, 'overwrite.yaml'),
+      (e: unknown) => {
+        assert.ok(e instanceof CliError);
+        assert.match((e as Error).message, /用了 subscription 键/);
+        assert.match((e as CliError).hint.join('\n'), /name: edu\*/);
+        return true;
+      },
+    );
   });
 
   it('键名打错（subscripton）抛错而非静默全局生效', () => {
@@ -453,16 +341,16 @@ describe('normalizeMatch（match 块 fail-closed）', () => {
   });
 
   it('多条件里部分键打错同样抛错（否则 AND 条件被弱化、作用域放宽）', () => {
-    assertConfigError(() => normalizeMatch({ subscription: 'work', 'url-domian': 'corp.com' }, 'overwrite.yaml'));
+    assertConfigError(() => normalizeMatch({ name: 'work', 'url-domian': 'corp.com' }, 'overwrite.yaml'));
   });
 
   it('值滤空（空数组/非字符串）抛错', () => {
-    assertConfigError(() => normalizeMatch({ subscription: [] }, 'overwrite.yaml'));
-    assertConfigError(() => normalizeMatch({ subscription: 123 }, 'overwrite.yaml'));
+    assertConfigError(() => normalizeMatch({ name: [] }, 'overwrite.yaml'));
+    assertConfigError(() => normalizeMatch({ name: 123 }, 'overwrite.yaml'));
   });
 
   it('match 为数组/标量抛错', () => {
-    assertConfigError(() => normalizeMatch(['subscription'], 'overwrite.yaml'));
+    assertConfigError(() => normalizeMatch(['name'], 'overwrite.yaml'));
     assertConfigError(() => normalizeMatch('work', 'overwrite.yaml'));
   });
 
@@ -471,51 +359,85 @@ describe('normalizeMatch（match 块 fail-closed）', () => {
   });
 });
 
-describe('applyOverwrite：嵌套层形似操作符键的告警', () => {
-  const file = (config: Record<string, unknown>): OverwriteFileEntry => ({ name: 'overwrite.yaml', path: '/tmp/overwrite.yaml', config });
+describe('match name 通配：尾部 *（前缀）与头部 *（后缀），其余报错', () => {
+  /** 经 normalizeMatch 走一遍，验证的是「用户写的 YAML」而非手搓的内部结构 */
+  const fromYaml = (match: Record<string, unknown>): OverwriteFileEntry => ({
+    name: 'overwrite.x.yaml',
+    path: '/x',
+    config: {},
+    match: normalizeMatch(match, 'overwrite.x.yaml'),
+  });
+  const hits = (entry: OverwriteFileEntry, subName: string): boolean => selectActiveOverwriteFiles([entry], { subName }).length === 1;
 
-  it('嵌套层形似操作符的键按字面保留并逐键告警（带文件名）', () => {
-    const r = applyOverwrite({ dns: { enable: true } }, [file({ dns: { '~x': 1, 'y+': 2, 'z!': 3, '+a': 4, '<+.b>': 5 } })]);
-    assert.deepEqual(r.config.dns, { enable: true, '~x': 1, 'y+': 2, 'z!': 3, '+a': 4, '<+.b>': 5 });
-    assert.deepEqual(
-      r.operatorShapedKeys.map(k => k.key),
-      ['~x', 'y+', 'z!', '+a', '<+.b>'],
-    );
-    assert.ok(r.operatorShapedKeys.every(k => k.file === 'overwrite.yaml'));
+  it('name: edu* 命中同前缀的多条订阅，不命中其他机场套餐', () => {
+    const entry = fromYaml({ name: 'edu*' });
+    for (const name of ['edu1', 'edu2', 'edu-hk']) {
+      assert.equal(hits(entry, name), true, `${name} 应命中 edu*`);
+    }
+    assert.equal(hits(entry, 'mini1'), false);
   });
 
-  it('同一文件同一键出现在多个嵌套映射只告警一次（每文件每键一次）', () => {
-    const target = { dns: { enable: true }, hosts: { 'a.com': '1.1.1.1' } };
-    const r = applyOverwrite(target, [file({ dns: { '~x': 1 }, hosts: { '~x': 2 } })]);
-    assert.deepEqual(r.operatorShapedKeys, [{ key: '~x', file: 'overwrite.yaml' }]);
+  it('前缀是全串前缀语义：edu* 不命中 xedu1（半匹配会让作用域悄悄放宽）', () => {
+    assert.equal(hits(fromYaml({ name: 'edu*' }), 'xedu1'), false);
   });
 
-  it('+. 开头的嵌套键是 mihomo 原生通配域名形态，字面保留且不告警', () => {
-    const target = { dns: { 'nameserver-policy': { 'geosite:cn': 'https://doh.pub/dns-query' } } };
-    const r = applyOverwrite(target, [file({ dns: { 'nameserver-policy': { '+.corp.example.com': 'https://x' } } })]);
-    assert.deepEqual(r.operatorShapedKeys, []);
-    assert.deepEqual((r.config.dns as Record<string, unknown>)['nameserver-policy'], {
-      'geosite:cn': 'https://doh.pub/dns-query',
-      '+.corp.example.com': 'https://x',
-    });
+  it('name: *edu 后缀匹配（YAML 源文件里前导 * 需加引号，别名语法）', () => {
+    const entry = fromYaml({ name: '*1' });
+    assert.equal(hits(entry, 'edu1'), true);
+    assert.equal(hits(entry, 'edu10'), false);
+    assert.equal(hits(entry, 'edu'), false);
   });
 
-  it('顶层操作符键是正常用法，不告警', () => {
-    const r = applyOverwrite({ rules: ['A'] }, [file({ 'rules+': ['B'], '~proxies': [{ name: 'p', type: 'socks5' }] })]);
-    assert.deepEqual(r.operatorShapedKeys, []);
-    assert.deepEqual(r.config.rules, ['A', 'B']);
+  it('无通配字符时是精确匹配：edu1 不命中 edu10', () => {
+    // 若实现成 startsWith/includes，edu1 会命中 edu10——作用域悄悄放宽
+    const entry = fromYaml({ name: 'edu1' });
+    assert.equal(hits(entry, 'edu1'), true);
+    assert.equal(hits(entry, 'edu10'), false);
   });
 
-  it('~key 元素补丁里的形似操作符字段同样告警', () => {
-    const target = { 'proxy-groups': [{ name: 'G', type: 'select' }] };
-    const r = applyOverwrite(target, [file({ '~proxy-groups': [{ name: 'G', 'x+': [1] }] })]);
-    assert.deepEqual(r.operatorShapedKeys, [{ key: 'x+', file: 'overwrite.yaml' }]);
+  it('前缀/后缀大小写不敏感（与 sub use 口径一致）', () => {
+    assert.equal(hits(fromYaml({ name: 'EDU*' }), 'edu1'), true);
+    assert.equal(hits(fromYaml({ name: 'edu*' }), 'EDU1'), true);
+    assert.equal(hits(fromYaml({ name: '*HK' }), 'edu-HK'), true);
   });
 
-  it('移植路径的值不解析也不告警（移植本就字面，目标无该键时不产生告警）', () => {
-    const r = applyOverwrite({}, [file({ hosts: { '<+.google.cn>': '8.8.8.8' } })]);
-    assert.deepEqual(r.config.hosts, { '<+.google.cn>': '8.8.8.8' });
-    assert.deepEqual(r.operatorShapedKeys, []);
+  it('数组内每项可各自带前缀/后缀通配', () => {
+    const entry = fromYaml({ name: ['edu*', '*hk'] });
+    assert.equal(hits(entry, 'edu2'), true);
+    assert.equal(hits(entry, 'tokyo-hk'), true);
+    assert.equal(hits(entry, 'hk-tokyo'), false);
+    assert.equal(hits(entry, 'mini1'), false);
+  });
+
+  it('中文订阅名可用通配（SAFE_NAME_RE 允许中文）', () => {
+    assert.equal(hits(fromYaml({ name: '教育*' }), '教育1'), true);
+  });
+
+  it('其余通配形态加载时报错：中间 *、多 *、?、单独 *（恒真）', () => {
+    // 通用 glob 匹配器已删（正则转义实现曾有灾难性回溯），只保留字面前缀/后缀两种形态；
+    // 单独 * 等于不限订阅，与「写了 match 想限定作用域」的意图相反
+    for (const bad of ['e*1', '**', 'edu?', '?edu', '*']) {
+      assert.throws(
+        () => normalizeMatch({ name: bad }, 'overwrite.yaml'),
+        (e: unknown) => {
+          assert.ok(e instanceof CliError, `name: ${bad} 应抛 CliError`);
+          assert.match((e as Error).message, /通配写法不支持/);
+          return true;
+        },
+        `name: ${bad} 应被拒绝`,
+      );
+    }
+  });
+
+  it('fail-closed：scope 缺 subName 时带通配的 name 同样不应用', () => {
+    assert.equal(selectActiveOverwriteFiles([fromYaml({ name: 'edu*' })], {}).length, 0);
+  });
+
+  it('name 与 url-domain 仍是 AND', () => {
+    const entry = fromYaml({ name: 'edu*', 'url-domain': 'glados-config.com' });
+    assert.equal(selectActiveOverwriteFiles([entry], { subName: 'edu1', subUrl: 'https://update.glados-config.com/x' }).length, 1);
+    assert.equal(selectActiveOverwriteFiles([entry], { subName: 'edu1', subUrl: 'https://other.com/x' }).length, 0);
+    assert.equal(selectActiveOverwriteFiles([entry], { subName: 'mini1', subUrl: 'https://update.glados-config.com/x' }).length, 0);
   });
 });
 
@@ -604,158 +526,6 @@ describe('loadOverwriteFile：近失文件名提示', () => {
   });
 });
 
-describe('match name 别名与订阅名 glob', () => {
-  const file = (match: OverwriteMatch): OverwriteFileEntry => ({ name: 'overwrite.x.yaml', path: '/x', config: {}, match });
-  /** 经 normalizeMatch 走一遍，验证的是「用户写的 YAML」而非手搓的内部结构 */
-  const fromYaml = (match: Record<string, unknown>): OverwriteFileEntry => ({
-    name: 'overwrite.x.yaml',
-    path: '/x',
-    config: {},
-    match: normalizeMatch(match, 'overwrite.x.yaml'),
-  });
-  const hits = (entry: OverwriteFileEntry, subName: string): boolean => selectActiveOverwriteFiles([entry], { subName }).length === 1;
-
-  it('name 是 subscription 的同义键，归一到同一判据', () => {
-    assert.equal(hits(fromYaml({ name: 'edu1' }), 'edu1'), true);
-    assert.equal(hits(fromYaml({ subscription: 'edu1' }), 'edu1'), true);
-    assert.equal(hits(fromYaml({ name: 'edu1' }), 'mini1'), false);
-  });
-
-  it('name: edu* 命中同前缀的多条订阅，不命中其他机场套餐', () => {
-    const entry = fromYaml({ name: 'edu*' });
-    for (const name of ['edu1', 'edu2', 'edu-hk']) {
-      assert.equal(hits(entry, name), true, `${name} 应命中 edu*`);
-    }
-    assert.equal(hits(entry, 'mini1'), false);
-  });
-
-  it('? 只匹配单个字符', () => {
-    const entry = fromYaml({ name: 'edu?' });
-    assert.equal(hits(entry, 'edu1'), true);
-    assert.equal(hits(entry, 'edu-hk'), false);
-  });
-
-  it('无通配字符时退化为精确匹配（旧写法行为不变）', () => {
-    // 若实现成 startsWith/includes，edu1 会命中 edu10——作用域悄悄放宽
-    const entry = fromYaml({ name: 'edu1' });
-    assert.equal(hits(entry, 'edu1'), true);
-    assert.equal(hits(entry, 'edu10'), false);
-  });
-
-  it('全串匹配：通配不在两端时不产生半匹配', () => {
-    assert.equal(hits(fromYaml({ name: 'edu*' }), 'xedu1'), false);
-    assert.equal(hits(fromYaml({ name: '*edu' }), 'edu1'), false);
-    assert.equal(hits(fromYaml({ name: '*edu*' }), 'xedu1'), true);
-  });
-
-  it('除 * 与 ? 外的字符一律字面，不当通配或正则', () => {
-    // 无通配字符的模式走精确比对快路径；含通配时走匹配器主循环，
-    // 两条路径都要覆盖。实现换成双指针后这些字符不再有特殊含义，
-    // 本组用例同时锁住「不许有人图省事换回正则拼接」
-    assert.equal(hits(fromYaml({ name: 'a.c' }), 'abc'), false);
-    assert.equal(hits(fromYaml({ name: 'a.c' }), 'a.c'), true);
-    assert.equal(hits(fromYaml({ name: 'a.c*' }), 'abcd'), false);
-    assert.equal(hits(fromYaml({ name: 'a.c*' }), 'a.cd'), true);
-    assert.equal(hits(fromYaml({ name: 'a+b*' }), 'aab'), false);
-    assert.equal(hits(fromYaml({ name: 'a+b*' }), 'a+bc'), true);
-    assert.equal(hits(fromYaml({ name: 'x(y)*' }), 'xy'), false);
-    assert.equal(hits(fromYaml({ name: 'x(y)*' }), 'x(y)z'), true);
-    // 这些形态在正则实现里会让 new RegExp 抛未捕获异常（而非 CliError）
-    for (const pattern of ['[*', '(*', '*)', '{*', '|*', '[a-*', '(?*', 'a\\*']) {
-      assert.doesNotThrow(() => hits(fromYaml({ name: pattern }), 'edu1'), `pattern ${pattern} 不得抛异常`);
-    }
-    assert.equal(hits(fromYaml({ name: 'a\\b*' }), 'a\\bc'), true);
-    assert.equal(hits(fromYaml({ name: '[x]*' }), '[x]y'), true);
-    assert.equal(hits(fromYaml({ name: '[x]*' }), 'x'), false);
-  });
-
-  it('glob 大小写不敏感（与 sub use 口径一致）', () => {
-    assert.equal(hits(fromYaml({ name: 'EDU*' }), 'edu1'), true);
-    assert.equal(hits(fromYaml({ name: 'edu*' }), 'EDU1'), true);
-  });
-
-  it('数组内每项各自可带 glob', () => {
-    const entry = fromYaml({ name: ['edu*', 'hk-?'] });
-    assert.equal(hits(entry, 'edu2'), true);
-    assert.equal(hits(entry, 'hk-1'), true);
-    assert.equal(hits(entry, 'hk-tokyo'), false);
-    assert.equal(hits(entry, 'mini1'), false);
-  });
-
-  it('subscription 旧键名同样享有通配（两键同义，不能只给 name 开）', () => {
-    assert.equal(hits(fromYaml({ subscription: 'edu*' }), 'edu2'), true);
-  });
-
-  it('连续 * 等价于单个 *', () => {
-    assert.equal(hits(fromYaml({ name: 'e**1' }), 'edu1'), true);
-    assert.equal(hits(fromYaml({ name: '**' }), 'anything'), true);
-  });
-
-  it('多星 pattern 不产生灾难性回溯（合法长度内即可挂死 CLI）', () => {
-    // 回归：最初用「转义成正则再 test」，这组输入实测跑 70 秒——64 正是 SAFE_NAME_RE
-    // 的长度上限，即完全合法的订阅名就能触发。现用双指针贪心回溯，O(n×m) 上界
-    const evil = { name: `${'*a'.repeat(20)}*b` };
-    const longName = 'a'.repeat(64);
-    const started = Date.now();
-    assert.equal(hits(fromYaml(evil), longName), false);
-    const elapsed = Date.now() - started;
-    assert.ok(elapsed < 1000, `多星匹配应在毫秒级完成，实际 ${elapsed}ms`);
-  });
-
-  it('贪心回溯的正确性：* 需要回退让后续字面段命中', () => {
-    // 双指针实现的关键路径——第一个 * 贪心吃太多时必须能回退
-    assert.equal(hits(fromYaml({ name: '*b' }), 'abcb'), true);
-    assert.equal(hits(fromYaml({ name: '*b*c' }), 'abxc'), true);
-    assert.equal(hits(fromYaml({ name: 'a*b*c' }), 'axbyc'), true);
-    assert.equal(hits(fromYaml({ name: 'a*b*c' }), 'axbyd'), false);
-    assert.equal(hits(fromYaml({ name: '*a*a*b' }), 'aab'), true);
-    assert.equal(hits(fromYaml({ name: '*a*a*b' }), 'ab'), false);
-  });
-
-  it('? 与 * 混用及尾部通配的边界', () => {
-    assert.equal(hits(fromYaml({ name: '?*' }), 'a'), true);
-    assert.equal(hits(fromYaml({ name: '?*' }), ''), false);
-    assert.equal(hits(fromYaml({ name: '*?' }), 'ab'), true);
-    assert.equal(hits(fromYaml({ name: 'a*' }), 'a'), true, '* 可匹配空串');
-    assert.equal(hits(fromYaml({ name: 'a?' }), 'a'), false, '? 必须吃掉一个字符');
-  });
-
-  it('中文订阅名可用通配（SAFE_NAME_RE 允许中文）', () => {
-    assert.equal(hits(fromYaml({ name: '教育*' }), '教育1'), true);
-  });
-
-  it('fail-closed：scope 缺 subName 时带通配的 name 同样不应用', () => {
-    assert.equal(selectActiveOverwriteFiles([fromYaml({ name: 'edu*' })], {}).length, 0);
-  });
-
-  it('name 与 url-domain 仍是 AND', () => {
-    const entry = fromYaml({ name: 'edu*', 'url-domain': 'glados-config.com' });
-    assert.equal(selectActiveOverwriteFiles([entry], { subName: 'edu1', subUrl: 'https://update.glados-config.com/x' }).length, 1);
-    assert.equal(selectActiveOverwriteFiles([entry], { subName: 'edu1', subUrl: 'https://other.com/x' }).length, 0);
-    assert.equal(selectActiveOverwriteFiles([entry], { subName: 'mini1', subUrl: 'https://update.glados-config.com/x' }).length, 0);
-  });
-
-  it('name 与 subscription 同时出现 → CliError（同义键无法判断以谁为准）', () => {
-    assert.throws(
-      () => normalizeMatch({ name: 'edu1', subscription: 'mini1' }, 'overwrite.x.yaml'),
-      (e: unknown) => {
-        assert.ok(e instanceof CliError);
-        assert.equal((e as CliError).label, '覆写配置错误');
-        assert.match((e as Error).message, /同时写了 name 与 subscription/);
-        return true;
-      },
-    );
-  });
-
-  it('两者同时出现即报错，值相同也不放行（不猜测意图）', () => {
-    assert.throws(() => normalizeMatch({ name: 'edu1', subscription: 'edu1' }, 'overwrite.x.yaml'), CliError);
-  });
-
-  it('内部归一后仍只有一处判据：直接构造 subscription 字段行为一致', () => {
-    assert.equal(hits(file({ subscription: ['edu*'] }), 'edu9'), true);
-  });
-});
-
 describe('覆写文件 enabled 开关', () => {
   const write = (name: string, content: string) => fs.writeFileSync(path.join(tmpDir, name), content);
   const cleanup = (...names: string[]) => {
@@ -796,9 +566,9 @@ describe('覆写文件 enabled 开关', () => {
     write('overwrite.meta.yaml', 'enabled: true\nlog-level: debug\n');
     try {
       const files = loadOverwriteFile();
-      assert.deepEqual(Object.keys(files[0].config), ['log-level']);
+      assert.deepEqual(Object.keys(files[0].config ?? {}), ['log-level']);
       // 内核对未知顶层键宽松（实测 mihomo -t 放行 enabled: false），剥离只能靠这里
-      const merged = applyOverwrite({}, files).config;
+      const merged = applyOverwrite({}, files, { mode: 'mixed' }).config;
       assert.ok(!('enabled' in merged), 'enabled 不得出现在合并结果中');
     } finally {
       cleanup('overwrite.meta.yaml');
@@ -866,8 +636,9 @@ describe('覆写文件 enabled 开关', () => {
 
   it('元数据键带操作符报错，不得绕过剥离落进配置', () => {
     // 剥离发生在解构、早于操作符解析：enabled!: false 既不停用文件，
-    // 又会被规范成键 enabled 写进最终配置——正是本功能要消灭的静默失效
-    for (const key of ['enabled!', 'match!', '+enabled', 'match+', '<enabled>', '~enabled']) {
+    // 又会被规范成键 enabled 写进最终配置——正是本功能要消灭的静默失效。
+    // <enabled> / ~enabled 走合并层的「已移除操作符」报错（下一用例），不在本列表
+    for (const key of ['enabled!', 'match!', '+enabled', 'match+']) {
       write('overwrite.op.yaml', `${key}: false\nlog-level: debug\n`);
       try {
         assert.throws(
@@ -879,6 +650,28 @@ describe('覆写文件 enabled 开关', () => {
             return true;
           },
           `${key} 应被拒绝`,
+        );
+      } finally {
+        cleanup('overwrite.op.yaml');
+      }
+    }
+  });
+
+  it('<enabled> / ~enabled 在加载时是普通字面键，合并时报「已移除的操作符」', () => {
+    // 尖括号转义与 ~ 已删：这两种元数据键变体不再是可解包形态，加载侧的
+    // assertNoMetadataKeyLookalikes 认不出它们（parse 后键名不同），由合并层拦截
+    for (const key of ['<enabled>', '~enabled']) {
+      write('overwrite.op.yaml', `${key}: false\nlog-level: debug\n`);
+      try {
+        const files = loadOverwriteFile();
+        assert.throws(
+          () => applyOverwrite({}, selectActiveOverwriteFiles(files, {}), { mode: 'mixed' }),
+          (e: unknown) => {
+            assert.ok(e instanceof CliError, `${key} 合并时应抛 CliError`);
+            assert.match((e as Error).message, /已移除/);
+            return true;
+          },
+          `${key} 合并时应被拒绝`,
         );
       } finally {
         cleanup('overwrite.op.yaml');
@@ -914,7 +707,7 @@ describe('覆写文件 enabled 开关', () => {
     write('overwrite.ok.yaml', 'enabled-by: me\nmatcher: x\nmatches: [a]\nlog-level: debug\n');
     try {
       const files = loadOverwriteFile();
-      assert.deepEqual(Object.keys(files[0].config).sort(), ['enabled-by', 'log-level', 'matcher', 'matches']);
+      assert.deepEqual(Object.keys(files[0].config ?? {}).sort(), ['enabled-by', 'log-level', 'matcher', 'matches']);
       assert.equal(files[0].enabled, true);
     } finally {
       cleanup('overwrite.ok.yaml');
@@ -925,7 +718,7 @@ describe('覆写文件 enabled 开关', () => {
     write('overwrite.nested.yaml', 'dns:\n  enabled: true\nlog-level: debug\n');
     try {
       const files = loadOverwriteFile();
-      assert.deepEqual(files[0].config.dns, { enabled: true });
+      assert.deepEqual(files[0].config?.dns, { enabled: true });
       assert.equal(files[0].enabled, true, '嵌套的 enabled 不该被当成文件开关');
     } finally {
       cleanup('overwrite.nested.yaml');
@@ -967,40 +760,20 @@ describe('覆写文件 enabled 开关', () => {
   });
 });
 
-describe('summarizeMatch 回显用户写的原键名（经 listOverwriteFile）', () => {
+describe('summarizeMatch 作用域摘要（经 listOverwriteFile）', () => {
   const write = (name: string, content: string) => fs.writeFileSync(path.join(tmpDir, name), content);
   const cleanup = (name: string) => fs.rmSync(path.join(tmpDir, name), { force: true });
 
-  it('写 name 显示 name=，写 subscription 显示 subscription=', () => {
-    // 内部归一到 subscription，但展示回显原键名——否则用户拿显示的键名回文件里搜不到
+  it('name 与多条件的摘要形态', () => {
     write('overwrite.a.yaml', 'match:\n  name: edu*\nlog-level: debug\n');
     try {
       assert.equal(listOverwriteFile().files[0].scope, 'name=edu*');
     } finally {
       cleanup('overwrite.a.yaml');
     }
-    write('overwrite.a.yaml', 'match:\n  subscription: edu1\nlog-level: debug\n');
-    try {
-      assert.equal(listOverwriteFile().files[0].scope, 'subscription=edu1');
-    } finally {
-      cleanup('overwrite.a.yaml');
-    }
-  });
-
-  it('多条件与数组值的摘要形态', () => {
     write('overwrite.a.yaml', 'match:\n  name: [edu*, hk-1]\n  url-domain: glados-config.com\nlog-level: debug\n');
     try {
       assert.equal(listOverwriteFile().files[0].scope, 'name=edu*/hk-1, url-domain=glados-config.com');
-    } finally {
-      cleanup('overwrite.a.yaml');
-    }
-  });
-
-  it('subscriptionKey 是展示元数据，不当作条件输出', () => {
-    write('overwrite.a.yaml', 'match:\n  name: edu1\nlog-level: debug\n');
-    try {
-      const scope = listOverwriteFile().files[0].scope ?? '';
-      assert.ok(!scope.includes('subscriptionKey'), `摘要不应含 subscriptionKey，实际: ${scope}`);
     } finally {
       cleanup('overwrite.a.yaml');
     }
@@ -1041,6 +814,228 @@ describe('覆写扩展文件加载顺序', () => {
       for (const name of names) {
         fs.rmSync(path.join(tmpDir, name));
       }
+    }
+  });
+
+  it('YAML 全部在前、JS 脚本在后（声明式基底，程序化后处理）', () => {
+    // z.yaml 码点序在 a.js 之后，但段序优先：YAML 段先于脚本段
+    const names = ['overwrite.z.yaml', 'overwrite.a.js', 'overwrite.y.yaml'];
+    fs.writeFileSync(path.join(tmpDir, 'overwrite.z.yaml'), 'log-level: debug\n');
+    fs.writeFileSync(path.join(tmpDir, 'overwrite.y.yaml'), 'log-level: info\n');
+    fs.writeFileSync(path.join(tmpDir, 'overwrite.a.js'), 'export default function () {}\n');
+    try {
+      const files = loadOverwriteFile();
+      assert.deepEqual(
+        files.map(f => f.name),
+        ['overwrite.y.yaml', 'overwrite.z.yaml', 'overwrite.a.js'],
+      );
+    } finally {
+      for (const name of names) {
+        fs.rmSync(path.join(tmpDir, name));
+      }
+    }
+  });
+});
+
+describe('JS 覆写脚本', () => {
+  const write = (name: string, content: string) => fs.writeFileSync(path.join(tmpDir, name), content);
+  const cleanup = (name: string) => fs.rmSync(path.join(tmpDir, name), { force: true });
+  // 每个用例用独立文件名：require 模块缓存按路径键控，CLI 短进程内文件不会变、
+  // 生产无此问题，但测试会改写同一路径的内容，复用名字会命中缓存的旧模块
+
+  it('.js 的 ESM 默认导出被加载（无 package.json 的数据目录里靠模块语法探测）', () => {
+    write('overwrite.esm.js', 'export default function (config) { config.touched = true; }\n');
+    try {
+      const files = loadOverwriteFile();
+      assert.equal(files.length, 1);
+      assert.equal(typeof files[0].transform, 'function');
+    } finally {
+      cleanup('overwrite.esm.js');
+    }
+  });
+
+  it('.mjs 与 .cjs（module.exports = fn）同样认', () => {
+    write('overwrite.m.mjs', 'export default function (config) { config.a = 1; }\n');
+    write('overwrite.c.cjs', 'module.exports = function (config) { config.b = 2; }\n');
+    try {
+      const files = loadOverwriteFile();
+      assert.deepEqual(
+        files.map(f => f.name),
+        ['overwrite.c.cjs', 'overwrite.m.mjs'],
+      );
+      assert.ok(files.every(f => typeof f.transform === 'function'));
+    } finally {
+      cleanup('overwrite.m.mjs');
+      cleanup('overwrite.c.cjs');
+    }
+  });
+
+  it('语法错误 → 加载失败进 broken（合并路径硬失败、诊断路径可见）', () => {
+    write('overwrite.broken.js', 'export default function ( { }\n');
+    try {
+      assert.throws(
+        () => loadOverwriteFile(),
+        e => e instanceof CliError && /加载失败/.test((e as Error).message),
+      );
+      assert.equal(listOverwriteFile().broken.length, 1);
+      assert.match(listOverwriteFile().broken[0].name, /overwrite\.broken\.js/);
+    } finally {
+      cleanup('overwrite.broken.js');
+    }
+  });
+
+  it('缺少默认导出函数 → 加载失败并给出写法提示', () => {
+    write('overwrite.nofn.js', 'export const x = 1;\n');
+    try {
+      assert.throws(
+        () => loadOverwriteFile(),
+        e => e instanceof CliError && /缺少变换函数/.test((e as Error).message),
+      );
+    } finally {
+      cleanup('overwrite.nofn.js');
+    }
+  });
+
+  it('执行：就地修改 config、返回值忽略、ctx 带订阅信息与 mode', () => {
+    write(
+      'overwrite.run.js',
+      [
+        'export default function (config, ctx) {',
+        '  config["log-level"] = "debug";',
+        '  config.seen = `${ctx.subscription.name}|${ctx.subscription.url}|${ctx.subscription.host}|${ctx.mode}`;',
+        '  return { ignored: true };',
+        '}',
+      ].join('\n'),
+    );
+    try {
+      const files = loadOverwriteFile();
+      const scope = { subName: 'edu1', subUrl: 'https://sub.glados-config.com/x' };
+      const r = applyOverwrite({}, selectActiveOverwriteFiles(files, scope), { mode: 'tun', scope });
+      assert.equal(r.config['log-level'], 'debug');
+      // host 是预解析 hostname；返回的对象被忽略（契约：就地修改）
+      assert.equal(r.config.seen, 'edu1|https://sub.glados-config.com/x|sub.glados-config.com|tun');
+    } finally {
+      cleanup('overwrite.run.js');
+    }
+  });
+
+  it('ctx.warn 的消息进 scriptWarnings 并带脚本名', () => {
+    write('overwrite.warn.js', 'export default function (config, ctx) { ctx.warn("分组不存在，跳过"); }\n');
+    try {
+      const files = loadOverwriteFile();
+      const r = applyOverwrite({}, files, { mode: 'mixed' });
+      assert.deepEqual(r.scriptWarnings, ['分组不存在，跳过（脚本 overwrite.warn.js）']);
+    } finally {
+      cleanup('overwrite.warn.js');
+    }
+  });
+
+  it('脚本无 match/enabled 概念，selectActiveOverwriteFiles 恒命中', () => {
+    write('overwrite.scope.js', 'export default function () {}\n');
+    try {
+      const files = loadOverwriteFile();
+      assert.equal(selectActiveOverwriteFiles(files, {}).length, 1);
+      assert.equal(selectActiveOverwriteFiles(files, { subName: 'x' }).length, 1);
+    } finally {
+      cleanup('overwrite.scope.js');
+    }
+  });
+
+  it('脚本执行抛错 → CliError 带文件名（与 YAML 解析失败同姿态）', () => {
+    write('overwrite.throw.js', 'export default function () { throw new Error("boom"); }\n');
+    try {
+      assert.throws(
+        () => applyOverwrite({}, loadOverwriteFile(), { mode: 'mixed' }),
+        e => e instanceof CliError && /overwrite\.throw\.js/.test((e as Error).message) && /boom/.test((e as Error).message),
+      );
+    } finally {
+      cleanup('overwrite.throw.js');
+    }
+  });
+
+  it('async 函数返回 Promise → 报错（脚本必须是同步函数）', () => {
+    write('overwrite.async.js', 'export default async function (config) { config.x = 1; }\n');
+    try {
+      assert.throws(
+        () => applyOverwrite({}, loadOverwriteFile(), { mode: 'mixed' }),
+        e => e instanceof CliError && /返回了 Promise/.test((e as Error).message),
+      );
+    } finally {
+      cleanup('overwrite.async.js');
+    }
+  });
+
+  it('脚本设置的锁定键经前后快照检出（剥除在 buildConfig，告警不静默）', () => {
+    write('overwrite.lock.js', 'export default function (config) { config["allow-lan"] = true; config.tls = { a: 1 }; }\n');
+    try {
+      const r = applyOverwrite({ secret: 'old' }, loadOverwriteFile(), { mode: 'mixed' });
+      // tls 与 LOCKED_CONFIG_KEYS 都在探针集里
+      assert.deepEqual(
+        r.scriptLockedHits.map(h => ({ file: h.file, keys: h.keys.sort() })),
+        [{ file: 'overwrite.lock.js', keys: ['allow-lan', 'tls'] }],
+      );
+    } finally {
+      cleanup('overwrite.lock.js');
+    }
+  });
+
+  it('脚本改非锁定键不产生命中；嵌套内部的锁定键改动检不出（浅层快照，与 YAML 侧键级检测同粒度）', () => {
+    write(
+      'overwrite.nolock.js',
+      'export default function (config) { config.dns = { ...(config.dns || {}), enable: true }; config["listeners"] = [{ type: "x" }]; }',
+    );
+    try {
+      // listeners 是顶层锁定键（新设置会被检出）——把它拆出来：先验证顶层新设置检出
+      const r = applyOverwrite({}, loadOverwriteFile(), { mode: 'mixed' });
+      assert.deepEqual(
+        r.scriptLockedHits.map(h => h.keys),
+        [['listeners']],
+      );
+    } finally {
+      cleanup('overwrite.nolock.js');
+    }
+  });
+
+  it('YAML 合并结果先于脚本执行（脚本看到并修改的是合并后的配置）', () => {
+    write('overwrite.base.yaml', 'log-level: info\nmode: rule\n');
+    write('overwrite.after.js', 'export default function (config) { config["log-level"] = config.mode === "rule" ? "saw-rule" : "no"; }\n');
+    try {
+      const r = applyOverwrite({}, loadOverwriteFile(), { mode: 'mixed' });
+      assert.equal(r.config['log-level'], 'saw-rule');
+    } finally {
+      cleanup('overwrite.base.yaml');
+      cleanup('overwrite.after.js');
+    }
+  });
+
+  it('ow 列表：脚本条目 kind=script、无字段清单', () => {
+    write('overwrite.list.js', 'export default function () {}\n');
+    try {
+      const info = listOverwriteFile();
+      assert.equal(info.files[0].kind, 'script');
+      assert.deepEqual(info.files[0].keys, []);
+    } finally {
+      cleanup('overwrite.list.js');
+    }
+  });
+
+  it('overwrite.ts 不被加载并提示改用 .js（TypeScript 不能直接执行）', () => {
+    write('overwrite.ts', 'export default function () {}\n');
+    write('overwrite.x.ts', 'export default function () {}\n');
+    const warns: string[] = [];
+    const original = console.warn;
+    console.warn = (message?: unknown) => {
+      warns.push(String(message));
+    };
+    try {
+      const files = loadOverwriteFile();
+      assert.equal(files.length, 0);
+      assert.equal(warns.length, 2);
+      assert.ok(warns.every(w => /不会被当作覆写文件加载/.test(w)));
+    } finally {
+      console.warn = original;
+      cleanup('overwrite.ts');
+      cleanup('overwrite.x.ts');
     }
   });
 });

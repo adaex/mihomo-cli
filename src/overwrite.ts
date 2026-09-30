@@ -1,20 +1,21 @@
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
 import * as yaml from 'js-yaml';
-import { YAML_MAX_ALIASES } from './constants.js';
+import { LOCKED_CONFIG_KEYS, YAML_MAX_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
 import { USER_DATA_DIR } from './paths.js';
 import { readSettings, writeSettings } from './settings.js';
 import type {
   BrokenOverwriteFile,
-  OperatorShapedKey,
   OverwriteFileEntry,
   OverwriteListResult,
   OverwriteMatch,
   OverwriteScope,
+  OverwriteScriptContext,
+  OverwriteTransform,
   ParsedOverrideKey,
-  SkippedMerge,
 } from './types.js';
 
 export function parseOverrideKey(key: string): ParsedOverrideKey {
@@ -22,111 +23,76 @@ export function parseOverrideKey(key: string): ParsedOverrideKey {
   let forceOverwrite = false;
   let arrayPrepend = false;
   let arrayAppend = false;
-  let arrayMergeByName = false;
-  let arrayMergeOnly = false;
 
-  const lastChar = key[key.length - 1];
-  const openAngleCount = (key.match(/</g) || []).length;
-  const closeAngleCount = (key.match(/>/g) || []).length;
-
-  if (lastChar === '!' && openAngleCount === closeAngleCount) {
+  if (key.endsWith('!')) {
     forceOverwrite = true;
     actualKey = key.slice(0, -1);
   }
-
-  const wrappedMatch = actualKey.match(/^(\+)?(<[^>]+>)(\+)?$/);
-  if (wrappedMatch) {
-    const prefixPlus = wrappedMatch[1] === '+';
-    const wrappedPart = wrappedMatch[2];
-    const suffixPlus = wrappedMatch[3] === '+';
-
-    const unwrapped = wrappedPart.slice(1, -1);
-
-    if (prefixPlus || suffixPlus) {
-      actualKey = unwrapped;
-      if (prefixPlus) arrayPrepend = true;
-      if (suffixPlus) arrayAppend = true;
-    } else {
-      actualKey = unwrapped;
-    }
-  } else if (actualKey.startsWith('~')) {
-    arrayMergeByName = true;
+  if (actualKey.startsWith('+')) {
+    arrayPrepend = true;
     actualKey = actualKey.slice(1);
-    // `~?key`：匹配不到同名元素就忽略该补丁，不追加。放在剥掉 `~` 之后判断，
-    // 故真以 `?` 开头的键名仍可用 `<~?key>` 转义（走上面的尖括号分支，不进这里）
-    if (actualKey.startsWith('?')) {
-      arrayMergeOnly = true;
-      actualKey = actualKey.slice(1);
-    }
-    // `~<key>` / `~?<key>`：操作符与尖括号转义的组合，解包必须在剥掉 `~`/`?` 之后再试
-    if (/^<[^>]+>$/.test(actualKey)) {
-      actualKey = actualKey.slice(1, -1);
-    }
-  } else {
-    if (actualKey.startsWith('+')) {
-      arrayPrepend = true;
-      actualKey = actualKey.slice(1);
-    }
-    if (actualKey.endsWith('+')) {
-      arrayAppend = true;
-      actualKey = actualKey.slice(0, -1);
-    }
+  }
+  if (actualKey.endsWith('+')) {
+    arrayAppend = true;
+    actualKey = actualKey.slice(0, -1);
   }
 
-  return { key: actualKey, forceOverwrite, arrayPrepend, arrayAppend, arrayMergeByName, arrayMergeOnly };
+  return { key: actualKey, forceOverwrite, arrayPrepend, arrayAppend };
 }
 
 /**
- * 校验解析结果：操作符修饰互斥、键名非空。解析器对互斥组合不报错、静默按分支优先级
- * 取其一（`~dns!` 按 ~ 合并、显式的 ! 整体覆盖被忽略；`+rules+` 按前置处理），
- * 用户无法预期结果——矛盾输入一律显式报错。
- * `~?` 是 `~` 的变体（未命中策略），不算两个操作符。
- * 另：裸 `+:` / `~:` / `!:` 解析出空键名，不能产出空字符串顶层键（内核静默忽略，笔误零反馈）。
+ * 校验解析结果：操作符修饰互斥、键名非空、已移除的操作符形态显式报错。
+ * 互斥组合（`+rules+`）解析器不报错、静默按分支处理，用户无法预期结果——矛盾输入一律显式报错。
+ * 裸 `+:` / `!:` 解析出空键名，不能产出空字符串顶层键（内核静默忽略，笔误零反馈）。
+ * `~`（按 name 合并）与 `<x>`（尖括号转义）已随 DSL 裁剪移除：没有专属报错的话，
+ * 这两种老写法会被当**字面键名**静默落进配置（内核对未知顶层键宽容），老用户无从得知要迁移。
  */
 function assertValidParsedKey(rawKey: string, parsed: ParsedOverrideKey): void {
+  if (rawKey.startsWith('~')) {
+    throw new CliError(`覆写键 "${rawKey}" 用了已移除的 ~ 操作符`, {
+      label: '覆写配置错误',
+      hint: ['按 name 合并/追加数组元素的 ~ 与 ~? 已移除，改用 JS 覆写脚本（README「覆写配置」章节的脚本一节）。'],
+    });
+  }
+  if (rawKey.includes('<') || rawKey.includes('>')) {
+    throw new CliError(`覆写键 "${rawKey}" 用了已移除的尖括号转义`, {
+      label: '覆写配置错误',
+      hint: ['<key> 转义已随 ~ 操作符移除——mihomo 顶层键不含尖括号，直接写键名即可。'],
+    });
+  }
   if (parsed.key === '') {
     throw new CliError(`覆写键名不能为空: "${rawKey}"`, {
       label: '覆写配置错误',
-      hint: ['操作符（!、+、~）必须修饰一个真实的键名，如 rules+、~proxy-groups。'],
+      hint: ['操作符（!、+）必须修饰一个真实的键名，如 rules+、dns!。'],
     });
   }
   const ops: string[] = [];
   if (parsed.forceOverwrite) ops.push('!（整体覆盖）');
-  if (parsed.arrayMergeByName || parsed.arrayMergeOnly) ops.push('~（按 name 合并）');
   if (parsed.arrayPrepend) ops.push('+前缀（数组前插）');
   if (parsed.arrayAppend) ops.push('+后缀（数组追加）');
   if (ops.length > 1) {
     throw new CliError(`覆写键 "${rawKey}" 含互斥的操作符: ${ops.join(' 与 ')}`, {
       label: '覆写配置错误',
-      hint: ['一个键只能使用一种操作符：整体覆盖 key!、数组前插 +key、数组追加 key+、按 name 合并 ~key。'],
+      hint: ['一个键只能使用一种操作符：整体覆盖 key!、数组前插 +key、数组追加 key+。'],
     });
   }
 }
 
 /**
  * 深度合并覆写到目标配置（顶层入口：DSL 操作符**只在本层解析**）。
- *
- * `skipped` 是可选的收集器：`~?key` 匹配不到同名元素时把跳过的项记进去，由调用方
- * （applyOverwrite → buildConfig）汇总成告警。用出参而非改返回类型——合并会递归进
- * 嵌套映射，改成返回 `{result, skipped}` 会让每个递归点都得拆包再合并。
- * 嵌套层形似操作符键的告警同理走 applyOverwrite（其内部直接调 mergeConfigLevel，
- * 每文件各建一份收集器）；本入口仅供单次合并与测试使用，不收集该类告警。
+ * 仅供单次合并与测试使用；多文件按序合并走 applyOverwrite。
  */
-export function deepMergeWithOverrides(target: unknown, override: unknown, skipped?: SkippedMerge[]): Record<string, unknown> {
-  return mergeConfigLevel(target, override, { skipped: skipped ?? [], operatorShapedKeys: [] }, true);
+export function deepMergeWithOverrides(target: unknown, override: unknown): Record<string, unknown> {
+  return mergeConfigLevel(target, override, true);
 }
 
 /**
  * 单层合并。`parseOperators` 仅顶层（覆写文件直接键）为 true，递归点一律传 false：
- * 嵌套层的键**按字面处理**（`+x`/`~x`/`x!`/`x+`/`<x>` 不再是操作符），与移植路径一致、
- * 语义可预测——内层键若随操作符解析，mihomo 原生通配键（如 nameserver-policy 的
- * `+.corp.example.com`）会被剥成 `.corp.example.com`，通配匹配静默失效。
- * 嵌套数组要改就写全量值（整组覆盖）。
- *
- * 字面层形似操作符的键记入 operatorShapedKeys，由 applyOverwrite → buildConfig
- * 汇总成告警，每文件每键只记一次。
+ * 嵌套层的键**按字面处理**（`+x`/`x!`/`x+` 不再是操作符），语义可预测——内层键若随
+ * 操作符解析，mihomo 原生通配键（如 nameserver-policy 的 `+.corp.example.com`）
+ * 会被剥成 `.corp.example.com`，通配匹配静默失效。嵌套数组要改就写全量值（整组覆盖）。
  */
-function mergeConfigLevel(target: unknown, override: unknown, collectors: MergeCollectors, parseOperators: boolean): Record<string, unknown> {
+function mergeConfigLevel(target: unknown, override: unknown, parseOperators: boolean): Record<string, unknown> {
   let t = target as Record<string, unknown>;
   if (t === null || t === undefined) {
     t = Array.isArray(override) ? ([] as unknown as Record<string, unknown>) : {};
@@ -151,14 +117,10 @@ function mergeConfigLevel(target: unknown, override: unknown, collectors: MergeC
     let forceOverwrite = false;
     let arrayPrepend = false;
     let arrayAppend = false;
-    let arrayMergeByName = false;
-    let arrayMergeOnly = false;
 
     if (parseOperators) {
-      ({ key, forceOverwrite, arrayPrepend, arrayAppend, arrayMergeByName, arrayMergeOnly } = parseOverrideKey(rawKey));
-      assertValidParsedKey(rawKey, { key, forceOverwrite, arrayPrepend, arrayAppend, arrayMergeByName, arrayMergeOnly });
-    } else if (isOperatorShapedNestedKey(rawKey)) {
-      noteOperatorShapedKey(collectors, rawKey);
+      ({ key, forceOverwrite, arrayPrepend, arrayAppend } = parseOverrideKey(rawKey));
+      assertValidParsedKey(rawKey, { key, forceOverwrite, arrayPrepend, arrayAppend });
     }
 
     // `__proto__` 键在对象字面赋值（下方所有 result[key] = ...）里走的是原型 setter
@@ -174,46 +136,6 @@ function mergeConfigLevel(target: unknown, override: unknown, collectors: MergeC
     }
 
     const existingValue = result[key];
-
-    if (arrayMergeByName) {
-      // ~key 只对「按 name 索引的数组」有意义：目标已存在且不是数组时报错，
-      // 不能静默包成单元素数组（`~dns: {enable: true}` 会把映射 dns 变成 [{enable:true}]，
-      // 丢掉原有字段，且 mihomo 要求 dns 是映射）。目标不存在（undefined）时放行：那是
-      // 「新增数组」的正常用法。
-      if (existingValue !== undefined && !Array.isArray(existingValue)) {
-        throw new CliError(
-          `覆写键 "${rawKey}" 的 ~ 语义只适用于数组，但 "${key}" 当前是${existingValue === null ? ' null' : typeof existingValue === 'object' ? '映射' : `标量（${typeof existingValue}）`}`,
-          {
-            label: '覆写配置错误',
-            hint: [
-              `~${key} 用于按 name 就地合并数组元素（如 ~proxy-groups）。`,
-              `若要覆盖非数组的 ${key}，请用 ${key}!（强制覆盖）或直接写 ${key}（深度合并）。`,
-            ],
-          },
-        );
-      }
-      // 按 name 就地 patch：在已有数组里找同名元素只合并其字段（保留其余字段与其余元素）。
-      // 找不到同名时：`~key` 追加（ssh 出口靠它新增节点），`~?key` 跳过并告警。
-      // 必须复制数组，禁止原地改写 target（否则会污染 subscriptionConfig）。
-      const existingArr = Array.isArray(existingValue) ? existingValue : [];
-      const overrideArr = Array.isArray(value) ? value : [value];
-      const merged = [...existingArr];
-      for (const item of overrideArr) {
-        const name = item && typeof item === 'object' && !Array.isArray(item) ? (item as { name?: unknown }).name : undefined;
-        const idx = name != null ? merged.findIndex(e => e && typeof e === 'object' && (e as { name?: unknown }).name === name) : -1;
-        if (idx >= 0) {
-          // 元素字段同属嵌套层：字面合并（`~key` 本身是顶层操作符，补丁字段不是）
-          merged[idx] = mergeConfigLevel(merged[idx], item, collectors, false);
-        } else if (arrayMergeOnly) {
-          // 静默跳过会变成「写了覆写却没生效」，与分组名拼错难以区分，故记一条供调用方告警
-          collectors.skipped.push({ key, name: name == null ? '(无 name)' : String(name) });
-        } else {
-          merged.push(item);
-        }
-      }
-      result[key] = merged;
-      continue;
-    }
 
     if (arrayPrepend || arrayAppend) {
       // 同 ~key：+key/key+ 是数组拼接语义，目标已存在且非数组时报错而非静默包成数组
@@ -252,7 +174,7 @@ function mergeConfigLevel(target: unknown, override: unknown, collectors: MergeC
       !Array.isArray(existingValue)
     ) {
       // 目标已有同名映射 → 逐键深度合并（deep merge 语义不变），进入字面层
-      result[key] = mergeConfigLevel(existingValue as Record<string, unknown>, value, collectors, false);
+      result[key] = mergeConfigLevel(existingValue as Record<string, unknown>, value, false);
       continue;
     }
 
@@ -260,30 +182,6 @@ function mergeConfigLevel(target: unknown, override: unknown, collectors: MergeC
   }
 
   return result;
-}
-
-/** 合并过程中的告警收集器（出参模式，理由见 deepMergeWithOverrides 注释）。 */
-interface MergeCollectors {
-  /** `~?key` 未命中同名元素而跳过的补丁 */
-  skipped: SkippedMerge[];
-  /** 嵌套层形似操作符、已按字面处理的键（每文件每键一次，applyOverwrite 按文件各建一份） */
-  operatorShapedKeys: OperatorShapedKey[];
-}
-
-/**
- * 嵌套层「形似操作符」的键：只挑不太可能是 mihomo 原生键的形态——`~x`/`~?x`、`x!`、
- * `x+`、`<...>` 尖括号包裹、`+x`。`+.` 开头除外：那是 nameserver-policy/hosts 等
- * 原生通配域名的常见形态，对它告警只会骚扰合法写法。命中仅用于提示，键一律按字面处理。
- */
-function isOperatorShapedNestedKey(key: string): boolean {
-  if (key.startsWith('+.')) return false;
-  return key.startsWith('~') || key.startsWith('+') || key.endsWith('!') || key.endsWith('+') || /^<[^>]+>$/.test(key);
-}
-
-/** 记一条字面层形似操作符的键，同一文件内每键只记一次（同一键出现在多个嵌套映射不刷屏）。 */
-function noteOperatorShapedKey(collectors: MergeCollectors, key: string): void {
-  if (collectors.operatorShapedKeys.some(note => note.key === key)) return;
-  collectors.operatorShapedKeys.push({ key });
 }
 
 export function isOverwriteEnabled(): boolean {
@@ -295,15 +193,30 @@ export function setOverwriteEnabled(enabled: boolean): void {
   writeSettings({ overwrite_enabled: enabled });
 }
 
-/** 判断文件名是否为覆写文件:主文件 overwrite.yaml 或扩展文件 overwrite.*.ya?ml。 */
-export function isOverwriteFilename(filename: string): boolean {
+/** 判断文件名是否为 YAML 覆写文件：主文件 overwrite.yaml 或扩展文件 overwrite.*.ya?ml。 */
+function isYamlOverwriteFilename(filename: string): boolean {
   return filename === 'overwrite.yaml' || /^overwrite\..+\.ya?ml$/.test(filename);
+}
+
+/**
+ * 判断文件名是否为 JS 覆写脚本：主脚本 overwrite.js 或扩展脚本 overwrite.*.{js,mjs,cjs}。
+ * .mjs/.cjs 显式声明模块格式；.js 在数据目录（无 package.json）下靠 Node 的模块语法
+ * 探测判 ESM/CJS（本仓 Node 下界 22.22.1，探测自 22.7 起默认启用），两种写法都认。
+ */
+function isScriptOverwriteFilename(filename: string): boolean {
+  return filename === 'overwrite.js' || /^overwrite\..+\.(js|mjs|cjs)$/.test(filename);
+}
+
+/** 覆写文件 = YAML 声明式覆写 + JS 脚本两类；reset overwrites 等消费点据此枚举删除 */
+export function isOverwriteFilename(filename: string): boolean {
+  return isYamlOverwriteFilename(filename) || isScriptOverwriteFilename(filename);
 }
 
 /**
  * 判断文件名是否「形似覆写文件却不被 isOverwriteFilename 认」（整体近失）。
  * 只认小写化后与某个合法形态完全一致、仅大小写或主文件扩展名不同的名字——最典型是
  * `overwrite.yml`（主文件只认 .yaml；.yml 只在扩展文件 `overwrite.*.yml` 形态下合法）。
+ * `.ts` 单列：TypeScript 脚本不能直接加载，静默跳过会让用户以为脚本生效了。
  * 误报零容忍：宁可漏报（overwrit.yaml、overwrite.json、overwrite.yaml.bak 这类
  * 故意改名或意图不明的文件），也不把用户目录里自己的无关文件报出来。
  */
@@ -312,30 +225,28 @@ function isOverwriteFilenameTypo(filename: string): boolean {
   const lower = filename.toLowerCase();
   // 大小写变体（如 Overwrite.YAML）在大小写不敏感的 APFS 上与合法名同名，
   // 但 readdirSync 返回的是存储大小写、按原样匹配不上，同样静默不加载
-  return lower === 'overwrite.yml' || lower === 'overwrite.yaml' || /^overwrite\..+\.ya?ml$/.test(lower);
+  return (
+    lower === 'overwrite.yml' ||
+    lower === 'overwrite.yaml' ||
+    /^overwrite\..+\.ya?ml$/.test(lower) ||
+    lower === 'overwrite.ts' ||
+    /^overwrite\..+\.ts$/.test(lower)
+  );
 }
 
 /**
- * match 块支持的匹配键（作用域限定）。
- * `name` 与 `subscription` 同义（前者是推荐写法），加载时归一到 `subscription`。
+ * match 块支持的匹配键（作用域限定）。历史写法 `subscription` 已收掉（与 name 同义、
+ * 两套写法留一套），写它直接报错指明改名。
  */
-const MATCH_KEYS = new Set(['name', 'subscription', 'url-domain']);
-
-/** 订阅名键的两个同义写法；两者同时出现时报错，不静默取其一。 */
-const SUBSCRIPTION_KEYS = ['name', 'subscription'] as const;
+const MATCH_KEYS = new Set(['name', 'url-domain']);
 
 /**
  * 校验并规整 match 块。仅接受对象；每个键值收敛为 string[]。
  * 返回 undefined 表示无 match 块（默认全局生效）。
  *
- * `name` 与 `subscription` 是同义键，归一到 `subscription` 单一字段——判据
- * （matchesScope）因此只有一处，不必在两个键上各写一遍匹配逻辑。用户写的原键名
- * 存进 `subscriptionKey` 供展示回显。两者同时出现直接报错（矛盾输入不静默取其一，
- * 同 assertValidParsedKey）。
- *
  * **fail closed**：match 块存在（哪怕写错）而解析不出任何有效条件时抛错，
  * 不能静默降级成「全局生效」——用户写了 match 显然想限定作用域，键名打错
- * （`subscripton:`）或值全被滤空（`subscription: []`）后文件反而应用到**所有**订阅，
+ * （`subscripton:`）或值全被滤空（`name: []`）后文件反而应用到**所有**订阅，
  * 是比「报错挡住启动」严重得多的静默失效。运行时侧的 matchesScope 同为 fail-closed
  * （scope 缺字段则不应用），此处把加载侧补齐。
  */
@@ -356,11 +267,10 @@ export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch |
   }
 
   const rawEntries = raw as Record<string, unknown>;
-  const writtenSubscriptionKeys = SUBSCRIPTION_KEYS.filter(k => k in rawEntries);
-  if (writtenSubscriptionKeys.length > 1) {
-    throw new CliError(`覆写文件 "${fileName}" 的 match 同时写了 name 与 subscription（两者同义）`, {
+  if ('subscription' in rawEntries) {
+    throw new CliError(`覆写文件 "${fileName}" 的 match 用了 subscription 键`, {
       label: '覆写配置错误',
-      hint: ['两个键含义相同，同时出现无法判断以哪个为准，请只保留一个。', '推荐用 name，如 match: {name: edu*}。'],
+      hint: ['subscription 键已收掉（与 name 同义但两套写法），请改写 name，匹配语义不变:', '  match:', '    name: edu*'],
     });
   }
 
@@ -376,21 +286,25 @@ export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch |
       problems.push(`键 "${key}" 的值为空或无有效字符串`);
       continue;
     }
-    // name → subscription 归一；原键名留给展示层
-    if (key === 'name' || key === 'subscription') {
-      result.subscription = arr;
-      result.subscriptionKey = key;
-      continue;
-    }
-
-    // url-domain 只做字面后缀比对，不含通配语义（通配只有订阅名键支持）——值里
-    // 出现 `*`/`?` 恒不命中，文件会静默对任何订阅都不生效，零提示的静默全不命中
-    // 会被当成 bug，故显式报错
+    // url-domain 只做字面后缀比对，不含通配语义——值里出现 `*`/`?` 恒不命中，
+    // 文件会静默对任何订阅都不生效，零提示的静默全不命中会被当成 bug，故显式报错
     if (key === 'url-domain') {
       const wildcard = arr.find(v => v.includes('*') || v.includes('?'));
       if (wildcard) {
         problems.push(`url-domain 不支持通配符（当前值 "${wildcard}"），只做字面后缀比对`);
         continue;
+      }
+    }
+    if (key === 'name') {
+      const bad = arr.find(v => !isValidNamePattern(v));
+      if (bad !== undefined) {
+        throw new CliError(`覆写文件 "${fileName}" 的 name 通配写法不支持: "${bad}"`, {
+          label: '覆写配置错误',
+          hint: [
+            '订阅名匹配只支持两种通配：尾部 *（前缀，edu* 命中 edu1、不命中 xedu1）与头部 *（后缀，*edu）。',
+            '单独一个 * 等于不限订阅（恒真），请删掉 match；更复杂的匹配写 JS 覆写脚本（README「覆写配置」章节）。',
+          ],
+        });
       }
     }
     (result as Record<string, string[]>)[key] = arr;
@@ -401,7 +315,7 @@ export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch |
       label: '覆写配置错误',
       hint: [
         'match 写错时该文件不会限定作用域、而是对所有订阅生效，故直接报错而非忽略。',
-        `可用键: ${[...MATCH_KEYS].join(', ')}（name 与 subscription 同义）`,
+        `可用键: ${[...MATCH_KEYS].join(', ')}`,
         '示例: match: {name: edu*} 或 match: {url-domain: [corp.com, github.com]}',
       ],
     });
@@ -411,7 +325,7 @@ export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch |
     // 空 match 块：matchesScope 对空条件恒真（= 全局生效），同样必须挡下
     throw new CliError(`覆写文件 "${fileName}" 的 match 为空（没有任何条件）`, {
       label: '覆写配置错误',
-      hint: [`可用键: ${[...MATCH_KEYS].join(', ')}（name 与 subscription 同义）`, '示例: match: {name: work}'],
+      hint: [`可用键: ${[...MATCH_KEYS].join(', ')}`, '示例: match: {name: work}'],
     });
   }
 
@@ -419,18 +333,25 @@ export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch |
 }
 
 /**
- * 一行摘要 match 作用域，供 `ow list` 展示；无限定返回 undefined。
- * 订阅名条件按用户写的原键名回显（`subscriptionKey`），`subscriptionKey` 自身是
- * 展示元数据、不是条件，不参与输出。
+ * name 值的合法通配形态：无 `*`（精确）、或恰好一个 `*` 且在最前/最后。
+ * 单独一个 `*` 判非法——它等于恒真（不限订阅），与「写了 match 想限定作用域」的意图相反，
+ * 与空 match 块报错是同一族判定。`?` 一律不支持（通用匹配器已删，见 nameMatchesPattern）。
  */
+function isValidNamePattern(value: string): boolean {
+  if (value === '*' || value.includes('?')) return false;
+  const star = value.indexOf('*');
+  if (star === -1) return true;
+  if (value.indexOf('*', star + 1) !== -1) return false;
+  return star === 0 || star === value.length - 1;
+}
+
+/** 一行摘要 match 作用域，供 `ow list` 展示；无限定返回 undefined。 */
 function summarizeMatch(match?: OverwriteMatch): string | undefined {
   if (!match) return undefined;
   const parts: string[] = [];
   for (const [key, value] of Object.entries(match)) {
-    if (key === 'subscriptionKey') continue;
-    const displayKey = key === 'subscription' ? (match.subscriptionKey ?? 'subscription') : key;
     const vals = Array.isArray(value) ? value : [value];
-    parts.push(`${displayKey}=${vals.join('/')}`);
+    parts.push(`${key}=${vals.join('/')}`);
   }
   return parts.length > 0 ? parts.join(', ') : undefined;
 }
@@ -453,67 +374,32 @@ function hostMatchesDomain(host: string, domain: string): boolean {
 }
 
 /**
- * 订阅名 glob 匹配：`*` 任意多字符、`?` 单字符，其余字符字面。**不走正则**，用双指针
- * 贪心回溯（最坏 O(n×m)）：「转义成正则再 test」在合法输入内就有灾难性回溯
- * （`*a`×20 的 pattern 配 64 字符订阅名实测 70 秒，而 64 正是 SAFE_NAME_RE 的上限）。
- *
- * - **全串匹配**：`edu*` 不命中 `xedu1`。前缀式半匹配会让作用域悄悄放宽。
- * - **无通配字符时退化为精确比对**：老写法 `subscription: home` 行为不变（向后兼容）。
- * - 大小写不敏感，与 findSubscriptionFuzzy（`sub use` 口径）一致；用双 toLowerCase
- *   而非正则 `i` flag，避免 Unicode 大小写折叠与订阅名白名单（SAFE_NAME_RE 含中文）
- *   产生口径差异。
- * - 逐 UTF-16 码元比较：SAFE_NAME_RE 只允许 BMP 汉字、无代理对，故 `?` = 一个字符。
- *   若将来放开 emoji 等星平面字符，`?` 的语义要重新评估。
+ * 订阅名匹配：精确值、尾部单个 `*`（前缀 `edu*`）、头部单个 `*`（后缀 `*edu`），
+ * 大小写不敏感（与 findSubscriptionFuzzy / `sub use` 口径一致——同一名称不能有两套
+ * 匹配规则）。只做字面前缀/后缀比对、**无通用匹配器**：glob 转正则的实现曾在合法输入
+ * 内灾难性回溯（`*a`×20 配 64 字符订阅名实测 70 秒，64 正是 SAFE_NAME_RE 的上限），
+ * 而真实使用面只有前缀区分（同机场套餐系列 edu1/edu2）——复杂匹配走 JS 覆写脚本。
+ * `edu*` 是全串前缀语义，不命中 `xedu1`（半匹配会让作用域悄悄放宽）。
  */
 function nameMatchesPattern(name: string, pattern: string): boolean {
   const n = name.toLowerCase();
   const p = pattern.toLowerCase();
-  if (!/[*?]/.test(p)) return n === p;
-
-  let nameIndex = 0;
-  let patternIndex = 0;
-  // 最近一个 `*` 在 pattern 中的位置，以及它当时匹配到的 name 位置（回溯锚点）
-  let starPatternIndex = -1;
-  let starNameIndex = 0;
-
-  while (nameIndex < n.length) {
-    if (patternIndex < p.length && p[patternIndex] !== '*' && (p[patternIndex] === '?' || p[patternIndex] === n[nameIndex])) {
-      // 字面字符或 `?` 命中，两边同时前进
-      nameIndex++;
-      patternIndex++;
-    } else if (patternIndex < p.length && p[patternIndex] === '*') {
-      // 记下锚点，先假设 `*` 匹配空串
-      starPatternIndex = patternIndex++;
-      starNameIndex = nameIndex;
-    } else if (starPatternIndex !== -1) {
-      // 失配但前面有 `*`：让它多吃一个字符再试
-      patternIndex = starPatternIndex + 1;
-      nameIndex = ++starNameIndex;
-    } else {
-      return false;
-    }
-  }
-
-  // name 耗尽，pattern 剩余部分必须全是 `*` 才算全串匹配
-  while (patternIndex < p.length && p[patternIndex] === '*') patternIndex++;
-  return patternIndex === p.length;
+  if (p.startsWith('*')) return n.endsWith(p.slice(1));
+  if (p.endsWith('*')) return n.startsWith(p.slice(0, -1));
+  return n === p;
 }
 
 /**
  * 判断单个覆写文件在给定作用域下是否应用。
- * - 无 match → 默认全局应用。
+ * - 无 match → 默认全局应用（JS 脚本无 match 机制，作用域判断写在脚本里）。
  * - 有 match → 所列条件全部满足（AND）；条件值数组内为 OR。
  * - fail closed：scope 缺少评估该条件所需字段时，该文件不应用。
  */
 function matchesScope(match: OverwriteMatch | undefined, scope?: OverwriteScope): boolean {
   if (!match) return true;
 
-  if (match.subscription) {
-    const names = Array.isArray(match.subscription) ? match.subscription : [match.subscription];
-    // 大小写不敏感 + glob：与 findSubscriptionFuzzy（sub use 的解析口径）一致——
-    // 同一名称不能有两套匹配规则（`match: {subscription: home}` 与 `sub use home`
-    // 必须指向同一订阅）。用户写 name 还是 subscription 都归一到本字段，
-    // 故通配对两种写法同样生效
+  if (match.name) {
+    const names = Array.isArray(match.name) ? match.name : [match.name];
     if (!scope?.subName) return false;
     const subName = scope.subName;
     if (!names.some(n => nameMatchesPattern(subName, n))) return false;
@@ -555,9 +441,9 @@ const METADATA_KEYS = new Set(['match', 'enabled']);
  * 文件没被停用、键被当普通配置写进运行配置，而内核对未知顶层键宽松、`-t` 不会拦下：
  *
  * - **操作符**：剥离发生在解构（早于 mergeConfigLevel 的操作符解析），`enabled!: false`
- *   会被 parseOverrideKey 规范成键 `enabled` 落进最终配置。尖括号转义 `<enabled>` 同样被拦
- *   （解析后键名也等于 `enabled`）：代价是没有「写真名为 enabled 的配置键」的逃生口，
- *   但 mihomo 顶层没有这个键，暂无实际影响。
+ *   会被 parseOverrideKey 规范成键 `enabled` 落进最终配置。代价是没有「写真名为
+ *   enabled 的配置键」的逃生口，但 mihomo 顶层没有这个键，暂无实际影响
+ *   （尖括号转义已随 DSL 裁剪移除，`<enabled>` 在合并层报「已移除的尖括号转义」）。
  * - **大小写/空白**：YAML 键大小写敏感，`Enabled: false` 既不是元数据键（不停用文件）
  *   又不是任何 mihomo 原生键（纯噪音）。判据是「小写去空白后等于元数据键、但原样不等于」——
  *   与 isOverwriteFilenameTypo 同一思路（只认整体近失，不做模糊猜测）。
@@ -617,8 +503,8 @@ function toBrokenFile(file: string, filePath: string, e: unknown): BrokenOverwri
     return { name: file, path: filePath, label: e.label, message: e.message, hint: e.hint };
   }
   const message = (e as Error).message || String(e);
-  // YAML 里 `*` 开头的标量是**别名语法**，`name: *edu` 会解析失败。推广订阅名 glob 后
-  // 前缀通配是很自然的写法，光说「解析失败」用户想不到是引号问题
+  // YAML 里 `*` 开头的标量是**别名语法**，`name: *edu`（后缀通配）会解析失败，
+  // 光说「解析失败」用户想不到是引号问题
   const hint = ['该文件当前未参与合并，请修正后重试（mihomo ow 可查看全部覆写文件）。'];
   if (/alias/i.test(message)) {
     hint.push('若写了以 * 开头的通配值（如 name: *edu），YAML 会把它当别名语法，请加引号写成 name: "*edu"');
@@ -627,8 +513,39 @@ function toBrokenFile(file: string, filePath: string, e: unknown): BrokenOverwri
 }
 
 /**
- * 读取目录下全部覆写文件，**不抛错、不静默**：成功的进 ok，解析/校验失败的进 broken。
- * 两条消费路径各自决定姿态：
+ * 加载 JS 覆写脚本并校验默认导出。createRequire 以脚本自身路径为基准：脚本内
+ * require/import 的相对依赖按它所在目录解析。require(esm)（Node ≥22.12，本仓下界
+ * 22.22.1）同步加载 ESM——buildConfig 是同步管线，脚本契约也要求同步；.cjs 走 CJS
+ * 加载，`module.exports = fn` 的写法同样认。加载即执行模块顶层代码（契约：顶层只
+ * 定义函数，副作用放变换函数内——status/doctor/config 等只读命令也会执行脚本）。
+ */
+function loadOverwriteScript(filePath: string, fileName: string): OverwriteTransform {
+  let mod: unknown;
+  try {
+    mod = createRequire(filePath)(filePath);
+  } catch (e) {
+    throw new CliError(`覆写脚本 "${fileName}" 加载失败: ${(e as Error).message?.split('\n')[0] ?? String(e)}`, {
+      label: '覆写配置错误',
+      hint: ['该脚本当前未参与合并。常见原因：语法错误、import/require 了不存在的模块、或使用了 top-level await（脚本必须可同步加载）。'],
+    });
+  }
+  const fn = typeof mod === 'function' ? mod : (mod as { default?: unknown } | null | undefined)?.default;
+  if (typeof fn !== 'function') {
+    throw new CliError(`覆写脚本 "${fileName}" 缺少变换函数`, {
+      label: '覆写配置错误',
+      hint: [
+        '写法（就地修改传入的 config，返回值忽略）:',
+        '  export default function (config, ctx) { ... }',
+        'CommonJS 写法 module.exports = function (config, ctx) { ... } 同样认。',
+      ],
+    });
+  }
+  return fn as OverwriteTransform;
+}
+
+/**
+ * 读取目录下全部覆写文件（YAML + JS 脚本），**不抛错、不静默**：成功的进 ok，
+ * 解析/校验失败的进 broken。两条消费路径各自决定姿态：
  * - 合并路径（loadOverwriteFile → buildConfig → start/doctor）：存在 broken 即硬失败
  * - 诊断路径（listOverwriteFile → status/ow 列表）：broken 红字列出，仪表盘永远
  *   能渲染——最需要排查工具的时候工具不能先坏
@@ -640,27 +557,30 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
   if (!fs.existsSync(USER_DATA_DIR)) return { ok, broken };
 
   const entries = fs.readdirSync(USER_DATA_DIR);
-  // 码点序，不用 localeCompare：后者随系统 locale 漂移（同一组中文文件名在
-  // en/zh_CN/ja 下三种顺序），而排序即合并顺序——不同机器合并出不同运行配置，全程静默。
-  // 排序是合并语义的一部分，不是展示细节。
-  const files = entries.filter(isOverwriteFilename).sort((a, b) => {
-    if (a === 'overwrite.yaml') return -1;
-    if (b === 'overwrite.yaml') return 1;
-    return a < b ? -1 : a > b ? 1 : 0;
-  });
+  // 两段排序：YAML 全部在前（主文件最先、扩展码点序）、JS 脚本在后（主脚本最先、
+  // 扩展码点序）——「声明式基底，程序化后处理」。段内码点序，不用 localeCompare：
+  // 后者随系统 locale 漂移（同一组中文文件名在 en/zh_CN/ja 下三种顺序），而排序即
+  // 合并顺序——不同机器合并出不同运行配置，全程静默。排序是合并语义的一部分，不是展示细节。
+  const files = entries
+    .filter(isOverwriteFilename)
+    .sort((a, b) => (overwriteSortKey(a) < overwriteSortKey(b) ? -1 : overwriteSortKey(a) > overwriteSortKey(b) ? 1 : 0));
 
   // 近失文件名：意图明显是覆写文件却不被任何合法模式认（最典型：主文件写成 overwrite.yml）。
   // 静默不加载 = 用户以为覆写生效了、`ow` 列表里也看不见，故打一行警告。
   // 只认整体近失（见 isOverwriteFilenameTypo），不扫全部「形近」文件
   for (const typo of entries.filter(e => isOverwriteFilenameTypo(e))) {
     console.warn(
-      `警告: "${typo}" 不会被当作覆写文件加载（合法文件名: overwrite.yaml 主文件、overwrite.*.yaml / overwrite.*.yml 扩展文件；主文件不支持 .yml）；若是笔误请改名`,
+      `警告: "${typo}" 不会被当作覆写文件加载（合法文件名: overwrite.yaml 主文件、overwrite.*.yaml / overwrite.*.yml 扩展文件、overwrite.js 主脚本、overwrite.*.js / .mjs / .cjs 扩展脚本）；若是笔误请改名`,
     );
   }
 
   for (const file of files) {
     const filePath = path.join(USER_DATA_DIR, file);
     try {
+      if (isScriptOverwriteFilename(file)) {
+        ok.push({ name: file, path: filePath, transform: loadOverwriteScript(filePath, file) });
+        continue;
+      }
       const content = fs.readFileSync(filePath, 'utf8');
       // 别名上限防 YAML 炸弹 DoS（同 config.ts SAFE_YAML_LOAD_OPTIONS，此处内联避免与 config 循环依赖）
       const parsed = yaml.load(content, { maxAliases: YAML_MAX_ALIASES }) as Record<string, unknown> | null;
@@ -689,6 +609,13 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
   return { ok, broken };
 }
 
+/** 覆写文件排序键：段序（YAML 0 / 脚本 1）→ 主文件优先 → 文件名码点序 */
+function overwriteSortKey(filename: string): string {
+  const segment = isScriptOverwriteFilename(filename) ? '1' : '0';
+  const primary = filename === 'overwrite.yaml' || filename === 'overwrite.js' ? '0' : '1';
+  return `${segment}${primary}${filename}`;
+}
+
 /**
  * 合并路径的加载出口：**任何坏文件都硬失败**，由 main().catch 统一渲染完整原因
  * （warn+退出 0 会让启动成功但覆写没参与合并，「以为生效了」比报错危险）。
@@ -703,29 +630,94 @@ export function loadOverwriteFile(): OverwriteFileEntry[] {
   return ok;
 }
 
+/** 脚本锁定键探针集：LOCKED_CONFIG_KEYS + 顶层 tls 段（YAML 侧告警同样含 tls） */
+const SCRIPT_LOCKED_PROBES: readonly string[] = [...LOCKED_CONFIG_KEYS, 'tls'];
+
+/** 脚本执行前的锁定键浅快照：只记存在性与值，与 YAML 侧的键级检测同粒度 */
+function snapshotLockedKeys(config: Record<string, unknown>): Record<string, unknown> {
+  const snap: Record<string, unknown> = {};
+  for (const k of SCRIPT_LOCKED_PROBES) {
+    if (k in config) snap[k] = config[k];
+  }
+  return snap;
+}
+
+/** 检出脚本新设置或改值的锁定键；嵌套内部的改动检不出（浅层对比，与 YAML 侧同粒度） */
+function diffLockedKeys(before: Record<string, unknown>, after: Record<string, unknown>): string[] {
+  return SCRIPT_LOCKED_PROBES.filter(k => {
+    const had = k in before;
+    const has = k in after;
+    return had !== has ? has : had && before[k] !== after[k];
+  });
+}
+
+/** applyOverwrite 的执行参数：构造脚本 ctx 所需（YAML 合并不用） */
+export interface ApplyOverwriteOptions {
+  mode: 'mixed' | 'tun';
+  scope?: OverwriteScope;
+}
+
+/** 脚本设置的锁定键命中，供 buildConfig 渲染告警（文案在 config.ts，只留一份） */
+export interface ScriptLockedHit {
+  file: string;
+  keys: string[];
+}
+
 /**
- * 应用已按开关与作用域筛选的覆写；不额外读取设置或改变节点池。
+ * 应用已按开关与作用域筛选的覆写：YAML 文件按序深度合并，JS 脚本随后按序执行
+ * （顺序由 readOverwriteFiles 的排序保证，两类混在同一 files 数组里按 transform 分派）。
+ * 不额外读取设置或改变节点池。
  *
- * 告警出参两个，均带文件名、供调用方（buildConfig → warnings）汇总：
- * - `skipped`：`~?key` 因匹配不到同名元素而跳过的补丁——静默跳过与「分组名拼错」
- *   无法区分，用户会以为覆写生效了。
- * - `operatorShapedKeys`：嵌套层形似操作符、已按字面处理的键——大概率是把顶层
- *   语法写进了嵌套层（以为 `+`/`~` 会生效），每文件每键只记一次。
+ * 脚本契约（README 同步承诺）：就地修改传入的 config、返回值忽略、必须同步
+ * （返回 Promise 报错——buildConfig 是同步管线）。脚本抛错按坏文件同款姿态：
+ * CLI 包装为带文件名的 CliError，合并路径硬失败。脚本设置的锁定键经前后快照检出，
+ * 由调用方渲染告警——剥除照常发生（安全边界不破），但不静默。
  */
 export function applyOverwrite(
   baseConfig: Record<string, unknown>,
   files: OverwriteFileEntry[],
-): { config: Record<string, unknown>; skipped: SkippedMerge[]; operatorShapedKeys: OperatorShapedKey[] } {
+  opts: ApplyOverwriteOptions,
+): { config: Record<string, unknown>; scriptWarnings: string[]; scriptLockedHits: ScriptLockedHit[] } {
   let result = { ...baseConfig };
-  const skipped: SkippedMerge[] = [];
-  const operatorShapedKeys: OperatorShapedKey[] = [];
-  for (const file of files) {
-    const collectors: MergeCollectors = { skipped: [], operatorShapedKeys: [] };
-    result = mergeConfigLevel(result, file.config, collectors, true);
-    for (const s of collectors.skipped) skipped.push({ ...s, file: file.name });
-    for (const k of collectors.operatorShapedKeys) operatorShapedKeys.push({ ...k, file: file.name });
+  const scriptWarnings: string[] = [];
+  const scriptLockedHits: ScriptLockedHit[] = [];
+
+  let host = '';
+  try {
+    if (opts.scope?.subUrl) host = new URL(opts.scope.subUrl.trim()).hostname;
+  } catch {
+    host = ''; // 非法 URL：脚本侧自己判（host 为空串）
   }
-  return { config: result, skipped, operatorShapedKeys };
+  const subscription = { name: opts.scope?.subName ?? '', url: opts.scope?.subUrl ?? '', host };
+
+  for (const file of files) {
+    if (file.transform) {
+      const before = snapshotLockedKeys(result);
+      const notes: string[] = [];
+      const ctx: OverwriteScriptContext = { subscription, mode: opts.mode, warn: message => notes.push(message) };
+      let returned: unknown;
+      try {
+        returned = file.transform(result, ctx);
+      } catch (e) {
+        throw new CliError(`覆写脚本 "${file.name}" 执行失败: ${(e as Error).message?.split('\n')[0] ?? String(e)}`, {
+          label: '覆写配置错误',
+          hint: ['本次构建已中止；修复脚本后重试（mihomo ow 可查看全部覆写文件与脚本）。'],
+        });
+      }
+      if (returned != null && typeof (returned as { then?: unknown }).then === 'function') {
+        throw new CliError(`覆写脚本 "${file.name}" 返回了 Promise`, {
+          label: '覆写配置错误',
+          hint: ['脚本必须是同步函数（buildConfig 是同步管线，纯转换没有要等网络的场景）；确需异步运算，先在脚本外算好再同步写入。'],
+        });
+      }
+      scriptWarnings.push(...notes.map(message => `${message}（脚本 ${file.name}）`));
+      const keys = diffLockedKeys(before, result);
+      if (keys.length > 0) scriptLockedHits.push({ file: file.name, keys });
+      continue;
+    }
+    result = mergeConfigLevel(result, file.config ?? {}, true);
+  }
+  return { config: result, scriptWarnings, scriptLockedHits };
 }
 
 /**
@@ -749,7 +741,8 @@ export function listOverwriteFile(scope?: OverwriteScope): OverwriteListResult {
     files: ok.map(f => ({
       name: f.name,
       path: f.path,
-      keys: Object.keys(f.config || {}),
+      kind: f.transform ? ('script' as const) : ('yaml' as const),
+      keys: f.transform ? [] : Object.keys(f.config || {}),
       scope: summarizeMatch(f.match),
       enabled: f.enabled !== false,
       ...(scope ? { matched: matchesScope(f.match, scope) } : {}),
