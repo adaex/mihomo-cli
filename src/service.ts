@@ -72,29 +72,34 @@ const LOG_ROTATE_MAX_BYTES = 10 * 1024 * 1024;
 /** launchctl 查询超时：只读探测卡住时按「查不到」处理 */
 const LAUNCHCTL_TIMEOUT_MS = 5000;
 /**
- * stop/uninstall **锁内** launchctl 调用的单次超时。
+ * 锁内 launchctl 调用的单次超时（start/install/restart/stop/uninstall 全部锁内调用统一）。
  *
- * 为什么比默认 5s 短：stop 侧锁体含**三次** launchctl（bootout、disable、print-disabled
- * 复核），按默认超时最坏持锁 15s，超出 `LOCK_STALE_MS`（10s，paths.ts）——并发 start
- * 等锁超过 10s 会按「持锁者已死」强夺进入，两进程同处临界区，停止计数判据被整体
- * 绕过（判据的全部意义就是防这个交错）。3s × 3 = 9s，收回阈值内；start 侧锁内
- * 两次调用（enable + bootstrap）维持默认 5s、合计恰等于阈值，是既有基线，不动。
+ * 为什么比默认 5s 短：锁内调用次数 × 单次超时的最坏持锁时长必须低于 `LOCK_STALE_MS`
+ * （10s，paths.ts）——等锁方超过 10s 会按「持锁者已死」强夺进入，两进程同处临界区，
+ * 停止计数判据被整体绕过（判据的全部意义就是防这个交错）。
+ * - stop/uninstall 侧三次（bootout、disable、print-disabled 复核）：3s × 3 = 9s
+ * - start/install/restart 侧：第四轮给 bootstrap 加幂等复读后，失败分支三次
+ *   （enable + bootstrap + exit 5 时的 print，见 bootstrapServiceIdempotentOrThrow）。
+ *   此前「两次默认 5s、合计恰等于阈值」的基线没有任何余量，print 的增量无处安放，
+ *   故统一压到 3s：正常两次 6s，失败分支 3 × 3 = 9s，都收回阈值内
  *
- * 为什么不能用「缩到两次调用」修——三个环节谁也挪不出锁：
+ * 为什么不能用「缩到两次调用」修 stop 侧——三个环节谁也挪不出锁：
  * - 复核必须在递增**之前**：位没真生效就不该记「停止过」，否则一次失败的 disable
  *   会让并发 start 白白中止（下方 disableServiceAutoStart「放在确认之后」防的事）
  * - 递增必须在锁内、紧随 disable：挪到锁外的话，并发 start 会在「disable 完成」与
  *   「递增落地」之间拿到锁，读不到计数变化，enable + bootstrap 照常覆盖这次停止
  * - bootout 必须与 disable 同锁：bootout 挪到锁前，并发 start 的 bootstrap 能滑进
  *   两者之间，stop 收尾时服务仍是 loaded + KeepAlive，杀掉的内核约 10s 后被拉回
- * 故只能压单次超时。
+ * 故只能压单次超时。start 侧同理：enable 必须在 bootstrap 前（disabled 标签硬失败，
+ * 见 installService 注释）、幂等 print 必须在锁内（放锁后判定，对方可能已 bootout，
+ * 见该函数注释），都挪不出去。
  *
- * 3s 的余量论证：锁内三次都是本机 XPC 往返——print/print-disabled 实测 3ms（见
- * getServiceStatus），disable 是同类的本地写；仓库里唯一实测会阻塞数秒的 launchctl
- * 是 kickstart -k（阻塞等进程死亡，故单独 60s 且刻意留在锁外），bootout 发出卸载
- * 请求即返回、不等进程死透（waitUntilUnloaded 的轮询正为此存在）。launchctl 慢到
- * 3s 不够说明系统已病态，此时快速失败（bootout/disable 抛 CliError）比持锁超时更
- * 安全：后者会静默拆掉整条并发防线。
+ * 3s 的余量论证：锁内调用都是本机 XPC 往返——print/print-disabled 实测 3ms（见
+ * getServiceStatus），disable/enable/bootstrap 是同类的本地写；仓库里唯一实测会阻塞
+ * 数秒的 launchctl 是 kickstart -k（阻塞等进程死亡，故单独 60s 且刻意留在锁外），
+ * bootout 发出卸载请求即返回、不等进程死透（waitUntilUnloaded 的轮询正为此存在）。
+ * launchctl 慢到 3s 不够说明系统已病态，此时快速失败比持锁超时更安全：后者会静默
+ * 拆掉整条并发防线。
  */
 // 导出供 service-concurrency.spec 的常量关系断言（调用次数 × 单次预算 < 强夺阈值）消费
 export const SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS = 3_000;
@@ -486,11 +491,15 @@ function runLaunchctlOrThrow(args: string[], what: string, timeoutMs: number = L
  *   （epoch 防线不受影响——并发 stop 早在锁内 shouldAbortStartOnDisable 被拦）
  * - print 113（未装载）= 真失败（disabled 残留 / I/O error），维持报错
  * 其他退出码原样抛，不吸收。
+ *
+ * 持锁预算：本函数两次调用 + 调用方的 enable 共三次，全部走
+ * SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS（见该常量的预算注释）——exit 5 复读 print 是
+ * 本函数的增量调用，预算按「失败分支三次」算，不因为它们正常是毫秒级就省掉。
  */
 function bootstrapServiceIdempotentOrThrow(what: string): void {
-  const result = runLaunchctl(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist]);
+  const result = runLaunchctl(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist], SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS);
   if (result.status === 0) return;
-  if (result.status === 5 && runLaunchctl(['print', serviceTarget()]).status === 0) return;
+  if (result.status === 5 && runLaunchctl(['print', serviceTarget()], SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS).status === 0) return;
   const detail = result.stderr.trim();
   throw new CliError(`${what}失败（launchctl 退出码 ${result.status ?? '执行失败'}）`, {
     hint: [detail, `手动确认: launchctl print ${serviceTarget()}`].filter(Boolean),
@@ -730,7 +739,7 @@ export async function installService(wasRunning: boolean, stopEpochBefore: numbe
           restoreSkipped = true;
           return;
         }
-        runLaunchctlOrThrow(['enable', serviceTarget()], '启用服务');
+        runLaunchctlOrThrow(['enable', serviceTarget()], '启用服务', SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS);
         bootstrapServiceIdempotentOrThrow('装载服务');
       });
     }
@@ -950,7 +959,7 @@ export async function startService(stopEpochBefore: number): Promise<{ started: 
       started = false;
       return;
     }
-    runLaunchctlOrThrow(['enable', serviceTarget()], '启用服务');
+    runLaunchctlOrThrow(['enable', serviceTarget()], '启用服务', SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS);
     bootstrapServiceIdempotentOrThrow('启动服务');
   });
 
@@ -1314,7 +1323,7 @@ export async function restartService(stopEpochBefore: number): Promise<{ hotRelo
         started = false;
         return;
       }
-      runLaunchctl(['enable', serviceTarget()]); // 容忍失败：bootstrap 会再判一次
+      runLaunchctl(['enable', serviceTarget()], SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS); // 容忍失败：bootstrap 会再判一次
       bootstrapServiceIdempotentOrThrow('重启服务');
     });
     // 被取消：直接返回，不清理归档也不做别的收尾

@@ -286,7 +286,12 @@ export async function downloadSubscription(url: string, subName = 'default', sig
     } catch {
       /* 回滚失败不掩盖原始错误 */
     }
-    throw new CliError(`订阅缓存写入失败: ${(e as Error).message}`, { label: '更新失败', hint: ['订阅文件已回滚，可重试: mihomo sub update'] });
+    throw new CliError(`订阅缓存写入失败: ${(e as Error).message}`, {
+      label: '更新失败',
+      // 不给命令级指引：add 与 update 两个消费方都会走到这里，而 add 失败后条目已
+      // 回滚删除，照「sub update」执行只会得到「没有订阅」——hint 只陈述已做的事
+      hint: ['订阅文件已随失败回滚删除', '若 cache.json 被手工改动，修复后重试'],
+    });
   }
 
   const proxies = parsed.proxies as unknown[] | undefined;

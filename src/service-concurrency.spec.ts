@@ -422,6 +422,18 @@ esac
       `锁内 ${LOCK_INNER_LAUNCHCTL_CALLS} 次 launchctl × 单次 ${SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS}ms 已达/超 LOCK_STALE_MS(${LOCK_STALE_MS}ms)，并发 start 会在持锁期间强夺进入——加锁内调用或调大预算前先算总预算（并同步本断言的乘数）`,
     );
   });
+
+  // start 侧对称断言（第四轮修复复查补）：bootstrap 幂等吸收的 exit 5 复读 print
+  // 是锁内增量调用，失败分支共三次（enable + bootstrap + print）。与 stop 侧同一
+  // 把尺：乘数 × 单次预算 < 强夺阈值。此断言在第四轮修复初版缺失——预算破坏没有
+  // 任何测试挡着，靠复查人工算出，补上对称断言防回归
+  it('start 侧锁内预算：失败分支三次调用 × 单次预算 < 强夺阈值', () => {
+    const START_LOCK_MAX_INNER_CALLS = 3;
+    assert.ok(
+      START_LOCK_MAX_INNER_CALLS * SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS < LOCK_STALE_MS,
+      `start 侧失败分支 ${START_LOCK_MAX_INNER_CALLS} 次 launchctl × 单次 ${SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS}ms 已达/超 LOCK_STALE_MS(${LOCK_STALE_MS}ms)`,
+    );
+  });
 });
 
 /**
