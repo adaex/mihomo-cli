@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { assertKnownFlags } from '../argv.js';
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
-import { isOverwriteFilename } from '../overwrite.js';
+import { isOverwriteFilename, listTypoOverwriteFiles } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
 import { cleanupAll } from '../process-stop.js';
@@ -176,4 +176,16 @@ export async function cmdReset(args: string[]): Promise<void> {
   ensureDirs();
   const labels = targets.filter(t => deleted.has(t.id)).map(t => t.label);
   console.log(labels.length > 0 ? colors.green(`已重置: ${labels.join('、')}`) : '没有需要重置的内容');
+
+  // 近失文件（overwrite.yml / overwrite.ts / 大小写变体）不被 isOverwriteFilename 认、
+  // 不在删除集里——reset 后它们残留且每次命令继续刷「不会被加载」警告。
+  // 保守删除一贯有理（文件名近失不等于意图确定），但用户刚要求重置覆写，必须让他知道
+  // 还有几个疑似文件没动、在哪
+  if (ids.has('overwrites')) {
+    const typos = listTypoOverwriteFiles();
+    if (typos.length > 0) {
+      console.log(colors.yellow(`另有 ${typos.length} 个疑似覆写文件未被识别、保留未删: ${typos.join('、')}`));
+      console.log(colors.gray('  这些文件名不会被加载（合法：overwrite.yaml、overwrite.*.yaml/yml、overwrite.js 等）；确认无用可手动删除'));
+    }
+  }
 }

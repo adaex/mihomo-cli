@@ -239,6 +239,18 @@ function isOverwriteFilenameTypo(filename: string): boolean {
 }
 
 /**
+ * 数据目录里「形似覆写文件却不会被加载」的近失文件名（overwrite.yml、overwrite.ts、
+ * 大小写变体）。加载时的警告与 reset overwrites 的残留提示共用这一个出口
+ */
+export function listTypoOverwriteFiles(): string[] {
+  try {
+    return fs.readdirSync(USER_DATA_DIR).filter(isOverwriteFilenameTypo);
+  } catch {
+    return [];
+  }
+}
+
+/**
  * match 块支持的匹配键（作用域限定）。历史写法 `subscription` 已收掉（与 name 同义、
  * 两套写法留一套），写它直接报错指明改名。
  */
@@ -605,7 +617,7 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
   // 近失文件名：意图明显是覆写文件却不被任何合法模式认（最典型：主文件写成 overwrite.yml）。
   // 静默不加载 = 用户以为覆写生效了、`ow` 列表里也看不见，故打一行警告。
   // 只认整体近失（见 isOverwriteFilenameTypo），不扫全部「形近」文件
-  for (const typo of entries.filter(e => isOverwriteFilenameTypo(e))) {
+  for (const typo of listTypoOverwriteFiles()) {
     console.warn(
       `警告: "${typo}" 不会被当作覆写文件加载（合法文件名: overwrite.yaml 主文件、overwrite.*.yaml / overwrite.*.yml 扩展文件、overwrite.js 主脚本、overwrite.*.js / .mjs / .cjs 扩展脚本）；若是笔误请改名`,
     );
