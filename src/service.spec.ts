@@ -11,6 +11,7 @@ import {
   buildLegacyCleanupScript,
   buildPlist,
   buildRootResidueCleanupError,
+  classifyResidueCleanup,
   concludeHotReload,
   describeAbnormalExit,
   describeExitCause,
@@ -565,6 +566,34 @@ describe('isValidServiceLabel：全仓唯一挡住 root 任意路径写的校验
  * （用户主动行为）而非「错误」渲染。真实 sudo 路径不自动测试（CODE_REVIEW），
  * 可测的是这份包装的纯逻辑。
  */
+/**
+ * cleanupKernelsOrThrow 的抛错/警告判据。服务路径统一走 cleanupAll 后，这三档
+ * 守住旧语义不回退：
+ * - root 进程没杀掉（sudo 取消/失败）必须抛（start/stop/uninstall 旧版就抛）
+ * - 仅 root pid 文件没清掉（无进程、非 TTY/取消）只警告：旧 killResidualKernels
+ *   无进程直接返回，从不为它弹密码，非 TTY 的 stop 不能被无害文件挡成 exit 1
+ * - 用户态残留（无 sudoError）不在本层抛：cmdStop/cmdUninstall/start 外层各有处置
+ */
+describe('classifyResidueCleanup：三档处置', () => {
+  it('干净 → ok', () => {
+    assert.equal(classifyResidueCleanup({ remaining: [], sudoError: null }), 'ok');
+  });
+
+  it('root 清理失败且进程仍在 → throw', () => {
+    assert.equal(classifyResidueCleanup({ remaining: [4321], sudoError: new SudoAuthError() }), 'throw');
+    assert.equal(classifyResidueCleanup({ remaining: [4321], sudoError: new Error('pkill 退出码异常') }), 'throw');
+  });
+
+  it('仅 root pid 文件清理失败（无残留进程）→ warn，不拦命令', () => {
+    assert.equal(classifyResidueCleanup({ remaining: [], sudoError: new SudoAuthError() }), 'warn');
+    assert.equal(classifyResidueCleanup({ remaining: [], sudoError: new Error('删除 pid 文件失败') }), 'warn');
+  });
+
+  it('用户态残留进程（无 sudoError）→ ok，交外层命令复核', () => {
+    assert.equal(classifyResidueCleanup({ remaining: [4321], sudoError: null }), 'ok');
+  });
+});
+
 describe('buildRootResidueCleanupError', () => {
   const ctx = { mainOutcome: '服务已停止，登录自启已关闭', retryCommand: 'mihomo stop' };
 

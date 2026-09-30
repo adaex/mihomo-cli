@@ -617,7 +617,7 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
   // 近失文件名：意图明显是覆写文件却不被任何合法模式认（最典型：主文件写成 overwrite.yml）。
   // 静默不加载 = 用户以为覆写生效了、`ow` 列表里也看不见，故打一行警告。
   // 只认整体近失（见 isOverwriteFilenameTypo），不扫全部「形近」文件
-  for (const typo of listTypoOverwriteFiles()) {
+  for (const typo of entries.filter(isOverwriteFilenameTypo)) {
     console.warn(
       `警告: "${typo}" 不会被当作覆写文件加载（合法文件名: overwrite.yaml 主文件、overwrite.*.yaml / overwrite.*.yml 扩展文件、overwrite.js 主脚本、overwrite.*.js / .mjs / .cjs 扩展脚本）；若是笔误请改名`,
     );

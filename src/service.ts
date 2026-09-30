@@ -1,6 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+
+import { colors } from './colors.js';
 import { getConfigInfo } from './config.js';
 import { isValidServiceLabel, RAW_SERVICE_LABEL_INPUT, SERVICE_BINARY_NAME, SERVICE_LABEL } from './constants.js';
 import { CliError } from './errors.js';
@@ -527,10 +529,34 @@ export function buildRootResidueCleanupError(result: Pick<CleanupResult, 'remain
  * 服务语境包装——主体动作已完成到哪一步、残留还在、如何重试。
  * 与游离内核路径（cmdStop → stop()）共用同一套杀进程与死亡等待，不再各维护一份。
  */
+/**
+ * 残留清理结果的三档处置（纯判据，供测试——真实 root/非 TTY 场景无法黑盒构造）：
+ * - 'throw'：root 清理没走通且进程仍在（remaining + sudoError），主体动作结果要说清
+ * - 'warn'：仅 root 属主 pid 文件没清掉（sudoError、无残留进程），无害不拦命令
+ * - 'ok'：无问题；用户态残留（remaining、无 sudoError）也归这档——交各命令外层
+ *   既有的复核（cmdStop 抛、cmdUninstall 提示、start 健康确认），本层只管 root
+ */
+export type ResidueCleanupVerdict = 'ok' | 'warn' | 'throw';
+export function classifyResidueCleanup(result: Pick<CleanupResult, 'remaining' | 'sudoError'>): ResidueCleanupVerdict {
+  if (result.remaining.length > 0 && result.sudoError) return 'throw';
+  if (result.sudoError) return 'warn';
+  return 'ok';
+}
+
+/**
+ * 服务路径的残留内核收口。唯一实现是 process-stop 的 cleanupAll
+ * （用户态逐 pid 复核 / root 一次 sudo 脚本 + 死亡等待），抛错/警告判据见
+ * classifyResidueCleanup——旧服务路径（killResidualKernels）无进程时从不为 pid
+ * 文件弹密码，这里保持，避免非 TTY 的 `mihomo stop` 被一个无害残留挡成 exit 1
+ */
 async function cleanupKernelsOrThrow(ctx: RootResidueCleanupContext): Promise<void> {
   const result = await cleanupAll();
-  if (result.remaining.length === 0 && !result.sudoError) return;
-  throw buildRootResidueCleanupError(result, ctx);
+  const verdict = classifyResidueCleanup(result);
+  if (verdict === 'ok') return;
+  const err = buildRootResidueCleanupError(result, ctx);
+  if (verdict === 'throw') throw err;
+  console.warn(colors.yellow(`警告: ${err.message}`));
+  for (const line of err.hint) console.warn(colors.gray(line));
 }
 
 /**
