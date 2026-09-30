@@ -787,3 +787,59 @@ describe('并发同向 start：bootstrap 撞已装载按幂等成功（exit 5 �
     assert.ok(result.lockHoldMs < LOCK_STALE_MS, `最坏持锁必须低于强夺阈值 ${LOCK_STALE_MS}ms（实测 ${result.lockHoldMs}ms）`);
   });
 });
+
+/**
+ * 结构不变量：并发基线是命令入口捕获的进程状态，不是 startService 调用时刻的值。
+ * 场景为 sub use / ow on|off 触发重启的链路——main() 在命令入口 capture 后，
+ * cmdSubscription 先下载订阅（慢速阶段，可能 10s+），期间另一终端 stop（bump），
+ * 随后 restartToApply 重入 cmdStart → startService。基线若挪进 cmdStart（重入时刻，
+ * 慢速阶段之后），bump 会被算进基线、并发 stop 漏检——此用例锁死 capture 的位置语义。
+ */
+describe('并发基线是命令入口的进程状态（restartToApply 慢速阶段链路）', () => {
+  function restartAfterSlowPhaseScript(): string {
+    return `import fs from 'node:fs';
+import path from 'node:path';
+import { PATHS } from ${MODULES.paths};
+import { captureStopEpochBaseline, recordServiceStopped, startService } from ${MODULES.service};
+
+fs.mkdirSync(path.dirname(PATHS.mihomoBinary), { recursive: true });
+fs.writeFileSync(PATHS.mihomoBinary, 'stub-kernel');
+fs.mkdirSync(path.dirname(PATHS.userAgentPlist), { recursive: true });
+fs.writeFileSync(PATHS.userAgentPlist, 'stub');
+fs.mkdirSync(path.dirname(PATHS.configFile), { recursive: true });
+fs.writeFileSync(PATHS.configFile, 'mixed-port: 17890\\n');
+
+// 命令入口（main() 的等价位置）：早于订阅下载等慢速阶段
+captureStopEpochBaseline();
+// 慢速阶段期间另一终端跑完 stop（stop 锁内 bump 后才 waitUntilUnloaded，此处直接 bump 即等价）
+recordServiceStopped();
+
+const r = await startService();
+console.log('RESULT:started=' + r.started);
+`;
+  }
+
+  it('capture 先于慢速阶段的 bump：重启被取消（started=false），stop 不被覆盖', async () => {
+    const fixture = makeFixture('mihomo-baseline-order');
+    const script = writeScript(fixture.fakeBin, 'baseline-order.mts', restartAfterSlowPhaseScript());
+    writeFakeLaunchctl(fixture.fakeBin, FAKE_LAUNCHCTL_BOOTSTRAP);
+    const env = {
+      ...process.env,
+      MIHOMO_CLI_DIR: fixture.dataDir,
+      MIHOMO_CLI_DAEMON_LABEL: fixture.label,
+      HOME: fixture.fakeHome,
+      PATH: `${fixture.fakeBin}:${process.env.PATH}`,
+      FAKE_STATE: path.join(fixture.fakeBin, 'loaded.state'),
+      FAKE_MODE: 'race',
+      MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1',
+      NO_COLOR: '1',
+    };
+    try {
+      const result = await spawnScript(script, env).done;
+      assert.equal(result.status, 0, `应正常退出，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      assert.match(result.stdout, /RESULT:started=false/, `基线先于 bump，锁内应判定并发停止并放弃启动，stdout: ${result.stdout}`);
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+});

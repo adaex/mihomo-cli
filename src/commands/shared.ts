@@ -40,6 +40,8 @@ function assertUniqueTokens(table: SubCommand[]): void {
 /**
  * 子命令分发：按 args[1] 在表中匹配主名或别名，命中即调其 handler。
  * 无 action 时走 fallback；未知 action 必须交给 onUnknown 报错。
+ * 调用方必须 await/return 本函数：handler 可能是异步的，不 await 会让未处理的
+ * Promise 带着 rejection 逃出 main().catch 的渲染口径。
  */
 export async function dispatchSubcommand(
   args: string[],

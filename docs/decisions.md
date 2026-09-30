@@ -28,6 +28,8 @@ withFileLock 要求临界区同步（持锁期间 await 等于按住锁等到强
 
 start/install/restart 都依赖「命令开始时的 epoch」做并发判定。危害窗口是「产生 wasRunning 的那次状态读取」到锁内判定之间：stop 在自己的锁内先递增、之后才 waitUntilUnloaded，存在「已递增而 launchctl print 仍报 running」的区间，函数内现取的基线必然已含对方的递增，并发隐形。故基线必须取在命令第一步——如今是 `main()` 在分发前调 `captureStopEpochBaseline()` 存入 service 模块状态，此后锁内判定、热重载后复读、健康确认后复读都读同一份 `stopEpochBaseline()`，不再跨层透传参数（透传时代的教训：可选默认值让新调用方静默退化，5+ 消费点每次都要记得传）。未捕获时（测试直接调 service 函数）退化为当前值，即不判并发。
 
+两个位置语义要记牢：① restartToApply（sub use / ow on|off 触发的重启）带着**原命令**的基线重入 start 链路，订阅下载期间的并发 stop 会被检出并取消重启——这是防线语义（终态与用户最后一条命令一致），基线若挪进 cmdStart 重入时刻即漏检，结构不变量由 service-concurrency.spec 的「并发基线是命令入口的进程状态」用例锁定；② TUN 分支的 bump 发生在基线捕获之后、而 TUN 不消费基线（两分支互斥），若将来 TUN 之后还要走 Mixed 启动会自我取消。
+
 ## D5 入站端口与整个控制面是系统锁定项，订阅与覆写不可设置
 
 远端订阅是不可信输入。锁定清单（config.ts 的 LOCKED_CONFIG_KEYS）按「能否开监听」划分，判据是上游 `config.Inbound` 结构体字段全集 + `updateListeners()` 的逐个消费，不是按键名眼熟程度：redir/tproxy、external-controller 全家桶（-tls/-unix/-pipe/-cors/-routing-mark/-doh）、tuic-server 与 ss-config/vmess-config（三个完整入站代理服务端，自带监听与认证，不经过 genAddr，allow-lan 管不到它们）、listeners/tunnels（同判据的通用入站声明）、allow-lan/bind-address/authentication/skip-auth-prefixes/lan-*-ips（allow-lan 为真且 bind-address 为默认时 genAddr 返回全网卡地址，skip-auth-prefixes 又能把鉴权换成空实现——三行 YAML 即全网卡无鉴权开放代理）。顶层 tls 段同锁（-tls 控制器的证书来源）。刻意不锁的：iptables（Linux 专用）、inbound-tfo/inbound-mptcp（传输层 socket 选项，不开监听）、tun（由启动模式整段接管）。
