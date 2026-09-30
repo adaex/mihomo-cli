@@ -371,14 +371,18 @@ export async function tryUpdateOne(sub: Subscription, signal?: AbortSignal): Pro
     const info = await downloadSubscription(sub.url, sub.name, signal);
     return { name: sub.name, success: true, proxies: info.proxies, proxyGroups: info.proxyGroups };
   } catch (e) {
-    return { name: sub.name, success: false, error: (e as Error).message };
+    // abort 是「本次自动更新整体超时、本订阅没赶上」，与真实网络失败分档：
+    // start 用缓存照常启动是正常降级，刷成红叉英文失败会把正常路径渲染成故障
+    return { name: sub.name, success: false, aborted: signal?.aborted === true, error: (e as Error).message };
   }
 }
 
-/** 打印单个订阅的更新结果（成功/失败），供自动更新与手动更新命令共用 */
+/** 打印单个订阅的更新结果（成功/跳过/失败），供自动更新与手动更新命令共用 */
 export function printUpdateResult(r: TryUpdateResult): void {
   if (r.success) {
     console.log(`${colors.green('✓')} ${r.name}: ${colors.green('已更新')} (${formatProxySummary(r)})`);
+  } else if (r.aborted) {
+    console.log(`${colors.gray('·')} ${r.name}: ${colors.gray('跳过（更新超时，使用本地缓存）')}`);
   } else {
     console.log(`${colors.red('✗')} ${r.name}: ${colors.red('失败')} (${(r.error || '').split('\n')[0]})`);
   }
@@ -422,11 +426,14 @@ export async function autoUpdateStaleSubscription(options: { timeout?: number } 
   }
 
   let updatedCount = 0;
+  let failedCount = 0;
 
   for (const r of results) {
     if (r.success) updatedCount++;
+    else if (!r.aborted) failedCount++;
     printUpdateResult(r);
   }
 
-  return { total: staleSubs.length, updated: updatedCount, failed: staleSubs.length - updatedCount };
+  // aborted（超时跳过）既不算成功也不算失败：用缓存启动是设计内降级
+  return { total: staleSubs.length, updated: updatedCount, failed: failedCount };
 }

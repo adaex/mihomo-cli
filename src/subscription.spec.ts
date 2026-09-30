@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { isSubscriptionStale, isValidHttpUrl, needsAutoUpdate, parseUserInfo } from './subscription.js';
+import { isSubscriptionStale, isValidHttpUrl, needsAutoUpdate, parseUserInfo, printUpdateResult, tryUpdateOne } from './subscription.js';
 
 describe('parseUserInfo：只收有限非负数，其余按缺失处理', () => {
   it('正常头全字段解析', () => {
@@ -128,6 +128,42 @@ describe('needsAutoUpdate 与 isSubscriptionStale 的口径（异常时间戳方
     assert.equal(isSubscriptionStale(staleSub), true);
     assert.equal(needsAutoUpdate(freshSub), false);
     assert.equal(isSubscriptionStale(freshSub), false);
+  });
+});
+
+describe('自动更新结果分档：整体超时（abort）是「跳过」不是「失败」', () => {
+  // start 的自动更新超时本是「用缓存照常启动」的正常降级；未完成的订阅若与真实
+  // 网络失败同刷红叉英文，用户第一眼读到的是一片故障。用例锁住三档各自的标记与渲染
+  const captureLog = (fn: () => void): string => {
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (message?: unknown) => lines.push(String(message));
+    try {
+      fn();
+    } finally {
+      console.log = original;
+    }
+    return lines.join('\n');
+  };
+
+  it('tryUpdateOne 带已中止的 signal → aborted=true、success=false（不与真实失败同档）', async () => {
+    // AbortSignal.abort() 让 fetch 在发请求前即拒绝，不需要网络；下载失败不写盘
+    const r = await tryUpdateOne({ name: 'a', url: 'http://127.0.0.1:1/s' }, AbortSignal.abort());
+    assert.equal(r.success, false);
+    assert.equal(r.aborted, true);
+  });
+
+  it('printUpdateResult：aborted 渲染为灰色「跳过…使用本地缓存」，不出现「失败」', () => {
+    const skipped = captureLog(() => printUpdateResult({ name: 'a', success: false, aborted: true }));
+    assert.match(skipped, /跳过/);
+    assert.match(skipped, /缓存/);
+    assert.doesNotMatch(skipped, /失败/);
+  });
+
+  it('printUpdateResult：真实失败仍是红叉「失败」，不被超时降级吞掉', () => {
+    const failed = captureLog(() => printUpdateResult({ name: 'a', success: false, error: '获取订阅失败: x' }));
+    assert.match(failed, /失败/);
+    assert.doesNotMatch(failed, /跳过/);
   });
 });
 

@@ -244,6 +244,11 @@ export interface KernelUpdateInfo {
   needsUpdate: boolean;
   assets: GitHubAsset[];
   release: GitHubRelease;
+  /**
+   * 首选 gh 认证查询失败后回退直连成功（命令层据此补一行灰字：spinner 说的
+   * 「gh 认证通道」与实际响应来源不一致时，用户需要能核对）
+   */
+  ghFallbackToDirect?: boolean;
 }
 
 export interface GitHubRelease {
@@ -451,4 +456,9 @@ export interface TryUpdateResult {
   proxies?: number;
   proxyGroups?: number;
   error?: string;
+  /**
+   * 因本次自动更新整体超时被中止（abort），既不是成功也不是真实失败：
+   * 调用方按「跳过、使用缓存」渲染，不计入 failed（start 用缓存启动是正常降级）
+   */
+  aborted?: boolean;
 }
