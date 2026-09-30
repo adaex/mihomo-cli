@@ -817,17 +817,18 @@ describe('覆写扩展文件加载顺序', () => {
     }
   });
 
-  it('YAML 全部在前、JS 脚本在后（声明式基底，程序化后处理）', () => {
-    // z.yaml 码点序在 a.js 之后，但段序优先：YAML 段先于脚本段
-    const names = ['overwrite.z.yaml', 'overwrite.a.js', 'overwrite.y.yaml'];
-    fs.writeFileSync(path.join(tmpDir, 'overwrite.z.yaml'), 'log-level: debug\n');
-    fs.writeFileSync(path.join(tmpDir, 'overwrite.y.yaml'), 'log-level: info\n');
+  it('JS 脚本全部在前、YAML 在后（程序化结构变换在前，声明式微调兜底）', () => {
+    // 纯码点序 a.yaml 在 z.js 之前，但段序优先：脚本段整体先于 YAML 段，
+    // 段内仍按码点序（a.js 在 z.js 前）
+    const names = ['overwrite.z.js', 'overwrite.a.js', 'overwrite.a.yaml'];
+    fs.writeFileSync(path.join(tmpDir, 'overwrite.z.js'), 'export default function () {}\n');
     fs.writeFileSync(path.join(tmpDir, 'overwrite.a.js'), 'export default function () {}\n');
+    fs.writeFileSync(path.join(tmpDir, 'overwrite.a.yaml'), 'log-level: info\n');
     try {
       const files = loadOverwriteFile();
       assert.deepEqual(
         files.map(f => f.name),
-        ['overwrite.y.yaml', 'overwrite.z.yaml', 'overwrite.a.js'],
+        ['overwrite.a.js', 'overwrite.z.js', 'overwrite.a.yaml'],
       );
     } finally {
       for (const name of names) {
@@ -1014,15 +1015,17 @@ describe('JS 覆写脚本', () => {
     }
   });
 
-  it('YAML 合并结果先于脚本执行（脚本看到并修改的是合并后的配置）', () => {
-    write('overwrite.base.yaml', 'log-level: info\nmode: rule\n');
-    write('overwrite.after.js', 'export default function (config) { config["log-level"] = config.mode === "rule" ? "saw-rule" : "no"; }\n');
+  it('脚本先于 YAML 执行（YAML 在脚本产出上声明式合并：覆盖标量、前插数组）', () => {
+    // 旧顺序（YAML 先）下脚本会盖掉 from-yaml，此用例必红——顺序是合并契约的一部分
+    write('overwrite.build.js', 'export default function (config) { config["log-level"] = "from-script"; config.rules = ["SCRIPT-RULE"]; }\n');
+    write('overwrite.tweak.yaml', 'log-level: from-yaml\n+rules:\n  - YAML-FIRST\n');
     try {
       const r = applyOverwrite({}, loadOverwriteFile(), { mode: 'mixed' });
-      assert.equal(r.config['log-level'], 'saw-rule');
+      assert.equal(r.config['log-level'], 'from-yaml');
+      assert.deepEqual(r.config.rules, ['YAML-FIRST', 'SCRIPT-RULE']);
     } finally {
-      cleanup('overwrite.base.yaml');
-      cleanup('overwrite.after.js');
+      cleanup('overwrite.build.js');
+      cleanup('overwrite.tweak.yaml');
     }
   });
 

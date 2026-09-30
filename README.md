@@ -381,7 +381,7 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 ├── overwrite.yaml        # 覆写配置（主文件，可选）
 ├── overwrite.*.yaml      # 覆写配置（扩展文件，如 overwrite.dns.yaml）
 ├── overwrite.js          # JS 覆写脚本（主脚本，可选；也认 .mjs / .cjs）
-├── overwrite.*.js        # JS 覆写脚本（扩展脚本，在全部 YAML 覆写之后执行）
+├── overwrite.*.js        # JS 覆写脚本（扩展脚本，在全部 YAML 覆写之前执行）
 ├── subscriptions/
 │   ├── cache.json        # 订阅动态缓存（更新时间、流量、到期时间等）
 │   └── <name>.yaml       # 订阅原始配置
@@ -410,7 +410,7 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
    - `overwrite.yaml` — 主覆写文件（只认 `.yaml`；写成 `overwrite.yml` 不会被加载，CLI 会打一行提示）
    - `overwrite.dns.yaml` — 按功能拆分的扩展文件（`overwrite.*.yaml` / `overwrite.*.yml` 格式）
    - `overwrite.js` / `overwrite.*.js`（或 `.mjs` / `.cjs`）— JS 覆写脚本，可做任意编程化处理（见下文「JS 覆写脚本」）
-2. 加载顺序：YAML 全部在前（`overwrite.yaml` 最先，扩展文件按文件名排序），JS 脚本在后（`overwrite.js` 最先，扩展脚本按文件名排序）——声明式基底，程序化后处理
+2. 加载顺序：JS 脚本全部在前（`overwrite.js` 最先，扩展脚本按文件名排序），YAML 在后（`overwrite.yaml` 最先，扩展文件按文件名排序）——脚本做程序化结构变换，YAML 在其产出上做声明式微调（如 `+rules` 前插的规则永远在最前，不受脚本重组影响）
 3. 覆写**默认即启用**，放好文件后重启生效（`mihomo start`）；如曾 `ow off` 禁用过，用 `mihomo ow on` 重新启用（会自动重启）
 
 ### 特殊语法（YAML）
@@ -443,7 +443,7 @@ hosts:
 
 ### JS 覆写脚本
 
-YAML 操作符只保留最简单的三种，其余一律写脚本自由处理。脚本是一个默认导出的函数，**就地修改**传入的 `config`（订阅 + YAML 覆写合并后的结果），返回值忽略：
+YAML 操作符只保留最简单的三种，其余一律写脚本自由处理。脚本是一个默认导出的函数，**就地修改**传入的 `config`（订阅解析后的配置），返回值忽略；YAML 覆写在全部脚本之后才声明式合并：
 
 ```js
 // ~/.mihomo-cli/overwrite.custom.js
@@ -475,6 +475,7 @@ export default function (config, ctx) {
 - **必须同步**：返回 Promise 会报错。脚本是纯数据变换，没有要等网络的场景
 - **全信任**：脚本以你的用户身份运行（和 `.zshrc` 一个待遇），不做沙箱与超时——别装来路不明的覆写脚本
 - **改不动系统锁定项**：`mixed-port`、`external-controller`、`allow-lan` 等入站与控制面键由 CLI 管理，脚本设置了会被剥除并提示（与 YAML 覆写同一条边界）
+- **脚本先于 YAML 执行**：脚本看到的是订阅原始配置，读不到 YAML 覆写注入的内容；需要脚本处理 YAML 注入项时，把那段逻辑也写进脚本
 - **只读命令也会执行脚本**：`status` / `doctor` / `config` 走同一条构建路径，脚本顶层别写副作用（顶层只定义函数，变换都在导出函数里做）
 - 脚本抛错或语法错误与坏 YAML 文件同款姿态：`ow` / `status` 里「加载失败」可见，`start` / `doctor` 硬失败并带文件名
 - 脚本受 `mihomo ow off` 全局开关管理；想临时停用单个脚本，改个扩展名（如 `.bak`）即可

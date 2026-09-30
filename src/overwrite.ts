@@ -565,8 +565,8 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
   if (!fs.existsSync(USER_DATA_DIR)) return { ok, broken };
 
   const entries = fs.readdirSync(USER_DATA_DIR);
-  // 两段排序：YAML 全部在前（主文件最先、扩展码点序）、JS 脚本在后（主脚本最先、
-  // 扩展码点序）——「声明式基底，程序化后处理」。段内码点序，不用 localeCompare：
+  // 两段排序：JS 脚本全部在前（主脚本最先、扩展码点序）、YAML 在后（主文件最先、
+  // 扩展码点序）——「程序化结构变换在前，声明式微调兜底」（D13）。段内码点序，不用 localeCompare：
   // 后者随系统 locale 漂移（同一组中文文件名在 en/zh_CN/ja 下三种顺序），而排序即
   // 合并顺序——不同机器合并出不同运行配置，全程静默。排序是合并语义的一部分，不是展示细节。
   const files = entries
@@ -617,9 +617,12 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
   return { ok, broken };
 }
 
-/** 覆写文件排序键：段序（YAML 0 / 脚本 1）→ 主文件优先 → 文件名码点序 */
+/**
+ * 覆写文件排序键：段序（脚本 0 / YAML 1）→ 主文件优先 → 文件名码点序。
+ * 脚本先做结构变换、YAML 后做声明式微调（含 + 前插），故脚本段在前（D13）。
+ */
 function overwriteSortKey(filename: string): string {
-  const segment = isScriptOverwriteFilename(filename) ? '1' : '0';
+  const segment = isScriptOverwriteFilename(filename) ? '0' : '1';
   const primary = filename === 'overwrite.yaml' || isPrimaryScriptFilename(filename) ? '0' : '1';
   return `${segment}${primary}${filename}`;
 }
