@@ -17,6 +17,15 @@ export function isProbeSuccessStatus(code: number | null): boolean {
 const PROBE_TIMEOUT_MS = 2000;
 
 /**
+ * 探测结果的短缓存（按端口）。排查时用户会连敲 status/doctor，代理不通时每次
+ * 固定等满 2s——代理状态在几秒内不可能翻转（切节点+节点重连本身远超这个时长），
+ * 第二次探测纯属白等。TTL 刻意短：只覆盖「连续查看」这个真实节奏，不牺牲
+ * 三态灯的时效性；--no-probe 不经过本函数、不受影响。
+ */
+const PROBE_CACHE_TTL_MS = 3_000;
+let probeCache: { port: number; at: number; result: ProxyProbeResult } | null = null;
+
+/**
  * 经本机混合端口发一次真实请求，确认「进程在跑」之外「代理真的通」。
  *
  * 这是 status/start 的独立确认层：进程活着而节点已死、订阅过期、流量用尽时，
@@ -27,6 +36,15 @@ const PROBE_TIMEOUT_MS = 2000;
  * 由调用方决定如何展示（status 黄灯 / start 提示）。
  */
 export async function probeProxyConnectivity(port: number): Promise<ProxyProbeResult> {
+  if (probeCache && probeCache.port === port && Date.now() - probeCache.at < PROBE_CACHE_TTL_MS) {
+    return probeCache.result;
+  }
+  const result = await probeProxyConnectivityUncached(port);
+  probeCache = { port, at: Date.now(), result };
+  return result;
+}
+
+async function probeProxyConnectivityUncached(port: number): Promise<ProxyProbeResult> {
   const start = Date.now();
   try {
     const { stdout } = await execFileAsync(
