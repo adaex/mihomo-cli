@@ -149,29 +149,39 @@ export function rmrf(dir: string): void {
 }
 
 /**
- * 清扫崩溃遗留的原子写临时文件（`<目标>.<pid>.<n>.tmp`）。
- * 正常路径用后即删；进程在写与 rename 之间被杀时残留，`dir open root` 会把垃圾
- * 展示给用户。只删修改时间超过 1 小时的——正在进行的原子写（别的进程刚创建的
- * tmp）绝不能碰。幂等、容错（清扫失败不影响命令本身），main 每次执行顺带跑一次
+ * 清扫崩溃遗留的临时产物（main 每次执行顺带跑一次，幂等、容错，失败不影响命令本身）：
+ * - 原子写临时文件 `<目标>.<pid>.<n>.tmp`：进程在写与 rename 之间被杀时残留，
+ *   `dir open root` 会把垃圾展示给用户
+ * - 内核下载临时目录 `kernel/.tmp-*`（mkdtempSync）：下载/解压中被 kill -9 或断电时
+ *   整个目录残留（可能含几十 MB 的 .gz），旧内核完好时用户没有理由 reset kernel，
+ *   没有任何别的清理路径
+ *
+ * 只删修改时间超过 1 小时的——正在进行的原子写/下载（别的进程刚创建的）绝不能碰。
  */
 export function cleanupStaleTmpFiles(): void {
   // atomicWriteFileSync 的目标分布在根目录（settings/cache/epoch）、subscriptions/
-  // （原始订阅）与 runtime/（config.yaml）——三处都扫，runtime 另有 stop/reset 整删
-  // 兜底，前两处的残留没有别的清理路径
-  for (const dir of [USER_DATA_DIR, DIRS.subscriptions, DIRS.runtime]) {
+  // （原始订阅）与 runtime/（config.yaml）；kernel/ 是下载临时目录。四处都扫，
+  // runtime 另有 stop/reset 整删兜底，其余三处的残留没有别的清理路径
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  for (const dir of [USER_DATA_DIR, DIRS.subscriptions, DIRS.runtime, DIRS.kernel]) {
+    let entries: string[];
     try {
-      const cutoff = Date.now() - 60 * 60 * 1000;
-      for (const entry of fs.readdirSync(dir)) {
-        if (!entry.endsWith('.tmp')) continue;
-        const full = path.join(dir, entry);
-        try {
-          if (fs.statSync(full).mtimeMs < cutoff) fs.rmSync(full, { force: true });
-        } catch {
-          /* 单个文件失败跳过 */
-        }
-      }
+      entries = fs.readdirSync(dir);
     } catch {
-      /* 目录不存在/不可读时无事可做 */
+      continue; // 目录不存在/不可读时无事可做
+    }
+    for (const entry of entries) {
+      // 原子写临时文件认 .tmp 后缀；内核临时目录认 mkdtemp 的 .tmp- 前缀
+      const isAtomicTmpFile = entry.endsWith('.tmp');
+      const isKernelTmpDir = entry.startsWith('.tmp-');
+      if (!isAtomicTmpFile && !isKernelTmpDir) continue;
+      const full = path.join(dir, entry);
+      try {
+        if (fs.statSync(full).mtimeMs >= cutoff) continue;
+        fs.rmSync(full, { recursive: true, force: true });
+      } catch {
+        /* 单个条目失败跳过 */
+      }
     }
   }
 }

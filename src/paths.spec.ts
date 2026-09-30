@@ -363,3 +363,51 @@ describe('有生命周期的瞬态文件位置约定', () => {
     }
   });
 });
+
+/**
+ * cleanupStaleTmpFiles 扫的是真实 USER_DATA_DIR，用子进程 + 一次性 MIHOMO_CLI_DIR
+ * 隔离（同「订阅缓存锁」用例范式）。
+ */
+describe('cleanupStaleTmpFiles：崩溃残留清扫', () => {
+  it('删超龄的 .tmp 文件与 kernel/.tmp-* 目录，保留新鲜的与无关条目', async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-tmpsweep-'));
+    try {
+      const script = [
+        `import assert from 'node:assert/strict';`,
+        `import fs from 'node:fs';`,
+        `import { cleanupStaleTmpFiles, DIRS, ensureDirs } from ${JSON.stringify(path.resolve('src/paths.ts'))};`,
+        `ensureDirs();`,
+        `const oldT = Date.now() - 2 * 60 * 60 * 1000;`,
+        // 根目录：超龄 .tmp 删、新鲜 .tmp 留、无关文件留
+        `fs.writeFileSync(DIRS.kernel + '/../settings.1.0.tmp', 'x');`,
+        `fs.utimesSync(DIRS.kernel + '/../settings.1.0.tmp', new Date(oldT), new Date(oldT));`,
+        `fs.writeFileSync(DIRS.kernel + '/../settings.2.0.tmp', 'y');`,
+        `fs.writeFileSync(DIRS.kernel + '/../settings.json', '{}');`,
+        // kernel：超龄 .tmp- 目录（含下载产物）整个删；新鲜 .tmp- 目录留；无关目录留
+        `fs.mkdirSync(DIRS.kernel + '/.tmp-old', { recursive: true });`,
+        `fs.writeFileSync(DIRS.kernel + '/.tmp-old/mihomo.gz', 'z');`,
+        `fs.utimesSync(DIRS.kernel + '/.tmp-old', new Date(oldT), new Date(oldT));`,
+        `fs.mkdirSync(DIRS.kernel + '/.tmp-new', { recursive: true });`,
+        `fs.writeFileSync(DIRS.kernel + '/mihomo', 'bin');`,
+        `cleanupStaleTmpFiles();`,
+        `assert.equal(fs.existsSync(DIRS.kernel + '/../settings.1.0.tmp'), false, '超龄原子写临时文件应删');`,
+        `assert.equal(fs.existsSync(DIRS.kernel + '/../settings.2.0.tmp'), true, '新鲜临时文件必须保留');`,
+        `assert.equal(fs.existsSync(DIRS.kernel + '/../settings.json'), true, '无关文件不得误删');`,
+        `assert.equal(fs.existsSync(DIRS.kernel + '/.tmp-old'), false, '超龄内核下载临时目录应递归删除');`,
+        `assert.equal(fs.existsSync(DIRS.kernel + '/.tmp-new'), true, '新鲜下载目录（进行中的下载）必须保留');`,
+        `assert.equal(fs.existsSync(DIRS.kernel + '/mihomo'), true, '现有内核不得误删');`,
+      ].join('\n');
+      const code = await new Promise<number | null>(resolve => {
+        const child = spawn(process.execPath, ['--import', 'tsx', '-e', script], {
+          stdio: 'inherit',
+          env: { ...process.env, MIHOMO_CLI_DIR: dataDir },
+        });
+        child.on('close', c => resolve(c));
+        child.on('error', () => resolve(-1));
+      });
+      assert.equal(code, 0, '子进程退出码非 0 表示清扫断言失败');
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});
