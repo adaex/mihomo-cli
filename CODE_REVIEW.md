@@ -2,7 +2,7 @@
 
 规则见 CLAUDE.md，决策论证见 docs/decisions.md，版本历史见 CHANGELOG。本文只保留**现行有效**的三样东西：实测结论、未覆盖风险、流程教训。历轮审查的逐项验证流水不在此堆放——看当轮 CHANGELOG 条目与 git 历史；每轮审查收尾时，把仍然成立的结论合并进对应节，过时的删掉。改相关代码时同步更新对应节。
 
-最近审查：2026-10-01，全仓复审（三路模块深审 + 用户接触面实跑）共修 16 项：覆写文件级错误诊断一致性、doctor/status 文案、死代码四删（withFileLock deadline 分支、forceSudo、uninstall 双 disable、测试专用 deepMergeWithOverrides）、残留内核清理统一到 cleanupAll、健康轮询关闭 print-disabled，以及六项体验打磨（超时订阅按跳过渲染、kernel/.tmp-* 清扫、零订阅口径、reset 近失提示、gh 回退明示、探测 3s 缓存）；合入后复查修掉清理统一引入的两处语义回退（无害 pid 文件让非 TTY stop 失败、uninstall user 残留退出码被收紧），处置判据抽 classifyResidueCleanup 锁四象限。上一轮 16 项见 26.9.93/26.9.94 CHANGELOG。全量验证 typecheck / 737 测试 / Biome（94 文件，非 0，仅 1 个既存 noProto warning）/ build 全绿。
+最近审查：2026-10-01，全仓复审（三路模块深审 + 用户接触面实跑）共修 16 项：覆写文件级错误诊断一致性、doctor/status 文案、死代码四删（withFileLock deadline 分支、forceSudo、uninstall 双 disable、测试专用 deepMergeWithOverrides）、残留内核清理统一到 cleanupAll、健康轮询关闭 print-disabled，以及六项体验打磨（超时订阅按跳过渲染、kernel/.tmp-* 清扫、零订阅口径、reset 近失提示、gh 回退明示、探测 3s 缓存）；合入后复查修掉清理统一引入的两处语义回退（无害 pid 文件让非 TTY stop 失败、uninstall user 残留退出码被收紧），处置判据抽 classifyResidueCleanup 锁四象限，并收窄 .tmp- 清扫只认 kernel/。本轮全部发布为 26.10.95。上一轮 16 项见 26.9.93/26.9.94 CHANGELOG。全量验证 typecheck / 737 测试 / Biome（98 文件，非 0，仅 1 个既存 noProto warning）/ build 全绿。
 
 ## 已有验证仍支持的结论
 
