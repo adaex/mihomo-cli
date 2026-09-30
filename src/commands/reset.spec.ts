@@ -25,6 +25,9 @@ function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSync
       }),
     );
     fs.writeFileSync(path.join(dataDir, 'overwrite.yaml'), 'log-level: debug\n');
+    // 覆写脚本与 YAML 同属 overwrites 目标：reset 的删除按 isOverwriteFilename 枚举，
+    // 漏删脚本会让「已重置」之后覆写照常生效
+    fs.writeFileSync(path.join(dataDir, 'overwrite.custom.js'), 'export default function () {}\n');
     fs.writeFileSync(path.join(dataDir, 'subscriptions', 'x.yaml'), 'proxies: []\n');
     fs.writeFileSync(path.join(dataDir, 'kernel', 'mihomo'), 'fixture');
     fs.writeFileSync(path.join(dataDir, 'logs', 'mihomo.log'), 'fixture');
@@ -48,6 +51,7 @@ describe('reset 的最终数据状态', () => {
         assert.equal(result.status, 0, result.stderr);
         assert.equal(fs.existsSync(path.join(dataDir, 'settings.json')), false);
         assert.equal(fs.existsSync(path.join(dataDir, 'overwrite.yaml')), false);
+        assert.equal(fs.existsSync(path.join(dataDir, 'overwrite.custom.js')), false, '覆写脚本须与 YAML 一并删除');
         const status = run(['ow']);
         assert.equal(status.status, 0, status.stderr);
         assert.match(status.stdout, /已启用/);

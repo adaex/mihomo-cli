@@ -9,7 +9,7 @@
 
 ### 新增
 
-- **JS 覆写脚本**（`overwrite.js` / `overwrite.*.{js,mjs,cjs}`）：默认导出一个函数，就地修改订阅 + YAML 覆写合并后的配置，返回值忽略。`ctx` 提供 `subscription`（name/url/预解析 host）、`mode`（mixed/tun）与 `warn(message)`（提示进 status/doctor/config 的 warnings 通道）。约定：必须同步（返回 Promise 报错）、全信任不沙箱（同 `.zshrc`）、系统锁定项（端口/控制面/allow-lan 等）照样剥除并告警、`ow off` 全局开关同样管脚本、坏脚本与坏 YAML 文件同款姿态（诊断面「加载失败」可见、start/doctor 硬失败）。加载顺序：YAML 全部在前、脚本在后。
+- **JS 覆写脚本**（主脚本 `overwrite.{js,mjs,cjs}`、扩展脚本 `overwrite.*.{js,mjs,cjs}`）：默认导出一个函数，就地修改订阅 + YAML 覆写合并后的配置，返回值忽略。`ctx` 提供 `subscription`（name/url/预解析 host）、`mode`（mixed/tun）与 `warn(message)`（提示进 status/doctor/config 的 warnings 通道）。约定：必须同步（返回 Promise 报错）、全信任不沙箱（同 `.zshrc`）、系统锁定项（端口/控制面/allow-lan 等）照样剥除并告警、`ow off` 全局开关同样管脚本、坏脚本与坏 YAML 文件同款姿态（诊断面「加载失败」可见、start/doctor 硬失败）。加载顺序：YAML 全部在前、脚本在后。
 - 迁移示例：原 `~?proxy-groups: [{name: Developer, default-selected: TW}]` 改为脚本 `(config['proxy-groups'] || []).find(g => g.name === 'Developer')` 后改字段、找不到 `ctx.warn` 跳过；原 `~proxies` 追加节点改 `'proxies+':`（数组追加）。README「覆写配置」章节已按新机制重写并附完整示例。
 
 ### 移除

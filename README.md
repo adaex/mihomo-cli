@@ -380,6 +380,8 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 ├── service-stop-epoch    # 并发启停的停止计数
 ├── overwrite.yaml        # 覆写配置（主文件，可选）
 ├── overwrite.*.yaml      # 覆写配置（扩展文件，如 overwrite.dns.yaml）
+├── overwrite.js          # JS 覆写脚本（主脚本，可选；也认 .mjs / .cjs）
+├── overwrite.*.js        # JS 覆写脚本（扩展脚本，在全部 YAML 覆写之后执行）
 ├── subscriptions/
 │   ├── cache.json        # 订阅动态缓存（更新时间、流量、到期时间等）
 │   └── <name>.yaml       # 订阅原始配置

@@ -138,7 +138,7 @@ function mergeConfigLevel(target: unknown, override: unknown, parseOperators: bo
     const existingValue = result[key];
 
     if (arrayPrepend || arrayAppend) {
-      // 同 ~key：+key/key+ 是数组拼接语义，目标已存在且非数组时报错而非静默包成数组
+      // +key/key+ 是数组拼接语义，目标已存在且非数组时报错而非静默包成数组
       // （`log-level+: debug` 会把字符串 log-level 变成 ["debug"]，mihomo 无法解析）
       if (existingValue !== undefined && !Array.isArray(existingValue)) {
         throw new CliError(
@@ -199,12 +199,20 @@ function isYamlOverwriteFilename(filename: string): boolean {
 }
 
 /**
- * 判断文件名是否为 JS 覆写脚本：主脚本 overwrite.js 或扩展脚本 overwrite.*.{js,mjs,cjs}。
+ * 判断文件名是否为 JS 覆写脚本：主脚本 overwrite.{js,mjs,cjs} 或扩展脚本
+ * overwrite.*.{js,mjs,cjs}。三种主文件形态都认——只认 .js 的话，写 overwrite.mjs
+ * 的用户会得到静默不加载（typo 检测也不覆盖），正是本仓要消灭的那类零提示失效。
  * .mjs/.cjs 显式声明模块格式；.js 在数据目录（无 package.json）下靠 Node 的模块语法
  * 探测判 ESM/CJS（本仓 Node 下界 22.22.1，探测自 22.7 起默认启用），两种写法都认。
  */
+const SCRIPT_EXTENSIONS = ['js', 'mjs', 'cjs'] as const;
+/** 主脚本文件名（overwrite.js / overwrite.mjs / overwrite.cjs），与 YAML 主文件同理最先加载 */
+function isPrimaryScriptFilename(filename: string): boolean {
+  return (SCRIPT_EXTENSIONS as readonly string[]).some(ext => filename === `overwrite.${ext}`);
+}
+
 function isScriptOverwriteFilename(filename: string): boolean {
-  return filename === 'overwrite.js' || /^overwrite\..+\.(js|mjs|cjs)$/.test(filename);
+  return isPrimaryScriptFilename(filename) || /^overwrite\..+\.(js|mjs|cjs)$/.test(filename);
 }
 
 /** 覆写文件 = YAML 声明式覆写 + JS 脚本两类；reset overwrites 等消费点据此枚举删除 */
@@ -612,7 +620,7 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
 /** 覆写文件排序键：段序（YAML 0 / 脚本 1）→ 主文件优先 → 文件名码点序 */
 function overwriteSortKey(filename: string): string {
   const segment = isScriptOverwriteFilename(filename) ? '1' : '0';
-  const primary = filename === 'overwrite.yaml' || filename === 'overwrite.js' ? '0' : '1';
+  const primary = filename === 'overwrite.yaml' || isPrimaryScriptFilename(filename) ? '0' : '1';
   return `${segment}${primary}${filename}`;
 }
 

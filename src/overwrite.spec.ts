@@ -870,6 +870,24 @@ describe('JS 覆写脚本', () => {
     }
   });
 
+  it('主脚本三形态 overwrite.js / overwrite.mjs / overwrite.cjs 都被认（主文件不限于 .js）', () => {
+    // 只认 .js 的话，写 overwrite.mjs 的用户会静默不加载（typo 检测也不覆盖）——
+    // README 承诺「或 .mjs / .cjs」，主文件与扩展文件必须同宽
+    write('overwrite.mjs', 'export default function (config) { config.m = 1; }\n');
+    write('overwrite.c.cjs', 'module.exports = function (config) { config.c = 1; }\n');
+    try {
+      const files = loadOverwriteFile();
+      // 主脚本（overwrite.mjs）先于扩展脚本（码点序），与 YAML 的主文件优先同构
+      assert.deepEqual(
+        files.map(f => f.name),
+        ['overwrite.mjs', 'overwrite.c.cjs'],
+      );
+    } finally {
+      cleanup('overwrite.mjs');
+      cleanup('overwrite.c.cjs');
+    }
+  });
+
   it('语法错误 → 加载失败进 broken（合并路径硬失败、诊断路径可见）', () => {
     write('overwrite.broken.js', 'export default function ( { }\n');
     try {
