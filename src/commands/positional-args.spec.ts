@@ -104,10 +104,11 @@ describe('声明个数内的合法形态不触发参数错误', () => {
     assert.match(output, /没有订阅/);
   });
 
-  it('sub remove -y foo：flag 在名称之前不受影响', () => {
+  it('sub remove -y foo：flag 在名称之前不受影响，空环境先报「没有订阅」（与 use/update 同口径）', () => {
     const { status, output } = run(['sub', 'remove', '-y', 'foo']);
     assert.notEqual(status, 0);
-    assert.match(output, /未找到匹配 "foo"/);
+    // 名称经 getNonFlagArg 正确取出（否则报「请指定名称」）；零订阅口径与 use/update 一致
+    assert.match(output, /没有订阅/);
   });
 
   it('sub add url name（两个位置参数）到达 URL 校验', () => {

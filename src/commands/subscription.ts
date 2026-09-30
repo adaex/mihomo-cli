@@ -81,21 +81,6 @@ function printSubscriptionList(): void {
 }
 
 /**
- * 拒绝以 `-` 开头的名字。`SAFE_NAME_RE` 允许短横线（`my-sub` 是正常名字），
- * 但**以短横线开头**的名字会造出删不掉的订阅：add/use/update 用位置参数能建出 `-s`，
- * 而 remove 走 getNonFlagArg 会把 `-s` 当选项跳过，恒报「请指定名称」，`-y` 也无用。
- * 与其让两边口径打架，不如在入口就拒绝这种名字。
- */
-function assertNotFlagLike(name: string, usage: string): void {
-  if (name.startsWith('-')) {
-    throw new CliError(`名称不能以 "-" 开头: "${name}"`, {
-      label: '参数错误',
-      hint: ['以 "-" 开头的名称会与命令行选项混淆，删除时无法指定。', `用法: ${usage}`],
-    });
-  }
-}
-
-/**
  * 读剪贴板取订阅 URL（macOS pbpaste）；非 TTY / 读取失败 / 非 URL 一律返回 null。
  * 取整串 trim 后整体校验，不猜「多行内容里哪一行是 URL」——猜错的代价是把
  * 错误内容当订阅写盘。展示走 maskUrl，确认前不回显完整链接
@@ -149,7 +134,8 @@ async function subAdd(args: string[]): Promise<void> {
   if (!subscription.isValidHttpUrl(url)) {
     throw new CliError('请提供有效的订阅 URL（需以 http:// 或 https:// 开头）');
   }
-  assertNotFlagLike(name, 'mihomo sub add <url> [name]');
+  // 名称无需再拒绝 "-" 开头：sub add 白名单为空，`sub add <url> -s` 在 withKnownFlags
+  // 就按未知选项拦下，建不出 remove 无法指定的名字（两道 argv 校验本就同口径）
   console.log(`添加订阅: ${name}`);
   // 入库（重名/名称非法）在 try 外抛出：回滚只针对「入库成功后下载失败」，
   // 否则重名错误会触发 removeSubscription 误删用户既有的同名订阅
@@ -281,6 +267,11 @@ async function subRemove(args: string[]): Promise<void> {
     throw new CliError('请指定要删除的订阅名称', {
       hint: subs.length > 0 ? ['', '可用订阅:', ...subs.map(s => `  ${s.name}`)] : undefined,
     });
+  }
+
+  // 与 use/update 同口径：零订阅先报「没有订阅」，而不是「未找到匹配」
+  if (subs.length === 0) {
+    throw new CliError('没有订阅，请先添加订阅', { hint: 'mihomo sub add <url> [name]' });
   }
 
   const target = subscription.resolveSubscription(subs, name);

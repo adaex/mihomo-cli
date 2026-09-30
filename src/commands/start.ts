@@ -33,15 +33,16 @@ export async function cmdStart(args: string[]): Promise<void> {
   // 放在 hasKernel 等状态检查之前——参数错误应在任何环境副作用之前报出
   assertPositionalCount(args, 1, 1, 'mihomo start [tun|mixed] [-s] [-u ms]');
   const targetMode = resolveStartMode(args);
+  // 选项值非法（-u 5s）必须在任何环境状态检查之前报出：参数错误先于副作用，
+  // 也不该让用户先看到「未找到内核」再发现自己选项写错（ow on 已有同款提前校验）
+  const skipUpdate = hasFlag(args, '-s', '--no-update');
+  const updateTimeout = parseIntArg(args, '-u', '--update-timeout', DEFAULT_AUTO_UPDATE_TIMEOUT);
   // TUN 分支若在弹密码前关了服务自启，启动失败/取消时错误提示要带上自启位的最终状态
   let disabledAutoStartForTun = false;
 
   if (!hasKernel()) {
     throw new CliError('未找到内核', { hint: '下载内核: mihomo kernel' });
   }
-
-  const skipUpdate = hasFlag(args, '-s', '--no-update');
-  const updateTimeout = parseIntArg(args, '-u', '--update-timeout', DEFAULT_AUTO_UPDATE_TIMEOUT);
 
   // 并发判定的基线由 main() 在命令入口捕获（service.ts captureStopEpochBaseline），
   // 不在这里取：它必须早于订阅自动更新等慢速阶段、且不晚于本命令第一次状态观察，
