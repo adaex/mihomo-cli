@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+### 修复
+
+- **README 承诺的覆写反例现在真的报错**：`log-level+: warning`（数组操作符作用于系统默认的标量键）此前静默产出 `log-level: [warning]`，配置一路存活到内核 `-t`——类型检查只看得到订阅层，而该键只存在于系统默认配置（在合并之后才注入）。现在文件加载阶段即报错并给出改写指引
+- **坏覆写文件在 `ow` / `status` 的结论与启动硬失败不再自相矛盾**：`~dns` 这类已移除操作符此前在 `ow`/status 被列为「已生效」（`status --json` 的 `applied` 也带着它），而 `start`/`config`/`doctor` 对同一文件硬失败。操作符形态错误（`~`/尖括号/互斥/空键）提前到加载阶段校验，诊断与合并两条路径看到同一份坏文件清单；坏文件的修复/迁移指引（hint）此前只在启动报错时可见，现在 `ow`、status 文本与 `status --json` 都带出
+- `mihomo status` 里 JS 覆写脚本的短名显示修复：`overwrite.js` 不再显示成 `js`（正确是「主文件」），`overwrite.dns.js` 不再带 `.js` 尾巴（26.9.93 引入脚本时漏改）
+- `mihomo doctor` 订阅新鲜度不再输出「N 分钟前**前**更新」；未来时间戳（时钟偏移）单独显示「更新时间记录异常」
+- 自动更新整体超时后，没赶上的订阅显示灰色「跳过（更新超时，使用本地缓存）」，不再与真实网络失败同刷红叉英文（`The operation was aborted...`），也不计入失败数——超时用缓存启动本是正常降级
+- 内核下载/解压中被强制终止后，`kernel/.tmp-*` 临时目录（可能几十 MB）不再永久残留：与原子写 `*.tmp` 同受按 1 小时龄的崩溃残留清扫，旧内核完好时无需手动 `reset kernel`
+- 空环境 `mihomo sub remove <名字>` 改报「没有订阅」，与 `use`/`update` 同口径（旧报「未找到匹配」）
+- `mihomo start -u 5s` 等非法选项值现在先报参数错误，不再先撞「未找到内核」
+- 服务路径清理 root 残留内核后偶发误报「部分进程未终止」（重跑一次又正常）消除：杀进程统一走带死亡等待轮询的同一实现，不再在发出 SIGKILL 后立刻复核 pgrep；三处 root 提权（start/stop/uninstall）前都补了「为什么需要管理员密码」的预告，不再无预警弹英文 `Password:`
+- `uninstall` 不再重复执行第二次 disable（锁内已写入并经 `print-disabled` 复核成功，第二次必成功，纯冗余）
+
+### 新增
+
+- `mihomo reset overwrites` 完成后，若目录里还有不被加载的疑似覆写文件（`overwrite.yml`、`overwrite.ts`、大小写变体），点名告知「N 个疑似文件保留未删」及原因（保守起见这些近失文件仍不自动删）
+- `mihomo kernel` 首选 gh 认证查询但回退直连成功时，打印一行实际来源（spinner 说的「gh 认证通道」与实际响应不再可能悄悄不一致）
+- 连续查看状态时连通性探测结果按端口缓存 3 秒：代理不通时连敲 `status`/`doctor` 不再每次干等 2 秒（代理状态秒级不可能翻转；`--no-probe` 不受影响）
+- README 修正 JS 脚本可见性描述：`ctx.warn()` 与脚本执行期抛错只在 `config`/`doctor`/`start` 可见，`status` 只加载脚本、不执行函数体
+
+### 内部
+
+- 残留内核清理收敛为唯一入口 `cleanupAll`（服务启停/卸载/重置/游离内核共用），删除 service.ts 内与之重复的约 100 行实现（`killResidualKernels`/`cleanupRootResidue` 等）；`cleanupAll`/`stop` 的 `forceSudo` 死参删除（无任何调用方传值）
+- 删除 `withFileLock` 的 deadline 分支：过线后重新核对的还是循环顶部微秒前算过的同一个锁龄谓词，该分支永不产生行为差异；锁的心智模型回到「强夺唯一依据是锁龄」
+- 健康轮询（每 100ms 一次、最坏 31 轮）不再白跑 `print-disabled`：健康判定从不读 disabled 字段，`getServiceStatus` 新增 `withDisabled` 选项，轮询关闭该查询以减少阻塞事件循环的 spawnSync；循环外从未被消费的首次快照一并删除
+- 删除测试专用的第二合并入口 `deepMergeWithOverrides`，相关用例改走生产唯一入口 `applyOverwrite`
+
 ## [26.9.94] - 2026-09-30
 
 ### 破坏性变更（覆写执行顺序）

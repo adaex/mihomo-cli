@@ -137,8 +137,8 @@ export async function cmdReset(args: string[]): Promise<void> {
     //
     // 无条件记录（哪怕本来什么都没在跑）：reset runtime 在零进程下同样删掉 config.yaml。
     // 必须在上面的 remaining 抛错之后——失败的清理不该中止并发的 start。
-    // serviceActive 为真时会与 stopService/uninstallService 重复递增，无害：
-    // 判据只问值变没变（uninstallService 本来就 bump 两次）
+    // serviceActive 为真时会与 stopService/uninstallService 锁内的递增重复，无害：
+    // 判据只问值变没变
     recordServiceStopped();
   }
 

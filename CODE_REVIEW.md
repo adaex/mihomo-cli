@@ -2,7 +2,7 @@
 
 规则见 CLAUDE.md，决策论证见 docs/decisions.md，版本历史见 CHANGELOG。本文只保留**现行有效**的三样东西：实测结论、未覆盖风险、流程教训。历轮审查的逐项验证流水不在此堆放——看当轮 CHANGELOG 条目与 git 历史；每轮审查收尾时，把仍然成立的结论合并进对应节，过时的删掉。改相关代码时同步更新对应节。
 
-最近审查：2026-09-30，四路深审 + 两轮复查共 16 项发现（修 13、记录 3），第六轮剩余模块复查零确认问题；覆写 DSL 裁边与 JS 脚本机制发布为 26.9.93，覆写段序翻转（脚本在前、YAML 在后，D13）发布为 26.9.94。全量验证 typecheck / 712 测试 / Biome（93 文件，非 0）/ build 全绿。
+最近审查：2026-10-01，全仓复审（三路模块深审 + 用户接触面实跑）共修 16 项：覆写文件级错误诊断一致性、doctor/status 文案、死代码四删（withFileLock deadline 分支、forceSudo、uninstall 双 disable、测试专用 deepMergeWithOverrides）、残留内核清理统一到 cleanupAll、健康轮询关闭 print-disabled，以及六项体验打磨（超时订阅按跳过渲染、kernel/.tmp-* 清扫、零订阅口径、reset 近失提示、gh 回退明示、探测 3s 缓存）。上一轮 16 项见 26.9.93/26.9.94 CHANGELOG。全量验证 typecheck / 733 测试 / Biome（94 文件，非 0，仅 1 个既存 noProto warning）/ build 全绿。
 
 ## 已有验证仍支持的结论
 
@@ -19,6 +19,13 @@
 - 上游 mihomo v1.19.30 的已查资产未提供 checksums；来源约束、大小比对和执行自检应保留，不能写成已验证哈希
 - HTTP 超时覆盖响应体，错误体读取限量；订阅 URL 按完整 URL 脱敏，不能按合法逗号拆开
 - 归档列表与清理使用相同判据，同秒多次轮转的序号后缀可被列出（log-files.spec）
+- 覆写文件级校验（已移除操作符/互斥/空键 + 数组操作符命中 BASE_CONFIG 非数组键）在 readOverwriteFiles 加载阶段执行：诊断旁路（ow/status）与合并闸门（start/config/doctor）看到同一份 broken 列表，坏文件的 hint 在三处文本与 status --json 都带出；依赖订阅当前值的冲突仍只在合并期报错（ow 不绑定订阅）
+- 残留内核清理唯一入口是 cleanupAll（process-stop.ts）：stop/start/uninstall/reset 四个路径共用，root 残留走一次 sudo 脚本（pkill + rm pid），发信号后统一 5s 死亡等待再复核 pgrep——服务路径曾在发信号后立即复核、收割稍慢时误报「部分进程未终止」，随统一消除；sudo 取消/脚本失败经 CleanupResult.sudoError 带出，服务语境文案由 buildRootResidueCleanupError 包装
+- waitServiceHealthy 轮询用 getServiceStatus({withDisabled:false})：健康判定不读 disabled，每轮只发一个 launchctl print（最坏 31 轮不再白跑 print-disabled）；循环外无首次快照（第一轮 sleep 后必覆盖）
+- withFileLock 强夺唯一判据是锁龄：deadline 等待上限分支是零行为残留（同谓词在循环顶部微秒前刚算过），已删；uninstallService 只在锁内 disable 一次（锁外第二次必成功，是冗余且双 bump）
+- 自动更新整体超时（abort）的订阅按「跳过（使用本地缓存）」灰字渲染、不计 failed；真实网络失败仍是红叉（subscription.spec 锁三档）
+- kernel/.tmp-* 下载临时目录与 *.tmp 原子写文件同受 cleanupStaleTmpFiles 按 1h 龄清扫（下载硬超时 180s，4 倍余量）
+- 连通性探测按端口缓存 3s（代理状态秒级不可翻转），连敲 status/doctor 第二次免等；--no-probe 不经缓存
 - 覆写 DSL 已裁边：`~`/`~?`/`<x>` 转义与 match 的 `subscription` 同义键移除，按 name 合并数组元素这类带条件的变换改由 JS 脚本承担（全信任模型同 `.zshrc`，同步函数、锁定键在脚本后剥除并告警）；移除形态显式报错给迁移指引。不在 CLI 复制一份分组必填字段校验（字段集随内核漂移），残缺元素仍由 `-t` 拒绝
 - 原生 `-t` 只验证配置解析，不能证明节点可达、端口可绑定或真实 TUN 路由正常；服务健康与代理连通性检查仍有独立价值
 - `sudo pkill -f <PATTERN>` 不会匹配 sudo 脚本自身的命令行：`escapeRegExp` 把点转义后，进程命令行里出现的是带反斜杠的正则源码、正则却要匹配字面点，恰好坏掉自匹配（对照实验：把 `\.` 换回 `.` 立即自匹配）。三个 root 脚本同此结论，不加行首锚；未来若改用未转义拼接必须重验
