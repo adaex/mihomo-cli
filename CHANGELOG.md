@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### 移除
+
+- 删除 npm preuninstall 钩子设施（`scripts/preuninstall.mjs`、`lifecycle-script.spec.ts`、package.json 的钩子与 files 条目）：npm 11.19.0 实测三个卸载场景均不执行 uninstall 生命周期脚本，机制自始无效，与 v4.13.0 删补全子系统同一判据（设施规模与真实使用面不匹配）；README 卸载段早已不依赖该提醒。
+
+### 内部
+
+- CODE_REVIEW.md 从「历轮审查流水 + 现行边界」重组为纯现行边界文档（实测结论 / 未覆盖与待复核 / 已评估未采纳 / 自动化测试边界 / 平台实测备忘 / 流程教训六节）。367 行压到 115 行，流水里散落的现行结论（判定不修三项、文件锁 inode 缺口、pkill 自匹配对照实验、doctor 性能口径、计时/负载/locale 测试方法论）已并入对应节，历轮验证过程看 git 历史与当轮 CHANGELOG；release.md 的文档分工表同步更新。
+
 ## [26.9.92] - 2026-09-30
 
 ### 修复
