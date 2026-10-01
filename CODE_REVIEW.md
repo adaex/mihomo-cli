@@ -2,7 +2,9 @@
 
 规则见 CLAUDE.md，决策论证见 docs/decisions.md，版本历史见 CHANGELOG。本文只保留**现行有效**的三样东西：实测结论、未覆盖风险、流程教训。历轮审查的逐项验证流水不在此堆放——看当轮 CHANGELOG 条目与 git 历史；每轮审查收尾时，把仍然成立的结论合并进对应节，过时的删掉。改相关代码时同步更新对应节。
 
-最近审查：2026-10-01，全仓复审（三路模块深审 + 用户接触面实跑）共修 16 项：覆写文件级错误诊断一致性、doctor/status 文案、死代码四删（withFileLock deadline 分支、forceSudo、uninstall 双 disable、测试专用 deepMergeWithOverrides）、残留内核清理统一到 cleanupAll、健康轮询关闭 print-disabled，以及六项体验打磨（超时订阅按跳过渲染、kernel/.tmp-* 清扫、零订阅口径、reset 近失提示、gh 回退明示、探测 3s 缓存）；合入后复查修掉清理统一引入的两处语义回退（无害 pid 文件让非 TTY stop 失败、uninstall user 残留退出码被收紧），处置判据抽 classifyResidueCleanup 锁四象限，并收窄 .tmp- 清扫只认 kernel/。上述 16 项发布为 26.10.95。其后复审 pid 清理链路并收口：两个提权脚本里的 `rm pid` 字面例外（buildKernelCleanupScript、legacy 迁移 buildLegacyCleanupScript）先后移除，pid 删除统一到「复核零进程才免提权 unlink、活进程保留」判据；同期拆分 CleanupResult 的脚本/pid 双错误字段、拦截裸 `-`、修正多处残留归因，发布为 26.10.96。上一轮 16 项见 26.9.93/26.9.94 CHANGELOG。全量验证 typecheck / 751 测试 / Biome（94 文件，非 0，仅 1 个既存 noProto warning）/ build 全绿。
+最近审查：2026-10-01，全仓四域复审（服务/进程、配置/覆写、命令层、测试与元数据，四个子代理并行深审 + 主仓实跑）共修 7 项：sudo 超时改抛超时错误（不再漏 ETIMEDOUT 串）、SECURITY 移除已删除 tar 防线的描述、match 值加载期校验（url-domain 裸域名/name 字符集 + rules!+、+~rules 漏网形态）、帮助文案对齐（logs/version/sub use）与子命令名大小写归一、零消费者导出收口与 StopResult.killed 删除、CHANGELOG 1.x–3.x 原样归档 docs/changelog。全量验证 typecheck / 766 测试 / Biome（98 文件，仅 1 个既存 noProto warning）/ build 全绿。尚未发布，修复记录在 CHANGELOG Unreleased。
+
+前一轮审查：2026-10-01，全仓复审（三路模块深审 + 用户接触面实跑）共修 16 项：覆写文件级错误诊断一致性、doctor/status 文案、死代码四删（withFileLock deadline 分支、forceSudo、uninstall 双 disable、测试专用 deepMergeWithOverrides）、残留内核清理统一到 cleanupAll、健康轮询关闭 print-disabled，以及六项体验打磨（超时订阅按跳过渲染、kernel/.tmp-* 清扫、零订阅口径、reset 近失提示、gh 回退明示、探测 3s 缓存）；合入后复查修掉清理统一引入的两处语义回退（无害 pid 文件让非 TTY stop 失败、uninstall user 残留退出码被收紧），处置判据抽 classifyResidueCleanup 锁四象限，并收窄 .tmp- 清扫只认 kernel/。上述 16 项发布为 26.10.95。其后复审 pid 清理链路并收口：两个提权脚本里的 `rm pid` 字面例外（buildKernelCleanupScript、legacy 迁移 buildLegacyCleanupScript）先后移除，pid 删除统一到「复核零进程才免提权 unlink、活进程保留」判据；同期拆分 CleanupResult 的脚本/pid 双错误字段、拦截裸 `-`、修正多处残留归因，发布为 26.10.96。上一轮 16 项见 26.9.93/26.9.94 CHANGELOG。全量验证 typecheck / 751 测试 / Biome（94 文件，非 0，仅 1 个既存 noProto warning）/ build 全绿。
 
 ## 已有验证仍支持的结论
 
