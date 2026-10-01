@@ -14,13 +14,15 @@ export function shellQuote(s: string): string {
 
 /**
  * 剥除终端控制字符与 ANSI 转义序列：服务器返回的字符串（订阅名、错误信息等）
- * 可能含 \x1b[2J（清屏）、光标上移等序列，伪造 CLI 输出。展示前必须消毒。
+ * 可能含 \x1b[2J（清屏）、光标上移、\r 回行首覆盖等序列，伪造 CLI 输出。
+ * 展示前必须消毒。\r 必须剥：它与 \n 不同，不换行而是回行首覆盖已输出内容
+ * （把 `✗ 校验失败` 覆盖成 `✓ 校验通过`）。
  * 保留 \t 和 \n，其余 C0 控制字符与 ESC 序列一律剥除。
  */
 export function sanitizeTerminal(s: string): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: 消毒必须匹配 ESC 序列
   const ansiEscape = /\x1b\[[0-9;]*[a-zA-Z]/g;
   // biome-ignore lint/suspicious/noControlCharactersInRegex: 消毒必须匹配 C0 控制字符
-  const controlChars = /[\x00-\x08\x0b\x0c\x0e-\x1f]/g;
+  const controlChars = /[\x00-\x08\x0b\x0c\x0d\x0e-\x1f]/g;
   return s.replace(ansiEscape, '').replace(controlChars, '');
 }
