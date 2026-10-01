@@ -99,6 +99,27 @@ describe('选项白名单只接受当前支持的写法', () => {
     assert.doesNotThrow(() => assertKnownFlags(['-n200'], ['-n', '--lines'], 'logs'));
     assert.throws(() => assertKnownFlags(['-u30000'], ['-n', '--lines'], 'logs'), CliError);
   });
+  it('单横线多字符（-name）报错附「名称不能以 - 开头」引导；单字符短选项与带值形态不附', () => {
+    const catchErr = (fn: () => void): CliError => {
+      try {
+        fn();
+      } catch (e) {
+        assert.ok(e instanceof CliError);
+        return e;
+      }
+      assert.fail('应抛 CliError');
+    };
+    // `-name` 是「想给订阅起名 -name」的典型笔误：只报「该命令不接受任何选项」会把用户
+    // 引向去查选项列表，而不是改掉前导 -
+    const nameErr = catchErr(() => assertKnownFlags(['sub', 'add', 'http://x', '-name'], [], 'sub add <url> [name]'));
+    assert.ok(nameErr.hint.some(l => l.includes('名称不能以')), '名称引导缺失');
+    // 单字符拼错的短选项：「可用选项」列表即修正指引，不追加名称引导
+    const shortErr = catchErr(() => assertKnownFlags(['-x'], ['-y'], 'reset'));
+    assert.ok(!shortErr.hint.some(l => l.includes('名称不能以')));
+    // 带值选项的 attached 形态误用：同样不追加（它是选项写法问题，不是名称）
+    const valueErr = catchErr(() => assertKnownFlags(['-u30000'], ['-n', '--lines'], 'logs'));
+    assert.ok(!valueErr.hint.some(l => l.includes('名称不能以')));
+  });
 });
 
 /**

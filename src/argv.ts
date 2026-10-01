@@ -40,9 +40,16 @@ export function assertKnownFlags(args: string[] | undefined, known: readonly str
     // `-h`/`--help` 单独点一句：它俩是顶层 help 的别名、命令级并不接受，用户很自然会试
     const isHelpFlag = a === '-h' || a === '--help';
     const helpNote = isHelpFlag ? ['', `${a} 只在顶层可用，命令用法见: mihomo-cli help`] : [];
+    // 单横线 + 多字符（`-name`、`-my-sub`）走到这里不是任何本命令选项形态：用户极可能
+    // 是在填名称位置写了 `-` 开头（订阅名/文件名 argv 一律当选项拦）。判据取「本命令
+    // 不带任何带值选项」——有带值选项时 `-n200`/`-u30000` 这类 attached 误用更可能是
+    // 选项写法问题，「可用选项」列表即修正指引；单字符（`-x`）是拼错的短选项同理
+    const hasValueFlag = known.some(f => VALUE_FLAGS.has(f));
+    const looksLikeName = a.length > 2 && !a.startsWith('--') && !hasValueFlag;
+    const nameNote = looksLikeName ? ['', `若这是在填写名称：名称不能以 \`-\` 开头（argv 会把它当选项拦截），请去掉前导 \`-\``] : [];
     throw new CliError(`未知的选项: ${a}`, {
       label: '参数错误',
-      hint: [known.length > 0 ? `可用选项: ${known.join(', ')}` : '该命令不接受任何选项', ...helpNote, '', `用法: mihomo-cli ${command}`],
+      hint: [known.length > 0 ? `可用选项: ${known.join(', ')}` : '该命令不接受任何选项', ...helpNote, ...nameNote, '', `用法: mihomo-cli ${command}`],
     });
   }
 }

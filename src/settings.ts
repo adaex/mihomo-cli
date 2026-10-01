@@ -134,8 +134,9 @@ export function getPorts(settings: Settings = readSettings()): { mixed: number; 
 function maskSingleUrl(url: string): string {
   try {
     const parsed = new URL(url);
-    // 已知 token 参数名（值可能很短，如 ?token=abc）
-    const tokenKeys = new Set([
+    // 已知 token 参数名（值可能很短，如 ?token=abc）。黑名单靠人工维护、已补录
+    // 多轮（uuid/sid/id 都曾漏网），加载期断言「枚举不重复」挡漂移
+    const TOKEN_KEY_NAMES = [
       'token',
       'key',
       'secret',
@@ -152,9 +153,12 @@ function maskSingleUrl(url: string): string {
       'email',
       'passwd',
       'apikey',
-      'api_key',
       'access',
-    ]);
+    ];
+    if (new Set(TOKEN_KEY_NAMES).size !== TOKEN_KEY_NAMES.length) {
+      throw new Error('tokenKeys 存在重复登记');
+    }
+    const tokenKeys = new Set(TOKEN_KEY_NAMES);
     // 启发式：值长度 ≥16 的 query 参数一律遮蔽（token 几乎都是长串，误伤率低）。
     // 黑名单永远枚举不完（uuid/sid/id 等都曾漏网），启发式更耐久。
     for (const [key, value] of parsed.searchParams) {

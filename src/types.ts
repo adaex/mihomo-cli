@@ -121,7 +121,7 @@ export interface OverwriteScriptContext {
   subscription: { name: string; url: string; host: string };
   /** 本次构建的运行模式 */
   mode: 'mixed' | 'tun';
-  /** 发一条告警进 warnings 通道（status / doctor / config 的输出可见） */
+  /** 发一条告警进 warnings 通道（`start` / `config` / `doctor` 的输出可见；`status` 走诊断旁路、不执行脚本，看不到） */
   warn: (message: string) => void;
 }
 
