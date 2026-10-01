@@ -123,6 +123,16 @@ describe('帮助文案与实际行为一致', () => {
       assert.match(out, /subscription use <name>.*自动重启/);
     });
   });
+
+  it('kernel 用法行的通道顺序与实际决策一致（本机代理优先、gh 回退）', () => {
+    // 回归：通道改为「本机代理 > gh > 直连」后帮助仍写旧顺序「gh > 本机代理 > 直连」，
+    // 用户按 help 排障被反向误导
+    withFixture((_d, run) => {
+      const out = run(['help', 'kernel']).stdout;
+      assert.match(out, /本机代理 > gh > 直连/);
+      assert.ok(!out.includes('gh > 本机代理'), '不得残留旧顺序');
+    });
+  });
 });
 
 describe('status 展示实际端口（含控制器口）', () => {

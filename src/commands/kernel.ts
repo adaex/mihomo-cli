@@ -17,23 +17,27 @@ import { withSpinner } from '../spinner.js';
  */
 const KERNEL_VALUE_FLAGS: ReadonlySet<string> = new Set([...VALUE_FLAGS, '--mirror']);
 
-/** 通道的人类可读标签（失败汇总用） */
-function channelLabel(channel: DownloadChannel): string {
+/** 通道的人类可读标签（失败汇总用）；措辞与 printChannelLine 头部行一致 */
+export function channelLabel(channel: DownloadChannel, isExplicitProxy: boolean): string {
   switch (channel.kind) {
     case 'gh':
-      // gh 回退候选带本机代理时，失败汇总要能看出它与首选通道是同一路径
-      return channel.proxy ? `gh（经代理 ${channel.proxy}）` : 'gh';
+      // gh 回退候选带的代理只可能是本机 Mixed 端口（显式 --proxy 是单候选、无 gh），
+      // 失败汇总要能看出它与首选通道是同一路径
+      return channel.proxy ? `gh（经本机代理 ${channel.proxy}）` : 'gh';
     case 'proxy':
-      return `代理 ${channel.proxy}`;
+      return `${isExplicitProxy ? '代理' : '本机代理'} ${channel.proxy}`;
     case 'mirror':
-      return `镜像 ${channel.mirror}`;
+      // mirror+proxy 组合只来自显式 --proxy，故用「代理」而非「本机代理」
+      return `镜像 ${channel.mirror}${channel.proxy ? `（经代理 ${channel.proxy}）` : ''}`;
     case 'direct':
       return '直连';
   }
 }
 
-/** 打印一行通道信息；isExplicitProxy 区分「代理」与「本机代理」措辞 */
-function printChannelLine(channel: DownloadChannel, isExplicitProxy: boolean): void {
+/** 打印一行通道信息；isExplicitProxy 区分「代理」与「本机代理」措辞。
+ * direct 无通道信息可报（旧版口径），也不打尾部空行——否则输出里多一个孤立空行 */
+export function printChannelLine(channel: DownloadChannel, isExplicitProxy: boolean): void {
+  if (channel.kind === 'direct') return;
   if (channel.kind === 'gh') {
     // proxy 只可能由「本机代理在跑」的回退分支注入（显式 --proxy 是单候选、无 gh）
     console.log(channel.proxy ? `下载通道: gh（GitHub CLI，经本机代理 ${channel.proxy}）` : '下载通道: gh（GitHub CLI）');
@@ -44,6 +48,46 @@ function printChannelLine(channel: DownloadChannel, isExplicitProxy: boolean): v
     console.log(`镜像: ${host}${channel.proxy ? `（经代理 ${channel.proxy}）` : ''}`);
   }
   console.log('');
+}
+
+/** 切换候选通道时的提示行：带上失败原因首行——中途切换后该原因不再出现在任何输出里
+ * （失败明细只在全失败分支打印），不带上用户就不知道首条通道是 HTTP 错误还是低速/超时
+ * （决定要不要换节点） */
+export function formatChannelSwitchLine(previousError: Error | null): string {
+  const reason = previousError?.message.split('\n')[0] ?? '';
+  return reason ? `上一通道失败（${reason}），切换为:` : '上一通道失败，切换为:';
+}
+
+/** 全部候选失败时的错误。单候选（显式 --mirror/--proxy/--mirror direct）以原始错误为
+ * 主消息——套「全部通道均失败」会掩盖真实原因，双通道换节点话术也不适用于本次运行 */
+export function buildDownloadFailureError(attempts: { channel: DownloadChannel; error: Error }[], isExplicitProxy: boolean): CliError {
+  if (attempts.length === 1) {
+    return new CliError(attempts[0].error.message, {
+      label: '下载失败',
+      hint: [
+        '',
+        '可改用其他通道重试:',
+        '  mihomo-cli kernel                  # 自动选择（本机代理优先、gh 回退）',
+        '  mihomo-cli kernel --mirror [镜像]  # 强制镜像（可用 v6/v4/cdn 等别名）',
+        `  可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`,
+        '  mihomo-cli kernel --mirror direct  # 强制直连',
+        '  mihomo-cli kernel --proxy <端口>   # 经本机其他代理工具出网',
+      ],
+    });
+  }
+  return new CliError('全部下载通道均失败', {
+    label: '下载失败',
+    hint: [
+      ...attempts.map(a => `  ${channelLabel(a.channel, isExplicitProxy)}: ${a.error.message.split('\n')[0]}`),
+      '',
+      '若两条通道都是低速失败：问题在当前选中的机场节点（url-test 只按握手延迟选、不测带宽），',
+      '在面板里手动给 Default Proxy 换个线路或节点后重试；也可换个时间等 url-test 重选',
+      '',
+      '通道选择：本机代理在跑时自动优先（含低速快速失败），失败回退 gh（仍经同一本机代理）；',
+      '手动指定: mihomo-cli kernel --mirror [镜像]（强制镜像）/ mihomo-cli kernel --mirror direct（强制直连）',
+      '          mihomo-cli kernel --proxy <端口>（经本机其他代理工具出网）',
+    ],
+  });
 }
 
 export async function cmdKernel(args: string[]): Promise<void> {
@@ -79,7 +123,9 @@ export async function cmdKernel(args: string[]): Promise<void> {
     }
   }
   const forceDirect = mirrorInfo.isOverride && !mirrorInfo.mirror;
-  const ghAvailable = kernel.hasGh();
+  // gh 探测只在做决策的形态下花这一次子进程（判据见 ghProbeNeeded）；
+  // 不需要时传 false——resolveDownloadChannels 对显式覆盖形态本就不看这个输入
+  const ghAvailable = kernel.ghProbeNeeded({ forceDirect, proxyOverride: proxyInfo.proxy }) && kernel.hasGh();
   const channels = kernel.resolveDownloadChannels({
     mirror: mirrorInfo.mirror,
     isOverride: mirrorInfo.isOverride,
@@ -174,36 +220,24 @@ export async function cmdKernel(args: string[]): Promise<void> {
     console.log('已是最新版本');
   } else {
     console.log('\n正在下载...');
-    // 逐个尝试候选通道：失败时记录原因、继续下一通道；任一成功即使用
+    // 逐个尝试候选通道：失败时记录通道与原因、继续下一通道；任一成功即使用
     let result: Awaited<ReturnType<typeof kernel.downloadKernel>> | undefined;
-    const failures: string[] = [];
+    const attempts: { channel: DownloadChannel; error: Error }[] = [];
     for (let attempt = 0; attempt < channels.length; attempt++) {
       if (attempt > 0) {
-        console.log('上一通道失败，切换为:');
+        console.log(formatChannelSwitchLine(attempts[attempt - 1]?.error ?? null));
         printChannelLine(channels[attempt], proxyInfo.proxy !== null);
       }
       try {
         result = await kernel.downloadKernel(msg => console.log(msg), channels[attempt], info.release);
       } catch (e) {
-        failures.push(`  ${channelLabel(channels[attempt])}: ${(e as Error).message.split('\n')[0]}`);
+        attempts.push({ channel: channels[attempt], error: e as Error });
         continue;
       }
       break;
     }
     if (!result) {
-      throw new CliError('全部下载通道均失败', {
-        label: '下载失败',
-        hint: [
-          ...failures,
-          '',
-          '若两条通道都是低速失败：问题在当前选中的机场节点（url-test 只按握手延迟选、不测带宽），',
-          '在面板里手动给 Default Proxy 换个线路或节点后重试；也可换个时间等 url-test 重选',
-          '',
-          '通道选择：本机代理在跑时自动优先（含低速快速失败），失败回退 gh（仍经同一本机代理）；',
-          '手动指定: mihomo-cli kernel --mirror [镜像]（强制镜像）/ mihomo-cli kernel --mirror direct（强制直连）',
-          '          mihomo-cli kernel --proxy <端口>（经本机其他代理工具出网）',
-        ],
-      });
+      throw buildDownloadFailureError(attempts, proxyInfo.proxy !== null);
     }
     console.log(`\n已更新到 ${result.version}`);
     // 运行中的内核仍是旧二进制（进程持有旧 inode），提醒重启生效。

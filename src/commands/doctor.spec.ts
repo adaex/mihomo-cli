@@ -108,23 +108,49 @@ describe('doctor：体检透传配置构建的 warnings', () => {
 });
 
 describe('doctor：内核面板自升级残留', () => {
-  it('kernel 下存在 meta-backup/meta-update 时告警并给出删除口径', () => {
+  it('meta-update 存在时 warn 真残留，修复命令只删暂存目录', () => {
+    fs.mkdirSync(path.join(dataDir, 'kernel', 'meta-update'));
+
+    const { stdout, output } = run(['doctor']);
+    assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
+    assert.match(stdout, /内核自升级残留/);
+    assert.match(stdout, /rm -rf .*meta-update/);
+  });
+
+  it('meta-backup 是上游设计保留的旧内核副本：不告警，按信息项给出独立删除口径', () => {
+    // 回归：曾与中断暂存合并成一条「残留」warn——面板成功自升级一次后它就常在，
+    // doctor 从此永久误报，且修复命令会把回滚备份一并 rm -rf（上游 update_core.go
+    // 成功路径从不清理 meta-backup，已核对）
+    fs.mkdirSync(path.join(dataDir, 'kernel', 'meta-backup'));
+
+    const { stdout, output } = run(['doctor']);
+    assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
+    assert.ok(!stdout.includes('内核自升级残留'), '备份不应按残留告警');
+    assert.match(stdout, /内核自升级备份/);
+    assert.match(stdout, /回滚/);
+    assert.match(stdout, /rm -rf .*meta-backup/);
+  });
+
+  it('两者并存时各自成项，修复命令不含 meta-backup', () => {
     fs.mkdirSync(path.join(dataDir, 'kernel', 'meta-backup'));
     fs.mkdirSync(path.join(dataDir, 'kernel', 'meta-update'));
 
     const { stdout, output } = run(['doctor']);
     assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
     assert.match(stdout, /内核自升级残留/);
-    assert.match(stdout, /rm -rf .*meta-backup/);
-    assert.match(stdout, /meta-update/);
-    // 两类目录性质分别说明：备份可留作回滚、暂存可安全删
-    assert.match(stdout, /回滚/);
-    assert.match(stdout, /可安全删除/);
+    // 其他检查项（如服务未安装）也有「修复:」行，只认残留项之后紧跟的那条
+    const lines = stdout.split('\n');
+    const idx = lines.findIndex(l => l.includes('内核自升级残留'));
+    const fixLine = lines.slice(idx + 1).find(l => l.includes('修复:'));
+    assert.ok(fixLine, '残留项应带修复命令');
+    assert.match(fixLine, /meta-update/);
+    assert.ok(!fixLine?.includes('meta-backup'), '修复命令不得连带删除回滚备份');
   });
 
-  it('无残留时不出现该项', () => {
+  it('无自升级目录时不出现这两项', () => {
     const { stdout } = run(['doctor']);
     assert.ok(!stdout.includes('内核自升级残留'));
+    assert.ok(!stdout.includes('内核自升级备份'));
   });
 });
 

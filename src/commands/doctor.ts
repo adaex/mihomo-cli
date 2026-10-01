@@ -109,25 +109,17 @@ async function collectChecks(): Promise<Check[]> {
     }
   }
 
-  // === 内核面板自升级残留 ===
-  // POST /upgrade 的 updater 在 kernel 目录留 meta-backup（旧内核备份，设计上保留）
-  // 与 meta-update（下载暂存，成功后自清——残留即升级被异常中断）；不影响运行，
-  // 仅占空间，归为 warn 并给出删除口径
-  const leftovers: { dir: string; note: string }[] = [];
-  if (fs.existsSync(KERNEL_SELF_BACKUP_DIR)) {
-    leftovers.push({ dir: KERNEL_SELF_BACKUP_DIR, note: '旧内核备份：需要手动回滚时可保留，否则可删' });
-  }
+  // === 内核面板自升级目录 ===
+  // 两个目录性质不同，不能合并成一条「残留」告警（上游 update_core.go 已核对）：
+  // - meta-update 是下载暂存，updater defer 清理——存在即升级被异常中断，真残留，warn
+  // - meta-backup 是旧内核副本，成功路径**从不清理**（有意保留供回滚，每次升级覆盖写），
+  //   面板升级成功一次它就常在——按残留 warn 等于永久误报，会训练用户无视 doctor 告警；
+  //   归为信息项，删除口径写进 detail（ok 项不渲染 fix/notes），且绝不与暂存共用一条 rm -rf
   if (fs.existsSync(KERNEL_SELF_UPDATE_DIR)) {
-    leftovers.push({ dir: KERNEL_SELF_UPDATE_DIR, note: '中断的下载暂存：可安全删除' });
+    push('内核自升级残留', 'warn', `中断的下载暂存: ${KERNEL_SELF_UPDATE_DIR}`, `rm -rf ${KERNEL_SELF_UPDATE_DIR}`);
   }
-  if (leftovers.length > 0) {
-    push(
-      '内核自升级残留',
-      'warn',
-      `发现 ${leftovers.length} 个面板自升级遗留目录`,
-      `rm -rf ${leftovers.map(l => l.dir).join(' ')}`,
-      leftovers.map(l => `  ${l.dir}：${l.note}`),
-    );
+  if (fs.existsSync(KERNEL_SELF_BACKUP_DIR)) {
+    push('内核自升级备份', 'ok', `旧内核副本（面板升级自动保留，供回滚；确认新版稳定后可删: rm -rf ${KERNEL_SELF_BACKUP_DIR}）`);
   }
 
   // === 数据目录 ===

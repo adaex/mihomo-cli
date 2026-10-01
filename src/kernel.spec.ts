@@ -9,10 +9,11 @@ import {
   buildReleaseApiCurlArgs,
   describeCurlDownloadError,
   findMatchingAsset,
+  ghProbeNeeded,
   parseCurlStatusOutput,
   pickLatestRelease,
-  resolveDownloadChannel,
   resolveDownloadChannels,
+  resolveFallbackQueryOptions,
   translateReleaseApiCurlError,
 } from './kernel.js';
 import type { GitHubAsset, GitHubRelease } from './types.js';
@@ -70,61 +71,61 @@ describe('findMatchingAsset（标准版形态精确匹配）', () => {
   });
 });
 
-describe('resolveDownloadChannel（下载通道优先级）', () => {
+describe('resolveDownloadChannels（下载通道优先级）', () => {
   const base = { mirror: null, isOverride: false, ghAvailable: false, proxyRunning: false, proxyPort: null, proxyOverride: null };
 
   it('显式 --mirror 优先于 gh 与代理（手动覆盖最高）', () => {
-    const ch = resolveDownloadChannel({
+    const ch = resolveDownloadChannels({
       ...base,
       mirror: 'https://v6.gh-proxy.org/',
       isOverride: true,
       ghAvailable: true,
       proxyRunning: true,
       proxyPort: 7890,
-    });
-    assert.equal(ch.kind, 'mirror');
-    assert.equal(ch.kind === 'mirror' && ch.mirror, 'https://v6.gh-proxy.org/');
+    })[0];
+    assert.equal(ch?.kind, 'mirror');
+    assert.equal(ch?.kind === 'mirror' && ch.mirror, 'https://v6.gh-proxy.org/');
   });
 
   it('--mirror direct（isOverride 但 mirror 为 null）强制直连，即使 gh/代理都在', () => {
-    const ch = resolveDownloadChannel({
+    const ch = resolveDownloadChannels({
       ...base,
       isOverride: true,
       ghAvailable: true,
       proxyRunning: true,
       proxyPort: 7890,
-    });
-    assert.equal(ch.kind, 'direct');
+    })[0];
+    assert.equal(ch?.kind, 'direct');
   });
 
   it('--mirror <镜像> 与 --proxy 可组合：镜像决定 URL，代理只做传输层', () => {
-    const ch = resolveDownloadChannel({
+    const ch = resolveDownloadChannels({
       ...base,
       mirror: 'https://cdn.gh-proxy.org/',
       isOverride: true,
       proxyOverride: 'socks5://127.0.0.1:7897',
-    });
-    assert.equal(ch.kind, 'mirror');
-    assert.equal(ch.kind === 'mirror' && ch.mirror, 'https://cdn.gh-proxy.org/');
-    assert.equal(ch.kind === 'mirror' && ch.proxy, 'socks5://127.0.0.1:7897');
+    })[0];
+    assert.equal(ch?.kind, 'mirror');
+    assert.equal(ch?.kind === 'mirror' && ch.mirror, 'https://cdn.gh-proxy.org/');
+    assert.equal(ch?.kind === 'mirror' && ch.proxy, 'socks5://127.0.0.1:7897');
   });
 
   it('显式 --proxy 优先于 gh（指定代理的场景往往正是 gh 直连不通）', () => {
-    const ch = resolveDownloadChannel({ ...base, ghAvailable: true, proxyOverride: 'http://127.0.0.1:7897' });
-    assert.equal(ch.kind, 'proxy');
-    assert.equal(ch.kind === 'proxy' && ch.proxy, 'http://127.0.0.1:7897');
+    const ch = resolveDownloadChannels({ ...base, ghAvailable: true, proxyOverride: 'http://127.0.0.1:7897' })[0];
+    assert.equal(ch?.kind, 'proxy');
+    assert.equal(ch?.kind === 'proxy' && ch.proxy, 'http://127.0.0.1:7897');
   });
 
   it('显式 --proxy 优先于本机自动代理（不与自动通道混用）', () => {
-    const ch = resolveDownloadChannel({ ...base, proxyRunning: true, proxyPort: 7890, proxyOverride: 'http://192.168.1.2:7897' });
-    assert.equal(ch.kind, 'proxy');
-    assert.equal(ch.kind === 'proxy' && ch.proxy, 'http://192.168.1.2:7897');
+    const ch = resolveDownloadChannels({ ...base, proxyRunning: true, proxyPort: 7890, proxyOverride: 'http://192.168.1.2:7897' })[0];
+    assert.equal(ch?.kind, 'proxy');
+    assert.equal(ch?.kind === 'proxy' && ch.proxy, 'http://192.168.1.2:7897');
   });
 
   it('无显式选项、代理在跑时 proxy 首选（gh 退为回退候选）', () => {
-    const ch = resolveDownloadChannel({ ...base, ghAvailable: true, proxyRunning: true, proxyPort: 7890 });
-    assert.equal(ch.kind, 'proxy');
-    assert.equal(ch.kind === 'proxy' && ch.proxy, 'http://127.0.0.1:7890');
+    const ch = resolveDownloadChannels({ ...base, ghAvailable: true, proxyRunning: true, proxyPort: 7890 })[0];
+    assert.equal(ch?.kind, 'proxy');
+    assert.equal(ch?.kind === 'proxy' && ch.proxy, 'http://127.0.0.1:7890');
   });
 
   it('代理在跑且有 gh 时候选为 [proxy, gh]——gh 带同一个本机代理，只换客户端不换路径（不保证重新选节点，局限见 resolveDownloadChannels 注释）', () => {
@@ -154,7 +155,7 @@ describe('resolveDownloadChannel（下载通道优先级）', () => {
   });
 
   it('全无条件时直连', () => {
-    assert.equal(resolveDownloadChannel(base).kind, 'direct');
+    assert.equal(resolveDownloadChannels(base)[0]?.kind, 'direct');
   });
 
   it('显式 --proxy 只有一个候选（显式意图不自动换通道）', () => {
@@ -163,6 +164,48 @@ describe('resolveDownloadChannel（下载通道优先级）', () => {
       channels.map(c => c.kind),
       ['proxy'],
     );
+  });
+});
+
+describe('ghProbeNeeded（gh 探测只在参与决策时做）', () => {
+  it('默认与显式镜像形态要探测（gh 回退候选 / 无代理时的版本查询认证通道）', () => {
+    assert.equal(ghProbeNeeded({ forceDirect: false, proxyOverride: null }), true);
+  });
+
+  it('--mirror direct 不探测（查询与下载都不经 gh）', () => {
+    assert.equal(ghProbeNeeded({ forceDirect: true, proxyOverride: null }), false);
+  });
+
+  it('显式 --proxy 不探测（单候选、查询直接经该代理）', () => {
+    assert.equal(ghProbeNeeded({ forceDirect: false, proxyOverride: 'http://127.0.0.1:7897' }), false);
+  });
+});
+
+describe('resolveFallbackQueryOptions（兜底版本查询与下载通道对齐）', () => {
+  it('无代理 gh 通道用 gh api 查', () => {
+    assert.deepEqual(resolveFallbackQueryOptions({ kind: 'gh' }), { proxy: null, useGh: true });
+  });
+
+  it('带本机代理的 gh 回退候选经该代理查（gh api 无命令行代理选项）', () => {
+    assert.deepEqual(resolveFallbackQueryOptions({ kind: 'gh', proxy: 'http://127.0.0.1:7890' }), { proxy: 'http://127.0.0.1:7890', useGh: false });
+  });
+
+  it('proxy 通道经代理查', () => {
+    assert.deepEqual(resolveFallbackQueryOptions({ kind: 'proxy', proxy: 'http://127.0.0.1:7897' }), { proxy: 'http://127.0.0.1:7897', useGh: false });
+  });
+
+  it('mirror 通道：带的代理只做传输层，无代理直连查', () => {
+    assert.deepEqual(resolveFallbackQueryOptions({ kind: 'mirror', mirror: 'https://cdn.gh-proxy.org/' }), { proxy: null, useGh: false });
+    assert.deepEqual(resolveFallbackQueryOptions({ kind: 'mirror', mirror: 'https://cdn.gh-proxy.org/', proxy: 'http://127.0.0.1:7897' }), {
+      proxy: 'http://127.0.0.1:7897',
+      useGh: false,
+    });
+  });
+
+  it('direct 通道绝不经 gh（「强制直连」含 API），直连 fetch 查询', () => {
+    // 回归：旧判据 useGh = apiProxy === null 使 direct（与无代理 mirror）的兜底查询
+    // 先试 gh api——gh 未装白吃 ENOENT、gh 已装则绕过「不经 gh」的通道语义
+    assert.deepEqual(resolveFallbackQueryOptions({ kind: 'direct' }), { proxy: null, useGh: false });
   });
 });
 

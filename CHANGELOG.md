@@ -8,6 +8,9 @@
 
 ### 修复
 
+- **doctor 不再把面板自升级的旧内核备份当「残留」告警**：上游升级器成功后**有意永久保留** `meta-backup`（旧内核副本，供回滚，已核对上游源码），此前它与中断暂存 `meta-update` 合并成一条 warn——面板里正常升级一次内核，doctor 从此每次都报「自升级残留」，且按提示修复会把回滚备份一并删掉。现拆为两项：`meta-update` 存在才是真残留（升级被中断），warn 并给只删暂存的命令；`meta-backup` 按信息项列出、给独立的可选清理口径
+- **kernel 帮助的通道顺序与实际一致**：帮助仍写旧顺序「gh > 本机代理 > 直连」，而实际已是本机代理优先、gh 回退——按 help 排障会被反向误导
+- **显式指定通道下载失败不再报统一话术**：`--mirror` / `--proxy` / `--mirror direct` 只有单条候选，失败时统一抛「全部下载通道均失败」既掩盖原始错误（HTTP 错误/低速/超时）又给不适用的换节点指引；现以原始错误为主消息，只附改用其他通道的出路
 - **`mihomo-cli update`/`doctor` 的 npm 此前同样吃不到本机代理**：shell 里 `export https_proxy` 指向自己的 Mixed 端口（Mixed 用户的常见终端配置）时，入口 D9 清除后 npm 直连 registry——代理明明在跑，手动 `npm install -g` 能成、CLI 包装的 update 反而失败。现清除时登记原值，npm 每次 spawn 前 TCP 探活被指端口：在监听（内核在跑）才把用户原配置 per-spawn 注回，端口不活（env 残留、内核已停）保持清除；不凭空注入（没用 env 代理的用户路径不变，用户 .npmrc 配置优先于 env），doctor 的版本检查同路径受益
 - **内核下载的 gh 回退此前实际走了直连**：v26.10.98 的设计是 gh 回退与首选通道同经本机代理（「只换客户端不换路径」），但入口 `clearProxyEnv`（D9）会清掉指向本机 Mixed 端口的代理 env——shell 里 export 了 `https_proxy` 的最常见形态恰好被清，gh 回退实际直连 GitHub，两条通道低速失败时「手动换节点」的诊断也随之失准。现 gh 回退候选由通道决策带上本机代理地址，下载时只给该子进程注入代理环境变量（不写全局 env；内核下载中途不重启自己的代理，不违反 D9），通道行与失败汇总显示真实路径
 - **TUN 启动增加并发复核**：此前 sudo 密码窗（最长 60 秒）期间另一终端执行 `stop`，TUN 仍会照常启动——终态与用户最后一条命令相反；并发 `start`（mixed）在密码窗完成引导也会被 TUN 脚本误杀内核。现启动前复核停止计数与服务装载态，被并发停止即取消（命令层关闭自启后重捕获基线，自己的递增不误判）
@@ -29,6 +32,7 @@
 
 ### 内部
 
+- 多候选下载中途切换通道时带上失败原因首行（此前原因只在全部失败分支可见，中途成功就永远看不到）；downloadKernel 兜底版本查询的出网方式抽 resolveFallbackQueryOptions 与下载通道对齐（direct 与无代理 mirror 绝不经 gh api）；gh 探测只在结果参与决策的形态执行（`--mirror direct`/`--proxy` 不再白花一次同步子进程）；删除零调用的 `resolveDownloadChannel` 导出；direct 通道不再多打孤立空行，失败汇总的「本机代理/经本机代理」措辞与通道头部行一致
 - help.spec 补整页帮助的别名行（列出全部入口）与快捷命令节（tun/use/restart）断言；log.ts 归档文件名注释修正；`mihomo-cli ui` 的运行态查询无容错记入 CODE_REVIEW（纯打开操作、失败重跑成本为零）
 - `OverwriteScriptContext.warn` 注释修正为现行口径：仅 `start`/`config`/`doctor` 可见，`status` 走诊断旁路不执行脚本
 - sudo 密码窗口（spawnSync 最长 60s）期间 Ctrl+C 无响应的已知权衡记入 CODE_REVIEW

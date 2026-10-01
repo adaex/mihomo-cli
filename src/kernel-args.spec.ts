@@ -147,7 +147,7 @@ describe('parseProxyArg', () => {
     assert.equal(parseProxyArg(['kernel', '-p7897']).proxy, 'http://127.0.0.1:7897');
   });
 
-  it('与 --mirror 可共存（组合语义在 resolveDownloadChannel，解析层互不干扰）', () => {
+  it('与 --mirror 可共存（组合语义在 resolveDownloadChannels，解析层互不干扰）', () => {
     const p = parseProxyArg(['kernel', '--mirror', 'cdn', '--proxy', '7897']);
     assert.equal(p.proxy, 'http://127.0.0.1:7897');
     assert.equal(parseMirrorArg(['kernel', '--mirror', 'cdn', '--proxy', '7897']).mirror, 'https://cdn.gh-proxy.org/');
