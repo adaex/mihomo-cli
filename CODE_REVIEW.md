@@ -41,6 +41,7 @@
 - **stop 游离路径批量 pkill 与并发 start 的交错**（记录不修）：B 读 status（未装载）→ 并发 A bootstrap 并拉起服务内核 → B 读 pids 命中 A 的内核 → stop() 的 cleanupAll pkill 杀掉它，KeepAlive 约 10s 拉回（游离路径不 bootout）。B 报「已停止」与终态相反。与已接受的「探测与动作之间隔一次查询」同族（TUN sudo 窗口），方向相反（stop 伤 start），触发要求两次读取之间落入对方的 bootstrap+进程拉起，记录不修
 - **TUN 启动的亚秒窗口内并发 stop 删 pid 文件**（记录不修）：TUN 启动脚本写完 pid 文件、内核尚未出现在 pgrep 的窗口内，并发 stop/reset 的零进程分支会删掉刚写的 pid 文件 → startTun 末尾 getPid() 为 null，把成功启动误报成「TUN 启动失败」。与上一条同族（探测与动作隔着一次查询），窗口亚秒级且旧 sudo 版同样存在（TTY 输密码即删），封死需要 start/stop 共享锁（跨进程锁在数据根目录、进程启动不在锁内），收益不抵复杂度
 - **文件锁 stat→unlink 两步、不复核 inode**（已知理论缺口）：仅在等待者被冻结（合盖/换出）且系统时钟前跳时可利用，微秒级窗口，不为此加机制
+- **sudo 密码窗口内 Ctrl+C 最长 60 秒无响应**（已知权衡）：三处提权（TUN 启动/残留清理/legacy 清理）的 `spawnSync('sudo', …, {stdio:'inherit', timeout:60s})` 阻塞主线程，期间信号处理器无法执行——与 process-stop.ts 头注释「轮询必须 async 保障 SIGINT 可达」的预期在此窗口相悖。改异步 spawn 需自行处理 sudo 子进程回收与 TTY 归属，复杂度远超收益；超时上限 60s 有界，非死锁，记录不修
 - **原子写 fsync 的文件系统边界**：非常规文件系统（如 NFS home）上 fsync 可返回 EINVAL，使原本 rename-only 能成功的写入整体失败——macOS APFS 实测无问题，未在其他文件系统实测。保证范围分层写在 atomicWriteFileSync docstring；崩溃遗留 `*.tmp` 的清扫在三道守卫与豁免判定**之后**执行（清扫是删除动作，不在被拒绝/豁免的命令上跑）
 - **remove 时序修复无自动化回归测试**：写盘失败无法黑盒注入，postCommit 回滚删除刚写 yaml 的链路只用例锁住两侧不变式（终态守护 + 未命中不删文件），该修复本身靠代码审查
 - **订阅侧 own `__proto__` 刻意不拦**（探针实测）：js-yaml 解析订阅顶层 `__proto__:` 得 own 键，经展示 walk（defineProperty 绕原型 setter）与 dump 均不炸，内核按未知键忽略；只有覆写**合并层**在操作符解析后拦截（覆盖 `__proto__!` 等形态），订阅侧透传是承诺行为
