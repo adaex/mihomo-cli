@@ -102,3 +102,17 @@ describe('dispatchSubcommand：合法表的分发协议不受影响', () => {
     assert.deepEqual(called, ['on', 'off']);
   });
 });
+
+describe('dispatchSubcommand：子命令名大小写不敏感（与顶层入口口径一致）', () => {
+  it('大写主名/别名照常命中，不报未知子命令', async () => {
+    await dispatchSubcommand(['x', 'ON'], TABLE, OPTIONS);
+    assert.deepEqual(called, ['on']);
+    await dispatchSubcommand(['x', 'ENABLE'], TABLE, OPTIONS);
+    assert.deepEqual(called, ['on', 'on']);
+  });
+
+  it('大小写混合同样命中', async () => {
+    await dispatchSubcommand(['x', 'OfF'], TABLE, OPTIONS);
+    assert.deepEqual(called, ['off']);
+  });
+});

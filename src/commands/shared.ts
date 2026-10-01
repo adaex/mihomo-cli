@@ -49,7 +49,8 @@ export async function dispatchSubcommand(
   options: { fallback: (args: string[]) => void | Promise<void>; onUnknown: (action: string) => never },
 ): Promise<void> {
   assertUniqueTokens(table);
-  const action = args[1];
+  // 与顶层入口（index.ts 对命令 token 做 toLowerCase）口径一致：子命令名同样不区分大小写
+  const action = args[1]?.toLowerCase();
   if (action) {
     const cmd = table.find(c => c.name === action || c.aliases?.includes(action));
     if (cmd) return cmd.handler(args);

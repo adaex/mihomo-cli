@@ -79,6 +79,31 @@ describe('命令级帮助', () => {
   });
 });
 
+describe('帮助文案与实际行为一致', () => {
+  it('logs 用法行写明裸 logs 列列表、带查看选项才默认当前', () => {
+    withFixture((_d, run) => {
+      const out = run(['help', 'logs']).stdout;
+      assert.match(out, /裸 logs 列列表/);
+      assert.match(out, /省略编号但给 -f\/-n\/-o 时即当前/);
+    });
+  });
+
+  it('version 用法行不带内嵌别名，别名只出现在别名行', () => {
+    withFixture((_d, run) => {
+      const out = run(['help', 'version']).stdout;
+      assert.match(out, /^mihomo version（别名: -v, --version）/m);
+      assert.ok(!out.includes('version, -v'), '用法签名不得内嵌别名');
+    });
+  });
+
+  it('subscription use 用法行写明自动重启，与 use 快捷行口径一致', () => {
+    withFixture((_d, run) => {
+      const out = run(['help', 'subscription']).stdout;
+      assert.match(out, /subscription use <name>.*自动重启/);
+    });
+  });
+});
+
 describe('status 展示实际端口（含控制器口）', () => {
   it('自定义端口后人读与 JSON 两形态都显示控制器口', () => {
     withFixture((_d, run) => {

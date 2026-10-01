@@ -14,8 +14,8 @@ export function cmdLogs(args: string[]): void {
   const openInViewer = hasFlag(args, '-o', '--open');
   const follow = hasFlag(args, '-f', '--follow');
   // 编号省略但给了查看类选项时默认看当前日志：`logs -f` / `logs -n 200` / `logs -o`
-  // 的意图明确是「看日志」，落到列表分支等于选项静默失效（`log` 已降为隐藏别名，
-  // `logs -f` 是跟随当前日志的自然写法，不能无声无息地只打印列表）
+  // 的意图明确是「看日志」，落到列表分支等于选项静默失效——
+  // `logs -f` 是跟随当前日志的自然写法，不能无声无息地只打印列表
   // -n 的三种形式判定与白名单/解析共用 matchValueFlagToken，不再本地手写
   const hasLinesFlag = args.some(a => matchValueFlagToken(a)?.spec.forms.includes('-n') === true);
   const targetName = getNonFlagArg(args, 1) ?? (follow || openInViewer || hasLinesFlag ? '0' : null);
