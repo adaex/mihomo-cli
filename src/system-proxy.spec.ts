@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { detectSystemProxy, parseScutilProxy, proxyEnvPointsAtSelf, summarizeSystemProxy } from './system-proxy.js';
+import {
+  detectSystemProxy,
+  getClearedProxyEnv,
+  parseProxyEndpoint,
+  parseScutilProxy,
+  proxyEnvPointsAtSelf,
+  recordClearedProxyEnv,
+  summarizeSystemProxy,
+} from './system-proxy.js';
 
 /** 本机实测的未配置形态：只有 ExceptionsList/FTPPassive，无任何代理键 */
 const EMPTY_DICT = `<dictionary> {
@@ -190,5 +198,42 @@ describe('proxyEnvPointsAtSelf：只认指向本机 Mixed 端口的代理 env', 
     for (const v of ['', 'not a url', '!!!']) {
       assert.equal(proxyEnvPointsAtSelf(v, 7890), false, JSON.stringify(v));
     }
+  });
+});
+
+describe('parseProxyEndpoint（代理 env 值解析，proxyEnvPointsAtSelf 的拆出件）', () => {
+  it('标准/裸形态/大小写 host', () => {
+    assert.deepEqual(parseProxyEndpoint('http://127.0.0.1:7890'), { host: '127.0.0.1', port: 7890 });
+    assert.deepEqual(parseProxyEndpoint('socks5://localhost:7890'), { host: 'localhost', port: 7890 });
+    assert.deepEqual(parseProxyEndpoint('127.0.0.1:7890'), { host: '127.0.0.1', port: 7890 });
+    assert.deepEqual(parseProxyEndpoint('LOCALHOST:7890'), { host: 'localhost', port: 7890 });
+  });
+
+  it('IPv6 字面量剥方括号，未指定地址族保留原样（探活侧归一）', () => {
+    assert.deepEqual(parseProxyEndpoint('http://[::1]:7890'), { host: '::1', port: 7890 });
+    assert.deepEqual(parseProxyEndpoint('http://[::]:7890'), { host: '::', port: 7890 });
+  });
+
+  it('无端口/垃圾值返回 null（不猜端口）', () => {
+    assert.equal(parseProxyEndpoint('http://localhost'), null);
+    assert.equal(parseProxyEndpoint('not a url'), null);
+    assert.equal(parseProxyEndpoint(''), null);
+  });
+});
+
+describe('recordClearedProxyEnv / getClearedProxyEnv（入口清除登记）', () => {
+  it('登记后可取副本，null 清空；返回的是副本（调用方改不进存底）', () => {
+    recordClearedProxyEnv(null);
+    assert.equal(getClearedProxyEnv(), null, '初始（复位后）为 null');
+
+    recordClearedProxyEnv({ https_proxy: 'http://127.0.0.1:7890' });
+    const got = getClearedProxyEnv();
+    assert.deepEqual(got, { https_proxy: 'http://127.0.0.1:7890' });
+    assert.notEqual(got, getClearedProxyEnv(), '两次取到不同对象');
+    if (got) got.https_proxy = 'mutated';
+    assert.deepEqual(getClearedProxyEnv(), { https_proxy: 'http://127.0.0.1:7890' }, '改副本不影响存底');
+
+    recordClearedProxyEnv(null);
+    assert.equal(getClearedProxyEnv(), null);
   });
 });

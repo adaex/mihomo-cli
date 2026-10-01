@@ -86,7 +86,7 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 
 **内核下载**
 - 镜像只作用产物下载、选择不持久化；版本查询代理可用时直接经代理（D8）
-- 守卫前清 env 代理只清指向本机 Mixed 端口的自指形态（D9）；gh 无命令行代理选项，本机代理在跑时的 gh 回退候选由通道决策带 proxy、下载 spawn per-spawn 注入 env，不写回 process.env（kernel 下载中途不重启自己的代理，与 D9 的死锁防护并存）
+- 守卫前清 env 代理只清指向本机 Mixed 端口的自指形态（D9）；两个 per-spawn 并存例外都「全程不重启内核」：① gh 回退候选由通道决策带 proxy（构造式注入，与用户 env 无关）；② update/doctor 的 npm 忠实恢复用户原 env（清除时登记、spawn 前 TCP 探活，活才注回；.npmrc 优先于 env，只恢复用户原配置）——均不写回 process.env
 - 下载候选为列表、逐个尝试首个成功即用；显式 --mirror/--proxy 只有一个候选（显式意图不自动换道）
 
 ## Git 与流程

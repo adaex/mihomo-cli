@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import net from 'node:net';
 import { promisify } from 'node:util';
 import { compareVersions } from 'compare-versions';
 import { assertKnownFlags, assertPositionalCount } from '../argv.js';
@@ -6,8 +7,62 @@ import { colors } from '../colors.js';
 import { PKG_NAME, VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
 import { withSpinner } from '../spinner.js';
+import { getClearedProxyEnv, parseProxyEndpoint } from '../system-proxy.js';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * 纯决策：给 npm 子进程恢复哪些代理 env。
+ * - 入口没清过自指 env（cleared 为 null）：{}——不替用户发明代理配置
+ * - 清过但探活失败（端口没监听）：{}——D9 的死锁/死端口防护照旧，npm 直连
+ * - 清过且端口活着（内核在跑）：原样恢复——update/doctor 全程不重启内核，无死锁
+ * npm 读 .npmrc 的优先级高于 env，用户在 .npmrc 里显式配置的代理不被覆盖。
+ */
+export function restoreProxyEnvForNpm(cleared: Record<string, string> | null, listening: boolean): Record<string, string> {
+  return cleared !== null && listening ? cleared : {};
+}
+
+/** 探活超时：只探本机回环端口，正常毫秒级；500ms 封顶且失败按「不可用」（不拖慢 doctor） */
+const PROXY_PROBE_TIMEOUT_MS = 500;
+
+/**
+ * TCP 探测本机代理端口是否在监听。0.0.0.0/:: 是 env 自指的合法写法（见 isLoopbackHost），
+ * connect 语义在各平台不一，探测时归一到确定的回环地址。
+ */
+export function isProxyPortListening(host: string, port: number): Promise<boolean> {
+  const targetHost = host === '0.0.0.0' ? '127.0.0.1' : host === '::' ? '::1' : host;
+  return new Promise(resolve => {
+    const socket = net.connect({ host: targetHost, port });
+    let settled = false;
+    const done = (ok: boolean): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(PROXY_PROBE_TIMEOUT_MS);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+  });
+}
+
+/**
+ * 构造 npm 子进程 env：入口 clearProxyEnv（D9）清掉了指向本机 Mixed 的自指代理 env，
+ * 但 update/doctor 的 npm 全程不碰内核——被清时代理端口仍在监听（内核在跑）就 per-spawn
+ * 注回用户原本的配置；端口不通（env 残留/内核已停）保持清除。每次调用独立探活：
+ * view 与 install 之间可能隔着用户确认，代理状态允许变化。
+ */
+async function buildNpmSpawnEnv(): Promise<NodeJS.ProcessEnv> {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  const cleared = getClearedProxyEnv();
+  // 所有被清键同一时刻指向同一组本机端口，取任一值探活即可
+  const sample = cleared ? Object.values(cleared).find(v => v) : undefined;
+  const endpoint = sample ? parseProxyEndpoint(sample) : null;
+  const listening = endpoint ? await isProxyPortListening(endpoint.host, endpoint.port) : false;
+  Object.assign(env, restoreProxyEnvForNpm(cleared, listening));
+  return env;
+}
 /** npm view 查询最新版的超时：网络不佳时降级为直接安装，不让用户干等 */
 const NPM_VIEW_TIMEOUT_MS = 15_000;
 
@@ -17,7 +72,8 @@ const NPM_VIEW_TIMEOUT_MS = 15_000;
  */
 export async function getLatestNpmVersion(timeoutMs: number = NPM_VIEW_TIMEOUT_MS): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync('npm', ['view', PKG_NAME, 'version'], { timeout: timeoutMs });
+    const env = await buildNpmSpawnEnv();
+    const { stdout } = await execFileAsync('npm', ['view', PKG_NAME, 'version'], { timeout: timeoutMs, env });
     const version = stdout.trim().split('\n').pop()?.trim();
     return version || null;
   } catch {
@@ -72,8 +128,9 @@ export async function cmdUpdate(args: string[] = []): Promise<void> {
   console.log('正在更新 mihomo-cli...');
   console.log('');
 
+  const installEnv = await buildNpmSpawnEnv();
   await new Promise<void>((resolve, reject) => {
-    const npm = spawn('npm', ['install', '-g', PKG_NAME], { stdio: 'inherit' });
+    const npm = spawn('npm', ['install', '-g', PKG_NAME], { stdio: 'inherit', env: installEnv });
 
     npm.on('close', code => {
       if (code === 0) {

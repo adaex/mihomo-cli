@@ -11,7 +11,7 @@ import { isSilentSigint } from './lifecycle.js';
 import { cleanupStaleTmpFiles, ensureDirs, PATHS } from './paths.js';
 import { captureStopEpochBaseline } from './service.js';
 import { suggestSimilar } from './suggest.js';
-import { proxyEnvPointsAtSelf } from './system-proxy.js';
+import { proxyEnvPointsAtSelf, recordClearedProxyEnv } from './system-proxy.js';
 
 process.on('SIGINT', () => {
   // 走 stderr：status --json / config --json 探测期间按 Ctrl+C 时，stdout 必须保持
@@ -68,12 +68,16 @@ function readSelfMixedPortEarly(): number {
  */
 function clearProxyEnv(): void {
   const selfPort = readSelfMixedPortEarly();
+  const cleared: Record<string, string> = {};
   for (const key of PROXY_ENV_KEYS) {
     const value = process.env[key];
     if (value && proxyEnvPointsAtSelf(value, selfPort)) {
+      cleared[key] = value;
       delete process.env[key];
     }
   }
+  // 登记原值：全程不重启内核的出网子进程（npm update/doctor）可在端口探活后 per-spawn 注回
+  if (Object.keys(cleared).length > 0) recordClearedProxyEnv(cleared);
 }
 
 /**
