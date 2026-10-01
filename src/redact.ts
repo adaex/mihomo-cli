@@ -10,6 +10,8 @@ import { maskUrl } from './settings.js';
  * - private-key：WireGuard 客户端私钥
  * - pre-shared-key：旧版 tuic
  * - auth-str：hysteria / hysteria2
+ * - auth：hysteria(1.x) 旧版 base64 认证字段（与 auth-str 并存期写法）
+ * - obfs-password：hysteria2 salamander/gecko 混淆密码
  * - secret：external-controller 访问密钥（顶层）
  * 这些键出现在任意嵌套层（如各类 plugin-opts）都掩码，递归不遗漏。
  *
@@ -17,7 +19,7 @@ import { maskUrl } from './settings.js';
  * query 里普遍带订阅 token（README 的覆写示例本身就含 ?token=xxx），复用 maskUrl。
  * 容器外的 url（如 url-test 分组的 gstatic 探测地址）不动。
  */
-const SECRET_KEYS = new Set(['password', 'uuid', 'private-key', 'pre-shared-key', 'auth-str', 'secret']);
+const SECRET_KEYS = new Set(['password', 'uuid', 'private-key', 'pre-shared-key', 'auth-str', 'auth', 'obfs-password', 'secret']);
 
 const URL_PROVIDER_KEYS = new Set(['proxy-providers', 'rule-providers']);
 
