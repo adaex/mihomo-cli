@@ -14,6 +14,8 @@ import type { GitHubAsset, GitHubRelease, KernelUpdateInfo } from './types.js';
 const GITHUB_REPO = 'MetaCubeX/mihomo';
 const KERNEL_HTTP_TIMEOUT = 120_000;
 const KERNEL_DOWNLOAD_TIMEOUT = 180_000;
+/** gh 通道下载超时：gh 无内置下载超时，正常 3～30s；100s 封顶让劣质节点快速失败，给回退通道让路 */
+const GH_DOWNLOAD_TIMEOUT = 100_000;
 
 const HTTP_CLIENT = createHttpClient({ timeout: KERNEL_HTTP_TIMEOUT });
 
@@ -59,9 +61,10 @@ function assertTrustedAssetUrl(rawUrl: string): void {
 // === 下载通道 ===
 
 /**
- * 内核下载通道。选择逻辑见 resolveDownloadChannel：
- * - gh：GitHub CLI 直连 GitHub，信任锚是 gh 本身 + 精确资产名，最优通道
- * - proxy：经代理（本机混合端口或显式 --proxy）直连 GitHub，TLS 端到端
+ * 内核下载通道：
+ * - proxy：curl 经代理（本机混合端口或显式 --proxy），有 --fail-with-body 与低速超时，失败语义最明确
+ * - gh：GitHub CLI，信任锚是 gh 本身 + 精确资产名；经代理时实测吞吐方差大（1.6～210s），
+ *   故本机代理在跑时作为回退候选而非首选
  * - mirror：第三方镜像前缀，无法验证来源完整性，仅兜底；可附带 proxy 做传输层
  * - direct：curl 直连
  */
@@ -81,26 +84,39 @@ export interface ChannelResolutionInput {
 }
 
 /**
- * 下载通道决策。显式覆盖最高优先：--mirror direct 强制直连、--mirror <镜像> 走镜像
- * （两者都可与 --proxy 组合——除 direct 外，镜像决定 URL、代理只做传输层）；
- * 显式 --proxy 单独给出时优先于 gh（指定代理的场景往往正是 gh 直连不通）；
- * 默认路径 gh > 本机代理 > 直连（镜像不持久化，每次按当前环境独立决策）。
- * 纯函数：运行状态（gh 是否存在、代理是否在跑）由命令层探测后注入，便于单测。
+ * 下载通道决策，返回按尝试顺序排列的候选列表（命令层逐个尝试、首个成功即用）：
+ * - 显式覆盖（--mirror direct / --mirror <镜像> / --proxy）只有一个候选——显式意图不自动换道
+ * - 默认：本机代理在跑 → proxy 首选、gh 回退（重试时 url-test 重新选节点）；
+ *   代理没跑 → gh；都没有 → direct
+ *
+ * 实证背景（2026-10）：gh 与 curl 经同一代理后路径相同，快慢取决于 url-test 选中的
+ * 节点对 Azure 的实际带宽（gh 210s 超时、curl 79.5s、二者也都有 1.6～8s），
+ * 「gh 最优」的旧排序在代理在跑时只会放大干等时间。纯函数，运行状态由命令层注入。
  */
-export function resolveDownloadChannel(input: ChannelResolutionInput): DownloadChannel {
+export function resolveDownloadChannels(input: ChannelResolutionInput): DownloadChannel[] {
   // 显式 --mirror direct（isOverride 但 mirror 为 null）：强制直连，绕过 gh/代理。
   // 与 --proxy 互斥的校验在 cmdKernel（需要 mirror/proxy 两个解析器的结果），这里不重复
-  if (input.isOverride && !input.mirror) return { kind: 'direct' };
+  if (input.isOverride && !input.mirror) return [{ kind: 'direct' }];
   if (input.isOverride && input.mirror) {
-    return input.proxyOverride ? { kind: 'mirror', mirror: input.mirror, proxy: input.proxyOverride } : { kind: 'mirror', mirror: input.mirror };
+    return [input.proxyOverride ? { kind: 'mirror', mirror: input.mirror, proxy: input.proxyOverride } : { kind: 'mirror', mirror: input.mirror }];
   }
-  if (input.proxyOverride) return { kind: 'proxy', proxy: input.proxyOverride };
-  if (input.ghAvailable) return { kind: 'gh' };
-  if (input.proxyRunning && input.proxyPort !== null) return { kind: 'proxy', proxy: `http://127.0.0.1:${input.proxyPort}` };
-  return { kind: 'direct' };
+  if (input.proxyOverride) return [{ kind: 'proxy', proxy: input.proxyOverride }];
+
+  if (input.proxyRunning && input.proxyPort !== null) {
+    const channels: DownloadChannel[] = [{ kind: 'proxy', proxy: `http://127.0.0.1:${input.proxyPort}` }];
+    if (input.ghAvailable) channels.push({ kind: 'gh' });
+    return channels;
+  }
+  if (input.ghAvailable) return [{ kind: 'gh' }];
+  return [{ kind: 'direct' }];
 }
 
-/** 检测 gh（GitHub CLI）是否可用：gh 直连 GitHub 且自带认证/代理环境，是最优下载通道 */
+/** 首选通道（resolveDownloadChannels 的首项） */
+export function resolveDownloadChannel(input: ChannelResolutionInput): DownloadChannel {
+  return resolveDownloadChannels(input)[0];
+}
+
+/** 检测 gh（GitHub CLI）是否可用，用作回退候选 */
 export function hasGh(): boolean {
   const result = spawnSync('gh', ['--version'], { stdio: 'ignore' });
   return !result.error && result.status === 0;
@@ -389,6 +405,13 @@ export function buildKernelCurlArgs(args: { url: string; proxy: string | null; m
     '--fail-with-body',
     '--max-filesize',
     String(args.maxBytes),
+    // 低速快速失败：url-test 可能选中「握手快但对 Azure 几乎无带宽」的节点（实测约
+    // 20KB/s 慢传），20 秒内平均速度低于 50KB/s 即中止——命令层据此切换下一通道，
+    // 不必干等到 --max-time
+    '--speed-limit',
+    '50000',
+    '--speed-time',
+    '20',
     '--progress-bar',
     '--connect-timeout',
     '30',
@@ -465,14 +488,14 @@ export async function downloadKernel(
       }
       const ghResult = spawnSync('gh', buildGhReleaseDownloadArgs(latest.tag_name, asset.name, tempDir), {
         stdio: 'inherit',
-        timeout: KERNEL_DOWNLOAD_TIMEOUT + 30_000,
+        timeout: GH_DOWNLOAD_TIMEOUT,
       });
       if (ghResult.error) {
         if ((ghResult.error as NodeJS.ErrnoException).code === 'ENOENT') {
           throw new Error('未找到 gh 命令（选择通道时明明可用），请重试或改用其他通道');
         }
         if ((ghResult.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {
-          throw new Error(`下载超时（gh ${Math.floor((KERNEL_DOWNLOAD_TIMEOUT + 30_000) / 1000)}s 未完成），GitHub 直连过慢时改用: mihomo kernel --mirror`);
+          throw new Error(`下载超时（gh ${Math.floor(GH_DOWNLOAD_TIMEOUT / 1000)}s 未完成），将尝试下一通道`);
         }
         throw new Error(`下载失败: ${ghResult.error.message}`);
       }

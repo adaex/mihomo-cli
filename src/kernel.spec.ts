@@ -10,6 +10,7 @@ import {
   parseCurlStatusOutput,
   pickLatestRelease,
   resolveDownloadChannel,
+  resolveDownloadChannels,
   translateReleaseApiCurlError,
 } from './kernel.js';
 import type { GitHubAsset, GitHubRelease } from './types.js';
@@ -118,19 +119,45 @@ describe('resolveDownloadChannel（下载通道优先级）', () => {
     assert.equal(ch.kind === 'proxy' && ch.proxy, 'http://192.168.1.2:7897');
   });
 
-  it('无显式选项时 gh 优先于代理', () => {
+  it('无显式选项、代理在跑时 proxy 首选（gh 退为回退候选）', () => {
     const ch = resolveDownloadChannel({ ...base, ghAvailable: true, proxyRunning: true, proxyPort: 7890 });
-    assert.equal(ch.kind, 'gh');
-  });
-
-  it('无 gh 时走代理，且地址为本机混合端口', () => {
-    const ch = resolveDownloadChannel({ ...base, proxyRunning: true, proxyPort: 7890 });
     assert.equal(ch.kind, 'proxy');
     assert.equal(ch.kind === 'proxy' && ch.proxy, 'http://127.0.0.1:7890');
   });
 
+  it('代理在跑且有 gh 时候选为 [proxy, gh]——回退重试让 url-test 重新选节点', () => {
+    const channels = resolveDownloadChannels({ ...base, ghAvailable: true, proxyRunning: true, proxyPort: 7890 });
+    assert.deepEqual(
+      channels.map(c => c.kind),
+      ['proxy', 'gh'],
+    );
+  });
+
+  it('代理在跑但无 gh 时候选只有 proxy', () => {
+    const channels = resolveDownloadChannels({ ...base, proxyRunning: true, proxyPort: 7890 });
+    assert.deepEqual(
+      channels.map(c => c.kind),
+      ['proxy'],
+    );
+  });
+
+  it('代理没跑时 gh 为唯一候选', () => {
+    assert.deepEqual(
+      resolveDownloadChannels({ ...base, ghAvailable: true }).map(c => c.kind),
+      ['gh'],
+    );
+  });
+
   it('全无条件时直连', () => {
     assert.equal(resolveDownloadChannel(base).kind, 'direct');
+  });
+
+  it('显式 --proxy 只有一个候选（显式意图不自动换通道）', () => {
+    const channels = resolveDownloadChannels({ ...base, ghAvailable: true, proxyOverride: 'http://127.0.0.1:7897' });
+    assert.deepEqual(
+      channels.map(c => c.kind),
+      ['proxy'],
+    );
   });
 });
 
@@ -166,6 +193,14 @@ describe('buildKernelCurlArgs', () => {
   it('恒含 --fail-with-body：镜像 4xx/5xx 错误页不再以退出码 0 落盘', () => {
     const args = buildKernelCurlArgs({ ...common, proxy: null });
     assert.ok(args.includes('--fail-with-body'));
+  });
+
+  it('恒含 --speed-limit / --speed-time：劣质节点低速慢传时 20s 快速失败切换通道', () => {
+    const args = buildKernelCurlArgs({ ...common, proxy: null });
+    const i = args.indexOf('--speed-limit');
+    assert.equal(args[i + 1], '50000');
+    const j = args.indexOf('--speed-time');
+    assert.equal(args[j + 1], '20');
   });
 
   it('proxy 通道含 -x 且原样透传代理地址（本机端口或显式 --proxy 同一口径）', () => {

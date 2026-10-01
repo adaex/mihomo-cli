@@ -9,7 +9,7 @@ import { DEFAULT_MIXED_PORT, VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
 import { formatDate, formatRelativeTime } from '../format.js';
 import { checkUpdate, hasGh } from '../kernel.js';
-import { PATHS, USER_DATA_DIR } from '../paths.js';
+import { KERNEL_SELF_BACKUP_DIR, KERNEL_SELF_UPDATE_DIR, PATHS, USER_DATA_DIR } from '../paths.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
@@ -107,6 +107,22 @@ async function collectChecks(): Promise<Check[]> {
     } else {
       push('内核', 'fail', `二进制无法执行（退出码 ${r.status}）`, '重新下载: mihomo kernel');
     }
+  }
+
+  // === 内核面板自升级残留 ===
+  // POST /upgrade 的 updater 在 kernel 目录留 meta-backup（旧内核备份，设计上保留）
+  // 与 meta-update（下载暂存，成功后自清——残留即升级被异常中断）；不影响运行，
+  // 仅占空间，归为 warn 并给出删除口径
+  const selfUpgradeLeftovers: string[] = [];
+  if (fs.existsSync(KERNEL_SELF_BACKUP_DIR)) selfUpgradeLeftovers.push(KERNEL_SELF_BACKUP_DIR);
+  if (fs.existsSync(KERNEL_SELF_UPDATE_DIR)) selfUpgradeLeftovers.push(KERNEL_SELF_UPDATE_DIR);
+  if (selfUpgradeLeftovers.length > 0) {
+    push(
+      '内核自升级残留',
+      'warn',
+      `发现 ${selfUpgradeLeftovers.length} 个面板自升级遗留目录（旧内核备份或中断的下载暂存）`,
+      `rm -rf ${selfUpgradeLeftovers.join(' ')}`,
+    );
   }
 
   // === 数据目录 ===
