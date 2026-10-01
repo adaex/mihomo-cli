@@ -16,7 +16,7 @@ process.env.MIHOMO_CLI_DIR = tmpDir;
 
 const { PATHS, DIRS } = await import('./paths.js');
 const { getMihomoPids, isRunning, MAIN_INSTANCE_PATTERN } = await import('./process-probe.js');
-const { buildKernelCleanupScript, cleanupAll, stop, clearPid } = await import('./process-stop.js');
+const { buildKernelCleanupScript, cleanupAll, stop, clearPid, reapPidWhenQuiet } = await import('./process-stop.js');
 const { SUDO_TIMEOUT_MS } = await import('./sudo.js');
 
 /**
@@ -179,6 +179,27 @@ describe('clearPid 免提权：删除只看父目录，不看文件自身', () =
   it('文件本就不存在按干净状态处理（返回 null，不报错）', () => {
     fs.rmSync(PATHS.pidFile, { force: true });
     assert.equal(clearPid(), null);
+  });
+});
+
+/**
+ * reapPidWhenQuiet：legacy 提权拆除后的 pid 收口（脚本本身不碰 pid）。
+ * 判据与 cleanupAll 末尾同源——**零进程才删，活进程（并存的无关 TUN）保留真相源**。
+ * 桩进程命令行经 MAIN_INSTANCE_PATTERN 物理隔离，全程免 sudo
+ */
+describe('reapPidWhenQuiet：零进程才删 pid，活进程保留', () => {
+  it('无进程时清掉已存在的 pid 文件', async () => {
+    fs.writeFileSync(PATHS.pidFile, '99999');
+    assert.equal(await reapPidWhenQuiet(), null);
+    assert.equal(fs.existsSync(PATHS.pidFile), false, '文件必须真的没了，不是「调用没报错」');
+  });
+
+  it('有匹配的活内核时保留 pid（status 真相源），不报错误', async () => {
+    const pid = spawnFakeKernel();
+    waitForPids(1);
+    fs.writeFileSync(PATHS.pidFile, String(pid));
+    assert.equal(await reapPidWhenQuiet(), null, '活进程保留不是错误');
+    assert.equal(fs.existsSync(PATHS.pidFile), true, '活进程的 pid 必须保留，删掉会让 status 对活内核误报未运行');
   });
 });
 

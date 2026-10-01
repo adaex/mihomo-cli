@@ -7,6 +7,7 @@ import { describe, it } from 'node:test';
 
 import { isValidServiceLabel } from './constants.js';
 import { CliError } from './errors.js';
+import { PATHS } from './paths.js';
 import {
   buildLegacyCleanupScript,
   buildPlist,
@@ -705,5 +706,10 @@ describe('buildLegacyCleanupScript：sudo 脚本退出码协议', () => {
     const script = buildLegacyCleanupScript();
     assert.ok(script.includes('exit 3'), 'bootout 失败应以 ≥2 的退出码报真实失败');
     assert.ok(!/\bexit 1\b/.test(script), '脚本内 exit 1 会被 runSudoScript 误报成「已取消或密码错误」');
+  });
+
+  it('脚本不删共用 pid（活进程真相源），body 不含 pidFile 路径', () => {
+    const script = buildLegacyCleanupScript();
+    assert.ok(!script.includes(PATHS.pidFile), '提权脚本删 pid = 绕过「活进程不删 isRunning 真相源」防线；pid 由包装层零进程复核后免提权收口');
   });
 });

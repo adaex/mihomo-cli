@@ -126,7 +126,7 @@ export async function cmdReset(args: string[]): Promise<void> {
   }
 
   // 先停止/卸载托管服务，使 KeepAlive 失效，再清理游离内核
-  if ((needsStop || serviceTargeted) && legacy) cleanupLegacyInstallOrThrow();
+  if ((needsStop || serviceTargeted) && legacy) await cleanupLegacyInstallOrThrow();
   if (serviceActive) {
     if (serviceTargeted) await uninstallService();
     else if (needsStop) await stopService();

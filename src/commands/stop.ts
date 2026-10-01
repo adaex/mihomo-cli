@@ -29,7 +29,7 @@ export async function cmdStop(args: string[]): Promise<void> {
   if (detectLegacySystemInstall()) {
     console.log(colors.yellow('检测到旧版本安装的系统级服务（root LaunchDaemon），停止前需清理'));
     console.log(colors.gray('  清理需要一次管理员密码（删除 root 拥有的文件）'));
-    cleanupLegacyInstallOrThrow();
+    await cleanupLegacyInstallOrThrow();
     console.log(colors.green('已清理遗留的系统级服务'));
     console.log('');
   }

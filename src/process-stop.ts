@@ -66,6 +66,30 @@ export function clearPid(): Error | null {
   }
 }
 
+/**
+ * 轮询等待主实例进程全部退出（发信号 / bootout 后的死亡收割）。零进程提前返回，
+ * 超时也正常返回——是否仍有进程由调用方另行复核，不在此抛错。
+ * cleanupAll 与 legacy 迁移后的 pid 收口共用这一份等待，不各写第二份
+ */
+export async function waitUntilNoMihomo(attempts: number = PROCESS_WAIT_ATTEMPTS, interval: number = PROCESS_WAIT_INTERVAL): Promise<void> {
+  for (let i = 0; i < attempts; i++) {
+    if (getMihomoPids().length === 0) return;
+    await sleep(interval);
+  }
+}
+
+/**
+ * 等进程退出并复核：**零进程才免提权删 pid**；有活进程（legacy 拆除时并存的无关
+ * TUN）时保留 pid——它仍是 isRunning/status 的真相源，删掉会让 status 对活内核
+ * 报「未运行」。给不经过 cleanupAll 的提权路径（cleanupLegacyInstallOrThrow）
+ * 收口 pid 用。返回 Error 仅当「零进程但 unlink 失败」；「有活进程、保留」归 null
+ */
+export async function reapPidWhenQuiet(): Promise<Error | null> {
+  await waitUntilNoMihomo();
+  if (getMihomoPids().length > 0) return null;
+  return clearPid();
+}
+
 function killProcess(pid: number): boolean {
   try {
     process.kill(pid, 'SIGKILL');
@@ -182,10 +206,7 @@ export async function cleanupAll(): Promise<CleanupResult> {
     }
   }
 
-  for (let i = 0; i < PROCESS_WAIT_ATTEMPTS; i++) {
-    if (getMihomoPids().length === 0) break;
-    await sleep(PROCESS_WAIT_INTERVAL);
-  }
+  await waitUntilNoMihomo();
 
   // pid 文件的**唯一收口**：先复核 remaining，**有进程活着时不得删**——pid 文件是
   // isRunning/status 的真相源（getPid 只信它），sudo 被取消、root TUN 仍在路由时

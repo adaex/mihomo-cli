@@ -37,7 +37,7 @@ async function handleLegacyInstall(): Promise<void> {
   console.log(colors.gray('  清理需要一次管理员密码（删除 root 拥有的文件）'));
   console.log('');
 
-  cleanupLegacyInstallOrThrow();
+  await cleanupLegacyInstallOrThrow();
 
   console.log(`${colors.green('已清理遗留的系统级服务')}`);
   console.log('');
@@ -144,7 +144,7 @@ export async function cmdUninstall(args: string[]): Promise<void> {
 
   if (legacy) {
     console.log(colors.gray('检测到旧版本的系统级服务，清理需要一次管理员密码'));
-    cleanupLegacyInstallOrThrow();
+    await cleanupLegacyInstallOrThrow();
     console.log(colors.green('已清理遗留的系统级服务'));
   }
 

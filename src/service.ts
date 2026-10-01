@@ -8,7 +8,7 @@ import { isValidServiceLabel, RAW_SERVICE_LABEL_INPUT, SERVICE_BINARY_NAME, SERV
 import { CliError } from './errors.js';
 import { allocateArchivePath, cleanupOldLogs, rotateAndCleanupLogs } from './log-files.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './paths.js';
-import { cleanupAll, describePidCleanupFailure } from './process-stop.js';
+import { cleanupAll, describePidCleanupFailure, reapPidWhenQuiet } from './process-stop.js';
 import { getPorts, readSettings } from './settings.js';
 import { runSudoScript, SudoAuthError } from './sudo.js';
 import { shellQuote } from './text.js';
@@ -917,6 +917,10 @@ export async function uninstallService(): Promise<void> {
  * 生成遗留安装清理脚本的 body（写盘 + chmod + sudo + 退出码映射由 runSudoScript 统一完成）。
  * 导出仅为测试退出码协议：脚本内部失败用 ≥2 的退出码（bootout 真实失败为 3），
  * 1 留给 sudo 鉴权取消/密码错误。
+ *
+ * 脚本**不删 pid 文件**：bootout 返回 113（daemon 未装载）时，pid 可能属于一个无关的
+ * 活 TUN，脚本内无条件 rm 会删掉活进程的 isRunning 真相源。pid 由
+ * cleanupLegacyInstallOrThrow 在拆除成功、复核零进程后免提权收口（reapPidWhenQuiet）
  */
 export function buildLegacyCleanupScript(): string {
   return [
@@ -932,7 +936,6 @@ export function buildLegacyCleanupScript(): string {
     `rm -f ${shellQuote(PATHS.systemDaemonPlist)}`,
     `chown "$SUDO_UID:$SUDO_GID" ${shellQuote(PATHS.logFile)} 2>/dev/null || true`,
     `chown -R "$SUDO_UID:$SUDO_GID" ${shellQuote(DIRS.data)} 2>/dev/null || true`,
-    `rm -f ${shellQuote(PATHS.pidFile)}`,
     'exit 0',
     '',
   ].join('\n');
@@ -965,7 +968,7 @@ export function cleanupLegacySystemInstall(): void {
  * 放 service.ts 而非 commands/shared.ts：shared.ts 被 start.ts 导入（restartToApply），
  * 若 start.ts 再反向导入 shared.ts 就成环。放这里依赖方向单向（commands → service）。
  */
-export function cleanupLegacyInstallOrThrow(): void {
+export async function cleanupLegacyInstallOrThrow(): Promise<void> {
   try {
     cleanupLegacySystemInstall();
   } catch (e) {
@@ -974,6 +977,13 @@ export function cleanupLegacyInstallOrThrow(): void {
       label: '清理遗留服务失败',
       hint: ['也可手动清理:', `  sudo launchctl bootout system/$(basename ${PATHS.systemDaemonPlist} .plist)`, `  sudo rm -f ${PATHS.systemDaemonPlist}`],
     });
+  }
+
+  // 脚本不碰 pid：root 拆除成功后等进程收割，零进程才免提权删；并存的活 TUN 保留
+  // 其 pid（status 真相）。删除失败只警告——迁移主体已完成，孤儿 pid 下次 stop 再清
+  const pidError = await reapPidWhenQuiet();
+  if (pidError) {
+    console.warn(colors.yellow(`警告: ${describePidCleanupFailure(pidError)}，下次 stop 会再次尝试`));
   }
 }
 
