@@ -190,3 +190,64 @@ describe('reset 目标解析的防呆', () => {
     });
   });
 });
+
+describe('确认窗口的并发复核', () => {
+  /**
+   * 交互确认的等待无上界，期间另一终端可能装上/卸掉服务。锁定「确认通过后重读
+   * 现值」：桩 launchctl 的 print 首次返回已装载（确认前快照）、之后返回未装载
+   * （模拟并发卸载）——按确认前快照行动会对已不存在的服务调 uninstallService 并
+   * 报「已重置: 服务」；重读后如实报「没有需要重置的内容」。
+   * 正向（确认期间装上服务 → 停掉它）依赖完整 stopService 桩，此处锁定重读行为
+   * 本身；停/卸动作语义由 service 层用例保证。
+   * 隔离三层：MIHOMO_CLI_DIR（数据目录）+ MIHOMO_CLI_DAEMON_LABEL（一次性 label）
+   * + 临时 HOME（userAgentPlist 随 homedir 走），桩 launchctl 走 PATH 前置。
+   */
+  it('确认后服务已被并发卸载：不调卸载、如实报告无内容', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-reset-recheck-'));
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-reset-recheck-home-'));
+    const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-reset-recheck-bin-'));
+    const label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
+    const countFile = path.join(fakeBin, 'count');
+    try {
+      fs.writeFileSync(
+        path.join(fakeBin, 'launchctl'),
+        `#!/bin/bash
+n=$(cat '${countFile}' 2>/dev/null || echo 0)
+echo $((n+1)) > '${countFile}'
+case "$1" in
+  print)
+    if [ "$n" -eq 0 ]; then
+      printf '\\tstate = running\\n\\tpid = 4242\\n'
+      exit 0
+    fi
+    exit 113
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+      );
+      fs.chmodSync(path.join(fakeBin, 'launchctl'), 0o755);
+      const result = spawnSync(process.execPath, ['--import', 'tsx', path.resolve('src/index.ts'), 'reset', 'service', '-y'], {
+        encoding: 'utf8',
+        timeout: 15_000,
+        env: {
+          ...process.env,
+          MIHOMO_CLI_DIR: dataDir,
+          MIHOMO_CLI_DAEMON_LABEL: label,
+          NO_COLOR: '1',
+          HOME: fakeHome,
+          PATH: `${fakeBin}:${process.env.PATH}`,
+        },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /没有需要重置的内容/);
+      assert.doesNotMatch(result.stdout, /已重置/);
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      fs.rmSync(fakeHome, { recursive: true, force: true });
+      fs.rmSync(fakeBin, { recursive: true, force: true });
+    }
+  });
+});

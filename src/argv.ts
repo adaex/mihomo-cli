@@ -94,6 +94,8 @@ export function assertPositionalCount(
  * 解析整数选项。全部调用点语义上都是正整数，故 <1、非数字、带尾随垃圾（`5s`）一律
  * 抛错而非静默取值：`-u 5s` 静默取 5（ms）会让自动更新立刻超时。
  * 宁可报错也不给用户一个看似成功的错误结果。三种形式与 assertKnownFlags 同口径。
+ * 重复给出（含 exact 与 attached/等号混写）显式报错，不静默取先者——「后写的没生效」
+ * 正是 assertKnownFlags 头注释要防的形态，口径与 kernel 的 --mirror/--proxy 一致。
  */
 export function parseIntArg(args: string[] | undefined, short: string, long: string, defaultValue: number): number {
   if (!args) return defaultValue;
@@ -110,18 +112,28 @@ export function parseIntArg(args: string[] | undefined, short: string, long: str
     return val;
   };
 
+  // 先收集全部命中再解析：exact 形式的值在下一 token（null 表示缺值），
+  // attached/等号形式自包含（'' 表示等号后为空，交 parse 报「需要正整数」）
+  const hits: { value: string | null; flag: string }[] = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === short || args[i] === long) {
-      if (i + 1 < args.length) {
-        return parse(args[i + 1], args[i]);
-      }
-      throw new CliError(`选项 ${args[i]} 缺少值`, { hint: [`例如: ${args[i]} ${defaultValue}`] });
+      hits.push({ value: i + 1 < args.length ? args[i + 1] : null, flag: args[i] });
+      continue;
     }
-    // attached 短选项 / 等号长选项：形式判定统一走登记表，只有属于本选项的 token 才消费
     const match = matchValueFlagToken(args[i]);
     if (match && match.form !== 'exact' && (match.spec.forms.includes(short) || match.spec.forms.includes(long))) {
-      return parse(match.inlineValue ?? '', match.baseForm);
+      hits.push({ value: match.inlineValue ?? '', flag: match.baseForm });
     }
+  }
+  if (hits.length > 1) {
+    throw new CliError(`选项 ${hits[0].flag} 只能指定一次（出现 ${hits.length} 次）`, { hint: [`例如: ${hits[0].flag} ${defaultValue}`] });
+  }
+  if (hits.length === 1) {
+    const [hit] = hits;
+    if (hit.value === null) {
+      throw new CliError(`选项 ${hit.flag} 缺少值`, { hint: [`例如: ${hit.flag} ${defaultValue}`] });
+    }
+    return parse(hit.value, hit.flag);
   }
   return defaultValue;
 }

@@ -78,6 +78,36 @@ describe('parseIntArg：-u 更新超时（attached 形式回归）', () => {
   });
 });
 
+describe('parseIntArg：重复给出显式报错，不静默取先者', () => {
+  // 口径对齐 kernel-args 的 --mirror/--proxy：后写的静默失效正是「以为生效了」的形态
+  it('exact 形式重复（start -u 5000 -u 70000）', () => {
+    assert.throws(
+      () => parseIntArg(['start', '-u', '5000', '-u', '70000'], '-u', '--update-timeout', 10000),
+      (e: unknown) => e instanceof CliError && /只能指定一次/.test((e as CliError).message),
+    );
+  });
+
+  it('exact 与 attached 混写（logs -n5 --lines=200）同样报错', () => {
+    assert.throws(
+      () => parseIntArg(['logs', '-n5', '--lines=200'], '-n', '--lines', 50),
+      (e: unknown) => e instanceof CliError && /只能指定一次/.test((e as CliError).message),
+    );
+  });
+
+  it('长形式与短形式算同一选项（--lines 5 -n 200）', () => {
+    assert.throws(
+      () => parseIntArg(['logs', '--lines', '5', '-n', '200'], '-n', '--lines', 50),
+      (e: unknown) => e instanceof CliError && /只能指定一次/.test((e as CliError).message),
+    );
+  });
+
+  it('单一命中不受影响（含 attached 与等号各自单独出现）', () => {
+    assert.equal(parseIntArg(['logs', '-n200'], '-n', '--lines', 50), 200);
+    assert.equal(parseIntArg(['logs', '--lines=200'], '-n', '--lines', 50), 200);
+    assert.equal(parseIntArg(['logs', '-n', '200'], '-n', '--lines', 50), 200);
+  });
+});
+
 describe('选项白名单只接受当前支持的写法', () => {
   it('无选项命令拒绝任意未知选项', () => {
     assert.throws(() => assertKnownFlags(['stop', '--no-ssh'], [], 'stop'), CliError);
