@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { displayWidth, formatRelativeTime, padEndDisplay } from './format.js';
+import { displayWidth, formatRelativeTime, formatTimestamp, padEndDisplay } from './format.js';
 
 describe('formatRelativeTime', () => {
   const now = Date.now();
@@ -28,6 +28,28 @@ describe('formatRelativeTime', () => {
  * （`logs [编号]`、`--mirror [镜像]`、`reset [目标...]`）会少缩进 2~3 格，
  * 正是要修的错位本身，故对宽度口径加锁。
  */
+describe('formatTimestamp：到期时间戳', () => {
+  it('0 特判为永久', () => {
+    assert.equal(formatTimestamp(0), '永久');
+  });
+
+  it('正常正数按本地时间展示，远期时间戳不误伤', () => {
+    assert.match(formatTimestamp(1_900_000_000), /2030/);
+    assert.notEqual(formatTimestamp(9_999_999_999), '未知');
+  });
+
+  it('非有限值返回「未知」，不漏出字面 Invalid Date', () => {
+    for (const v of ['abc', NaN, Infinity, 1e15 + 1e15, undefined, null]) {
+      assert.equal(formatTimestamp(v), '未知', `value ${String(v)}`);
+      assert.ok(formatTimestamp(v) !== 'Invalid Date');
+    }
+  });
+
+  it('负数返回「未知」，不显示成 1970 日期', () => {
+    assert.equal(formatTimestamp(-100), '未知');
+  });
+});
+
 describe('displayWidth：CJK 占两列', () => {
   it('纯 ASCII 等于码点数', () => {
     assert.equal(displayWidth('install'), 7);

@@ -60,8 +60,16 @@ export function formatTimestamp(ts: unknown): string {
   if (ts === undefined || ts === null) return '未知';
   // 机场以 expire=0（或缺省）表示永久/无限期，不能显示成 1970-01-01
   if (ts === 0) return '永久';
+  // 先按有限非负数校验：非有限值经 new Date(NaN).toLocaleString 会漏出字面
+  // 「Invalid Date」（不抛异常，下面的 catch 接不住），与其他格式化函数对垃圾值
+  // 统一返回「未知」的口径不一致；正常写入已被 parseUserInfo 过滤，此处挡手工改坏的缓存
+  const num = Number(ts);
+  if (!Number.isFinite(num) || num < 0) return '未知';
   try {
-    return new Date((ts as number) * 1000).toLocaleString('zh-CN');
+    const date = new Date(num * 1000);
+    // 秒数本身有限、但乘 1000 后超出日期上限时仍是 Invalid Date，显式复核不依赖 toLocaleString 不抛错
+    if (Number.isNaN(date.getTime())) return '未知';
+    return date.toLocaleString('zh-CN');
   } catch {
     return '未知';
   }
