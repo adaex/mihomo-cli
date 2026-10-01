@@ -4,17 +4,19 @@
 
 ### 修复
 
-- `mihomo sub add <url> -`（名称位置误粘裸短横线）恢复入口拦截：裸 `-` 既逃过未知选项拦截、又通过名称白名单，建出的订阅没有任何命令能删除或切换（remove/use 都把 `-` 当选项跳过），只剩 reset。26.10.95 删除 flag 形态守卫时的论证只覆盖 `-s` 这类 token，漏了裸 `-`
-- 服务路径（stop/uninstall/reset）零进程时不再为 root 属主的 pid 文件弹管理员密码：无进程读它、文件无害，26.10.95 清理统一时此语义回退（统一入口的零进程分支也去清了 pid 文件）；游离 `mihomo stop` 保持旧行为不变（照常尝试清理并警告）
+- **裸 `-` 一律按未知选项报错**：此前被 argv 校验豁免、取位置参数时又跳过，两头不认等于静默丢弃——`sub update -`（短横线笔误）会被当成无参形态批量更新全部订阅，`start -` 静默起默认代理，`sub add <url> -` 更会建出 remove/use 都无法指定的订阅（只剩 reset 能收拾）
+- **pid 文件清理免提权**：文件在 runtime/ 下（用户属主目录），目录可写即可删其中任意文件、与文件属主无关——root 属主的 TUN 残留文件也直接删，不再走 sudo rm。此前零进程的 `mihomo stop` 会为一个没有进程读的无害文件弹管理员密码（取消后还警告「未能清理」，而文件随后就被免提权的 runtime 清理删掉）；sudo 清理脚本被取消后也不再紧接着弹第二次密码
 - `mihomo reset` 遇 root 残留清理的 sudo 未走通（取消/非 TTY/脚本失败）时不再完全静默：进程复核已清空则继续重置，但黄字告知可能有残留未清及重试入口（26.10.95 统一后该场景的警告通道被丢弃）
 - `mihomo stop` 收尾警告归因修正：进程在死亡等待内自行退光、而 sudo 清理脚本被取消/失败时，旧逻辑把它说成「root 属主的 pid 文件未能清理」（文件可能根本没出过问题），现按「清理未完成、进程目前已不在」归因；两类收尾错误（脚本/pid 文件）拆为独立字段，服务路径的提示同步按字段分开
-- pid 文件清理失败的警告不再连打两遍（clearPid 内部遗留的 console.warn 与调用方警告叠加）
+- 残留清理报错不再把 surviving 进程一概说成「root 属主」：没进过 root 分支（用户态 SIGKILL 未能终止）时按「用户态未能终止」描述，root 断言只跟随 sudo 脚本失败出现
+- pid 文件清理失败的警告不再连打两遍（clearPid 内部遗留的 console.warn 与调用方警告叠加）；sudo 失败短语全仓统一为 describeSudoFailure，各处不再各说各话
 - 空环境裸 `mihomo sub remove`（未给名称）改报「没有订阅」，与带名称形态及 use/update 同口径（旧报「请指定名称」并引导补一个不存在的参数）
 - 混合属主时 root 残留清理的预告只列 root 属主的 PID：用户态游离内核混在其中时，旧消息把全部 PID 都标成「root 属主的内核残留」，与实际属主不符
 
 ### 内部
 
-- `CleanupResult.sudoError` 拆为 `scriptError`（pkill 脚本）与 `pidError`（pid 文件删除）两个字段：进程死光但脚本没走完与仅 pid 文件残留是两种归因，合并字段让调用方提示说错事；处置判据 classifyResidueCleanup 同步（任一错误非空即触发 throw/warn 档）
+- `CleanupResult.sudoError` 拆为 `scriptError`（pkill 脚本）与 `pidError`（pid 文件删除）两个字段：进程死光但脚本没走完与仅 pid 文件残留是两种归因，合并字段让调用方提示说错事；处置判据 classifyResidueCleanup 同步（任一错误非空即触发 throw/warn 档），reset 的警告判据也收口到它
+- `StaleState` 删除无消费方的 `needsSudo`/`hasRootPidFile` 字段；`clearPid` 的三态返回值（cancelled/failed/null）随免提权化收敛为 `Error | null`
 - 覆写数组拼接误用的「值类型描述」抽为 describeValueKind：文件级（系统默认值）与合并级（订阅现值）两处检查共用，消除已漂移的双实现
 - 测试注释清理：三处历史叙事（引入版本、旧实现去向）改为只留判据，历史留在 CHANGELOG/git
 

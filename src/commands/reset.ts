@@ -6,8 +6,17 @@ import { isOverwriteFilename, listTypoOverwriteFiles } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
 import { cleanupAll } from '../process-stop.js';
-import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, getServiceStatus, recordServiceStopped, stopService, uninstallService } from '../service.js';
+import {
+  classifyResidueCleanup,
+  cleanupLegacyInstallOrThrow,
+  detectLegacySystemInstall,
+  getServiceStatus,
+  recordServiceStopped,
+  stopService,
+  uninstallService,
+} from '../service.js';
 import { updateSettings } from '../settings.js';
+import { describeSudoFailure } from '../sudo.js';
 import type { ResetTarget, Settings } from '../types.js';
 import { confirmOrThrow } from './shared.js';
 
@@ -130,11 +139,14 @@ export async function cmdReset(args: string[]): Promise<void> {
         hint: ['请手动运行: sudo pkill -9 mihomo'],
       });
     }
-    // remaining 复核已空、但 sudo 没走通（取消/非 TTY/脚本失败）：重置继续走，
-    // 但 root 侧可能仍有未清的残留，静默会让用户以为全部清干净了
-    const cleanupError = cleanup.scriptError ?? cleanup.pidError;
-    if (cleanupError) {
-      console.warn(colors.yellow('警告: root 残留清理未完成（sudo 取消、失败或不可用），可能仍有残留进程或 pid 文件'));
+    // remaining 复核已空、但清理有收尾错误（判据与 stop/服务路径同源 classifyResidueCleanup
+    // 的 'warn' 档）：重置继续走，但静默会让用户以为全部清干净了。归因按字段分开——
+    // scriptError 是 root 清理没走通（可能仍有残留进程），pidError 只是文件没删掉
+    if (classifyResidueCleanup(cleanup) === 'warn') {
+      const reason = cleanup.scriptError
+        ? `root 残留清理未完成（${describeSudoFailure(cleanup.scriptError)}），可能仍有残留进程`
+        : `pid 文件未能清理（${cleanup.pidError?.message}）`;
+      console.warn(colors.yellow(`警告: ${reason}`));
       console.warn(colors.gray('重试清理: mihomo stop'));
     }
     // 与 cmdStop 的提前返回同族：serviceActive 为假时上面的 stopService/uninstallService

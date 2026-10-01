@@ -154,15 +154,10 @@ export function isPidFileOwnedByRoot(): boolean {
 
 export function checkStaleState(): StaleState {
   const allPids = getMihomoPids();
-  const hasRootProcess = allPids.some(p => isProcessRoot(p));
-  const hasRootPidFile = isPidFileOwnedByRoot();
-
   return {
-    needsCleanup: allPids.length > 0 || hasRootPidFile,
+    needsCleanup: allPids.length > 0 || isPidFileOwnedByRoot(),
     allPids,
-    hasRootProcess,
-    hasRootPidFile,
-    needsSudo: hasRootProcess || hasRootPidFile,
+    hasRootProcess: allPids.some(p => isProcessRoot(p)),
   };
 }
 

@@ -16,7 +16,9 @@ export function hasFlag(args: string[] | undefined, short: string, long?: string
 
 /**
  * 校验 args 中的 flag 是否都在白名单内。拼错的 flag 被静默跳过会让用户以为选项生效了、
- * 实际行为完全没变，故未知即报错。
+ * 实际行为完全没变，故未知即报错。**裸 `-` 不豁免**：本 CLI 没有「- 表示 stdin」的
+ * 约定，静默吞掉它会让 `sub update -` 被当成无参形态去批量更新、`start -` 静默起
+ * 默认代理——必须当未知选项报错。
  *
  * 带值选项的 attached 短选项（`-n200`）与等号长选项（`--lines=200`）由 matchValueFlagToken
  * 统一判定，且基础形式必须同时在白名单内（`logs` 认 `-n200` 但不认 `-u30000`）。
@@ -26,7 +28,7 @@ export function assertKnownFlags(args: string[] | undefined, known: readonly str
   if (!args) return;
   const knownSet = new Set(known);
   for (const a of args) {
-    if (!a.startsWith('-') || a === '-') continue;
+    if (!a.startsWith('-')) continue;
     if (knownSet.has(a)) continue;
     // 带值选项的非 exact 形式（`-n200` / `--lines=200`）：判定收口在 matchValueFlagToken
     const match = matchValueFlagToken(a);

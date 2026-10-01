@@ -24,6 +24,14 @@ export class SudoAuthError extends Error {
   }
 }
 
+/**
+ * sudo 失败的用户可见短语（取消/密码错误与真实失败两个口径）。
+ * 各命令的警告文案共用这一份——各写一份会漂移出两三种说法
+ */
+export function describeSudoFailure(e: Error): string {
+  return e instanceof SudoAuthError ? 'sudo 已取消或密码错误' : 'sudo 执行失败';
+}
+
 interface SudoScriptOptions {
   /** 动作名，用于错误消息，如 "安装服务" */
   action: string;

@@ -197,8 +197,9 @@ export interface CleanupResult {
    */
   scriptError: Error | null;
   /**
-   * root 属主 pid 文件删除的提权错误。只有用户态清理路径的末尾收口会产出
-   * （sudo 脚本自带 rm pid，成功时无文件可清）；null = 无文件、已清或清理成功
+   * pid 文件删除（免提权 unlink，见 clearPid）的失败。null = 无文件、已清或清理成功；
+   * scriptError 非空时本字段反映的是 clearPid 照常执行的结果（免提权、无交互代价，
+   * 没有理由跳过）——不设「错误优先级」，两个字段各自如实带出
    */
   pidError: Error | null;
 }
@@ -207,8 +208,6 @@ export interface StaleState {
   needsCleanup: boolean;
   allPids: number[];
   hasRootProcess: boolean;
-  hasRootPidFile: boolean;
-  needsSudo: boolean;
 }
 
 // === Service (launchd 服务) ===

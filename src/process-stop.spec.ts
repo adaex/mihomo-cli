@@ -149,17 +149,15 @@ describe('cleanupAll 真实杀进程', () => {
     assert.equal(result.pidError, null, '用户态 pid 文件无需提权');
   });
 
-  it('零进程时不碰 pid 文件（root 属主的文件要弹密码，无进程读它时不值得提权）', async () => {
+  it('零进程时同样清掉 pid 文件（免提权，root 属主残留也直接删、不弹密码）', async () => {
+    // pid 文件在 runtime/（用户属主目录、无 sticky bit），unlink 不看文件属主——
+    // 零进程清它没有任何提权代价，删不掉才要警告（root 属主 + sudo 的旧路径已删）
     fs.writeFileSync(PATHS.pidFile, '99999');
     const result = await cleanupAll();
     assert.equal(result.killed, 0);
-    assert.equal(fs.existsSync(PATHS.pidFile), true, 'cleanupAll 零进程分支不得动 pid 文件');
+    assert.equal(fs.existsSync(PATHS.pidFile), false, '零进程分支也要清 pid 文件');
     assert.equal(result.scriptError, null);
     assert.equal(result.pidError, null);
-    // 文件由 stop() 的零进程分支负责清（游离路径的既有行为）
-    const stopResult = await stop();
-    assert.equal(stopResult.notRunning, true);
-    assert.equal(fs.existsSync(PATHS.pidFile), false);
   });
 });
 
@@ -244,14 +242,11 @@ describe('isRunning 的 PID 复用防线', () => {
 });
 
 /**
- * sudo 分支（会弹密码的交互式 spawnSync）超时必须引用 SUDO_TIMEOUT_MS（与 runSudoScript
- * 同一常量）。spawnSync 的 options 在模块私有函数内部构造，测试进程无法拦截参数本身；而该
- * 缺陷的形态恰是「抄数字」——早于密码输完就把 sudo 连密码提示一起杀掉，用户被误判成
- * 「操作失败」。故此处锚定「源码引用同一常量」这一事实。
- *
- * 判据是「带 stdio:'inherit' 的调用块内 timeout 为字面数字即红」——旧断言只要求文件内
- * **存在一处** `timeout: SUDO_TIMEOUT_MS`，killAllMihomo 的引用让它恒过，clearPid 自抄的
- * 10s 从它眼皮底下漏过。免密分支（无 stdio:'inherit'）不受此限，10s 是合理值。
+ * 交互式（会弹密码的 stdio:'inherit' spawnSync）超时必须引用 SUDO_TIMEOUT_MS（与
+ * runSudoScript 同一常量）。spawnSync 的 options 在模块私有函数内部构造，测试进程无法
+ * 拦截参数本身；缺陷形态是「抄数字」——早于密码输完就把 sudo 连密码提示一起杀掉，
+ * 用户被误判成「操作失败」。本文件现在只剩 killAllMihomo 一处免密 spawnSync（10s 合理），
+ * 此断言作为回归哨兵保留：将来任何人再加交互式 spawnSync 都不得自抄超时。
  */
 describe('sudo 分支超时统一', () => {
   it('交互式（stdio: inherit）调用的超时不得是字面数字，必须引用 SUDO_TIMEOUT_MS', () => {

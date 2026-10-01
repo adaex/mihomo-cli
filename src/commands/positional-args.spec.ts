@@ -119,18 +119,24 @@ describe('声明个数内的合法形态不触发参数错误', () => {
     assert.doesNotMatch(output, /请指定要删除的订阅名称/);
   });
 
-  it('sub add 的裸 - 名称被拒：建出后 remove/use 都无法指定它（getNonFlagArg 会跳过）', () => {
-    // 裸 - 逃过未知选项拦截（argv 解析显式豁免），SAFE_NAME_RE 又放行——
-    // 唯一能挡住的是 add 入口的名称守卫；此形态建库即死胡同，只剩 reset 能收拾
-    const { status, output } = run(['sub', 'add', 'https://example.com/sub', '-']);
-    assert.notEqual(status, 0);
-    assert.match(output, /名称不能以 "-" 开头/);
+  it('裸 - 一律按未知选项拒绝：静默吞掉会让 sub update - 变批量更新、start - 静默起代理', () => {
+    // 裸 - 曾被 assertKnownFlags 豁免、getNonFlagArg 又跳过——两头不认等于静默丢弃，
+    // `-` 位置的笔误会落成「无参形态」执行（批量更新/默认启动）；它也建不出
+    // remove/use 能指定的订阅名，必须在 argv 层报错
+    for (const args of [
+      ['sub', 'add', 'https://example.com/sub', '-'],
+      ['sub', 'update', '-'],
+      ['start', '-'],
+    ]) {
+      const { status, output } = run(args);
+      assert.notEqual(status, 0, `mihomo ${args.join(' ')} 应报未知选项，实际: ${output}`);
+      assert.match(output, /未知的选项: -\n/);
+    }
     assert.equal(fs.existsSync(path.join(dataDir, 'settings.json')), false, '拒绝必须发生在入库之前');
   });
 
-  it('sub add 的 -my-sub 名称在 argv 层按未知选项拒绝（守卫只兜裸 - 这种漏网形态）', () => {
-    // 分工：- 前缀 token 由未知选项拦截，裸 - 因 argv 解析豁免漏到 handler——
-    // 两道防线各锁一端，缺任一端都能建出 remove/use 无法指定的订阅
+  it('sub add 的 -my-sub 名称在 argv 层按未知选项拒绝（- 前缀 token 不是合法订阅名）', () => {
+    // - 前缀 token 一律是选项形态：既会被白名单拒绝，也建不出 remove/use 能指定的订阅
     const { status, output } = run(['sub', 'add', 'https://example.com/sub', '-my-sub']);
     assert.notEqual(status, 0);
     assert.match(output, /未知的选项: -my-sub/);

@@ -585,8 +585,7 @@ describe('classifyResidueCleanup：三档处置', () => {
   });
 
   it('无残留进程但有提权错误（pid 文件或清理未走完）→ warn，不拦命令', () => {
-    assert.equal(classifyResidueCleanup({ remaining: [], scriptError: null, pidError: new SudoAuthError() }), 'warn');
-    assert.equal(classifyResidueCleanup({ remaining: [], scriptError: null, pidError: new Error('删除 pid 文件失败') }), 'warn');
+    assert.equal(classifyResidueCleanup({ remaining: [], scriptError: null, pidError: new Error('EACCES: permission denied') }), 'warn');
     assert.equal(classifyResidueCleanup({ remaining: [], scriptError: new SudoAuthError(), pidError: null }), 'warn');
     assert.equal(classifyResidueCleanup({ remaining: [], scriptError: new Error('终止残留内核失败（pkill 退出码异常）'), pidError: null }), 'warn');
   });
@@ -630,17 +629,25 @@ describe('buildRootResidueCleanupError', () => {
   });
 
   it('无 root 进程（仅 pid 文件）时残留描述与手动命令切换为 pid 文件版', () => {
-    // remaining 为空、仅 pidError = root 属主 pid 文件残留；
+    // remaining 为空、仅 pidError（免提权 unlink 的失败，非 SudoAuthError）= pid 文件残留；
     // 重试入口对它同样成立，但手动命令不再是 pkill
     const startCtx = { mainOutcome: '服务尚未启动', retryCommand: 'mihomo start' };
-    const err = buildRootResidueCleanupError({ remaining: [], scriptError: null, pidError: new SudoAuthError() }, startCtx);
-    assert.equal(err.label, '已取消');
+    const err = buildRootResidueCleanupError({ remaining: [], scriptError: null, pidError: new Error('EACCES: permission denied') }, startCtx);
+    assert.equal(err.label, '清理残留进程失败');
     assert.ok(err.hint.some(l => l.startsWith('root 属主的 pid 文件未被清理')));
     assert.ok(
       err.hint.some(l => l.startsWith('手动清理: sudo rm -f ')),
       'pid 文件残留的手动命令是 rm 而非 pkill',
     );
     assert.ok(err.hint.some(l => l.includes('mihomo start')));
+  });
+
+  it('remaining 非空但仅 pidError（没进过 root 分支）→ 残留是用户态的，不许说成 root 属主', () => {
+    // 无 root 进程 + 用户态内核 SIGKILL 不死 + pid 文件 unlink 失败：remaining 是
+    // 用户态没能终止的进程，说「root 残留内核仍在运行」是归因说错事
+    const err = buildRootResidueCleanupError({ remaining: [1111, 2222], scriptError: null, pidError: new Error('EACCES: permission denied') }, ctx);
+    assert.ok(err.hint.some(l => l.includes('残留内核仍在运行（PID 1111, 2222）')));
+    assert.ok(!err.hint.some(l => l.includes('root 残留内核仍在运行')), '没进过 root 分支时不得断言 root 属主');
   });
 
   it('进程自行退光、清理脚本未走完（仅 scriptError）→ 归因「清理未完成」而非 pid 文件', () => {
