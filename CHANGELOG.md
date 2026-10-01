@@ -1,5 +1,35 @@
 # Changelog
 
+## [Unreleased]
+
+### 修复
+
+- **`sub` 列表的面板 URL 脱敏**：`web_page_url`（服务器可控的 `profile-web-page-url` 响应头）常带机场自动登录 token，此前唯独常驻列表原样上屏，其余 URL 出口均已脱敏
+- **https→http 降级守卫的错误消息脱敏**：token 常被服务器保留在重定向查询串里，恰在该守卫要防的攻击形态下经「获取订阅失败：」前缀明文带出（后面补的 URL 反而是掩码）
+- **空白/纯注释覆写文档不再硬失败**：js-yaml 5 对其抛「expected a document」而非返回 null（js-yaml 4 行为，注释即按它写的），落入 catch 把「先建空骨架再编辑」的自然操作顺序当坏文件让 start/config/doctor 失败；恢复「不计入任何一边」的承诺
+- **带值选项重复给出显式报错**：`start -u 5000 -u 70000` 此前静默取 5000（后写的没生效，正是「以为生效了」的红线形态），口径对齐 kernel 的 `--mirror`/`--proxy`
+- **reset 确认后重读服务状态**：交互确认等待无上界，期间另一终端 `install && start` 装上服务的话，按确认前快照判定会既不停也不卸载、直接删 config/kernel 目录，KeepAlive 对已删文件落入崩溃循环；与 start 的「快照 + 现值」双读同姿态
+- **直连 fetch 超时翻译为超时语义**：不再裸抛「This operation was aborted」（与 curl 路径的退出码翻译对称）；外部 signal 的中止保持原样
+- **doctor 版本比较补脏数据守卫**：latest 非 semver（私有 registry）按 skip 渲染，体检不被击穿（与 update 的 resolveUpdateAction 同口径）
+- **installService 原子落位**：copyFileSync 直写 `~/Library/LaunchAgents` 被打断会留半截 plist、launchd 静默不加载；改 tmp+rename
+- **热重载的 abort 预算不再被前置 launchctl 查询分食**：timer 起表移到第一个 fetch 前；launchctl 病态慢时热重载不再恒降级为完整重启（代理瞬断）；三处只读 running/loaded 的状态查询省掉 print-disabled
+- **崩溃清扫名单补 `runtime/check-*` 与 `service.plist.stage`**（均仅 finally 清理，SIGKILL 即永久残留）
+- **`sub remove` 对未命中报错**：并发删除下不再对没删的东西报「已删除」（removeSubscription 返回 `{found, switchedTo}`）
+- **doctor 的坏订阅名不击穿体检**：手改 settings 的非法订阅名包成 fail 检查项继续跑完
+- **hasGh 探测加 3s 超时**（防 wrapper 挂死入口）；**pickLatestRelease 补滤 `-rc` 后缀**（上游未勾 prerelease 位时版本对账必炸）；**mirror 遇非 github.com 资产地址点破「镜像未起作用」**（上游迁移资产 host 后不再静默退化直连）
+- **空串子命令显式报错**：`sub ""` / `ow ""` / `dir ""` 不再静默落列表；空命令 token 的纠错建议不再全命中（纯噪音）
+- **ow 用法行补 `[-s] [-u ms]`**（与 onUnknown 报错、sub use 三处两个说法）；**prepublishOnly 补全 typecheck+test+check**（红色测试不再能随发布出门）
+
+### 测试
+
+- **补安全关键闸门的零覆盖缺口**：`downloadKernel` 下载后完整性闸门（大小对账/自检/版本对账/白名单/原子替换，子进程 + 桩 curl/gzip 端到端）、`assertTrustedAssetUrl` 单测、`assertLooksLikeSubscription` 写闸（错误 JSON 拒收且原文件不动/服务端消息透出/provider-only 放行）、http 大小上限三道（声明预拒/流式中止/错误体限量）、`waitUntilUnloaded` 耗尽抛错与 `disableServiceAutoStart` 位未生效复核（「谎报停止」的两条唯一闸门）、`commands/log.spec.ts`（编号省略默认当前日志/归档序号映射）——以上全部做过反向验证（破坏防线确认用例转红）
+- **修 waitServiceHealthy 用例的隔离违规**：原用真实 `PATHS` 拼 pgrep pattern，开发机自己的内核在跑时假红/飘（违反 D11）；改子进程 + MIHOMO_CLI_DIR 并断言隔离前提
+
+### 重构
+
+- **service.ts（1205 行）按职责拆四节**：launchctl.ts（解析与状态读取）、stop-epoch.ts（停止计数与并发基线）、legacy-cleanup.ts（遗留 root 清理与残留分档）、hot-reload.ts（热重载探测与结论）；service.ts 剩服务生命周期本体（~630 行），全部旧导出经 re-export 保持，全仓 import 不变，纯移动零行为变化
+- cmdStop 服务路径复用 handleStopResult；getControllerPortOrNull 收拢 status/ui 同构降级；startCommandForCurrentMode 收拢三处重启命令推导；doctor 的 withTimeout 改名 withAbortableTimeout（与 errors.ts 同名异构区分）
+
 ## [26.10.99] - 2026-10-02
 
 ### 变更（breaking）
