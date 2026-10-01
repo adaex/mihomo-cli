@@ -24,6 +24,8 @@ function levenshtein(a: string, b: string): number {
  */
 export function suggestSimilar(input: string, candidates: readonly string[]): string[] {
   const lower = input.toLowerCase();
+  // 空输入（`mihomo-cli ""`）startsWith 恒真、全候选命中，按长度差挑出的建议纯是噪音
+  if (lower === '') return [];
   const scored: { name: string; score: number; lenDiff: number }[] = [];
   for (const cand of candidates) {
     const c = cand.toLowerCase();

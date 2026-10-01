@@ -7,7 +7,7 @@ import { listOverwriteFile } from '../overwrite.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
-import { getPorts, getSubscriptionsWithCache, subscriptionUrgency } from '../settings.js';
+import { getControllerPortOrNull, getSubscriptionsWithCache, subscriptionUrgency } from '../settings.js';
 import { formatProxySummary, getActiveSubscription, isSubscriptionStale, resolveUpdateInterval } from '../subscription.js';
 import type { OverwriteFileInfo, ProxyProbeResult, StatusJson, SubscriptionUrgency } from '../types.js';
 
@@ -128,12 +128,7 @@ export async function printStatus(args: string[] = []): Promise<void> {
   const cached = activeSub ? getSubscriptionsWithCache().find(s => s.name === activeSub.name) : undefined;
   const legacy = detectLegacySystemInstall();
   // 控制器端口在 settings 非法时不应让整个 status 崩掉（doctor 另有一项专查非法 ports）
-  let controllerPort: number | null = null;
-  try {
-    controllerPort = getPorts().controller;
-  } catch {
-    controllerPort = null;
-  }
+  const controllerPort = getControllerPortOrNull();
 
   const { running, pid, kind } = state;
 

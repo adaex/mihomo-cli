@@ -19,7 +19,7 @@
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"src/**/*.spec.ts\"",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm test && npm run check && npm run build",
     "prepare": "husky"
   },
   "keywords": [

@@ -32,3 +32,9 @@ describe('suggestSimilar', () => {
     assert.ok(suggestSimilar('abx', many).length <= 3);
   });
 });
+
+describe('suggestSimilar：空输入不给建议', () => {
+  it('空串返回空数组（startsWith 恒真全命中，建议纯是噪音）', () => {
+    assert.deepEqual(suggestSimilar('', ['ui', 'ow', 'sub']), []);
+  });
+});

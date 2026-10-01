@@ -148,7 +148,7 @@ export const COMMANDS: Command[] = [
     group: 'config',
     usage: [
       { signature: 'overwrite', description: '查看覆写状态（别名 ow）' },
-      { signature: 'overwrite on|off', description: '启用/禁用覆写配置' },
+      { signature: 'overwrite on|off [-s] [-u ms]', description: '启用/禁用覆写配置（运行中自动重启，可透传启动选项）' },
     ],
   },
   {

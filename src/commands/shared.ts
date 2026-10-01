@@ -49,8 +49,13 @@ export async function dispatchSubcommand(
   options: { fallback: (args: string[]) => void | Promise<void>; onUnknown: (action: string) => never },
 ): Promise<void> {
   assertUniqueTokens(table);
-  // 与顶层入口（index.ts 对命令 token 做 toLowerCase）口径一致：子命令名同样不区分大小写
+  // 与顶层入口（index.ts 对命令 token 做 toLowerCase）口径一致：子命令名同样不区分大小写。
+  // 空串按显式提供处理（`ui ""`/`sub update ""` 同口径）：静默落 fallback = 把显式
+  // 输入当缺省，列表刷屏掩盖真实问题
   const action = args[1]?.toLowerCase();
+  if (action === '') {
+    throw new CliError('子命令不能为空', { hint: [`用法: mihomo-cli ${args[0]} <子命令>`] });
+  }
   if (action) {
     const cmd = table.find(c => c.name === action || c.aliases?.includes(action));
     if (cmd) return cmd.handler(args);

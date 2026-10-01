@@ -21,7 +21,7 @@ import { confirmOrThrow, confirmPrompt, dispatchSubcommand, restartToApply, type
 function printRestartHintIfRunning(variant: 'update' | 'removed-active' = 'update'): void {
   const state = runtime.getRunningState();
   if (state.running) {
-    const hintCommand = state.kind === 'tun' ? 'mihomo-cli start tun' : 'mihomo-cli start';
+    const hintCommand = runtime.startCommandForCurrentMode(state);
     const message =
       variant === 'removed-active'
         ? `提示: 运行中的实例仍在使用已删除订阅的配置，执行 ${hintCommand} 切换到新订阅`

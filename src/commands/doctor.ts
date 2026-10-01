@@ -21,8 +21,10 @@ import { getLatestNpmVersion } from './update.js';
 /** 限时等待：GitHub 查询在 doctor 里只给数秒，超时按「不可达」降级为 skip，不拖慢体检。
  * 用 AbortSignal 而非单纯弃掉 promise：弃置后子进程的 stdio 管道仍占住事件循环，
  * 报告打完后进程要等满子进程自身超时（curl --max-time 120s）才退——abort 会把
- * 子进程一并杀掉（checkUpdate 把 signal 透传给 gh/curl/直连三路） */
-function withTimeout<T>(promise: (signal: AbortSignal) => Promise<T>, ms: number): Promise<T> {
+ * 子进程一并杀掉（checkUpdate 把 signal 透传给 gh/curl/直连三路）。
+ * 刻意不叫 withTimeout：errors.ts 有同名函数接 Promise（无 AbortSignal 语义），
+ * 同名异构是搬运陷阱——误用 errors 版会丢 abort，恰是本函数存在的理由 */
+function withAbortableTimeout<T>(promise: (signal: AbortSignal) => Promise<T>, ms: number): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
   return promise(controller.signal).finally(() => clearTimeout(timer));
@@ -83,7 +85,7 @@ async function collectChecks(): Promise<Check[]> {
     kernelProxyPort = null;
   }
   const kernelVersionPromise: Promise<KernelUpdateInfo | null> = hasKernel()
-    ? withTimeout(
+    ? withAbortableTimeout(
         signal =>
           checkUpdate({
             proxy: kernelProxyPort !== null ? `http://127.0.0.1:${kernelProxyPort}` : null,

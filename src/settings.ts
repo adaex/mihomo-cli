@@ -183,6 +183,17 @@ function maskSingleUrl(url: string): string {
   }
 }
 
+/** 控制器端口的安全读取：ports 配置非法（如两端口相同）时返回 null 而非抛错。
+ * status/ui 这类只读展示命令不应被坏设置挡死——控制器地址是排查「连不上」的唯一
+ * 可见线索；doctor 另有专查非法 ports 的检查项 */
+export function getControllerPortOrNull(): number | null {
+  try {
+    return getPorts().controller;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 遮蔽 URL 中的敏感信息。
  * 不对逗号做任何切分：逗号在 query/path 中合法（`?nodes=us,hk&token=xxx`），

@@ -6,7 +6,7 @@ import { VALUE_FLAGS } from '../flags.js';
 import type { DownloadChannel } from '../kernel.js';
 import * as kernel from '../kernel.js';
 import { parseMirrorArg, parseProxyArg } from '../kernel-args.js';
-import { getRunningState } from '../runtime.js';
+import { getRunningState, startCommandForCurrentMode } from '../runtime.js';
 import { getPorts } from '../settings.js';
 import { withSpinner } from '../spinner.js';
 
@@ -245,7 +245,7 @@ export async function cmdKernel(args: string[]): Promise<void> {
     // 与 sub update 的重启提示同判据
     const state = getRunningState();
     if (state.running) {
-      const restartCommand = state.kind === 'tun' ? 'mihomo-cli start tun' : 'mihomo-cli start';
+      const restartCommand = startCommandForCurrentMode(state);
       console.log(colors.yellow(`提示: 运行中的内核仍是旧版本，执行 ${restartCommand} 重启后生效`));
     }
     // ad-hoc 签名的 Go 二进制被替换后，macOS 可能按新可执行文件重新要求本地网络授权；
