@@ -5,7 +5,7 @@ import { CliError } from '../errors.js';
 import { isOverwriteFilename, listTypoOverwriteFiles } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
-import { cleanupAll } from '../process-stop.js';
+import { cleanupAll, describePidCleanupFailure } from '../process-stop.js';
 import {
   classifyResidueCleanup,
   cleanupLegacyInstallOrThrow,
@@ -145,7 +145,7 @@ export async function cmdReset(args: string[]): Promise<void> {
     if (classifyResidueCleanup(cleanup) === 'warn') {
       const reason = cleanup.scriptError
         ? `root 残留清理未完成（${describeSudoFailure(cleanup.scriptError)}），可能仍有残留进程`
-        : `pid 文件未能清理（${cleanup.pidError?.message}）`;
+        : describePidCleanupFailure(cleanup.pidError as Error);
       console.warn(colors.yellow(`警告: ${reason}`));
       console.warn(colors.gray('重试清理: mihomo stop'));
     }

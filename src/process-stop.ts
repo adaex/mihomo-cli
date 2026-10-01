@@ -34,12 +34,20 @@ function clearRuntime(): void {
 }
 
 /**
+ * pid 文件清理失败的核心短语，三处警告（游离 stop / 服务路径 / reset）共用——
+ * 各写一份会漂移出多种说法；语境后缀（重试入口等）由调用方自行拼接
+ */
+export function describePidCleanupFailure(err: Error): string {
+  return `pid 文件未能清理（${err.message}）`;
+}
+
+/**
  * pid 文件清理失败的可见警告（进程已不在时的唯一出口）。语气由调用方决定——
  * 游离 stop 与服务路径都要让用户知道文件还在、下次会再试，不能静默
  */
 function warnPidCleanupFailed(err: Error | null): void {
   if (!err) return;
-  console.warn(colors.yellow(`警告: pid 文件未能清理（${err.message}），下次 stop 会再次尝试`));
+  console.warn(colors.yellow(`警告: ${describePidCleanupFailure(err)}，下次 stop 会再次尝试`));
 }
 
 /**
@@ -173,13 +181,16 @@ export async function cleanupAll(): Promise<CleanupResult> {
     await sleep(PROCESS_WAIT_INTERVAL);
   }
 
-  // sudo 脚本已自行 rm pid；其余路径在此收口。clearPid 免提权、无交互代价，故
-  // 无条件执行（脚本被取消时 pid 文件可能还在，这里直接删掉）。两类错误各自独立
-  // 带出：进程死光但脚本没走完（scriptError）与仅 pid 文件没删掉（pidError）归因
-  // 不同，合并成一个字段会让调用方的提示说错事
-  const pidError = clearPid();
+  // 先复核 remaining，再决定是否清 pid 文件：**有进程活着时不得删**——pid 文件是
+  // isRunning/status 的真相源（getPid 只信它），sudo 被取消、root TUN 仍在路由时
+  // 把文件删掉，status 从此对活着的内核报「未运行」。零进程才收口清理（免提权、
+  // 无交互代价；脚本成功时文件已不存在，clearPid 直接成功）
+  const remaining = getMihomoPids();
+  const pidError = remaining.length === 0 ? clearPid() : null;
 
-  return { killed: killedCount, failed: failedPids.length, remaining: getMihomoPids(), scriptError, pidError };
+  // 两类错误各自独立带出：进程死光但脚本没走完（scriptError）与仅 pid 文件没删掉
+  // （pidError）归因不同，合并成一个字段会让调用方的提示说错事
+  return { killed: killedCount, failed: failedPids.length, remaining, scriptError, pidError };
 }
 
 export async function stop(): Promise<StopResult> {

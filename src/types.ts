@@ -207,7 +207,6 @@ export interface CleanupResult {
 export interface StaleState {
   needsCleanup: boolean;
   allPids: number[];
-  hasRootProcess: boolean;
 }
 
 // === Service (launchd 服务) ===

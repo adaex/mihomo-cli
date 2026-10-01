@@ -157,7 +157,6 @@ export function checkStaleState(): StaleState {
   return {
     needsCleanup: allPids.length > 0 || isPidFileOwnedByRoot(),
     allPids,
-    hasRootProcess: allPids.some(p => isProcessRoot(p)),
   };
 }
 

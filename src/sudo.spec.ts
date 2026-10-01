@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { describe, it } from 'node:test';
 
-import { SudoAuthError, sudoExitToError } from './sudo.js';
+import { describeSudoFailure, SudoAuthError, sudoExitToError } from './sudo.js';
 
 /**
  * sudo 退出码映射的纯函数回归。真实 sudo 路径（密码提示、脚本执行）不自动测试
@@ -40,6 +40,18 @@ describe('sudoExitToError：退出码到错误的分工协议', () => {
 
   it('status 为 null（sudo 被信号终止）单独描述，不与退出码混淆', () => {
     assert.equal(sudoExitToError('清理残留进程', null).message, '清理残留进程被中断（sudo 进程被信号终止）');
+  });
+});
+
+describe('describeSudoFailure：警告文案的统一口径', () => {
+  it('鉴权取消/密码错误归一为固定短语', () => {
+    assert.equal(describeSudoFailure(new SudoAuthError()), 'sudo 已取消或密码错误');
+  });
+
+  it('其余失败保留原始 message——笼统的「sudo 执行失败」会把修复方式藏掉', () => {
+    // 非 TTY 的真实错误自带「换交互终端」的指引，丢弃它用户就只剩瞎猜
+    const e = new Error('当前环境无法输入管理员密码（需要在交互式终端运行 sudo）');
+    assert.equal(describeSudoFailure(e), e.message);
   });
 });
 

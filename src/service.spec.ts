@@ -567,12 +567,11 @@ describe('isValidServiceLabel：全仓唯一挡住 root 任意路径写的校验
  * 可测的是这份包装的纯逻辑。
  */
 /**
- * cleanupKernelsOrThrow 的抛错/警告判据。服务路径统一走 cleanupAll 后，这三档
- * 守住旧语义不回退：
- * - root 进程没杀掉（sudo 取消/失败）必须抛（start/stop/uninstall 旧版就抛）
- * - 仅 root pid 文件没清掉（无进程、非 TTY/取消）只警告：旧 killResidualKernels
- *   无进程直接返回，从不为它弹密码，非 TTY 的 stop 不能被无害文件挡成 exit 1
- * - 用户态残留（无提权错误）不在本层抛：cmdStop/cmdUninstall/start 外层各有处置
+ * cleanupKernelsOrThrow 的抛错/警告判据。三档口径：
+ * - root 进程没杀掉（sudo 取消/失败，scriptError）必须抛——残留内核还在占端口
+ * - 无残留进程但有收尾错误只警告：pid 文件免提权清理失败或清理没走完都无进程
+ *   可害，不能把命令挡成 exit 1
+ * - 用户态残留（无 scriptError）不在本层抛：cmdStop/cmdUninstall/start 外层各有处置
  */
 describe('classifyResidueCleanup：三档处置', () => {
   it('干净 → ok', () => {
@@ -590,8 +589,11 @@ describe('classifyResidueCleanup：三档处置', () => {
     assert.equal(classifyResidueCleanup({ remaining: [], scriptError: new Error('终止残留内核失败（pkill 退出码异常）'), pidError: null }), 'warn');
   });
 
-  it('用户态残留进程（无提权错误）→ ok，交外层命令复核', () => {
+  it('用户态残留进程（无 scriptError）→ ok，交外层命令复核', () => {
     assert.equal(classifyResidueCleanup({ remaining: [4321], scriptError: null, pidError: null }), 'ok');
+    // pidError 是免提权 unlink 的小错，不参与 throw 分档：跟着外层的残留处置走，
+    // 不单独把命令拦成失败（否则 message 会变成 unlink 错误、与「进程未终止」的 hint 自相矛盾）
+    assert.equal(classifyResidueCleanup({ remaining: [4321], scriptError: null, pidError: new Error('EACCES: permission denied') }), 'ok');
   });
 });
 
@@ -629,22 +631,24 @@ describe('buildRootResidueCleanupError', () => {
   });
 
   it('无 root 进程（仅 pid 文件）时残留描述与手动命令切换为 pid 文件版', () => {
-    // remaining 为空、仅 pidError（免提权 unlink 的失败，非 SudoAuthError）= pid 文件残留；
-    // 重试入口对它同样成立，但手动命令不再是 pkill
+    // remaining 为空、仅 pidError（免提权 unlink 的失败，非 SudoAuthError）：文案只说
+    // 「未能清理」+ 具体错误，不断言文件属主（unlink 失败未必与 root 有关）
     const startCtx = { mainOutcome: '服务尚未启动', retryCommand: 'mihomo start' };
     const err = buildRootResidueCleanupError({ remaining: [], scriptError: null, pidError: new Error('EACCES: permission denied') }, startCtx);
     assert.equal(err.label, '清理残留进程失败');
-    assert.ok(err.hint.some(l => l.startsWith('root 属主的 pid 文件未被清理')));
+    assert.ok(err.hint.some(l => l.startsWith('pid 文件未能清理（EACCES: permission denied）')));
+    assert.ok(!err.hint.some(l => l.includes('root 属主')), 'unlink 失败与文件属主无关，不得断言 root');
     assert.ok(
       err.hint.some(l => l.startsWith('手动清理: sudo rm -f ')),
-      'pid 文件残留的手动命令是 rm 而非 pkill',
+      'pid 文件残留的手动命令是 rm 而非 pkill（提权是权限异常时的逃生口）',
     );
     assert.ok(err.hint.some(l => l.includes('mihomo start')));
   });
 
   it('remaining 非空但仅 pidError（没进过 root 分支）→ 残留是用户态的，不许说成 root 属主', () => {
     // 无 root 进程 + 用户态内核 SIGKILL 不死 + pid 文件 unlink 失败：remaining 是
-    // 用户态没能终止的进程，说「root 残留内核仍在运行」是归因说错事
+    // 用户态没能终止的进程，说「root 残留内核仍在运行」是归因说错事。
+    // 该象限 classify 归 'ok'（交外层复核），此处断言的是纯函数防御性文案的一致性
     const err = buildRootResidueCleanupError({ remaining: [1111, 2222], scriptError: null, pidError: new Error('EACCES: permission denied') }, ctx);
     assert.ok(err.hint.some(l => l.includes('残留内核仍在运行（PID 1111, 2222）')));
     assert.ok(!err.hint.some(l => l.includes('root 残留内核仍在运行')), '没进过 root 分支时不得断言 root 属主');
