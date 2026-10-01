@@ -544,6 +544,49 @@ describe('文件级操作符校验：诊断路径与合并路径看到同一份�
   });
 });
 
+describe('空文档：无内容可合并，不计入任何一边', () => {
+  /**
+   * 回归背景：js-yaml 5 对空/纯注释文档抛「expected a document」而非返回 null
+   * （js-yaml 4 的行为），旧实现把它当语法错收进 broken——先建空骨架再编辑的
+   * 自然操作顺序会让 start/config/doctor 硬失败。
+   */
+  it('空文件/纯注释文件静默跳过，不进 broken 也不进 ok', () => {
+    for (const [fileName, content] of [
+      ['overwrite.yaml', ''],
+      ['overwrite.blank.yaml', '\n\n'],
+      ['overwrite.comment.yaml', '# 骨架，待填\n# 第二行注释\n'],
+    ] as const) {
+      const filePath = path.join(tmpDir, fileName);
+      fs.writeFileSync(filePath, content);
+      try {
+        const listed = listOverwriteFile();
+        assert.equal(listed.broken.length, 0, JSON.stringify(listed.broken));
+        assert.doesNotThrow(() => loadOverwriteFile());
+        assert.equal(loadOverwriteFile().filter(f => f.name === fileName).length, 0, '空文档不进 ok');
+      } finally {
+        fs.rmSync(filePath);
+      }
+    }
+  });
+
+  it('字面 null/~ 文档同样跳过（js-yaml 5 仍返回 null，走既有分支）', () => {
+    for (const [fileName, content] of [
+      ['overwrite.null.yaml', 'null\n'],
+      ['overwrite.tilde.yaml', '~\n'],
+      ['overwrite.dashes.yaml', '---\n'],
+    ] as const) {
+      const filePath = path.join(tmpDir, fileName);
+      fs.writeFileSync(filePath, content);
+      try {
+        assert.equal(listOverwriteFile().broken.length, 0);
+        assert.equal(loadOverwriteFile().filter(f => f.name === fileName).length, 0);
+      } finally {
+        fs.rmSync(filePath);
+      }
+    }
+  });
+});
+
 describe('loadOverwriteFile：match 笔误形态', () => {
   it('`match:` 空值（条件块缩进笔误）→ 合并路径硬失败，不静默全局生效', () => {
     // 端到端回归：`match:` 下面的条件顶了格 → js-yaml 解析出 match: null + 顶层垃圾键。

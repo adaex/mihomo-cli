@@ -1,5 +1,6 @@
 import { VERSION } from './constants.js';
 import { formatBytes } from './format.js';
+import { maskUrl } from './settings.js';
 import type { HttpClient, HttpClientOptions, HttpResponse } from './types.js';
 
 /** HTTP 响应体大小上限（50MB）：订阅/内核产物远小于此，超限视为异常（劫持/故障）并中止，防 OOM。 */
@@ -60,7 +61,9 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
         // 防 https→http 降级重定向：fetch 默认静默跟随协议降级，
         // 订阅配置等敏感内容明文传输可被 MITM 替换。内核下载走 curl --proto =https 有同等防线。
         if (isHttpsUrl(url) && !isHttpsUrl(response.url)) {
-          throw new Error(`请求被重定向到非 https 地址（${response.url}），已拒绝`);
+          // response.url 是重定向后的最终地址：订阅 URL 的 token 常被服务器保留在
+          // 重定向查询串里——恰在本守卫要防的攻击形态下泄漏，错误消息必须脱敏
+          throw new Error(`请求被重定向到非 https 地址（${maskUrl(response.url)}），已拒绝`);
         }
         if (!response.ok) {
           let text = '';

@@ -62,7 +62,9 @@ function printSubscriptionList(): void {
       console.log(`    ${colors.gray('到期: ')}${formatTimestamp(s.expire)}`);
     }
     if (s.web_page_url) {
-      console.log(`    ${colors.gray('页面: ')}${s.web_page_url}`);
+      // 服务器可控的 profile-web-page-url，机场面板链接普遍带 ?token= 自动登录令牌，
+      // 与其他一切 URL 出口同走 maskUrl（此处是常驻列表，最容易被截屏/粘贴出去）
+      console.log(`    ${colors.gray('页面: ')}${maskUrl(s.web_page_url)}`);
     }
   });
   // 全部订阅都没有流量数据、且至少一个从未更新过时点一句：流量与到期是列表的常驻

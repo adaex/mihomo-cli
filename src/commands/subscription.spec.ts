@@ -143,6 +143,19 @@ describe('sub 的选项白名单按子命令校验', () => {
         assert.match(result.stdout, /beta/);
       }));
 
+    it('列表的面板 URL 脱敏（web_page_url 常带机场自动登录 token，列表最易被截屏/粘贴）', () =>
+      withFixture((dataDir, run) => {
+        fs.mkdirSync(path.join(dataDir, 'subscriptions'), { recursive: true });
+        fs.writeFileSync(
+          path.join(dataDir, 'subscriptions', 'cache.json'),
+          JSON.stringify({ alpha: { web_page_url: 'https://airport.example.com/user?token=PANELTOKEN1234567890' } }),
+        );
+        const result = run(['sub']);
+        assert.equal(result.status, 0, result.stderr);
+        assert.doesNotMatch(result.stdout, /PANELTOKEN1234567890/);
+        assert.match(result.stdout, /token=\*\*\*/);
+      }));
+
     it('未知子命令仍报错', () =>
       withFixture((_dataDir, run) => {
         const result = run(['sub', 'bogus']);

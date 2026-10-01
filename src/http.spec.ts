@@ -100,4 +100,29 @@ describe('createHttpClient：4xx 诊断与降级守卫行为', () => {
     const response = await client.get<{ ok: boolean }>(`${base}/redirect`, { responseType: 'json' });
     assert.deepEqual(response.data, { ok: true });
   });
+
+  // 本地无证书无法端到端构造 https→http 重定向，用桩 fetch 固定守卫分支的输入
+  it('https→http 降级守卫的错误消息脱敏（token 常被服务器保留在重定向查询串里）', async () => {
+    const originalFetch = globalThis.fetch;
+    const fakeResponse = {
+      url: 'http://mirror.example.com/dl?token=SECRETTOKEN1234567890',
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+    };
+    globalThis.fetch = (async () => fakeResponse) as typeof fetch;
+    try {
+      const client = createHttpClient({ timeout: 1_000 });
+      await assert.rejects(client.get('https://airport.example.com/sub?token=SECRETTOKEN1234567890'), e => {
+        const message = (e as Error).message;
+        assert.match(message, /非 https/);
+        // 错误消息若原样带最终 URL，恰在本守卫要防的攻击形态（降级重定向）下泄漏 token
+        assert.doesNotMatch(message, /SECRETTOKEN1234567890/);
+        assert.match(message, /token=\*\*\*/);
+        return true;
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

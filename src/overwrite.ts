@@ -687,6 +687,10 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
         continue;
       }
       const content = fs.readFileSync(filePath, 'utf8');
+      // 空白/纯注释文档前置跳过：js-yaml 5 对这类输入抛「expected a document」而非
+      // 返回 null（js-yaml 4 的行为，709 行注释即按它写的），落入 catch 会让 start/config/doctor
+      // 硬失败——先建空骨架文件再编辑是自然操作顺序
+      if (isBlankYamlDocument(content)) continue;
       // 别名上限防 YAML 炸弹 DoS（同 config.ts SAFE_YAML_LOAD_OPTIONS，此处内联避免与 config 循环依赖）
       const parsed = yaml.load(content, { maxAliases: YAML_MAX_ALIASES }) as Record<string, unknown> | null;
       // 顶层数组/标量不是合法覆写文件，与语法错同族的静默失效，统一收进 broken
@@ -706,13 +710,26 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
           hint: ['该文件当前未参与合并。覆写文件形如:', '  +rules:', '    - DOMAIN-SUFFIX,example.com,DIRECT'],
         });
       }
-      // parsed === null（空文件）无内容可合并，按现状不计入任何一边
+      // parsed === null（字面 null/~ 或 --- 空文档）无内容可合并，不计入任何一边
     } catch (e) {
       broken.push(toBrokenFile(file, filePath, e));
     }
   }
 
   return { ok, broken };
+}
+
+/**
+ * 空白或纯注释的覆写文档：无内容可合并，按「不计入任何一边」跳过。
+ * 必须在 yaml.load 之前判断——js-yaml 5 对空文档抛异常（js-yaml 4 返回 null），
+ * 落入 catch 会把空骨架文件当坏文件硬失败。判据只认行首注释：任何非注释
+ * 内容行都不以 # 开头，不会误伤。
+ */
+function isBlankYamlDocument(content: string): boolean {
+  return content.split('\n').every(line => {
+    const t = line.trim();
+    return t === '' || t.startsWith('#');
+  });
 }
 
 /**
