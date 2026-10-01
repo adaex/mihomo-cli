@@ -205,7 +205,8 @@ export function tunBlockedByRunningService(): CliError {
  */
 export function assertTunStartNotRaced(): void {
   if (shouldAbortStartOnDisable(stopEpochBaseline(), readStopEpoch())) throw cancelledByConcurrentStop();
-  if (getServiceStatus().loaded) throw tunBlockedByRunningService();
+  // withDisabled:false——本判据只消费 loaded，print-disabled 是白多一次的阻塞查询
+  if (getServiceStatus({ withDisabled: false }).loaded) throw tunBlockedByRunningService();
 }
 
 /**

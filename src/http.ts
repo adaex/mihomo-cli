@@ -83,6 +83,16 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
         const text = await readBodyWithLimit(response, controller, MAX_RESPONSE_BYTES);
         const data = config?.responseType === 'json' ? JSON.parse(text) : text;
         return { data: data as T, headers: response.headers, status: response.status };
+      } catch (e) {
+        // 定时器到点的 abort（controller 是本客户端自己建的）翻译成超时语义——
+        // 直连被墙正是最常见场景，干等 60s 后收到一句与原因无关的
+        // 「This operation was aborted」无从排查；curl 路径早有同款翻译。
+        // 外部 signal 的中止（订阅自动更新的整体超时）不在此列：调用方按
+        // aborted 分档渲染，消息另有归属，保持原样上抛
+        if (controller.signal.aborted && (e as Error).name === 'AbortError') {
+          throw new Error(`请求超时（${Math.round(timeout / 1000)}s）: ${maskUrl(url)}`);
+        }
+        throw e;
       } finally {
         clearTimeout(timer);
       }

@@ -268,7 +268,7 @@ describe('assertLooksLikeSubscription：写盘闸门（防错误 JSON 覆盖好�
     assert.match(resultLine, /quota exceeded/, '服务端错误消息透出');
     assert.match(resultLine, /磁盘上原有的订阅配置未被覆盖/);
     const yamlLine = stdout.split('\n').find(l => l.startsWith('YAML_NOW:'));
-    assert.ok(yamlLine && yamlLine.includes('name: keep'), '磁盘上原文件必须保持旧内容');
+    assert.ok(yamlLine?.includes('name: keep'), '磁盘上原文件必须保持旧内容');
   });
 
   it('空对象（无服务端消息字段）同样拒收，不因取消息而崩', () => {
@@ -285,6 +285,6 @@ describe('assertLooksLikeSubscription：写盘闸门（防错误 JSON 覆盖好�
     const resultLine = stdout.split('\n').find(l => l.startsWith('RESULT:'));
     assert.ok(resultLine?.includes('NO-THROW'), `provider-only 应放行: ${resultLine}`);
     const yamlLine = stdout.split('\n').find(l => l.startsWith('YAML_NOW:'));
-    assert.ok(yamlLine && yamlLine.includes('proxy-providers'), '内容应已写盘');
+    assert.ok(yamlLine?.includes('proxy-providers'), '内容应已写盘');
   });
 });

@@ -391,6 +391,13 @@ describe('cleanupStaleTmpFiles：崩溃残留清扫', () => {
         // .tmp- 前缀目录只在 kernel/ 下清扫：根目录即便有超龄同名目录也必须保留
         `fs.mkdirSync(DIRS.kernel + '/../.tmp-other', { recursive: true });`,
         `fs.utimesSync(DIRS.kernel + '/../.tmp-other', new Date(oldT), new Date(oldT));`,
+        // runtime/check-*（config 校验的 mkdtemp，仅 finally 清理）与根目录的
+        // service.plist.stage（install 的 lint 载体）同属崩溃残留，超龄应扫
+        `fs.mkdirSync(DIRS.runtime + '/check-old', { recursive: true });`,
+        `fs.writeFileSync(DIRS.runtime + '/check-old/config.yaml', 'x');`,
+        `fs.utimesSync(DIRS.runtime + '/check-old', new Date(oldT), new Date(oldT));`,
+        `fs.writeFileSync(DIRS.kernel + '/../service.plist.stage', 'plist');`,
+        `fs.utimesSync(DIRS.kernel + '/../service.plist.stage', new Date(oldT), new Date(oldT));`,
         `cleanupStaleTmpFiles();`,
         `assert.equal(fs.existsSync(DIRS.kernel + '/../settings.1.0.tmp'), false, '超龄原子写临时文件应删');`,
         `assert.equal(fs.existsSync(DIRS.kernel + '/../settings.2.0.tmp'), true, '新鲜临时文件必须保留');`,
@@ -399,6 +406,8 @@ describe('cleanupStaleTmpFiles：崩溃残留清扫', () => {
         `assert.equal(fs.existsSync(DIRS.kernel + '/.tmp-old'), false, '超龄内核下载临时目录应递归删除');`,
         `assert.equal(fs.existsSync(DIRS.kernel + '/.tmp-new'), true, '新鲜下载目录（进行中的下载）必须保留');`,
         `assert.equal(fs.existsSync(DIRS.kernel + '/mihomo'), true, '现有内核不得误删');`,
+        `assert.equal(fs.existsSync(DIRS.runtime + '/check-old'), false, '超龄 config 校验临时目录应删');`,
+        `assert.equal(fs.existsSync(DIRS.kernel + '/../service.plist.stage'), false, '超龄 install stage 残留应删');`,
       ].join('\n');
       const code = await new Promise<number | null>(resolve => {
         const child = spawn(process.execPath, ['--import', 'tsx', '-e', script], {

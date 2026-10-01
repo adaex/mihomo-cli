@@ -136,9 +136,9 @@ export function ghProbeNeeded(input: { forceDirect: boolean; proxyOverride: stri
   return !input.forceDirect && input.proxyOverride === null;
 }
 
-/** 检测 gh（GitHub CLI）是否可用，用作回退候选 */
+/** 检测 gh（GitHub CLI）是否可用，用作回退候选。超时防 wrapper/挂钩把入口探测挂死 */
 export function hasGh(): boolean {
-  const result = spawnSync('gh', ['--version'], { stdio: 'ignore' });
+  const result = spawnSync('gh', ['--version'], { stdio: 'ignore', timeout: 3_000 });
   return !result.error && result.status === 0;
 }
 
@@ -185,7 +185,10 @@ export function pickLatestRelease(releases: GitHubRelease[]): GitHubRelease {
       !r.prerelease &&
       !r.tag_name.toLowerCase().includes('alpha') &&
       !r.tag_name.toLowerCase().includes('beta') &&
-      !r.tag_name.toLowerCase().includes('prerelease'),
+      !r.tag_name.toLowerCase().includes('prerelease') &&
+      // rc 后缀：上游未勾 prerelease 位时它是唯一防线——漏放行会让版本对账必然
+      // 失败（内核 -v 吐三段版本，对不上 vX.Y.Z-rc.N），kernel 更新 100% 报不匹配
+      !r.tag_name.toLowerCase().includes('-rc'),
   );
 
   if (stableReleases.length === 0) {
@@ -532,6 +535,12 @@ export async function downloadKernel(
   assertTrustedAssetUrl(asset.browser_download_url);
   // 下载 URL：仅 mirror 通道套前缀；gh 通道不用 URL（gh 按 tag + 资产名自行解析）
   const downloadUrl = channel.kind === 'mirror' ? withMirror(asset.browser_download_url, channel.mirror) : asset.browser_download_url;
+  // 镜像前缀只拼 github.com 形态的地址（其他 GitHub 资产 host 套不进去）；上游若迁移
+  // 资产地址形态，显式 --mirror 会静默退化成直连——被墙网络下只见超时，没有任何
+  // 「镜像没起作用」的线索，必须点破
+  if (channel.kind === 'mirror' && channel.mirror && downloadUrl === asset.browser_download_url) {
+    console.warn(`警告: 镜像前缀未能作用于该资产地址（host 非 github.com），本次为直连下载`);
+  }
 
   // 下载、解压、自检都在临时目录里完成，自检通过后才原子替换旧内核——
   // 自检失败时系统必须仍有旧内核可用（先删后验会变成 KeepAlive 崩溃循环）；

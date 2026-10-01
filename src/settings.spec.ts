@@ -457,7 +457,7 @@ describe('removeSubscription：数据最终状态（子进程真实模块）', (
         fs.writeFileSync(rawA, 'proxies: []');
         const switched = m.removeSubscription('a');
         const settings = JSON.parse(fs.readFileSync(paths.PATHS.settingsFile, 'utf8'));
-        process.stdout.write('SWITCHED:' + String(switched) + '\\n');
+        process.stdout.write('SWITCHED:' + JSON.stringify(switched) + '\\n');
         process.stdout.write('NAMES:' + settings.subscriptions.map(s => s.name).join(',') + '\\n');
         process.stdout.write('ACTIVE:' + String(settings.active_subscription) + '\\n');
         process.stdout.write('RAW_EXISTS:' + String(fs.existsSync(rawA)) + '\\n');
@@ -467,7 +467,7 @@ describe('removeSubscription：数据最终状态（子进程真实模块）', (
         env: { ...process.env, MIHOMO_CLI_DIR: dir },
       });
       assert.equal(r.status, 0, r.stderr || r.stdout);
-      assert.match(r.stdout, /SWITCHED:b/);
+      assert.match(r.stdout, /SWITCHED:\{"found":true,"switchedTo":"b"\}/);
       assert.match(r.stdout, /NAMES:b/);
       assert.match(r.stdout, /ACTIVE:b/);
       assert.match(r.stdout, /RAW_EXISTS:false/, '原始配置文件应随 remove 删除（postCommit 副作用）');
@@ -496,7 +496,7 @@ describe('removeSubscription：数据最终状态（子进程真实模块）', (
         const result = m.removeSubscription('missing');
         process.stdout.write('GHOST_EXISTS:' + String(fs.existsSync(ghost)) + '\\n');
         const settings = JSON.parse(fs.readFileSync(paths.PATHS.settingsFile, 'utf8'));
-        process.stdout.write('RESULT:' + String(result) + '\\n');
+        process.stdout.write('RESULT:' + JSON.stringify(result) + '\\n');
         process.stdout.write('NAMES:' + settings.subscriptions.map(s => s.name).join(',') + '\\n');
       `;
       const r = spawnSync(process.execPath, ['--import', 'tsx', '-e', code], {
@@ -504,7 +504,7 @@ describe('removeSubscription：数据最终状态（子进程真实模块）', (
         env: { ...process.env, MIHOMO_CLI_DIR: dir },
       });
       assert.equal(r.status, 0, r.stderr || r.stdout);
-      assert.match(r.stdout, /RESULT:null/);
+      assert.match(r.stdout, /RESULT:\{"found":false[^}]*\}/);
       assert.match(r.stdout, /NAMES:a/);
       // 时序判别：未命中不产生补丁，删除副作用不得执行——rm 若在 mutator 里
       //（写盘之前）就会先删掉文件；postCommit 语义下它与提交绑定

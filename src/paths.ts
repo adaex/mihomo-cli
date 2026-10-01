@@ -180,10 +180,14 @@ export function cleanupStaleTmpFiles(): void {
     for (const entry of entries) {
       // 原子写临时文件认 .tmp 后缀（四个目录都可能有）；.tmp- 前缀目录**只认
       // kernel/**——mkdtemp 的下载临时目录只建在那里，前缀不能在全数据目录通用，
-      // 否则根目录将来出现别的 .tmp- 设施会被误扫
+      // 否则根目录将来出现别的 .tmp- 设施会被误扫。
+      // check- 前缀目录只认 runtime/（config 校验的 mkdtemp，仅 finally 清理，SIGKILL
+      // 即残留）；service.plist.stage 是 install 的 lint 载体（同样仅 finally 清理）
       const isAtomicTmpFile = entry.endsWith('.tmp');
       const isKernelTmpDir = dir === DIRS.kernel && entry.startsWith('.tmp-');
-      if (!isAtomicTmpFile && !isKernelTmpDir) continue;
+      const isConfigCheckTmpDir = dir === DIRS.runtime && entry.startsWith('check-');
+      const isPlistStage = dir === USER_DATA_DIR && entry === 'service.plist.stage';
+      if (!isAtomicTmpFile && !isKernelTmpDir && !isConfigCheckTmpDir && !isPlistStage) continue;
       const full = path.join(dir, entry);
       try {
         if (fs.statSync(full).mtimeMs >= cutoff) continue;

@@ -299,3 +299,69 @@ describe('doctor：内核版本查询超时不拖住进程退出', () => {
     }
   });
 });
+
+describe('doctor：CLI 版本比较的脏数据守卫', () => {
+  /**
+   * latest 非 semver（私有 registry、异常 npm 输出）时裸 compareVersions 会抛错、
+   * 体检崩在任何输出打印之前——update.ts 的 resolveUpdateAction 有同款守卫，
+   * 两侧口径应对齐。桩 npm 固定返回非法版本串。
+   */
+  it('latest 非 semver：按 skip 渲染，体检跑完不被击穿', () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-doctor-dirtyver-bin-'));
+    try {
+      fs.writeFileSync(path.join(binDir, 'npm'), ['#!/bin/sh', '[ "$1" = "view" ] || exit 9', 'echo "26.10.99.!!not-semver"', ''].join('\n'), { mode: 0o755 });
+      const r = spawnSync(process.execPath, ['--import', 'tsx', ENTRY, 'doctor'], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH}`,
+          MIHOMO_CLI_DIR: dataDir,
+          MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(dataDir)}`,
+          NO_COLOR: '1',
+        },
+        timeout: 60_000,
+      });
+      const output = `${r.stdout || ''}${r.stderr || ''}`;
+      assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
+      assert.match(r.stdout || '', /无法比较/, `应有 skip 提示: ${output}`);
+      assert.equal(r.status, 0, r.stderr);
+    } finally {
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('doctor：坏订阅名不击穿体检', () => {
+  /**
+   * 手改 settings.json 写入路径形态的订阅名时，getSubscriptionRawConfigPath 抛
+   * CliError——体检是诊断面（同列表面板的姿态），必须包成 fail 检查项继续跑完，
+   * 不能在「订阅配置」项整体退出、后面的端口/连通性检查全不跑。
+   */
+  it('非法订阅名：订阅配置项报 fail，体检完成', () => {
+    const dirty = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-doctor-badname-'));
+    try {
+      fs.mkdirSync(path.join(dirty, 'subscriptions'), { recursive: true });
+      fs.mkdirSync(path.join(dirty, 'kernel'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dirty, 'settings.json'),
+        JSON.stringify({ subscriptions: [{ name: '../evil', url: 'https://example.com' }], active_subscription: '../evil' }),
+      );
+      const r = spawnSync(process.execPath, ['--import', 'tsx', ENTRY, 'doctor'], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          MIHOMO_CLI_DIR: dirty,
+          MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(dirty)}`,
+          NO_COLOR: '1',
+        },
+        timeout: 60_000,
+      });
+      const output = `${r.stdout || ''}${r.stderr || ''}`;
+      assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
+      assert.match(r.stdout || '', /订阅名称无效|订阅配置/, output);
+      assert.notEqual(r.status, null);
+    } finally {
+      fs.rmSync(dirty, { recursive: true, force: true });
+    }
+  });
+});

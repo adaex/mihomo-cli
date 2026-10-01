@@ -295,7 +295,11 @@ async function subRemove(args: string[]): Promise<void> {
     }
   }
 
-  const switchedTo = removeSubscription(target.name);
+  const { found, switchedTo } = removeSubscription(target.name);
+  // 并发删除下 found=false：什么都没删还报「已删除」违反「成功要有独立结果依据」
+  if (!found) {
+    throw new CliError(`订阅 "${target.name}" 不存在（可能已被并发删除）`, { hint: ['查看当前列表: mihomo-cli sub'] });
+  }
   console.log(`已删除订阅 "${target.name}"`);
   if (switchedTo) {
     console.log(`已自动切换到 "${switchedTo}"`);

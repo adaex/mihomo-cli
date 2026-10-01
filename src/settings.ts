@@ -366,7 +366,13 @@ export function addSubscription(url: string, name = 'default'): void {
   });
 }
 
-export function removeSubscription(name: string): string | null {
+/** removeSubscription 的结果：found=false 表示条目已不在（并发删除等），调用方不得报成功 */
+export interface RemoveSubscriptionResult {
+  found: boolean;
+  switchedTo: string | null;
+}
+
+export function removeSubscription(name: string): RemoveSubscriptionResult {
   let switchedTo: string | null = null;
   let found = false;
 
@@ -400,11 +406,11 @@ export function removeSubscription(name: string): string | null {
     },
   );
 
-  if (!found) return null;
+  if (!found) return { found: false, switchedTo: null };
 
   deleteSubscriptionCache(name);
 
-  return switchedTo;
+  return { found: true, switchedTo };
 }
 
 export function setDefaultSubscription(name: string): boolean {

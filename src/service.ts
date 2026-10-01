@@ -655,8 +655,10 @@ export async function installService(wasRunning: boolean): Promise<{ restoreSkip
 
     // ~/Library/LaunchAgents 在全新系统上可能不存在；recursive 对已存在目录是 no-op，不改权限
     fs.mkdirSync(path.dirname(PATHS.userAgentPlist), { recursive: true });
-    fs.copyFileSync(stagePath, PATHS.userAgentPlist);
-    fs.chmodSync(PATHS.userAgentPlist, 0o644);
+    // 原子落位（同目录 tmp + rename）：copyFileSync 直写被 kill/掉电打断会留半截
+    // plist，launchd 解析失败不加载，用户只见「install 像没生效」；stage 只留作 lint 载体。
+    // tmp 名以 .tmp 结尾，launchd 不会把崩溃残留当 plist 扫
+    atomicWriteFileSync(PATHS.userAgentPlist, fs.readFileSync(stagePath, 'utf8'), { mode: 0o644 });
 
     if (wasRunning) {
       // 并发的 stop 若在重装期间跑完（重装含 bootout + 等待，有真实窗口），这里的
@@ -1060,12 +1062,13 @@ async function tryHotReload(): Promise<boolean> {
   // 开发服务器）且对该 PUT 返回 2xx 时，CLI 会打印「已启动」而服务内核仍跑旧配置——
   // 配置变更静默未生效，是最难排查的一类失败。
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HOT_RELOAD_TIMEOUT_MS);
   try {
     // 状态查询同样可能抛错（launchctl 超时/112/125、settings 端口非法）：探测类失败
     // 必须按「热重载不可用」处理并回退 kickstart，不能让一次读状态失败直接废掉整个
-    // restartService——launchd 病态时恰恰最需要 kickstart 自愈。契约见函数头注释
-    const status = getServiceStatus();
+    // restartService——launchd 病态时恰恰最需要 kickstart 自愈。契约见函数头注释。
+    // withDisabled:false——热重载只消费 running/pid，print-disabled 是白多一次的阻塞
+    // 查询；abort 预算也不该被它分食（见下方 timer 起表位置的注释）
+    const status = getServiceStatus({ withDisabled: false });
     if (!status.running || status.pid === null) return false;
 
     // 端口经 settings.ports 解析（默认 9090），与 buildConfig 写进配置的值同源
@@ -1076,33 +1079,39 @@ async function tryHotReload(): Promise<boolean> {
     const secret = readSettings().controller_secret;
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (typeof secret === 'string' && secret) headers.Authorization = `Bearer ${secret}`;
-    // /version 是 mihomo 特有端点，返回体带 version 字段；用它确认应答方是 mihomo
-    // 而非碰巧监听同端口的其他程序（后者极可能对未知路径的 PUT 也返回 2xx）
-    const probe = await fetch(`${baseUrl}/version`, { headers, signal: controller.signal });
-    if (!probe.ok) return false;
-    const info = (await probe.json()) as { version?: unknown };
-    if (typeof info?.version !== 'string') return false;
+    // timer 起表在状态查询之后、第一个 fetch 之前：abort 预算只覆盖网络探测与 PUT，
+    // 不被前置的 launchctl 查询分食——launchctl 病态慢（print 各 2-3s）时 timer 在
+    // fetch 前已到点会令热重载恒不可用，每次 restart 都退化为完整重启（代理瞬断）
+    const timer = setTimeout(() => controller.abort(), HOT_RELOAD_TIMEOUT_MS);
+    try {
+      // /version 是 mihomo 特有端点，返回体带 version 字段；用它确认应答方是 mihomo
+      // 而非碰巧监听同端口的其他程序（后者极可能对未知路径的 PUT 也返回 2xx）
+      const probe = await fetch(`${baseUrl}/version`, { headers, signal: controller.signal });
+      if (!probe.ok) return false;
+      const info = (await probe.json()) as { version?: unknown };
+      if (typeof info?.version !== 'string') return false;
 
-    // /version 只确认「端口上是个 mihomo」，挡不住「另一个 mihomo」（手工起的实例、
-    // 端口冲突）。用 lsof 取监听 pid 与服务 pid 比对，不一致则回退 kickstart
-    const port = getPorts().controller;
-    const lsofResult = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', timeout: 5000 });
-    if (lsofResult.status !== 0) return false;
-    const listenerPid = Number.parseInt(lsofResult.stdout.trim(), 10);
-    if (!Number.isFinite(listenerPid) || listenerPid !== status.pid) return false;
+      // /version 只确认「端口上是个 mihomo」，挡不住「另一个 mihomo」（手工起的实例、
+      // 端口冲突）。用 lsof 取监听 pid 与服务 pid 比对，不一致则回退 kickstart
+      const port = getPorts().controller;
+      const lsofResult = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', timeout: 5000 });
+      if (lsofResult.status !== 0) return false;
+      const listenerPid = Number.parseInt(lsofResult.stdout.trim(), 10);
+      if (!Number.isFinite(listenerPid) || listenerPid !== status.pid) return false;
 
-    const res = await fetch(`${baseUrl}/configs?force=true`, {
-      method: 'PUT',
-      headers,
-      body: '{}',
-      signal: controller.signal,
-    });
-    // 文档化成功码是 204（属 2xx，res.ok 天然涵盖）；非 2xx 一律回退 kickstart
-    return res.ok;
+      const res = await fetch(`${baseUrl}/configs?force=true`, {
+        method: 'PUT',
+        headers,
+        body: '{}',
+        signal: controller.signal,
+      });
+      // 文档化成功码是 204（属 2xx，res.ok 天然涵盖）；非 2xx 一律回退 kickstart
+      return res.ok;
+    } finally {
+      clearTimeout(timer);
+    }
   } catch {
     return false;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

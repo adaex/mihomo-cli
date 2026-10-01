@@ -149,7 +149,17 @@ async function collectChecks(): Promise<Check[]> {
   } else {
     push('订阅', 'ok', `${subs.length} 个${active ? `，当前: ${active.name}` : ''}`);
     if (active) {
-      if (!readSubscriptionRawConfig(active.name)) {
+      // 名称非法（手改 settings.json 写入路径形态等）会让路径构造抛 CliError——
+      // 体检是诊断面，不能被坏状态击穿（同列表面板的姿态），包成 fail 检查项继续
+      let rawConfig: string | null | Error;
+      try {
+        rawConfig = readSubscriptionRawConfig(active.name);
+      } catch (e) {
+        rawConfig = e as Error;
+      }
+      if (rawConfig instanceof Error) {
+        push('订阅配置', 'fail', `${rawConfig.message}`, '手工修正 settings.json 中的订阅名后重试');
+      } else if (!rawConfig) {
         push('订阅配置', 'fail', `当前订阅 "${active.name}" 有条目但无配置文件`, `mihomo-cli sub update ${active.name}`);
       } else {
         push('订阅配置', 'ok', `"${active.name}" 配置文件存在`);
@@ -282,10 +292,18 @@ async function collectChecks(): Promise<Check[]> {
   const latest = await latestVersionPromise;
   if (latest === null) {
     push('CLI 版本', 'skip', 'npm registry 不可达，跳过检查');
-  } else if (compareVersions(latest, VERSION) > 0) {
-    push('CLI 版本', 'warn', `当前 ${VERSION}，最新 ${latest}`, 'mihomo-cli update');
   } else {
-    push('CLI 版本', 'ok', `${VERSION}（最新）`);
+    // 非 semver 的 latest（私有 registry、异常 npm 输出）按 skip 渲染，不击穿体检——
+    // update.ts 的 resolveUpdateAction 有同款 try/catch，两侧口径一致
+    try {
+      if (compareVersions(latest, VERSION) > 0) {
+        push('CLI 版本', 'warn', `当前 ${VERSION}，最新 ${latest}`, 'mihomo-cli update');
+      } else {
+        push('CLI 版本', 'ok', `${VERSION}（最新）`);
+      }
+    } catch {
+      push('CLI 版本', 'skip', `最新版本号无法比较（${latest}），跳过检查`);
+    }
   }
 
   return checks;

@@ -110,7 +110,7 @@ describe('createHttpClient：4xx 诊断与降级守卫行为', () => {
       status: 200,
       headers: new Headers(),
     };
-    globalThis.fetch = (async () => fakeResponse) as typeof fetch;
+    globalThis.fetch = (async () => fakeResponse) as unknown as typeof fetch;
     try {
       const client = createHttpClient({ timeout: 1_000 });
       await assert.rejects(client.get('https://airport.example.com/sub?token=SECRETTOKEN1234567890'), e => {
@@ -164,6 +164,33 @@ describe('createHttpClient：4xx 诊断与降级守卫行为', () => {
       assert.equal(err.response?.status, 502);
       // 非 JSON 前缀解析失败 → 无 data，status 仍可定位
       assert.equal(err.response?.data, undefined);
+      return true;
+    });
+  });
+
+  it('超时（定时器到点的 abort）翻译成超时语义，不再是裸 AbortError', async () => {
+    // 直连被墙干等 60s 后收到「This operation was aborted」无从排查——
+    // 诊断要与 curl 路径的退出码翻译对齐。server 收到请求后挂起不响应
+    const base = await startServer(() => {
+      /* 永不响应 */
+    });
+    const client = createHttpClient({ timeout: 200 });
+    await assert.rejects(client.get(`${base}/hang`), e => {
+      assert.match((e as Error).message, /请求超时（0s）/);
+      assert.doesNotMatch((e as Error).message, /aborted/);
+      return true;
+    });
+  });
+
+  it('外部 signal 的中止不翻译成超时（调用方按 aborted 分档，消息另有归属）', async () => {
+    const base = await startServer(() => {
+      /* 永不响应 */
+    });
+    const client = createHttpClient({ timeout: 60_000 });
+    const external = new AbortController();
+    external.abort(); // 只中止外部 signal，客户端自己的定时器不动
+    await assert.rejects(client.get(`${base}/sub`, { signal: external.signal }), e => {
+      assert.equal((e as Error).name, 'AbortError', '外部中止保持原始 AbortError 上抛');
       return true;
     });
   });

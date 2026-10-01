@@ -433,6 +433,11 @@ describe('pickLatestRelease', () => {
     assert.equal(picked.tag_name, 'v1.19.30');
   });
 
+  it('rc 后缀（上游未勾 prerelease 位时的形态）同样过滤——版本对账对不上 rc，装上必报不匹配', () => {
+    const picked = pickLatestRelease([rel('v1.19.31-rc.2'), rel('v1.19.30')]);
+    assert.equal(picked.tag_name, 'v1.19.30');
+  });
+
   it('全是预发布时抛错，不回退首个（回退等于静默把 alpha 当稳定版装上）', () => {
     assert.throws(() => pickLatestRelease([rel('v2.0.0-beta.1'), rel('v1.19.0-alpha')]), /未找到稳定版内核/);
   });
@@ -474,8 +479,16 @@ describe('downloadKernel：下载后完整性闸门（子进程 + PATH 桩 curl/
    * （一段 -v 时输出版本号的 shell 脚本），真实跑完下载→解压→自检→对账→原子替换链。
    * MIHOMO_CLI_DIR 隔离数据目录；预摆旧内核断言「失败时旧内核未受影响」。
    */
-  function runKernelDownloadCase(opts: { assetSize: number; curlBody: string; binaryContent: string; downloadUrl?: string; preExisting?: string }): {
+  function runKernelDownloadCase(opts: {
+    assetSize: number;
+    curlBody: string;
+    binaryContent: string;
+    downloadUrl?: string;
+    preExisting?: string;
+    channel?: { kind: 'direct' } | { kind: 'mirror'; mirror: string };
+  }): {
     stdout: string;
+    stderr: string;
   } {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-kernel-gate-'));
     const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-kernel-gate-bin-'));
@@ -495,7 +508,7 @@ describe('downloadKernel：下载后完整性闸门（子进程 + PATH 桩 curl/
       '  }],',
       '};',
       'try {',
-      "  await downloadKernel(null, { kind: 'direct' }, releaseInfo);",
+      `  await downloadKernel(null, ${JSON.stringify(opts.channel ?? { kind: 'direct' })}, releaseInfo);`,
       "  console.log('RESULT:NO-THROW');",
       '} catch (e) {',
       "  console.log('RESULT:' + JSON.stringify({ message: e.message }));",
@@ -538,7 +551,7 @@ exit 0
         },
       });
       assert.equal(r.status, 0, r.stderr);
-      return { stdout: r.stdout };
+      return { stdout: r.stdout, stderr: r.stderr };
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });
       fs.rmSync(fakeBin, { recursive: true, force: true });
@@ -594,5 +607,19 @@ exit 0
     assert.match(resultLineOf(stdout), /NO-THROW/);
     assert.match(binaryLineOf(stdout), /v1\.19\.30/);
     assert.doesNotMatch(binaryLineOf(stdout), /OLD-KERNEL/);
+  });
+
+  it('mirror 通道遇非 github.com 资产地址：照常直连下载，但点破「镜像未起作用」', () => {
+    // 上游若迁移资产 host（如 release-assets），显式 --mirror 会静默退化成直连——
+    // 被墙网络下只见超时、无任何线索，必须警告
+    const { stdout, stderr } = runKernelDownloadCase({
+      assetSize: 3,
+      curlBody: 'abc',
+      binaryContent: '#!/bin/sh\necho "Mihomo Meta v1.19.30 darwin"\n',
+      downloadUrl: 'https://release-assets.githubusercontent.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo.gz',
+      channel: { kind: 'mirror', mirror: 'https://gh-proxy.org/' },
+    });
+    assert.match(resultLineOf(stdout), /NO-THROW/);
+    assert.match(stderr, /镜像前缀未能作用/);
   });
 });
