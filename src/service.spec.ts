@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,6 +19,7 @@ import {
   parseDisabledList,
   parseServicePrint,
   shouldAbortStartOnDisable,
+  waitServiceHealthy,
 } from './service.js';
 import { SudoAuthError } from './sudo.js';
 import type { ServiceStatus } from './types.js';
@@ -721,5 +722,116 @@ describe('buildLegacyCleanupScript：sudo 脚本退出码协议', () => {
     assert.ok(rmIndex !== -1 && checkIndex > rmIndex, 'rm 之后必须有存在性复核');
     assert.ok(script.includes('exit 4'), '复核失败应以 exit 4 报真实失败');
     assert.ok(!/rm -f [^\n]*\|\| true/.test(script), 'rm 不得 || true 吞错');
+  });
+});
+
+/**
+ * waitServiceHealthy 的查询容错。生产形态是「bootstrap 成功后 launchctl 在观察窗内
+ * 由通转不通（系统极端负载/launchd 抖动）」：旧实现第一轮查询失败即抛
+ * 「无法查询服务状态」，把「很可能已启动成功」报成「启动失败」（且 start 会
+ * 以退出码 1 收场）。轮询里查询失败必须按「本轮未知」处理；整个窗口全部失败时
+ * 用进程探测兜底，避免假阴性。
+ * 桩 launchctl 由控制文件驱动：fail = print 一律 112，其余输出 running fixture。
+ */
+describe('waitServiceHealthy：轮询期间 launchctl 查询失败的容错', () => {
+  function writeStubLaunchctl(binDir: string, modeFile: string): void {
+    const script = `#!/bin/bash
+if [ "$1" = "print" ]; then
+  if [ -f "${modeFile}" ] && [ "$(cat "${modeFile}")" = "fail" ]; then
+    exit 112
+  fi
+  cat <<'FIXTURE'
+${REAL_PRINT_RUNNING}
+FIXTURE
+  exit 0
+fi
+exit 0
+`;
+    fs.writeFileSync(path.join(binDir, 'launchctl'), script);
+    fs.chmodSync(path.join(binDir, 'launchctl'), 0o755);
+  }
+
+  /** 桩「内核」：真实存在的可执行文件（node 自身），命令行匹配 MAIN_INSTANCE_PATTERN（binary + -f configFile） */
+  function spawnFakeKernel(): number {
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)', PATHS.mihomoBinary, '-f', PATHS.configFile], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+    return child.pid as number;
+  }
+
+  function waitPgrepSeesPid(pid: number): void {
+    for (let i = 0; i < 50; i++) {
+      const r = spawnSync('pgrep', ['-f', String(pid)], { encoding: 'utf8' });
+      if (r.status === 0 && r.stdout.split('\n').includes(String(pid))) return;
+      spawnSync(process.execPath, ['-e', 'setTimeout(() => {}, 50)']);
+    }
+  }
+
+  it('查询持续失败 + 无内核进程：不抛错，落回 healthy:false 的诚实结论', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-health-'));
+    const modeFile = path.join(tmpDir, 'mode');
+    const binDir = path.join(tmpDir, 'bin');
+    fs.mkdirSync(binDir);
+    writeStubLaunchctl(binDir, modeFile);
+    fs.writeFileSync(modeFile, 'fail');
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${originalPath}`;
+    try {
+      const health = await waitServiceHealthy();
+      assert.equal(health.healthy, false);
+      assert.equal(health.crashed, false);
+    } finally {
+      process.env.PATH = originalPath;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('查询中途恢复（running）：窗口内跳过失败轮次，结论 healthy:true', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-health-'));
+    const modeFile = path.join(tmpDir, 'mode');
+    const binDir = path.join(tmpDir, 'bin');
+    fs.mkdirSync(binDir);
+    writeStubLaunchctl(binDir, modeFile);
+    fs.writeFileSync(modeFile, 'fail');
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${originalPath}`;
+    try {
+      // 首轮失败后被「恢复」（模拟 launchctl 抖动结束）
+      setTimeout(() => fs.writeFileSync(modeFile, 'ok'), 300);
+      const health = await waitServiceHealthy();
+      assert.equal(health.healthy, true);
+      assert.equal(health.pid, 5474);
+    } finally {
+      process.env.PATH = originalPath;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('查询持续失败 + 内核进程活着：进程探测兜底判 healthy:true，不报假失败', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-health-'));
+    const modeFile = path.join(tmpDir, 'mode');
+    const binDir = path.join(tmpDir, 'bin');
+    fs.mkdirSync(binDir);
+    writeStubLaunchctl(binDir, modeFile);
+    fs.writeFileSync(modeFile, 'fail');
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${originalPath}`;
+    const kernelPid = spawnFakeKernel();
+    waitPgrepSeesPid(kernelPid);
+    try {
+      const health = await waitServiceHealthy();
+      assert.equal(health.healthy, true, '进程活着是强证据，不得报成启动失败');
+      assert.equal(health.pid, kernelPid);
+    } finally {
+      process.env.PATH = originalPath;
+      try {
+        process.kill(kernelPid, 'SIGKILL');
+      } catch {
+        /* 已退出 */
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

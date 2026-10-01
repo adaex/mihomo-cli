@@ -9,6 +9,7 @@ import { CliError } from './errors.js';
 import { allocateArchivePath, cleanupOldLogs, rotateAndCleanupLogs } from './log-files.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './paths.js';
 import { cleanupAll, describePidCleanupFailure, reapPidWhenQuiet } from './process-stop.js';
+import { getMihomoPids } from './process-probe.js';
 import { getPorts, readSettings } from './settings.js';
 import { runSudoScript, SudoAuthError } from './sudo.js';
 import { shellQuote } from './text.js';
@@ -252,12 +253,18 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
   // 每轮少一个阻塞事件循环的 spawnSync（见 getServiceStatus 的 withDisabled）。
   // do/while 先 sleep 再查：循环外不取首次快照——它在第一轮 sleep 后必被覆盖，
   // 查了也没人读
-  let last: ServiceStatus;
-
-  // 第一阶段：观察满窗口。期间检出崩溃立即返回，否则以窗口结束时的状态为准
+  // 第一阶段：观察满窗口。期间检出崩溃立即返回，否则以窗口结束时的状态为准。
+  // 查询失败 ≠ 未运行：enable/bootstrap 数秒前刚走同一 launchctl 成功，轮询里的
+  // 瞬时失败（超时/112/125）按「本轮未知」跳过，不升级为「启动失败」的假结论。
+  // last 可空：整个观察窗查询全部失败时为 null，由 healthViaProcessProbe 兜底
+  let last: ServiceStatus | null = null;
   do {
     await sleep(SERVICE_HEALTH_INTERVAL_MS);
-    last = getServiceStatus({ withDisabled: false });
+    try {
+      last = getServiceStatus({ withDisabled: false });
+    } catch {
+      continue;
+    }
 
     if (isCrashed(last)) {
       return { healthy: false, crashed: true, pid: null, exitCode: last.lastExitCode, terminatingSignal: last.lastTerminatingSignal };
@@ -268,12 +275,20 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
     }
   } while (Date.now() < deadline);
 
+  // 观察窗内查询无一成功：用进程探测兜底，避免「内核实际已运行却被报成启动失败」
+  // 的假阴性；连进程也探测不到才落回诚实的「未能确认」结论
+  if (last === null) return healthViaProcessProbe();
+
   if (last.running) return { healthy: true, crashed: false, pid: last.pid, exitCode: null, terminatingSignal: null };
 
   // 第二阶段：窗口结束仍未 running（慢机器上内核起得慢，或正在 spawn 重试），再宽限一会儿
   while (Date.now() < graceDeadline) {
     await sleep(SERVICE_HEALTH_INTERVAL_MS);
-    last = getServiceStatus({ withDisabled: false });
+    try {
+      last = getServiceStatus({ withDisabled: false });
+    } catch {
+      continue;
+    }
 
     if (isCrashed(last)) {
       return { healthy: false, crashed: true, pid: null, exitCode: last.lastExitCode, terminatingSignal: last.lastTerminatingSignal };
@@ -283,6 +298,22 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
   }
 
   return { healthy: false, crashed: false, pid: last.pid, exitCode: last.lastExitCode, terminatingSignal: last.lastTerminatingSignal };
+}
+
+/**
+ * 观察窗内 launchctl 查询全部失败时的兜底判据：进程在 = 服务内核活着（launchd 拉起的
+ * 进程，命令行匹配即强证据），返回健康并以进程 pid 为结果依据；pgrep 自身失败不致命——
+ * 与「无进程」一样落回 healthy:false（assertServiceHealthy 报「未能进入运行状态」，
+ * 日志尾部仍是有效线索）。
+ */
+function healthViaProcessProbe(): ServiceHealth {
+  try {
+    const pids = getMihomoPids();
+    if (pids.length > 0) return { healthy: true, crashed: false, pid: pids[0], exitCode: null, terminatingSignal: null };
+  } catch {
+    /* pgrep 探测失败：无独立依据，落回未能确认的诚实结论 */
+  }
+  return { healthy: false, crashed: false, pid: null, exitCode: null, terminatingSignal: null };
 }
 
 /**

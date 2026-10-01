@@ -137,7 +137,16 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
   // 被并发的 stop 取消。必须单独成一条错误：落进 assertServiceHealthy 会报
   // 「内核未能进入运行状态」并附一个从未被创建的日志路径，指向完全错误的排查方向
   if (!started) throw cancelledByConcurrentStop();
-  if (hotReloaded) return getServiceStatus().pid;
+  // 热重载的成功依据是 PUT 2xx + 端口身份确认（restartService），pid 只是展示附加值：
+  // 取快照撞上 launchctl 瞬时失败时降级为 null（上层打印「已启动」不带 PID），
+  // 不让已完成的重载被一次只读查询报成失败
+  if (hotReloaded) {
+    try {
+      return getServiceStatus().pid;
+    } catch {
+      return null;
+    }
+  }
 
   try {
     return await assertServiceHealthy();

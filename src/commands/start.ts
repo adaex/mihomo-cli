@@ -150,7 +150,13 @@ export async function cmdStart(args: string[]): Promise<void> {
     throw new CliError(lines[0], { label: '启动失败', hint: [...lines.slice(1), ...extraHint] });
   }
 
-  await printStatus();
+  // 状态展示是启动成功后的附加信息：查询撞上瞬时失败（launchctl 超时/抖动）降级为
+  // 警告，不让「已启动」以退出码 1 收场——脚本消费方会把假失败当真实失败处理
+  try {
+    await printStatus();
+  } catch (e) {
+    console.log(colors.yellow(`状态展示失败（不影响已完成的启动）: ${(e as Error).message.split('\n')[0]}`));
+  }
 
   // Mixed 模式需手动配置系统代理：进程活着 ≠ 流量走代理，这是 Mixed 最大的日常摩擦。
   // TUN 模式由虚拟网卡接管全局流量，无需此步。start 是低频命令（重启/首次），提示不烦。
