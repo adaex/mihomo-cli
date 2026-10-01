@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { describe, it } from 'node:test';
 
-import { describeSudoFailure, SudoAuthError, sudoExitToError } from './sudo.js';
+import { describeSudoFailure, SudoAuthError, sudoExitToError, sudoTimeoutError } from './sudo.js';
 
 /**
  * sudo 退出码映射的纯函数回归。真实 sudo 路径（密码提示、脚本执行）不自动测试
@@ -41,6 +41,16 @@ describe('sudoExitToError：退出码到错误的分工协议', () => {
   it('status 为 null（sudo 被信号终止）单独描述，不与退出码混淆', () => {
     assert.equal(sudoExitToError('清理残留进程', null).message, '清理残留进程被中断（sudo 进程被信号终止）');
   });
+
+  it('超时单独成错：点明是本工具时限、操作可能只完成一半，不漏 ETIMEDOUT 内部串', () => {
+    // spawnSync 超时的结果形态与被信号终止相同（status=null、signal=SIGTERM），
+    // 但含义是 CLI 自己的超时，文案必须区分，见 runSudoScript 的 ETIMEDOUT 分支
+    const e = sudoTimeoutError('清理遗留的系统级服务');
+    assert.ok(!(e instanceof SudoAuthError));
+    assert.match(e.message, /^清理遗留的系统级服务超时/);
+    assert.ok(e.message.includes('可能只完成了一部分'), '超时可能落在脚本中途，必须提示半截状态');
+    assert.ok(!e.message.includes('ETIMEDOUT'), '内部错误码不得漏进用户面文案');
+  });
 });
 
 describe('describeSudoFailure：警告文案的统一口径', () => {
@@ -64,5 +74,11 @@ describe('runSudoScript 的脚本目录约定', () => {
     const source = fs.readFileSync(new URL('./sudo.ts', import.meta.url), 'utf8');
     assert.ok(!source.includes('DIRS.runtime'), 'sudo 脚本不得写入 DIRS.runtime（stop/reset 会 rmrf 该目录，密码窗口内脚本会被连带删除）');
     assert.ok(source.includes('USER_DATA_DIR'), '脚本路径应派生自 USER_DATA_DIR（数据根目录）');
+  });
+
+  it('spawnSync 超时（ETIMEDOUT）改抛 sudoTimeoutError，不把原始 error 漏给用户', () => {
+    // 真实 sudo 不自动跑；此处锁分支存在与判据，防「先判 result.error 原样抛」回潮
+    const source = fs.readFileSync(new URL('./sudo.ts', import.meta.url), 'utf8');
+    assert.match(source, /ETIMEDOUT'\) throw sudoTimeoutError/, '超时必须经 sudoTimeoutError 渲染（否则漏出 spawnSync sudo ETIMEDOUT 内部串）');
   });
 });

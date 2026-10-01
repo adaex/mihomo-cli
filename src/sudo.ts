@@ -6,9 +6,10 @@ import { ensureDirs, USER_DATA_DIR } from './paths.js';
 
 /**
  * sudo 脚本执行超时：交互输密码 + 多步 root 操作的统一上限。
- * 导出供进程路径（killAllMihomo 的 sudo pkill 分支）引用同一常量：spawnSync 超时会把
- * 密码提示连同整个 sudo 子进程一起杀掉，别处自抄一个更短的数字，就是在给
- * 「密码输得慢的用户」埋「操作失败」的假象。
+ * spawnSync 超时会把密码提示连同整个 sudo 子进程一起杀掉，别处自抄一个更短的数字，
+ * 就是在给「密码输得慢的用户」埋「操作失败」的假象。
+ * 导出供 runSudoScript 自身与 process-stop.spec 的「交互式 spawnSync 不得自抄超时」
+ * 哨兵断言引用同一常量。
  */
 export const SUDO_TIMEOUT_MS = 60_000;
 
@@ -58,6 +59,16 @@ export function sudoExitToError(action: string, status: number | null, codeMessa
 }
 
 /**
+ * spawnSync 超时错误（runSudoScript 识别 `error.code === 'ETIMEDOUT'` 后使用）。
+ * 超时与「外部信号终止」的结果形态相同（status=null、signal=SIGTERM），但对用户的
+ * 含义不同：是**本工具的时限**杀掉了进程，脚本可能执行到一半，必须点明超时与可能的
+ * 半截状态，而不是漏出 `spawnSync sudo ETIMEDOUT` 内部串
+ */
+export function sudoTimeoutError(action: string): Error {
+  return new Error(`${action}超时（${SUDO_TIMEOUT_MS / 1000}s 未完成）：密码输入或脚本执行超过时限，操作可能只完成了一部分，请检查后重试`);
+}
+
+/**
  * 写临时 bash 脚本并用单次交互式 sudo 执行（TUN 启动与系统级服务操作共用的范式）。
  * stdio:'inherit' 让 sudo 直接在 TTY 读密码；一个脚本内完成多步 root 操作，只弹一次密码。
  * 退出码 1 保留给 sudo 鉴权取消/密码错误；脚本内部失败用 ≥2 区分，映射见 sudoExitToError。
@@ -82,7 +93,12 @@ export function runSudoScript(scriptBody: string, opts: SudoScriptOptions): void
 
   try {
     const result = spawnSync('sudo', [scriptPath], { stdio: 'inherit', timeout: SUDO_TIMEOUT_MS });
-    if (result.error) throw result.error;
+    // spawnSync 超时同时设置 error=ETIMEDOUT 与 status=null：先判 error 原样抛出会
+    // 绕过下面 sudoExitToError 的 null 分支，把内部串漏给用户
+    if (result.error) {
+      if ((result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') throw sudoTimeoutError(opts.action);
+      throw result.error;
+    }
     if (result.status !== 0) throw sudoExitToError(opts.action, result.status, opts.codeMessages);
   } finally {
     try {
