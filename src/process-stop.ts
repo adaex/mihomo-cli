@@ -95,9 +95,16 @@ function killAllMihomo(): boolean {
 }
 
 /**
- * root 残留（TUN 内核、旧系统级服务）的一次性清理脚本：sudo 内完成
- * pkill + rm pid 文件，**只弹一次密码**。pkill 的 pattern 匹配所有主实例
- * （含用户态进程），故调用方只要发现 root 残留即可整体交给本脚本。
+ * root 残留（TUN 内核、旧系统级服务）的一次性清理脚本：sudo 内只做 pkill，
+ * **只弹一次密码**。pkill 的 pattern 匹配所有主实例（含用户态进程），故调用方
+ * 只要发现 root 残留即可整体交给本脚本。
+ *
+ * 脚本里**不删 pid 文件**——pid 收口唯一在 cleanupAll 末尾（复核 remaining 为空
+ * 才免提权删）。sudo 被取消时脚本根本不执行、pkill 失败时 `exit 2`，两者都可能
+ * 留下活进程；在提权脚本里无条件 `rm pid` 会绕过「活进程不删 isRunning 真相源」
+ * 这道唯一防线（此前仅靠这两条时序间接保证）。且 root 属主 pid 在用户拥有的
+ * runtime/ 下本就能免提权 unlink，放进 sudo 删没有收益。
+ *
  * 退出码协议与 legacy 清理脚本同款：2 = 脚本内真实失败，1 留给 sudo 鉴权取消。
  */
 export function buildKernelCleanupScript(): string {
@@ -107,7 +114,6 @@ export function buildKernelCleanupScript(): string {
     `pkill -9 -f ${shellQuote(MAIN_INSTANCE_PATTERN)} 2>/dev/null`,
     'rc=$?',
     '[ $rc -le 1 ] || exit 2',
-    `rm -f ${shellQuote(PATHS.pidFile)} 2>/dev/null || true`,
     'exit 0',
     '',
   ].join('\n');
@@ -119,7 +125,7 @@ export function buildKernelCleanupScript(): string {
  * - 零进程：免提权清掉 pid 文件（clearPid 对 root 属主残留同样直接删），
  *   删不掉只作 pidError 警告带出，不挡任何命令
  * - 无 root 进程：≤3 个逐 pid 复核命令行后 SIGKILL（防 pid 复用误杀），更多走批量 pkill
- * - 有 root 进程：一次 sudo 脚本（pkill + rm pid）；sudo 非 TTY/取消/失败不抛，
+ * - 有 root 进程：一次 sudo 脚本（只 pkill，不删 pid 文件）；sudo 非 TTY/取消/失败不抛，
  *   经返回值的 scriptError/pidError 与 remaining 交给调用方按各自语境包装
  * - 发信号后**轮询等待死亡**（最多 5s）再复核 pgrep：root 进程被信号终止后由
  *   launchd 收养/收割，立即复核可能仍列到濒死 pid，误报「部分进程未终止」
@@ -181,10 +187,10 @@ export async function cleanupAll(): Promise<CleanupResult> {
     await sleep(PROCESS_WAIT_INTERVAL);
   }
 
-  // 先复核 remaining，再决定是否清 pid 文件：**有进程活着时不得删**——pid 文件是
+  // pid 文件的**唯一收口**：先复核 remaining，**有进程活着时不得删**——pid 文件是
   // isRunning/status 的真相源（getPid 只信它），sudo 被取消、root TUN 仍在路由时
-  // 把文件删掉，status 从此对活着的内核报「未运行」。零进程才收口清理（免提权、
-  // 无交互代价；脚本成功时文件已不存在，clearPid 直接成功）
+  // 把文件删掉，status 从此对活着的内核报「未运行」。零进程才在此免提权清理
+  // （无交互代价；sudo 脚本只 pkill、不碰 pid，root 属主文件同样在此直接 unlink）
   const remaining = getMihomoPids();
   const pidError = remaining.length === 0 ? clearPid() : null;
 

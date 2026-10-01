@@ -140,14 +140,20 @@ export async function cmdReset(args: string[]): Promise<void> {
       });
     }
     // remaining 复核已空、但清理有收尾错误（判据与 stop/服务路径同源 classifyResidueCleanup
-    // 的 'warn' 档）：重置继续走，但静默会让用户以为全部清干净了。归因按字段分开——
-    // scriptError 是 root 清理没走通（可能仍有残留进程），pidError 只是文件没删掉
+    // 的 'warn' 档）：重置继续走，但静默会让用户以为全部清干净了。scriptError 优先——
+    // 它可能意味着仍有进程残留，pidError 只是随后的文件小错（与服务路径归因同优先级）
     if (classifyResidueCleanup(cleanup) === 'warn') {
       const reason = cleanup.scriptError
         ? `root 残留清理未完成（${describeSudoFailure(cleanup.scriptError)}），可能仍有残留进程`
-        : describePidCleanupFailure(cleanup.pidError as Error);
-      console.warn(colors.yellow(`警告: ${reason}`));
-      console.warn(colors.gray('重试清理: mihomo stop'));
+        : cleanup.pidError
+          ? describePidCleanupFailure(cleanup.pidError)
+          : null;
+      // warn 档（remaining 空）下两个字段必有一个非空，reason 不会是 null；
+      // 留守卫是防 classify 判据将来改动后打出空「警告: 」，而非指望类型断言兜底
+      if (reason) {
+        console.warn(colors.yellow(`警告: ${reason}`));
+        console.warn(colors.gray('重试清理: mihomo stop'));
+      }
     }
     // 与 cmdStop 的提前返回同族：serviceActive 为假时上面的 stopService/uninstallService
     // 一个都没跑，没有 disable 可执行，但这里即将删掉 runtime/config.yaml 或 kernel/——

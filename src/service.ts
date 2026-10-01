@@ -509,8 +509,10 @@ export interface RootResidueCleanupContext {
  * 「已取消」；其余失败保留原始消息（scriptError 优先——它先于 pid 收口发生）。
  * remaining 的归因按 scriptError 分：非空 = root 脚本没走通，残留按 root 论；
  * 空 = 没进过 root 分支，残留是用户态没能终止的，不许说成 root 属主。
- * remaining 为空时：pidError = pid 文件残留，仅 scriptError = 进程在死亡等待内
- * 自行退光、清理没走完
+ * remaining 为空时 **scriptError 优先于 pidError**：仅 pidError = pid 文件残留；
+ * scriptError（无论是否并存 pidError）= 进程在死亡等待内自行退光、清理没走完，
+ * 主归因随脚本、pid 文件错误只作附带——「可能仍有进程」比「文件残留」更需用户行动，
+ * 被 pidError 盖成 rm 引导会漏掉潜在的存活内核
  */
 export function buildRootResidueCleanupError(result: Pick<CleanupResult, 'remaining' | 'scriptError' | 'pidError'>, ctx: RootResidueCleanupContext): CliError {
   const { scriptError, pidError } = result;
@@ -521,11 +523,14 @@ export function buildRootResidueCleanupError(result: Pick<CleanupResult, 'remain
     ? scriptError
       ? `root 残留内核仍在运行（${pidList}），可能继续占用代理端口`
       : `残留内核仍在运行（${pidList}）——用户态未能终止，与提权无关`
-    : pidError
-      ? `${describePidCleanupFailure(pidError)}: ${PATHS.pidFile}`
-      : 'root 残留清理未完成，进程目前已不在（死亡等待内自行退出，非 sudo 清理）';
+    : scriptError
+      ? `root 残留清理未完成，进程目前已不在（死亡等待内自行退出，非 sudo 清理）${pidError ? `；${describePidCleanupFailure(pidError)}` : ''}`
+      : pidError
+        ? `${describePidCleanupFailure(pidError)}: ${PATHS.pidFile}`
+        : 'root 残留未被清理干净';
   const hint = [ctx.mainOutcome, residueHint, `重新运行可再次尝试清理: ${ctx.retryCommand}`];
-  hint.push(hasKernelResidue || !pidError ? '手动清理: sudo pkill -9 mihomo' : `手动清理: sudo rm -f ${PATHS.pidFile}`);
+  // 有 kernel 残留、或脚本没走完（可能仍有进程）→ pkill 幂等兜底；仅 pid 文件残留才引导 rm
+  hint.push(hasKernelResidue || scriptError ? '手动清理: sudo pkill -9 mihomo' : `手动清理: sudo rm -f ${PATHS.pidFile}`);
   if (cancelled) {
     return new CliError('管理员密码未输入或有误，root 残留未被清理', { label: '已取消', hint });
   }

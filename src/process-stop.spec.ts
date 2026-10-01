@@ -149,9 +149,10 @@ describe('cleanupAll 真实杀进程', () => {
     assert.equal(result.pidError, null, '用户态 pid 文件无需提权');
   });
 
-  it('零进程时同样清掉 pid 文件（免提权，root 属主残留也直接删、不弹密码）', async () => {
+  it('零进程时同样清掉 pid 文件（免提权清理、不弹密码）', async () => {
     // pid 文件在 runtime/（用户属主目录、无 sticky bit），unlink 不看文件属主——
-    // 零进程清它没有任何提权代价，删不掉才要警告（root 属主 + sudo 的旧路径已删）
+    // 零进程清它没有任何提权代价，删不掉才要警告（root 属主 + sudo 的旧路径已删）。
+    // 本用例造不出 root 属主文件，「文件自身权限无关」的同构验证见下方 clearPid 组
     fs.writeFileSync(PATHS.pidFile, '99999');
     const result = await cleanupAll();
     assert.equal(result.killed, 0);
@@ -162,16 +163,37 @@ describe('cleanupAll 真实杀进程', () => {
 });
 
 /**
+ * clearPid 免提权的 POSIX 判据：unlink 一个目录项只查**父目录**的写权限，与文件
+ * 自身的写位、属主都无关。root 属主文件无法在非特权测试里 chown 制造，可自动化的
+ * 同构事实是把文件置为只读（0444，自身不可写）——父目录 runtime/ 可写时照样删掉。
+ * 文件「写位」与「属主」对删除都不构成条件，root 属主的 TUN 残留与此同构。
+ */
+describe('clearPid 免提权：删除只看父目录，不看文件自身', () => {
+  it('文件自身只读（0444）仍删除成功', () => {
+    fs.writeFileSync(PATHS.pidFile, '99999', { mode: 0o444 });
+    assert.equal(fs.existsSync(PATHS.pidFile), true);
+    assert.equal(clearPid(), null, '只读文件不应产生删除错误（unlink 查父目录而非文件写位）');
+    assert.equal(fs.existsSync(PATHS.pidFile), false, '文件必须真的没了，不是「调用没报错」');
+  });
+
+  it('文件本就不存在按干净状态处理（返回 null，不报错）', () => {
+    fs.rmSync(PATHS.pidFile, { force: true });
+    assert.equal(clearPid(), null);
+  });
+});
+
+/**
  * root 残留清理脚本的退出码协议（与 legacy 清理脚本同款）：脚本内部失败用 2，
- * 1 留给 sudo 鉴权取消/密码错误（runSudoScript 的映射依赖这个分工）；
- * pkill 与 rm pid 必须在同一次 sudo 内完成，只弹一次密码。
+ * 1 留给 sudo 鉴权取消/密码错误（runSudoScript 的映射依赖这个分工）。
+ * 脚本**只 pkill、不碰 pid 文件**：pid 收口唯一在 cleanupAll 末尾（复核 remaining
+ * 为空才免提权删），提权脚本里任何 rm 都会绕过「活进程不删真相源」的防线。
  */
 describe('buildKernelCleanupScript：root 残留清理脚本协议', () => {
   const script = buildKernelCleanupScript();
 
-  it('一次脚本同时 pkill 与 rm pid 文件（只弹一次密码）', () => {
+  it('脚本只 pkill，不含任何 rm（pid 收口唯一在 cleanupAll 末尾）', () => {
     assert.match(script, /pkill -9 -f/);
-    assert.match(script, /rm -f .*pid/);
+    assert.doesNotMatch(script, /\brm\b/, '提权脚本删 pid = 绕过「活进程不删 isRunning 真相源」的唯一防线');
   });
 
   it('pkill 异常退出（2/3）报 exit 2，脚本内不出现裸 exit 1', () => {

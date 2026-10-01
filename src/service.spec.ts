@@ -669,6 +669,30 @@ describe('buildRootResidueCleanupError', () => {
     );
     assert.ok(!err.hint.some(l => l.startsWith('手动清理: sudo rm -f')), '不该引导用户去删可能不存在的 pid 文件');
   });
+
+  it('scriptError 与 pidError 并存（无残留进程）→ 主归因随脚本、pid 仅附带，手动命令给 pkill', () => {
+    // 近乎不可达（sudo 脚本失败 + 进程在死亡等待内自行退光 + runtime 权限异常三重），
+    // 但优先级必须钉死：「可能仍有进程」比「文件残留」更需用户行动。旧逻辑按 pidError
+    // 优先，会把它说成 pid 文件残留并引导 rm，漏掉潜在存活内核
+    const err = buildRootResidueCleanupError(
+      { remaining: [], scriptError: new Error('终止残留内核失败（pkill 退出码异常）'), pidError: new Error('EACCES: permission denied') },
+      ctx,
+    );
+    assert.equal(err.label, '清理残留进程失败');
+    assert.ok(
+      err.hint.some(l => l.includes('清理未完成，进程目前已不在')),
+      '主归因是脚本未走完',
+    );
+    assert.ok(
+      err.hint.some(l => l.includes('pid 文件未能清理')),
+      'pid 文件错误作为附带也要带出，不能丢',
+    );
+    assert.ok(
+      err.hint.some(l => l.startsWith('手动清理: sudo pkill -9 mihomo')),
+      '有脚本错误时给 pkill（幂等覆盖潜在存活进程）',
+    );
+    assert.ok(!err.hint.some(l => l.startsWith('手动清理: sudo rm -f')), '不该把用户引向 rm 而漏掉潜在进程');
+  });
 });
 
 /**
