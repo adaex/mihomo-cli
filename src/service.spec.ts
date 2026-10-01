@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,7 +19,7 @@ import {
   parseDisabledList,
   parseServicePrint,
   shouldAbortStartOnDisable,
-  waitServiceHealthy,
+  waitUntilUnloaded,
 } from './service.js';
 import { SudoAuthError } from './sudo.js';
 import type { ServiceStatus } from './types.js';
@@ -734,8 +734,22 @@ describe('buildLegacyCleanupScript：sudo 脚本退出码协议', () => {
  * 桩 launchctl 由控制文件驱动：fail = print 一律 112，其余输出 running fixture。
  */
 describe('waitServiceHealthy：轮询期间 launchctl 查询失败的容错', () => {
-  function writeStubLaunchctl(binDir: string, modeFile: string): void {
-    const script = `#!/bin/bash
+  /**
+   * 子进程 + MIHOMO_CLI_DIR 隔离：healthViaProcessProbe 的 pgrep pattern 锚定
+   * PATHS.mihomoBinary——父进程直接调时 pattern 指向真实 ~/.mihomo-cli，开发机上
+   * 自己的内核在跑会让 healthy:false 用例假红、pid 断言飘（D11：进程匹配类测试
+   * 必须断言隔离前提）。真实用到的系统工具只有 pgrep（pattern 锚定隔离目录，
+   * 匹配不到任何真实进程）。
+   */
+  function runHealthScenario(scenario: { initialMode: 'fail' | 'notrunning' | 'ok'; switchTo?: { mode: string; afterMs: number }; fakeKernel?: boolean }): {
+    stdout: string;
+  } {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-health-'));
+    const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-health-bin-'));
+    const modeFile = path.join(dataDir, 'mode');
+    const servicePath = path.resolve('src/service.ts');
+    const pathsPath = path.resolve('src/paths.ts');
+    const stubLaunchctl = `#!/bin/bash
 if [ "$1" = "print" ]; then
   mode="$(cat "${modeFile}" 2>/dev/null)"
   if [ "$mode" = "fail" ]; then
@@ -750,123 +764,197 @@ FIXTURE
   cat <<'FIXTURE'
 ${REAL_PRINT_RUNNING}
 FIXTURE
+  fi
+  exit 0
+`;
+    fs.writeFileSync(path.join(fakeBin, 'launchctl'), stubLaunchctl);
+    fs.chmodSync(path.join(fakeBin, 'launchctl'), 0o755);
+    fs.writeFileSync(modeFile, scenario.initialMode);
+    const fakeKernelSetup = scenario.fakeKernel
+      ? [
+          "const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)', PATHS.mihomoBinary, '-f', PATHS.configFile], { detached: true, stdio: 'ignore' });",
+          'child.unref();',
+          'kernelPid = child.pid;',
+          'for (let i = 0; i < 50; i++) {',
+          "  const r = spawnSync('pgrep', ['-f', String(kernelPid)], { encoding: 'utf8' });",
+          "  if (r.status === 0 && r.stdout.split('\\n').includes(String(kernelPid))) break;",
+          "  spawnSync(process.execPath, ['-e', 'setTimeout(() => {}, 50)']);",
+          '}',
+        ].join('\n')
+      : '';
+    const switchSetup = scenario.switchTo
+      ? `setTimeout(() => fs.writeFileSync(${JSON.stringify(modeFile)}, ${JSON.stringify(scenario.switchTo.mode)}), ${scenario.switchTo.afterMs});`
+      : '';
+    const script = [
+      "import { spawn, spawnSync } from 'node:child_process';",
+      "import fs from 'node:fs';",
+      `const { PATHS } = await import(${JSON.stringify(pathsPath)});`,
+      `const { waitServiceHealthy } = await import(${JSON.stringify(servicePath)});`,
+      "console.log('ISOLATION:' + (PATHS.mihomoBinary.startsWith(process.env.MIHOMO_CLI_DIR) ? 'ok' : PATHS.mihomoBinary));",
+      'let kernelPid = null;',
+      fakeKernelSetup,
+      switchSetup,
+      'try {',
+      '  const health = await waitServiceHealthy();',
+      "  console.log('HEALTH:' + JSON.stringify({ healthy: health.healthy, crashed: health.crashed, pid: health.pid, kernelPid }));",
+      '} catch (e) {',
+      "  console.log('HEALTH:THREW:' + e.message);",
+      '} finally {',
+      "  if (kernelPid) try { process.kill(kernelPid, 'SIGKILL'); } catch {}",
+      '}',
+    ].join('\n');
+    try {
+      const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+        encoding: 'utf8',
+        timeout: 60_000,
+        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, PATH: `${fakeBin}:${process.env.PATH}` },
+      });
+      assert.equal(r.status, 0, r.stderr);
+      return { stdout: r.stdout };
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      fs.rmSync(fakeBin, { recursive: true, force: true });
+    }
+  }
+
+  const isolationOk = (stdout: string) => {
+    assert.match(stdout.split('\n').find(l => l.startsWith('ISOLATION:')) ?? '', /ISOLATION:ok/, '隔离前提：pgrep pattern 必须锚定临时数据目录');
+  };
+  const healthOf = (stdout: string): { healthy: boolean; crashed: boolean; pid: number | null; kernelPid: number | null } => {
+    const line = stdout.split('\n').find(l => l.startsWith('HEALTH:'));
+    assert.ok(line && !line.startsWith('HEALTH:THREW'), `应正常返回: ${line}`);
+    return JSON.parse(line.slice('HEALTH:'.length));
+  };
+
+  it('查询持续失败 + 无内核进程：不抛错，落回 healthy:false 的诚实结论', () => {
+    const { stdout } = runHealthScenario({ initialMode: 'fail' });
+    isolationOk(stdout);
+    const health = healthOf(stdout);
+    assert.equal(health.healthy, false);
+    assert.equal(health.crashed, false);
+  });
+
+  it('查询中途恢复（running）：窗口内跳过失败轮次，结论 healthy:true', () => {
+    const { stdout } = runHealthScenario({ initialMode: 'fail', switchTo: { mode: 'ok', afterMs: 300 } });
+    isolationOk(stdout);
+    const health = healthOf(stdout);
+    assert.equal(health.healthy, true);
+    assert.equal(health.pid, 5474);
+  });
+
+  it('第一阶段 not running + 宽限期查询全失败：陈旧快照不得直接当结论，进程活着则兜底 healthy:true', () => {
+    const { stdout } = runHealthScenario({ initialMode: 'notrunning', switchTo: { mode: 'fail', afterMs: 400 }, fakeKernel: true });
+    isolationOk(stdout);
+    const health = healthOf(stdout);
+    assert.equal(health.healthy, true, '宽限期查询全失败时陈旧快照不可信：进程活着须兜底判健康');
+    assert.equal(health.pid, health.kernelPid);
+  });
+
+  it('查询持续失败 + 内核进程活着：进程探测兜底判 healthy:true，不报假失败', () => {
+    const { stdout } = runHealthScenario({ initialMode: 'fail', fakeKernel: true });
+    isolationOk(stdout);
+    const health = healthOf(stdout);
+    assert.equal(health.healthy, true, '进程活着是强证据，不得报成启动失败');
+    assert.equal(health.pid, health.kernelPid);
+  });
+});
+
+describe('waitUntilUnloaded：轮询耗尽是「报停止成功是谎报」的唯一闸门', () => {
+  /** 桩 print 恒报装载（exit 0 + running fixture），25 轮 × 200ms 后必须抛错而非通过 */
+  it('bootout 未生效（恒装载）抛「服务卸载超时」，不带着「已卸载」往下走', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-unloaded-'));
+    const binDir = path.join(tmpDir, 'bin');
+    fs.mkdirSync(binDir);
+    const stub = `#!/bin/bash
+if [ "$1" = "print" ]; then
+  cat <<'FIXTURE'
+${REAL_PRINT_RUNNING}
+FIXTURE
   exit 0
 fi
 exit 0
 `;
-    fs.writeFileSync(path.join(binDir, 'launchctl'), script);
+    fs.writeFileSync(path.join(binDir, 'launchctl'), stub);
     fs.chmodSync(path.join(binDir, 'launchctl'), 0o755);
-  }
-
-  /** 桩「内核」：真实存在的可执行文件（node 自身），命令行匹配 MAIN_INSTANCE_PATTERN（binary + -f configFile） */
-  function spawnFakeKernel(): number {
-    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)', PATHS.mihomoBinary, '-f', PATHS.configFile], {
-      detached: true,
-      stdio: 'ignore',
-    });
-    child.unref();
-    return child.pid as number;
-  }
-
-  function waitPgrepSeesPid(pid: number): void {
-    for (let i = 0; i < 50; i++) {
-      const r = spawnSync('pgrep', ['-f', String(pid)], { encoding: 'utf8' });
-      if (r.status === 0 && r.stdout.split('\n').includes(String(pid))) return;
-      spawnSync(process.execPath, ['-e', 'setTimeout(() => {}, 50)']);
-    }
-  }
-
-  it('查询持续失败 + 无内核进程：不抛错，落回 healthy:false 的诚实结论', async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-health-'));
-    const modeFile = path.join(tmpDir, 'mode');
-    const binDir = path.join(tmpDir, 'bin');
-    fs.mkdirSync(binDir);
-    writeStubLaunchctl(binDir, modeFile);
-    fs.writeFileSync(modeFile, 'fail');
     const originalPath = process.env.PATH;
     process.env.PATH = `${binDir}:${originalPath}`;
     try {
-      const health = await waitServiceHealthy();
-      assert.equal(health.healthy, false);
-      assert.equal(health.crashed, false);
+      await assert.rejects(waitUntilUnloaded('gui/501/com.mihomo-cli.test.never-booted'), e => {
+        assert.match((e as CliError).message, /服务卸载超时/);
+        assert.match((e as CliError).message, /仍处于装载状态/);
+        return true;
+      });
     } finally {
       process.env.PATH = originalPath;
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+});
 
-  it('查询中途恢复（running）：窗口内跳过失败轮次，结论 healthy:true', async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-health-'));
-    const modeFile = path.join(tmpDir, 'mode');
-    const binDir = path.join(tmpDir, 'bin');
-    fs.mkdirSync(binDir);
-    writeStubLaunchctl(binDir, modeFile);
-    fs.writeFileSync(modeFile, 'fail');
-    const originalPath = process.env.PATH;
-    process.env.PATH = `${binDir}:${originalPath}`;
+describe('disableServiceAutoStart：位未生效复核（TUN 防线第一层的失败可见性）', () => {
+  /**
+   * 子进程 + MIHOMO_CLI_DIR：disable 与 bumpStopEpoch 都写真实数据目录，父进程
+   * 静态 import 的 PATHS 已绑定开发机路径。桩 launchctl 让 disable 退出 0 但
+   * print-disabled 报空表——命令成功 ≠ 位生效，此时必须抛错而非报「已关闭自启」。
+   */
+  function runDisableCase(printDisabledBody: (label: string) => string): { stdout: string } {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-disable-'));
+    const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-disable-bin-'));
+    const label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
+    const servicePath = path.resolve('src/service.ts');
+    const stub = `#!/bin/bash
+case "$1" in
+  disable) exit 0 ;;
+  print-disabled)
+    cat <<'FIXTURE'
+${printDisabledBody(label)}
+FIXTURE
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+`;
+    fs.writeFileSync(path.join(fakeBin, 'launchctl'), stub);
+    fs.chmodSync(path.join(fakeBin, 'launchctl'), 0o755);
+    const script = [
+      "import fs from 'node:fs';",
+      `const { disableServiceAutoStart } = await import(${JSON.stringify(servicePath)});`,
+      'try {',
+      '  disableServiceAutoStart(1000);',
+      "  console.log('RESULT:NO-THROW');",
+      '} catch (e) {',
+      "  console.log('RESULT:' + e.message);",
+      '}',
+      "console.log('EPOCH_EXISTS:' + fs.existsSync(process.env.MIHOMO_CLI_DIR + '/service-stop-epoch'));",
+    ].join('\n');
     try {
-      // 首轮失败后被「恢复」（模拟 launchctl 抖动结束）
-      setTimeout(() => fs.writeFileSync(modeFile, 'ok'), 300);
-      const health = await waitServiceHealthy();
-      assert.equal(health.healthy, true);
-      assert.equal(health.pid, 5474);
+      const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: label, PATH: `${fakeBin}:${process.env.PATH}` },
+      });
+      assert.equal(r.status, 0, r.stderr);
+      return { stdout: r.stdout };
     } finally {
-      process.env.PATH = originalPath;
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      fs.rmSync(fakeBin, { recursive: true, force: true });
     }
+  }
+
+  it('disable 退出 0 但 print-disabled 报空表：抛「位未生效」，且不递增停止计数', () => {
+    const { stdout } = runDisableCase(() => '{}\n');
+    const resultLine = stdout.split('\n').find(l => l.startsWith('RESULT:'));
+    assert.ok(resultLine && !resultLine.includes('NO-THROW'), '位未生效必须抛错');
+    assert.match(resultLine, /disable 位未生效/);
+    assert.match(
+      stdout.split('\n').find(l => l.startsWith('EPOCH_EXISTS:')) ?? '',
+      /EPOCH_EXISTS:false/,
+      '失败的 disable 不得记「停止过」（并发 start 会白白中止）',
+    );
   });
 
-  it('第一阶段 not running + 宽限期查询全失败：陈旧快照不得直接当结论，进程活着则兜底 healthy:true', async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-health-'));
-    const modeFile = path.join(tmpDir, 'mode');
-    const binDir = path.join(tmpDir, 'bin');
-    fs.mkdirSync(binDir);
-    writeStubLaunchctl(binDir, modeFile);
-    // 第一阶段快照 = not running（loaded）；窗口中途 launchctl 转 fail，宽限期查询全失败
-    fs.writeFileSync(modeFile, 'notrunning');
-    const originalPath = process.env.PATH;
-    process.env.PATH = `${binDir}:${originalPath}`;
-    const kernelPid = spawnFakeKernel();
-    waitPgrepSeesPid(kernelPid);
-    try {
-      setTimeout(() => fs.writeFileSync(modeFile, 'fail'), 400);
-      const health = await waitServiceHealthy();
-      assert.equal(health.healthy, true, '宽限期查询全失败时陈旧快照不可信：进程活着须兜底判健康');
-      assert.equal(health.pid, kernelPid);
-    } finally {
-      process.env.PATH = originalPath;
-      try {
-        process.kill(kernelPid, 'SIGKILL');
-      } catch {
-        /* 已退出 */
-      }
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it('查询持续失败 + 内核进程活着：进程探测兜底判 healthy:true，不报假失败', async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-health-'));
-    const modeFile = path.join(tmpDir, 'mode');
-    const binDir = path.join(tmpDir, 'bin');
-    fs.mkdirSync(binDir);
-    writeStubLaunchctl(binDir, modeFile);
-    fs.writeFileSync(modeFile, 'fail');
-    const originalPath = process.env.PATH;
-    process.env.PATH = `${binDir}:${originalPath}`;
-    const kernelPid = spawnFakeKernel();
-    waitPgrepSeesPid(kernelPid);
-    try {
-      const health = await waitServiceHealthy();
-      assert.equal(health.healthy, true, '进程活着是强证据，不得报成启动失败');
-      assert.equal(health.pid, kernelPid);
-    } finally {
-      process.env.PATH = originalPath;
-      try {
-        process.kill(kernelPid, 'SIGKILL');
-      } catch {
-        /* 已退出 */
-      }
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+  it('位真生效（print-disabled 含本 label）：不抛错，停止计数随之递增', () => {
+    const { stdout } = runDisableCase(label => `\t\t"${label}" => disabled\n`);
+    assert.match(stdout.split('\n').find(l => l.startsWith('RESULT:')) ?? '', /NO-THROW/);
+    assert.match(stdout.split('\n').find(l => l.startsWith('EPOCH_EXISTS:')) ?? '', /EPOCH_EXISTS:true/);
   });
 });
