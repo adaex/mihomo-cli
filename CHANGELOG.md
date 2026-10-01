@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### 修复
+
+- **健康轮询宽限期与观察窗同兜底**：第二阶段（宽限窗）launchctl 查询全失败时，不再拿第一阶段末尾的陈旧「未运行」快照当结论——进程探测兜底与第一阶段同一判据
+- **凭据脱敏补 hysteria2 realm-opts 的 `token`**（realm 认证令牌）
+- **update 版本决策不再裸奔**：抽纯函数 `resolveUpdateAction` 并补测试（领先拦截/已最新跳过/落后继续/查询失败降级/非 semver 五路），`getLatestNpmVersion` 补桩 npm 三态用例
+- `config` 展示的终端安全锁结构用例：js-yaml 对控制字符一律转义，dump 输出无原始控制字节（防止未来换序列化实现或新增绕过 dump 的展示形态时静默引入注入面）
+
+### 内部
+
+- help.spec 补整页帮助的别名行（列出全部入口）与快捷命令节（tun/use/restart）断言；log.ts 归档文件名注释修正；`mihomo-cli ui` 的运行态查询无容错记入 CODE_REVIEW（纯打开操作、失败重跑成本为零）
+
 ### 变更（breaking）
 
 - **命令入口收敛为 `mihomo-cli` + `mh`**：`mihomo` / `mhm` 别名移除——`mihomo` 与内核二进制同名，两个包管理器的全局 bin 会互相覆盖。从旧版升级后旧的 `mihomo` / `mhm` 链接由 npm 自动清理；全文命令示例与提示文案统一改用 `mihomo-cli`
