@@ -39,7 +39,7 @@ describe('parseMirrorArg', () => {
   });
 
   it('重复的 --mirror 报错，hint 直接给出可用镜像而非指向不存在的命令级 --help', () => {
-    // 提示里若写「见 mihomo kernel --help」，用户照做会撞上 assertKnownFlags 的
+    // 提示里若写「见 mihomo-cli kernel --help」，用户照做会撞上 assertKnownFlags 的
     // 「未知的选项: --help」——`--help` 只是顶层 help 的别名，命令级并不接受它。
     // 把人指向一个必定报错的命令比不给提示更糟，故断言镜像清单真的列了出来
     for (const args of [

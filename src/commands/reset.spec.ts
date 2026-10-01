@@ -179,7 +179,7 @@ describe('reset 目标解析的防呆', () => {
   });
 
   it('reset config 报未知目标（config 不是 settings 的别名）', () => {
-    // 回归：`config` 曾在 settings 目标的别名里，与用户从 `mihomo config` 命令得到的
+    // 回归：`config` 曾在 settings 目标的别名里，与用户从 `mihomo-cli config` 命令得到的
     // 「运行配置」直觉对撞（那属于 runtime 目标）；`reset config -y` 会删超预期的
     // 订阅列表/端口/密钥。未知目标报错 + 目标列表兜底
     withFixture((dataDir, run) => {

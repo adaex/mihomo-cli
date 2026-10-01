@@ -143,7 +143,7 @@ exit 0
 `;
 
 /**
- * 热重载场景脚本：起一个桩 external-controller（/version 自报 mihomo、PUT /configs
+ * 热重载场景脚本：起一个桩 external-controller（/version 自报 mihomo-cli、PUT /configs
  * 返回 204），让真实 launchOrRestart 走完「running 且未 disabled → restartService →
  * tryHotReload」全链路。BUMP=1 时在 PUT 到达的那一刻用真实 recordServiceStopped
  * 递增停止计数——复现「热重载刚被内核接受、并发的 stop 随即完成」这一交错。

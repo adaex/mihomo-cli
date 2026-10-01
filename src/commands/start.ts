@@ -22,7 +22,7 @@ export function resolveStartMode(args: string[]): 'tun' | 'mixed' {
   const modeArg = getNonFlagArg(args, 1);
   const modeToken = modeArg?.toLowerCase();
   if (modeToken !== undefined && modeToken !== 'tun' && modeToken !== 'mixed') {
-    throw new CliError(`未知的启动模式: ${modeArg}`, { hint: '用法: mihomo start [tun|mixed]（默认 mixed）' });
+    throw new CliError(`未知的启动模式: ${modeArg}`, { hint: '用法: mihomo-cli start [tun|mixed]（默认 mixed）' });
   }
   return modeToken === 'tun' ? 'tun' : 'mixed';
 }
@@ -31,7 +31,7 @@ export async function cmdStart(args: string[]): Promise<void> {
   assertKnownFlags(args, ['-s', '--no-update', '-u', '--update-timeout'], 'start [tun|mixed]');
   // 位置参数至多一个（模式）：`start mixed garbage` 此前忽略 garbage 继续执行。
   // 放在 hasKernel 等状态检查之前——参数错误应在任何环境副作用之前报出
-  assertPositionalCount(args, 1, 1, 'mihomo start [tun|mixed] [-s] [-u ms]');
+  assertPositionalCount(args, 1, 1, 'mihomo-cli start [tun|mixed] [-s] [-u ms]');
   const targetMode = resolveStartMode(args);
   // 选项值非法（-u 5s）必须在任何环境状态检查之前报出：参数错误先于副作用，
   // 也不该让用户先看到「未找到内核」再发现自己选项写错（ow on 已有同款提前校验）
@@ -41,7 +41,7 @@ export async function cmdStart(args: string[]): Promise<void> {
   let disabledAutoStartForTun = false;
 
   if (!hasKernel()) {
-    throw new CliError('未找到内核', { hint: '下载内核: mihomo kernel' });
+    throw new CliError('未找到内核', { hint: '下载内核: mihomo-cli kernel' });
   }
 
   // 并发判定的基线由 main() 在命令入口捕获（service.ts captureStopEpochBaseline），
@@ -70,7 +70,7 @@ export async function cmdStart(args: string[]): Promise<void> {
     // 此时起 TUN 是正常用法。只看 installed 会把它一并拦掉，与「stop 后可用 tun」矛盾
     if (serviceBefore.loaded) {
       throw new CliError('服务正在运行，无法启动 TUN', {
-        hint: ['两者会抢占同一组端口与配置。请先停止服务:', '  mihomo stop', '', 'TUN 用完后 mihomo start 可恢复服务'],
+        hint: ['两者会抢占同一组端口与配置。请先停止服务:', '  mihomo-cli stop', '', 'TUN 用完后 mihomo-cli start 可恢复服务'],
       });
     }
 
@@ -86,7 +86,7 @@ export async function cmdStart(args: string[]): Promise<void> {
       disableServiceAutoStart();
       disabledAutoStartForTun = true;
       console.log(colors.gray('已临时关闭服务自启（避免重启后服务拿 TUN 配置启动）'));
-      console.log(colors.gray('TUN 用完后 mihomo start 可恢复'));
+      console.log(colors.gray('TUN 用完后 mihomo-cli start 可恢复'));
       console.log('');
     } else {
       // disable 位已在（上次 stop/tun 留下，起 TUN 的最常见前置）或服务根本未装——
@@ -104,11 +104,11 @@ export async function cmdStart(args: string[]): Promise<void> {
     // 「已装载」的旧任务，得先 uninstall 清干净
     if (serviceBefore.loaded) {
       throw new CliError('服务处于异常状态（plist 不存在，但任务仍装载）', {
-        hint: ['先清理残留任务，再重新安装:', '  mihomo uninstall', '  mihomo install'],
+        hint: ['先清理残留任务，再重新安装:', '  mihomo-cli uninstall', '  mihomo-cli install'],
       });
     }
     throw new CliError('服务未安装', {
-      hint: ['Mixed 模式由 launchd 服务托管，需先安装:', '  mihomo install', '', '临时使用可走 TUN: mihomo tun'],
+      hint: ['Mixed 模式由 launchd 服务托管，需先安装:', '  mihomo-cli install', '', '临时使用可走 TUN: mihomo-cli tun'],
     });
   }
 
@@ -142,7 +142,7 @@ export async function cmdStart(args: string[]): Promise<void> {
     // sudo 取消/内核没起来时，自启位已经关掉了——只报启动失败会让用户以为一切照旧，
     // 下次开机才发现代理没回来
     if (targetMode === 'tun' && disabledAutoStartForTun) {
-      extraHint.push('', '服务自启已被关闭（启动 TUN 前关闭以避免自启失败循环）。', '恢复 Mixed 模式: mihomo start');
+      extraHint.push('', '服务自启已被关闭（启动 TUN 前关闭以避免自启失败循环）。', '恢复 Mixed 模式: mihomo-cli start');
     }
     if (e instanceof CliError) {
       throw new CliError(e.message, { label: e.label, hint: [...e.hint, ...extraHint] });
@@ -160,7 +160,7 @@ export async function cmdStart(args: string[]): Promise<void> {
     printSystemProxyHint(getPorts().mixed);
   } else {
     // TUN 是 root 临时进程：关终端、退出 shell 都不会停它，「怎么收掉」必须随成功一起告知
-    console.log(colors.gray('TUN 为临时进程，关闭终端不会停止；停止: mihomo stop（之后 mihomo start 恢复 Mixed）'));
+    console.log(colors.gray('TUN 为临时进程，关闭终端不会停止；停止: mihomo-cli stop（之后 mihomo-cli start 恢复 Mixed）'));
   }
   console.log('');
 }

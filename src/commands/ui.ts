@@ -34,13 +34,13 @@ function copyToClipboard(text: string): boolean {
 export function cmdUI(args: string[]): void {
   assertKnownFlags(args.slice(1), ['-c', '--copy-secret'], 'ui [zash|dash|yacd] [-c]');
   // 名称至多一个：`ui zash extra` 此前静默忽略 extra；校验先于打开浏览器等副作用
-  assertPositionalCount(args, 1, 1, 'mihomo ui [zash|dash|yacd] [-c]');
+  assertPositionalCount(args, 1, 1, 'mihomo-cli ui [zash|dash|yacd] [-c]');
   const uiName = resolveUiName(args);
   const copySecret = hasFlag(args, '-c', '--copy-secret');
 
   // UI 依赖 external-controller，未运行时打开也连不上：先提醒再照常打开（用户可能只是想看看面板）
   if (!getRunningState().running) {
-    console.log(colors.yellow('提示: mihomo 未运行，UI 暂时无法连接（先执行 mihomo start 启动）'));
+    console.log(colors.yellow('提示: mihomo-cli 未运行，UI 暂时无法连接（先执行 mihomo-cli start 启动）'));
     console.log('');
   }
 
@@ -72,7 +72,7 @@ export function cmdUI(args: string[]): void {
         copyToClipboard(secret) ? '访问密钥已复制到剪贴板，UI 连接时粘贴' : colors.yellow('访问密钥复制失败，请到 settings.json 查看 controller_secret'),
       );
     } else {
-      console.log(colors.gray('已配置访问密钥，UI 连接时需输入（mihomo ui -c 可复制到剪贴板）'));
+      console.log(colors.gray('已配置访问密钥，UI 连接时需输入（mihomo-cli ui -c 可复制到剪贴板）'));
     }
   }
   console.log('');

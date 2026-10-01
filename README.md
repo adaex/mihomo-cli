@@ -15,15 +15,15 @@
 - 🛡️ **服务托管** - 基于 launchd，崩溃/登录自动拉起，代理后台常驻；日常 `start`/`stop` **全程免密**
 - 🔄 **双模式支持** - Mixed 模式和 TUN 透明代理模式
 - 📊 **状态监控** - 查看运行状态、内存占用、订阅流量、到期时间与更新新鲜度（紧急度着色，`--json` 机器可读）
-- 🩺 **体检诊断** - `mihomo doctor` 一键检查内核/服务/端口/订阅/配置/连通性/内核与 CLI 版本并给修复指引
-- 🔌 **端口逃生口** - 默认 7890/9090 可经 `settings.json` 的 `ports` 覆盖，status 与 `mihomo ui` 会显示实际端口
+- 🩺 **体检诊断** - `mihomo-cli doctor` 一键检查内核/服务/端口/订阅/配置/连通性/内核与 CLI 版本并给修复指引
+- 🔌 **端口逃生口** - 默认 7890/9090 可经 `settings.json` 的 `ports` 覆盖，status 与 `mihomo-cli ui` 会显示实际端口
 - 🔌 **连通性探测** - 启动与状态展示独立确认「代理真的通」，不通时归因到订阅过期/流量用尽/节点失效
-- 🔎 **查看生效配置** - `mihomo config [--json] [--reveal]` 展示由订阅与覆写推导出的运行配置，停止状态下同样可用；节点密码、UUID、provider 订阅 token 等凭据默认脱敏
+- 🔎 **查看生效配置** - `mihomo-cli config [--json] [--reveal]` 展示由订阅与覆写推导出的运行配置，停止状态下同样可用；节点密码、UUID、provider 订阅 token 等凭据默认脱敏
 - 📝 **日志管理** - 每次启动归档上一次日志，保留 7 天，支持列表/跟随/编号查看
 - 🎨 **Web UI** - 一键打开 Web 控制面板 (zash/metacubexd/yacd)
 - 🔄 **内核更新** - 自动检查更新，支持 GitHub 镜像加速
 - 💡 **容错提示** - 命令/子命令拼错时给出 did-you-mean 纠错建议
-- ⌨️ **命令别名** - `mihomo` / `mhm` / `mh` 均可调用
+- ⌨️ **命令别名** - `mihomo-cli` / `mh` 均可调用
 
 ## 安装
 
@@ -45,39 +45,39 @@ npm link
 
 ## 快速开始
 
-> 全新环境直接运行 `mihomo`（不带参数）会显示状态与「开始使用」引导：缺哪步列哪步。
+> 全新环境直接运行 `mihomo-cli`（不带参数）会显示状态与「开始使用」引导：缺哪步列哪步。
 
 ### 1. 下载内核
 
 ```bash
 # 自动选择通道：gh > 本机代理 > 直连
-mihomo kernel
+mihomo-cli kernel
 
 # 国内网络强制走镜像（裸 --mirror 固定走裸域 gh-proxy.org）
-mihomo kernel --mirror
+mihomo-cli kernel --mirror
 
 # 或用短别名指定镜像（纯 IPv6 网络用 v6）
-mihomo kernel --mirror cdn
-mihomo kernel --mirror v6
+mihomo-cli kernel --mirror cdn
+mihomo-cli kernel --mirror v6
 
-# mihomo 没在跑、但本机有别的代理工具时，经指定代理出网（纯端口视为 127.0.0.1）
-mihomo kernel --proxy 7897
-mihomo kernel --proxy socks5://127.0.0.1:7897
+# mihomo-cli 没在跑、但本机有别的代理工具时，经指定代理出网（纯端口视为 127.0.0.1）
+mihomo-cli kernel --proxy 7897
+mihomo-cli kernel --proxy socks5://127.0.0.1:7897
 ```
 
 ### 2. 添加订阅
 
 ```bash
-mihomo sub add "https://your-subscription-url" "my-proxy"
+mihomo-cli sub add "https://your-subscription-url" "my-proxy"
 
 # 或先在机场页面复制订阅链接，再运行（交互下自动读取剪贴板，确认后添加）
-mihomo sub add
+mihomo-cli sub add
 ```
 
 ### 3. 安装服务
 
 ```bash
-mihomo install
+mihomo-cli install
 ```
 
 Mixed 模式由 launchd 服务托管（崩溃/登录自动拉起），只需装这一次。全程免密，详见「服务托管」。
@@ -86,24 +86,24 @@ Mixed 模式由 launchd 服务托管（崩溃/登录自动拉起），只需装�
 
 ```bash
 # Mixed 模式（默认），同时开启登录自启
-mihomo start
+mihomo-cli start
 
 # 再次执行 start = 重启并应用新配置
-mihomo start
+mihomo-cli start
 
 # 停止并关闭登录自启
-mihomo stop
+mihomo-cli stop
 
 # 临时 TUN 透明代理（不走服务，需管理员权限）
-mihomo tun
+mihomo-cli tun
 ```
 
 ### 5. 打开 Web UI
 
 ```bash
-mihomo ui          # 默认 zash
-mihomo ui dash     # metacubexd
-mihomo ui yacd     # YACD
+mihomo-cli ui          # 默认 zash
+mihomo-cli ui dash     # metacubexd
+mihomo-cli ui yacd     # YACD
 ```
 
 ## 命令参考
@@ -112,37 +112,37 @@ mihomo ui yacd     # YACD
 
 | 命令                        | 说明                                                                         |
 | --------------------------- | ---------------------------------------------------------------------------- |
-| `mihomo install`            | 安装服务（Mixed 模式的前置，只需一次；升级用户会顺带清理旧的 root 服务）      |
-| `mihomo start [tun\|mixed]` | 启动代理并开启登录自启（`-s` 跳过订阅更新，`-u` 更新超时） |
-| `mihomo stop`               | 停止代理并关闭登录自启                                                       |
-| `mihomo uninstall`          | 卸载服务                                                                     |
-| `mihomo status`             | 查看运行状态（含订阅流量、到期、更新新鲜度；`--json` 机器可读，`--no-probe` 跳过连通性探测）             |
-| `mihomo logs`               | 列出所有日志（当前 + 历史归档）                                              |
-| `mihomo logs <编号>`        | 查看指定日志（`0`=当前，`1+`=归档，`-f` 实时跟随，`-n N` 行数，`-o` 打开）  |
-| `mihomo logs -f`            | 跟随当前日志（省略编号时默认当前，等价 `logs 0 -f`）                        |
+| `mihomo-cli install`            | 安装服务（Mixed 模式的前置，只需一次；升级用户会顺带清理旧的 root 服务）      |
+| `mihomo-cli start [tun\|mixed]` | 启动代理并开启登录自启（`-s` 跳过订阅更新，`-u` 更新超时） |
+| `mihomo-cli stop`               | 停止代理并关闭登录自启                                                       |
+| `mihomo-cli uninstall`          | 卸载服务                                                                     |
+| `mihomo-cli status`             | 查看运行状态（含订阅流量、到期、更新新鲜度；`--json` 机器可读，`--no-probe` 跳过连通性探测）             |
+| `mihomo-cli logs`               | 列出所有日志（当前 + 历史归档）                                              |
+| `mihomo-cli logs <编号>`        | 查看指定日志（`0`=当前，`1+`=归档，`-f` 实时跟随，`-n N` 行数，`-o` 打开）  |
+| `mihomo-cli logs -f`            | 跟随当前日志（省略编号时默认当前，等价 `logs 0 -f`）                        |
 
 ### 订阅管理
 
 | 命令                          | 说明                                   |
 | ----------------------------- | -------------------------------------- |
-| `mihomo sub`                  | 列出所有订阅（含流量、到期时间）       |
-| `mihomo sub use <name>`       | 切换当前订阅（支持模糊匹配，自动重启；重启透传 `-s`/`-u` 等启动选项） |
-| `mihomo sub add [url] [name]` | 添加订阅并自动切换（名称不可重复、不能以 `-` 开头；交互下不带 URL 时自动读剪贴板并确认） |
-| `mihomo sub update`           | 更新所有订阅                           |
-| `mihomo sub update <name>`    | 更新指定订阅（支持模糊匹配）           |
-| `mihomo sub remove <name>`    | 删除订阅（别名 `rm`/`delete`；精确名直接删，模糊匹配需确认，`-y` 跳过） |
+| `mihomo-cli sub`                  | 列出所有订阅（含流量、到期时间）       |
+| `mihomo-cli sub use <name>`       | 切换当前订阅（支持模糊匹配，自动重启；重启透传 `-s`/`-u` 等启动选项） |
+| `mihomo-cli sub add [url] [name]` | 添加订阅并自动切换（名称不可重复、不能以 `-` 开头；交互下不带 URL 时自动读剪贴板并确认） |
+| `mihomo-cli sub update`           | 更新所有订阅                           |
+| `mihomo-cli sub update <name>`    | 更新指定订阅（支持模糊匹配）           |
+| `mihomo-cli sub remove <name>`    | 删除订阅（别名 `rm`/`delete`；精确名直接删，模糊匹配需确认，`-y` 跳过） |
 
-> 节点测速请用 `mihomo ui` 打开的 Web 面板（zash/metacubexd/yacd 均内置逐节点实时测延迟），
+> 节点测速请用 `mihomo-cli ui` 打开的 Web 面板（zash/metacubexd/yacd 均内置逐节点实时测延迟），
 > 或直接在订阅里配置 `url-test` 分组由内核自动选路——两者都比一次性的命令行快照更实时。
 
 ### 覆写配置
 
 | 命令                           | 说明                       |
 | ------------------------------ | -------------------------- |
-| `mihomo ow`                  | 查看覆写配置状态和文件列表（别名 `enable`/`disable` 亦可用于开关） |
-| `mihomo ow on`                   | 启用覆写配置（**默认已启用**，自动重启）                          |
-| `mihomo ow off`                  | 禁用覆写配置（自动重启）                                          |
-| `mihomo config [--json] [--reveal]` | 查看当前生效的运行配置（由订阅与覆写推导，停止状态下同样可用；凭据默认脱敏，`--reveal` 显示原文） |
+| `mihomo-cli ow`                  | 查看覆写配置状态和文件列表（别名 `enable`/`disable` 亦可用于开关） |
+| `mihomo-cli ow on`                   | 启用覆写配置（**默认已启用**，自动重启）                          |
+| `mihomo-cli ow off`                  | 禁用覆写配置（自动重启）                                          |
+| `mihomo-cli config [--json] [--reveal]` | 查看当前生效的运行配置（由订阅与覆写推导，停止状态下同样可用；凭据默认脱敏，`--reveal` 显示原文） |
 
 > `ow on`/`ow off` 是**全局总开关**（一次开关所有覆写）。只想停用某一个文件，在该文件里写 `enabled: false`，见[单个文件的开关](#单个文件的开关enabled)
 
@@ -150,24 +150,25 @@ mihomo ui yacd     # YACD
 
 | 命令                              | 说明                                                                |
 | --------------------------------- | ------------------------------------------------------------------- |
-| `mihomo kernel [--mirror [镜像]]` | 更新内核（自动选择通道：gh > 本机代理 > 直连；`--mirror` 强制镜像，`--mirror direct` 强制直连） |
-| `mihomo update`                   | 更新 mihomo-cli（先查 npm 最新版，已是最新则跳过重装）              |
-| `mihomo ui [zash\|dash\|yacd] [-c]` | 打开 Web UI（`-c` 把控制器访问密钥复制到剪贴板；默认只提示、不动剪贴板） |
-| `mihomo dir`                      | 显示数据目录位置                                                    |
-| `mihomo dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `data`, `runtime`, `kernel`）  |
-| `mihomo reset [目标...] [--full] [-y]` | 重置用户数据（可用目标：`subs`, `logs`, `data`, `runtime`, `settings`, `kernel`, `overwrites`, `service`；`--full` 删全部，`-y` 跳过确认） |
-| `mihomo doctor`                   | 体检诊断（内核/服务/端口/订阅/配置/连通性/CLI 版本，有异常退出码 1） |
-| `mihomo version`                  | 显示版本信息                                                        |
-| `mihomo help [命令]`             | 显示帮助（无参数显示全部；也可用 `mihomo <命令> -h`）               |
+| `mihomo-cli kernel [--mirror [镜像]]` | 更新内核（自动选择通道：gh > 本机代理 > 直连；`--mirror` 强制镜像，`--mirror direct` 强制直连） |
+| `mihomo-cli update`                   | 更新 mihomo-cli（先查 npm 最新版，已是最新则跳过重装）              |
+| `mihomo-cli ui [zash\|dash\|yacd] [-c]` | 打开 Web UI（`-c` 把控制器访问密钥复制到剪贴板；默认只提示、不动剪贴板） |
+| `mihomo-cli dir`                      | 显示数据目录位置                                                    |
+| `mihomo-cli dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `data`, `runtime`, `kernel`）  |
+| `mihomo-cli reset [目标...] [--full] [-y]` | 重置用户数据（可用目标：`subs`, `logs`, `data`, `runtime`, `settings`, `kernel`, `overwrites`, `service`；`--full` 删全部，`-y` 跳过确认） |
+| `mihomo-cli doctor`                   | 体检诊断（内核/服务/端口/订阅/配置/连通性/CLI 版本，有异常退出码 1） |
+| `mihomo-cli version`                  | 显示版本信息                                                        |
+| `mihomo-cli help [命令]`             | 显示帮助（无参数显示全部；也可用 `mihomo-cli <命令> -h`）               |
 
 ### 命令别名
 
 以下任意命令等效：
 
-- `mihomo-cli` (原名)
-- `mihomo`
-- `mhm`
-- `mh`
+- `mihomo-cli`（推荐，也是包名）
+- `mh`（简写）
+
+> 旧版曾提供 `mihomo` / `mhm` 别名，已移除：`mihomo` 与 mihomo 内核二进制同名，
+> 两个包管理器的全局 bin 会互相覆盖；从旧版升级后旧的 `mihomo` / `mhm` 链接由 npm 自动清理。
 
 子命令组亦有别名：`subscription` = `sub`/`subs`/`subscriptions`，`directory` = `dir`/`dirs`/`directories`，`overwrite` = `ow`
 
@@ -177,9 +178,9 @@ mihomo ui yacd     # YACD
 
 | 快捷命令               | 等效于                     |
 | ---------------------- | -------------------------- |
-| `mihomo tun`           | `mihomo start tun`         |
-| `mihomo use <name>`    | `mihomo subscription use <name>` |
-| `mihomo restart`       | `mihomo start`（start 本身即重启） |
+| `mihomo-cli tun`           | `mihomo-cli start tun`         |
+| `mihomo-cli use <name>`    | `mihomo-cli subscription use <name>` |
+| `mihomo-cli restart`       | `mihomo-cli start`（start 本身即重启） |
 
 ## 模式说明
 
@@ -187,27 +188,27 @@ mihomo ui yacd     # YACD
 
 - HTTP + SOCKS5 混合端口
 - 由 launchd 服务托管，崩溃/登录自动拉起
-- 需先 `mihomo install`（一次），之后 `start`/`stop` 全程免密
+- 需先 `mihomo-cli install`（一次），之后 `start`/`stop` 全程免密
 - 需要手动配置应用代理
 
 ### TUN 模式（透明代理）
 
 - 全局自动路由，所有流量自动走代理
-- 临时进程，不走 launchd（用完 `mihomo stop` 收掉）
+- 临时进程，不走 launchd（用完 `mihomo-cli stop` 收掉）
 - 需要 sudo / 管理员权限
 - 首次使用会自动配置 DNS 和路由
-- 与服务互斥：服务运行时会被拦下，需先 `mihomo stop`
+- 与服务互斥：服务运行时会被拦下，需先 `mihomo-cli stop`
 
 ## 服务托管
 
 Mixed 模式由 macOS 原生的 **launchd** 托管：内核崩溃、被系统 kill（如内存不足）、重新登录后都会自动拉起，无需手动 `start`。
 
 ```bash
-mihomo install         # 安装服务（只需一次，装完不启动）
-mihomo start           # 启动 + 开启登录自启
-mihomo stop            # 停止 + 关闭登录自启
-mihomo uninstall       # 卸载服务
-mihomo status          # 查看状态
+mihomo-cli install         # 安装服务（只需一次，装完不启动）
+mihomo-cli start           # 启动 + 开启登录自启
+mihomo-cli stop            # 停止 + 关闭登录自启
+mihomo-cli uninstall       # 卸载服务
+mihomo-cli status          # 查看状态
 ```
 
 **以上全部免密**。安装为用户级 LaunchAgent（`~/Library/LaunchAgents/`，`gui/<uid>` 域），不需要 root，因此日常启停不会打断你去输密码。
@@ -223,7 +224,7 @@ mihomo status          # 查看状态
 
 `stop` 会一并关闭自启，这是它与「杀掉进程」的区别——只停不关的话，下次登录代理又自己回来了，而 CLI 已经告诉你「已停止」。
 
-> `uninstall` 只卸服务，订阅/内核/日志仍留在数据目录（重装后可继续用）。要彻底移除 mihomo-cli：`mihomo reset --full` 删全部数据，再 `npm uninstall -g mihomo-cli`——`uninstall` 结束时也会提示这两步。
+> `uninstall` 只卸服务，订阅/内核/日志仍留在数据目录（重装后可继续用）。要彻底移除 mihomo-cli：`mihomo-cli reset --full` 删全部数据，再 `npm uninstall -g mihomo-cli`——`uninstall` 结束时也会提示这两步。
 >
 > **顺序别反**：先 `npm uninstall -g` 的话，LaunchAgent plist 会留下来，而能清理它的命令已经没了（plist 带 `KeepAlive`，仍会尝试拉起一个不存在的内核）。npm 现代版本**不会执行** uninstall 生命周期钩子（实测 npm 11.19.0 三种卸载场景均不触发，官方文档亦注明 uninstall lifecycle scripts 未实现），所以别指望卸载时看到任何提醒——按上面的顺序来。真反了也能救，手动执行：
 >
@@ -259,45 +260,45 @@ mihomo status          # 查看状态
 且会清掉所有 App 的授权。遇到这种情况建议提 issue 说明场景。
 
 另外，系统按代码签名与可执行文件 UUID 识别进程，而 mihomo 内核是 GitHub 下载的 Go 二进制（ad-hoc 签名），
-**`mihomo kernel` 更新内核后可能需要重新授权一次**。
+**`mihomo-cli kernel` 更新内核后可能需要重新授权一次**。
 
 ### TUN 与服务共存
 
-TUN 是临时模式，不走 launchd（本就需要 sudo，且用完即走）。两者会抢占同一组端口，因此服务运行时执行 `mihomo tun` 会被拦下：
+TUN 是临时模式，不走 launchd（本就需要 sudo，且用完即走）。两者会抢占同一组端口，因此服务运行时执行 `mihomo-cli tun` 会被拦下：
 
 ```bash
-mihomo stop      # 先停服务
-mihomo tun       # 起临时 TUN（需 sudo）
-mihomo stop      # 收掉 TUN
-mihomo start     # 恢复服务
+mihomo-cli stop      # 先停服务
+mihomo-cli tun       # 起临时 TUN（需 sudo）
+mihomo-cli stop      # 收掉 TUN
+mihomo-cli start     # 恢复服务
 ```
 
-**`mihomo tun` 会自动关掉服务的登录自启**，并在启动时提示。原因是服务与 TUN 共用同一份运行时配置：TUN 一跑，那份配置就是 TUN 模式，而服务以普通用户身份运行、无权创建 TUN 设备。若自启还开着，用户不 `stop` 直接关机，下次开机 launchd 就会拿这份配置反复拉起一个必然失败的内核。
+**`mihomo-cli tun` 会自动关掉服务的登录自启**，并在启动时提示。原因是服务与 TUN 共用同一份运行时配置：TUN 一跑，那份配置就是 TUN 模式，而服务以普通用户身份运行、无权创建 TUN 设备。若自启还开着，用户不 `stop` 直接关机，下次开机 launchd 就会拿这份配置反复拉起一个必然失败的内核。
 
-TUN 用完后 `mihomo start` 会按 Mixed 重建配置并恢复自启。
+TUN 用完后 `mihomo-cli start` 会按 Mixed 重建配置并恢复自启。
 
 **TUN 下 DNS 恒为开启**。若订阅或覆写里写了 `dns.enable: false`，TUN 模式会强制改回 `true` 并显示「配置提示」——TUN 会劫持 53 端口流量（`dns-hijack`），内置 DNS 关着就没有任何组件接管，网络直接不可用。只锁 `enable` 这一个键，`nameserver`、`enhanced-mode` 等仍按你的配置走。Mixed 模式不受影响，那里关 DNS 是合法配置。
 
 ### 不要用 sudo 运行
 
-`sudo mihomo …` 会被直接拒绝。服务是用户级 LaunchAgent（域 `gui/<uid>`），以 root 运行时域变成 `gui/0` —— 一个不存在的域，所有服务操作都会静默跳过却报成功。TUN 需要的 root 权限由 CLI 内部按需申请，无需在外层加 `sudo`。
+`sudo mihomo-cli …` 会被直接拒绝。服务是用户级 LaunchAgent（域 `gui/<uid>`），以 root 运行时域变成 `gui/0` —— 一个不存在的域，所有服务操作都会静默跳过却报成功。TUN 需要的 root 权限由 CLI 内部按需申请，无需在外层加 `sudo`。
 
 ### 日志
 
-每次 `mihomo start` 会把上一次的 `mihomo.log` 归档为 `mihomo.<时间戳>.log`，归档保留 7 天。运行期间日志持续追加到 `mihomo.log`；若单次运行就写超 10MB，配置变更触发的重启会顺便轮转，不会无限增长。
+每次 `mihomo-cli start` 会把上一次的 `mihomo.log` 归档为 `mihomo.<时间戳>.log`，归档保留 7 天。运行期间日志持续追加到 `mihomo.log`；若单次运行就写超 10MB，配置变更触发的重启会顺便轮转，不会无限增长。
 
 ```bash
-mihomo logs         # 列出当前日志与归档
-mihomo logs 0 -f    # 实时跟随当前日志
-mihomo logs 1       # 查看最新的归档
+mihomo-cli logs         # 列出当前日志与归档
+mihomo-cli logs 0 -f    # 实时跟随当前日志
+mihomo-cli logs 1       # 查看最新的归档
 ```
 
 ## 内核更新通道
 
-`mihomo kernel` 按优先级自动选择下载通道，无需手动指定：
+`mihomo-cli kernel` 按优先级自动选择下载通道，无需手动指定：
 
 1. **gh**：检测到 GitHub CLI（`gh`）时，经 `gh release download` 直连 GitHub
-2. **本机代理**：mihomo 代理在跑时，经混合端口直连 GitHub（TLS 端到端）
+2. **本机代理**：mihomo-cli 代理在跑时，经混合端口直连 GitHub（TLS 端到端）
 3. **直连**：以上都不可用时
 
 镜像不持久化——每次按当前环境独立决策，换网络不会用到上次的镜像。
@@ -308,14 +309,14 @@ mihomo logs 1       # 查看最新的归档
 手动覆盖：
 
 ```bash
-mihomo kernel                # 自动选择通道
-mihomo kernel --mirror       # 强制走镜像（裸域 gh-proxy.org；不探测网络，纯 IPv6 网络请显式 v6）
-mihomo kernel --mirror v6    # 显式走 v6.gh-proxy.org
-mihomo kernel --mirror cdn   # 短别名指定镜像（cdn/v4/v6/axisnow）
-mihomo kernel --mirror hk.gh-proxy.org  # 任意镜像主机名或完整 URL
-mihomo kernel --mirror direct  # 强制直连（绕过 gh/代理自动通道）
-mihomo kernel --proxy 7897   # 经指定代理出网（纯端口视为 127.0.0.1:7897；mihomo 没跑但本机有别的代理工具时用）
-mihomo kernel --proxy socks5://127.0.0.1:7897  # 完整代理地址；可与 --mirror 组合（镜像决定下载地址，代理只做传输）
+mihomo-cli kernel                # 自动选择通道
+mihomo-cli kernel --mirror       # 强制走镜像（裸域 gh-proxy.org；不探测网络，纯 IPv6 网络请显式 v6）
+mihomo-cli kernel --mirror v6    # 显式走 v6.gh-proxy.org
+mihomo-cli kernel --mirror cdn   # 短别名指定镜像（cdn/v4/v6/axisnow）
+mihomo-cli kernel --mirror hk.gh-proxy.org  # 任意镜像主机名或完整 URL
+mihomo-cli kernel --mirror direct  # 强制直连（绕过 gh/代理自动通道）
+mihomo-cli kernel --proxy 7897   # 经指定代理出网（纯端口视为 127.0.0.1:7897；mihomo-cli 没跑但本机有别的代理工具时用）
+mihomo-cli kernel --proxy socks5://127.0.0.1:7897  # 完整代理地址；可与 --mirror 组合（镜像决定下载地址，代理只做传输）
 ```
 
 > 镜像经第三方中转，无法验证来源完整性；gh 与本机代理通道直连 GitHub，优先使用。
@@ -334,7 +335,7 @@ mihomo kernel --proxy socks5://127.0.0.1:7897  # 完整代理地址；可与 --m
 
 - 默认更新间隔：12 小时（订阅服务端可通过 `profile-update-interval` 覆盖）
 - 触发时机：`start` 命令（`sub` 列表只读）
-- **服务常驻期间不会自动更新**：launchd 只负责拉起内核，不会跑 `start`。`status` 会在订阅超过更新间隔时黄标提醒（`已超过 N 小时间隔，建议 mihomo sub update`），此时手动跑 `mihomo sub update` 或 `mihomo start` 即可
+- **服务常驻期间不会自动更新**：launchd 只负责拉起内核，不会跑 `start`。`status` 会在订阅超过更新间隔时黄标提醒（`已超过 N 小时间隔，建议 mihomo-cli sub update`），此时手动跑 `mihomo-cli sub update` 或 `mihomo-cli start` 即可
 - 更新失败时继续使用本地缓存，不影响使用
 - 自动更新默认超时 10 秒，可通过 `-u <ms>` 调整；使用 `-s` 可完全跳过自动更新
 
@@ -348,9 +349,9 @@ mihomo kernel --proxy socks5://127.0.0.1:7897  # 完整代理地址；可与 --m
 | `-n` | `--lines` | 日志显示行数 | 100 |
 
 ```bash
-mihomo start -u 30000            # 短选项 + 空格
-mihomo start --update-timeout 30000   # 长选项 + 空格
-mihomo start --update-timeout=30000   # 长选项 + 等号
+mihomo-cli start -u 30000            # 短选项 + 空格
+mihomo-cli start --update-timeout 30000   # 长选项 + 空格
+mihomo-cli start --update-timeout=30000   # 长选项 + 等号
 ```
 
 布尔开关：`-s`（跳过订阅更新）、`--no-update`、`-y`/`--yes`（跳过确认）、`-o`（用系统默认程序打开）。
@@ -365,7 +366,7 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 - **运行配置校验**：启动或重载前，由已安装的 mihomo 内核执行 `-t` 校验；配置被拒绝时保留现有 `config.yaml`，不会自动删除错误节点、分组或规则
 - **`reset` 停止确认**：需要停止进程的重置会先确认进程已终止，失败则中止删除
 
-裸 `mihomo reset` 清订阅、日志和运行数据，保留内核、覆写文件、其他设置及服务安装；`--full` 额外删除这些内容并卸载服务。指定多个目标时顺序不影响结果，`reset overwrites` 恢复覆写默认开启状态
+裸 `mihomo-cli reset` 清订阅、日志和运行数据，保留内核、覆写文件、其他设置及服务安装；`--full` 额外删除这些内容并卸载服务。指定多个目标时顺序不影响结果，`reset overwrites` 恢复覆写默认开启状态
 
 ## 数据目录
 
@@ -418,7 +419,7 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
    - `overwrite.dns.yaml` — 按功能拆分的扩展文件（`overwrite.*.yaml` / `overwrite.*.yml` 格式）
    - `overwrite.js` / `overwrite.*.js`（或 `.mjs` / `.cjs`）— JS 覆写脚本，可做任意编程化处理（见下文「JS 覆写脚本」）
 2. 加载顺序：JS 脚本全部在前（`overwrite.js` 最先，扩展脚本按文件名排序），YAML 在后（`overwrite.yaml` 最先，扩展文件按文件名排序）——脚本做程序化结构变换，YAML 在其产出上做声明式微调（如 `+rules` 前插的规则永远在最前，不受脚本重组影响）
-3. 覆写**默认即启用**，放好文件后重启生效（`mihomo start`）；如曾 `ow off` 禁用过，用 `mihomo ow on` 重新启用（会自动重启）
+3. 覆写**默认即启用**，放好文件后重启生效（`mihomo-cli start`）；如曾 `ow off` 禁用过，用 `mihomo-cli ow on` 重新启用（会自动重启）
 
 ### 特殊语法（YAML）
 
@@ -485,7 +486,7 @@ export default function (config, ctx) {
 - **脚本先于 YAML 执行**：脚本看到的是订阅原始配置，读不到 YAML 覆写注入的内容；需要脚本处理 YAML 注入项时，把那段逻辑也写进脚本
 - **只读命令也会加载脚本**：`ow` / `status` 扫描文件时会加载脚本，模块顶层代码随之执行（顶层只定义函数，变换都在导出函数里做）；导出的变换函数在 `config` / `doctor` / `start` 构建时才调用，`status` 不调用、也不显示它的 `ctx.warn`
 - 加载失败（语法错误、缺少导出、顶层抛错）与坏 YAML 同款姿态：`ow` / `status` 里「加载失败」可见，`config` / `start` / `doctor` 硬失败并带文件名；变换函数执行中抛错只在后三者报出（`ow` / `status` 不执行函数体）
-- 脚本受 `mihomo ow off` 全局开关管理；想临时停用单个脚本，改个扩展名（如 `.bak`）即可
+- 脚本受 `mihomo-cli ow off` 全局开关管理；想临时停用单个脚本，改个扩展名（如 `.bak`）即可
 
 ### 作用域限定（match）
 
@@ -510,16 +511,16 @@ export default function (config, ctx) {
 
 > `url-domain` 命中该域名下的**所有**订阅。同一机场的多条订阅（如 `edu1`、`mini1`）URL 往往同域名，用 `url-domain` 会一并生效；要在同机场内按套餐区分，用 `name: edu*`。若只是担心某条订阅没有要改的分组，在 JS 脚本里判（找不到就 `ctx.warn` 跳过），不必为此改作用域；`match` 应当按「这份覆写在语义上属于哪些订阅」来写。JS 脚本没有 match 机制——作用域判断写在脚本开头（`if (!ctx.subscription.name.startsWith('edu')) return;`）。
 
-`mihomo status` 会按当前活跃订阅区分「生效」与「不适用」，括号里只列本次真正参与合并的文件：
+`mihomo-cli status` 会按当前活跃订阅区分「生效」与「不适用」，括号里只列本次真正参与合并的文件：
 
 ```text
 覆写: 已启用 (seal，1 个不适用，1 个已禁用)
   glados 不适用于当前订阅 mini1（作用域 name=edu*）
 ```
 
-「不适用」指文件本身是启用的，只是 `match` 没命中当前订阅——切到命中的订阅（`sub use`）或改 `match` 才会生效，与 `enabled: false` 的「已禁用」是两回事。`mihomo ow` 列表不做这个判断（它不绑定某条订阅），那里的作用域一栏只说明该文件管哪些订阅。`--json` 形态下 `overwrite.applied` 是生效清单（`ow off` 全局关闭时为空数组），`overwrite.files` 仍是「未被 `enabled: false` 停用」的全部文件；语法或元数据键写错的文件进 `overwrite.errors`（不混进 files/applied）。
+「不适用」指文件本身是启用的，只是 `match` 没命中当前订阅——切到命中的订阅（`sub use`）或改 `match` 才会生效，与 `enabled: false` 的「已禁用」是两回事。`mihomo-cli ow` 列表不做这个判断（它不绑定某条订阅），那里的作用域一栏只说明该文件管哪些订阅。`--json` 形态下 `overwrite.applied` 是生效清单（`ow off` 全局关闭时为空数组），`overwrite.files` 仍是「未被 `enabled: false` 停用」的全部文件；语法或元数据键写错的文件进 `overwrite.errors`（不混进 files/applied）。
 
-**坏文件不阻断诊断、但阻断启动**：YAML 语法错误（含 `enabled: no` 这类元数据键错误）的文件在 `mihomo ow` 与 `status` 中以「加载失败」红字标出，诊断命令永远可用；但该文件不参与合并，`mihomo start`/`doctor` 会硬失败并给出原因——曾经语法错只警告一行就跳过、退出码 0，启动成功但覆写根本没生效。
+**坏文件不阻断诊断、但阻断启动**：YAML 语法错误（含 `enabled: no` 这类元数据键错误）的文件在 `mihomo-cli ow` 与 `status` 中以「加载失败」红字标出，诊断命令永远可用；但该文件不参与合并，`mihomo-cli start`/`doctor` 会硬失败并给出原因——曾经语法错只警告一行就跳过、退出码 0，启动成功但覆写根本没生效。
 
 ### 单个文件的开关（enabled）
 
@@ -536,8 +537,8 @@ enabled: false    # 暂时停用这份覆写，不用改名或删除
     port: 1080
 ```
 
-- 不写该键即启用；被停用的文件**仍会出现在 `mihomo ow` 列表里**并标注 `[已禁用]`（改名成 `.bak` 则会从列表里消失，不知道自己还有这份配置）
-- 与 `mihomo ow off` 是两层：后者是全局总开关，一次关掉所有覆写
+- 不写该键即启用；被停用的文件**仍会出现在 `mihomo-cli ow` 列表里**并标注 `[已禁用]`（改名成 `.bak` 则会从列表里消失，不知道自己还有这份配置）
+- 与 `mihomo-cli ow off` 是两层：后者是全局总开关，一次关掉所有覆写
 - **必须写 `false`，不能写 `no` / `off`**：YAML 里这两个是字符串而非布尔值，CLI 会直接报错而不是按「真值」放行——否则你以为停用了、配置却照常生效
 - `enabled` 与 `match` 同属元数据键，不会进入最终的 mihomo 运行配置；它们**不接受操作符，也必须小写**（`enabled!`、`+match`、`Enabled` 都会直接报错——那些写法既不停用文件，还会把键当普通配置写进运行配置，而内核对未知顶层键不报错、你不会收到任何提示）
 
@@ -590,7 +591,7 @@ export default function (config, ctx) {
 }
 ```
 
-> 注：`default-selected` 由 mihomo 内核决定默认选中项，优先级低于 `store-selected` 缓存的历史选择。若之前手动选过、且开启了 `store-selected`，需 `mihomo reset data` 清缓存后才能看到默认值接管。
+> 注：`default-selected` 由 mihomo 内核决定默认选中项，优先级低于 `store-selected` 缓存的历史选择。若之前手动选过、且开启了 `store-selected`，需 `mihomo-cli reset data` 清缓存后才能看到默认值接管。
 
 ### 同时使用多个机场
 
@@ -620,7 +621,7 @@ proxy-providers:
   - 'DOMAIN-SUFFIX,corp.example.com,SecondAirport'
 ```
 
-provider 节点与订阅节点同池参与分组选择；节点延迟与手动切换在 Web UI（`mihomo ui`）里操作。若想让订阅里已有的某个分组也纳入第二机场的节点，写 JS 脚本按 name 找到该分组、加 `use` 字段（找不到时 `ctx.warn` 跳过——订阅里没有该分组时不该新建一个残缺分组）
+provider 节点与订阅节点同池参与分组选择；节点延迟与手动切换在 Web UI（`mihomo-cli ui`）里操作。若想让订阅里已有的某个分组也纳入第二机场的节点，写 JS 脚本按 name 找到该分组、加 `use` 字段（找不到时 `ctx.warn` 跳过——订阅里没有该分组时不该新建一个残缺分组）
 
 ### 用 ssh -D 做节点
 
@@ -649,17 +650,17 @@ provider 节点与订阅节点同池参与分组选择；节点延迟与手动�
 ### 一键体检
 
 ```bash
-mihomo doctor
+mihomo-cli doctor
 ```
 
 逐项检查内核可执行性、数据目录可写、settings 有效性（含端口覆盖合法性）、订阅配置与新鲜度、服务状态、端口占用、
-配置的内核原生校验、代理连通性、内核版本（落后时提示 `mihomo kernel`）、CLI 版本（落后时提示 `mihomo update`）；
+配置的内核原生校验、代理连通性、内核版本（落后时提示 `mihomo-cli kernel`）、CLI 版本（落后时提示 `mihomo-cli update`）；
 两个版本检查都访问网络，GitHub/npm 不可达则跳过、不算异常。每项给出 ✓/!/✗ 与修复命令；
 存在异常项时退出码为 1（警告不影响退出码）。
 
 ### 启动失败
 
-`mihomo start` 先用内核检查候选配置，错误会直接显示并保留现有运行配置。CLI 不再自动修复重名节点或失效引用，需要修改订阅或覆写后重试
+`mihomo-cli start` 先用内核检查候选配置，错误会直接显示并保留现有运行配置。CLI 不再自动修复重名节点或失效引用，需要修改订阅或覆写后重试
 
 内核只报「哪个键不合法」，说不出「这个键是覆写加进来的」，所以提示里会附上本次实际生效的覆写文件与作用域：
 
@@ -676,13 +677,13 @@ mihomo doctor
   请修正订阅或覆写；当前运行时配置未改动。
 ```
 
-清单已按 `ow` 开关、文件内 `enabled` 与 `match` 过滤，即**本次真正参与合并**的文件；`(全局)` 表示该文件没有 `match`、对所有订阅生效，有 `match` 时按你写的键名回显（如 `name=edu*`）。没有覆写生效时不显示这一段（问题就在订阅本身）。`mihomo doctor` 给出同样的信息，`mihomo ow` 可看全部覆写文件（含被停用的）
+清单已按 `ow` 开关、文件内 `enabled` 与 `match` 过滤，即**本次真正参与合并**的文件；`(全局)` 表示该文件没有 `match`、对所有订阅生效，有 `match` 时按你写的键名回显（如 `name=edu*`）。没有覆写生效时不显示这一段（问题就在订阅本身）。`mihomo-cli doctor` 给出同样的信息，`mihomo-cli ow` 可看全部覆写文件（含被停用的）
 
 校验通过后仍需确认内核已运行：端口占用、系统权限等启动问题会报错并附日志尾部，退出码非 0。异常退出原因与 `status` 使用同一口径（`退出码 N` 或 `被信号终止（Killed: 9）`）
 
 ```bash
-mihomo logs 0        # 看完整原因
-mihomo stop          # 止住 launchd 的反复重试
+mihomo-cli logs 0        # 看完整原因
+mihomo-cli stop          # 止住 launchd 的反复重试
 ```
 
 若 `status` 显示「不在运行」但带「内核上次异常退出」的提示，说明内核正在崩溃循环中被反复拉起，同样按上面两步处理。提示会区分两种死法：`退出码 N`（内核自己退的，多为配置问题）与 `被信号终止（Killed: 9）`（被外部杀掉，常见于系统内存不足时被 OOM killer 干掉）。
@@ -695,9 +696,9 @@ sudo pkill -9 mihomo
 
 ### TUN 模式无法启动
 
-1. 运行 `mihomo tun`，按提示提供管理员密码，无需在命令前加 sudo
+1. 运行 `mihomo-cli tun`，按提示提供管理员密码，无需在命令前加 sudo
 2. 检查是否有其他程序占用 53 端口
-3. 查看日志：`mihomo logs 0 -f`
+3. 查看日志：`mihomo-cli logs 0 -f`
 
 ### 订阅更新失败
 
@@ -720,7 +721,7 @@ sudo pkill -9 mihomo
 }
 ```
 
-改动后 `mihomo start` 重新生成配置即生效；Web UI 连接地址与系统代理里的端口请使用新值（`mihomo status` 会显示实际端口）
+改动后 `mihomo-cli start` 重新生成配置即生效；Web UI 连接地址与系统代理里的端口请使用新值（`mihomo-cli status` 会显示实际端口）
 
 ## 安全特性
 

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 /**
- * `mihomo doctor`：端到端跑完整体检，锁「配置构建的 warnings 透传进体检输出」。
+ * `mihomo-cli doctor`：端到端跑完整体检，锁「配置构建的 warnings 透传进体检输出」。
  *
  * 桩内核沿用 subscription-prepare.spec 的手法，只模拟 `-v`（取版本）与
  * `-t -d <dir> -f <file>`（原生校验协议），不调真实内核。MIHOMO_CLI_DIR 与

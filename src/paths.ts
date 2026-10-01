@@ -84,7 +84,7 @@ export const DIRECTORY_TARGETS: Record<string, DirectoryTarget> = {
   root: { path: null, label: '根目录' },
   subs: { path: DIRS.subscriptions, label: '订阅目录' },
   logs: { path: DIRS.logs, label: '日志目录' },
-  data: { path: DIRS.data, label: 'mihomo 数据目录' },
+  data: { path: DIRS.data, label: 'mihomo-cli 数据目录' },
   runtime: { path: DIRS.runtime, label: '运行时目录' },
   kernel: { path: DIRS.kernel, label: '内核目录' },
 };

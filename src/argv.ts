@@ -39,10 +39,10 @@ export function assertKnownFlags(args: string[] | undefined, known: readonly str
     // 那会渲染成空列表，看着像是工具自己没填上。改说「该命令不接受任何选项」。
     // `-h`/`--help` 单独点一句：它俩是顶层 help 的别名、命令级并不接受，用户很自然会试
     const isHelpFlag = a === '-h' || a === '--help';
-    const helpNote = isHelpFlag ? ['', `${a} 只在顶层可用，命令用法见: mihomo help`] : [];
+    const helpNote = isHelpFlag ? ['', `${a} 只在顶层可用，命令用法见: mihomo-cli help`] : [];
     throw new CliError(`未知的选项: ${a}`, {
       label: '参数错误',
-      hint: [known.length > 0 ? `可用选项: ${known.join(', ')}` : '该命令不接受任何选项', ...helpNote, '', `用法: mihomo ${command}`],
+      hint: [known.length > 0 ? `可用选项: ${known.join(', ')}` : '该命令不接受任何选项', ...helpNote, '', `用法: mihomo-cli ${command}`],
     });
   }
 }
@@ -121,7 +121,7 @@ export function parseIntArg(args: string[] | undefined, short: string, long: str
 
 /**
  * 从任意命令的 argv 中抽取 start 支持的启动选项（含其值），供 sub use / ow on|off 触发的
- * 重启透传——`mihomo sub use foo -s` 里的 -s 等选项不透传的话，重启会走默认行为。
+ * 重启透传——`mihomo-cli sub use foo -s` 里的 -s 等选项不透传的话，重启会走默认行为。
  * 选项集合从 flags.ts 的 START_RESTART_FLAGS 派生（单一登记表）。
  */
 export function extractStartOptions(args: string[] | undefined): string[] {

@@ -37,7 +37,7 @@ describe('命令级帮助', () => {
     withFixture((_d, run) => {
       const r = run(['help', 'subscription']);
       assert.equal(r.status, 0, r.stderr);
-      assert.match(r.stdout, /mihomo subscription/);
+      assert.match(r.stdout, /mihomo-cli subscription/);
       assert.match(r.stdout, /subscription use <name>/);
       assert.match(r.stdout, /别名: sub, subs, subscriptions/);
       // 是单命令帮助，不是整页
@@ -91,7 +91,7 @@ describe('帮助文案与实际行为一致', () => {
   it('version 用法行不带内嵌别名，别名只出现在别名行', () => {
     withFixture((_d, run) => {
       const out = run(['help', 'version']).stdout;
-      assert.match(out, /^mihomo version（别名: -v, --version）/m);
+      assert.match(out, /^mihomo-cli version（别名: -v, --version）/m);
       assert.ok(!out.includes('version, -v'), '用法签名不得内嵌别名');
     });
   });

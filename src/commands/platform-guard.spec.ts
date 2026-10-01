@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url';
  *
  * 服务托管依赖 launchd、目录/UI 打开依赖 open、提权依赖 sudo，均为 macOS 专有实现，
  * 缺守卫时非 macOS 会「部分成功」。help/version 是纯信息命令，豁免——且豁免必须连
- * ensureDirs 的副作用一起免掉：否则非 macOS 上的 mihomo help 会在用户家目录建出
- * 一套本不该出现的数据目录（与 root 下的 mihomo version 同一族缺陷）。
+ * ensureDirs 的副作用一起免掉：否则非 macOS 上的 mihomo-cli help 会在用户家目录建出
+ * 一套本不该出现的数据目录（与 root 下的 mihomo-cli version 同一族缺陷）。
  *
  * process.platform 是 getter，直接赋值静默失败（实测仍为 darwin），必须 defineProperty。
  */
@@ -50,7 +50,7 @@ describe('平台守卫：非 macOS 下拒绝执行', () => {
   for (const cmd of ['status', 'stop', 'start', 'install']) {
     it(`${cmd} 在非 macOS 上被拒绝并退出非 0`, () => {
       const { status, output } = runOnPlatform('linux', [cmd]);
-      assert.notEqual(status, 0, `linux 上 mihomo ${cmd} 必须失败——「部分成功」比报错更难排查`);
+      assert.notEqual(status, 0, `linux 上 mihomo-cli ${cmd} 必须失败——「部分成功」比报错更难排查`);
       assert.match(output, /仅支持 macOS/, '错误信息应说明平台限制');
     });
   }

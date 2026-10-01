@@ -58,7 +58,7 @@ export function isProcessRoot(pid: number): boolean {
  * 均含这两段;而仅用编辑器打开配置文件的进程(命令行无 binary)不会命中,
  * 从而避免误杀/误判为残留。escapeRegExp 防止路径里的 `.` 当通配符。
  *
- * **内核路径必须匹配两种形式**:服务经符号链 `kernel/mihomo-cli-service` 启动,
+ * **内核路径必须匹配两种形式**:服务经符号链 `kernel/mihomo-service` 启动,
  * tun 经真实二进制 `kernel/mihomo` 启动,而进程命令行记录的是**启动时用的那个路径**——
  * 实测 `ps -ww -o command=` 对符号链启动的进程输出符号链名,用真实文件名 pgrep 匹配不到。
  * 只认一种会漏掉另一种:残留进程杀不掉、getMihomoPids 漏报、状态误判。
@@ -122,14 +122,14 @@ export function getMihomoPids(): number[] {
   // spawnSync 自身失败(ENOENT/超时): status 为 null。pgrep 不存在于 macOS 之外的环境时不该崩,
   // 但也不能假装「没有进程」——同样归入探测失败
   if (result.error || result.status === null) {
-    throw new CliError('无法探测 mihomo 进程（pgrep 执行失败）', {
-      hint: ['这不代表内核未运行，只表示查不到。', '请手动确认: pgrep -fl mihomo'],
+    throw new CliError('无法探测 mihomo-cli 进程（pgrep 执行失败）', {
+      hint: ['这不代表内核未运行，只表示查不到。', '请手动确认: pgrep -fl mihomo-cli'],
     });
   }
 
   if (result.status !== 0 && result.status !== 1) {
     throw new CliError(`进程探测失败（pgrep 退出码 ${result.status}）`, {
-      hint: [(result.stderr || '').trim(), '', '这是 CLI 的缺陷，请反馈。手动确认内核状态: pgrep -fl mihomo'].filter(Boolean),
+      hint: [(result.stderr || '').trim(), '', '这是 CLI 的缺陷，请反馈。手动确认内核状态: pgrep -fl mihomo-cli'].filter(Boolean),
     });
   }
 

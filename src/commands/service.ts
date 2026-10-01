@@ -47,21 +47,21 @@ async function handleLegacyInstall(): Promise<void> {
  * 「装好了，但没恢复运行，因为期间有人停了它」。两个消费点共用（installService 锁内判据、
  * 健康确认失败后复读），文案只此一份。
  *
- * 说「停止操作」而非「执行了 mihomo stop」：递增点不止 stop，tun 与 install 首装同样
+ * 说「停止操作」而非「执行了 mihomo-cli stop」：递增点不止 stop，tun 与 install 首装同样
  * 会关闭自启并递增，说成 stop 是在讲一件没发生的事。
  */
 function printRestoreSkipped(): void {
   console.log(colors.yellow('未恢复运行：安装期间检测到停止操作'));
   console.log(colors.gray('  另一个终端关闭了服务自启，已按最后一条命令保持停止'));
-  console.log(colors.gray('  启动: mihomo start'));
+  console.log(colors.gray('  启动: mihomo-cli start'));
   console.log('');
 }
 
 export async function cmdInstall(args: string[]): Promise<void> {
   assertKnownFlags(args.slice(1), [], 'install');
-  assertPositionalCount(args, 0, 1, 'mihomo install');
+  assertPositionalCount(args, 0, 1, 'mihomo-cli install');
   if (!hasKernel()) {
-    throw new CliError('未找到内核', { hint: '下载内核: mihomo kernel' });
+    throw new CliError('未找到内核', { hint: '下载内核: mihomo-cli kernel' });
   }
 
   // 并发判定基线由 main() 在命令入口捕获（service.ts captureStopEpochBaseline），
@@ -103,12 +103,12 @@ export async function cmdInstall(args: string[]): Promise<void> {
       }
       throw new CliError(e.message, {
         label: e.label,
-        hint: [...e.hint, '', '服务已安装成功，仅恢复运行失败；修正配置后可执行 mihomo start 重试。'],
+        hint: [...e.hint, '', '服务已安装成功，仅恢复运行失败；修正配置后可执行 mihomo-cli start 重试。'],
       });
     }
     console.log(colors.green('已按原状态重新启动'));
   } else {
-    console.log('启动: mihomo start');
+    console.log('启动: mihomo-cli start');
     // 装完就提示没订阅，好过用户执行 start 才撞墙
     if (!fs.existsSync(PATHS.configFile)) {
       console.log(colors.gray('  尚无运行时配置，start 会先要求添加订阅'));
@@ -119,7 +119,7 @@ export async function cmdInstall(args: string[]): Promise<void> {
 
 export async function cmdUninstall(args: string[]): Promise<void> {
   assertKnownFlags(args.slice(1), [], 'uninstall');
-  assertPositionalCount(args, 0, 1, 'mihomo uninstall');
+  assertPositionalCount(args, 0, 1, 'mihomo-cli uninstall');
   const status = getServiceStatus();
   const legacy = detectLegacySystemInstall();
   const residue = getMihomoPids();
@@ -155,11 +155,11 @@ export async function cmdUninstall(args: string[]): Promise<void> {
     console.log('手动清理: sudo pkill -9 mihomo');
   }
 
-  console.log(colors.gray('重新安装: mihomo install'));
+  console.log(colors.gray('重新安装: mihomo-cli install'));
   // 卸服务 ≠ 清数据：订阅/内核/日志还在数据目录，npm 包也还在——想彻底移除的用户
   // 需要知道三条路径，否则最常见的结局是「以为卸载了，目录和包都留着」
   console.log(colors.gray('彻底移除 mihomo-cli:'));
-  console.log(colors.gray('  mihomo reset --full      # 删除全部数据（订阅/内核/日志等）'));
+  console.log(colors.gray('  mihomo-cli reset --full      # 删除全部数据（订阅/内核/日志等）'));
   console.log(colors.gray('  npm uninstall -g mihomo-cli'));
   console.log('');
 }

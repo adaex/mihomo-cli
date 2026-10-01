@@ -48,7 +48,7 @@ describe('root 守卫：sudo 下拒绝执行', () => {
   for (const cmd of ['stop', 'status', 'start', 'install', 'uninstall']) {
     it(`${cmd} 被拒绝并退出非 0`, () => {
       const { status, output } = runAsRoot([cmd]);
-      assert.notEqual(status, 0, `sudo mihomo ${cmd} 必须失败——退出 0 会让脚本把「什么都没做」当成功`);
+      assert.notEqual(status, 0, `sudo mihomo-cli ${cmd} 必须失败——退出 0 会让脚本把「什么都没做」当成功`);
       assert.match(output, /不要用 sudo/, '错误信息应直接告诉用户去掉 sudo');
     });
   }
@@ -61,7 +61,7 @@ describe('root 守卫：sudo 下拒绝执行', () => {
   });
 
   it('豁免连副作用一起免：help/version 及别名不创建数据目录', () => {
-    // 豁免若只免「拒绝」不免副作用，sudo mihomo version 会在 /var/root（sudo 的 HOME）
+    // 豁免若只免「拒绝」不免副作用，sudo mihomo-cli version 会在 /var/root（sudo 的 HOME）
     // 建出一套用户永远看不到的目录。不设 MIHOMO_CLI_DIR，以临时 HOME 直接复现该场景；
     // 别名（-h/-v/--help/--version）与大小写变体经 findCommand 解析后同样落在豁免名单内
     for (const cmd of ['help', 'version', '-h', '-v', '--help', '--version', 'HELP']) {

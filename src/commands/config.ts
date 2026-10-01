@@ -23,18 +23,18 @@ import { getActiveSubscription } from '../subscription.js';
 export function cmdConfig(args: string[] = []): void {
   assertKnownFlags(args.slice(1), ['-j', '--json', '--reveal'], 'config [--json] [--reveal]');
   // 不接受位置参数：`config garbage` 此前被静默忽略
-  assertPositionalCount(args, 0, 1, 'mihomo config [--json] [--reveal]');
+  assertPositionalCount(args, 0, 1, 'mihomo-cli config [--json] [--reveal]');
   const asJson = hasFlag(args, '-j', '--json');
   const reveal = hasFlag(args, '--reveal');
 
   const active = getActiveSubscription();
   if (!active) {
-    throw new CliError('尚无订阅，无法推导配置', { hint: '添加订阅: mihomo sub add <url>' });
+    throw new CliError('尚无订阅，无法推导配置', { hint: '添加订阅: mihomo-cli sub add <url>' });
   }
 
   const rawContent = readSubscriptionRawConfig(active.name);
   if (!rawContent) {
-    throw new CliError(`订阅 "${active.name}" 有条目但没有本地配置文件`, { hint: `更新订阅: mihomo sub update ${active.name}` });
+    throw new CliError(`订阅 "${active.name}" 有条目但没有本地配置文件`, { hint: `更新订阅: mihomo-cli sub update ${active.name}` });
   }
 
   // 与 status/doctor 一致：当前是 TUN 就按 TUN 推导，否则 Mixed

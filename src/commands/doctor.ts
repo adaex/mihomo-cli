@@ -70,7 +70,7 @@ async function collectChecks(): Promise<Check[]> {
   // 而那种失败只在「另有检查项先抛错」时出现，极难复现。
   const latestVersionPromise = getLatestNpmVersion(4_000).catch(() => null);
 
-  // 内核版本同样在开头并行发起：查询出网与 mihomo kernel 同口径——代理在跑直接经代理，
+  // 内核版本同样在开头并行发起：查询出网与 mihomo-cli kernel 同口径——代理在跑直接经代理，
   // 没跑才走 gh 认证（免未认证限流）。gh 不能优先于在跑的代理：gh 直连被墙时会挂到自身
   // 超时，4s 的体检预算被耗干，「内核版本 ok」退化成 skip，还拖住进程退出（子进程句柄）。
   // 4s 超时/失败一律降级 skip——体检不该被 registry 之外再多一个网络故障拖红。
@@ -96,16 +96,16 @@ async function collectChecks(): Promise<Check[]> {
 
   // === 内核 ===
   if (!hasKernel()) {
-    push('内核', 'fail', '未安装', 'mihomo kernel');
+    push('内核', 'fail', '未安装', 'mihomo-cli kernel');
   } else {
     const v = getKernelVersion();
     const r = spawnSync(PATHS.mihomoBinary, ['-v'], { encoding: 'utf8', timeout: 5_000 });
     if (r.status === 0 && /v?\d+\.\d+\.\d+/.test(`${r.stdout}${r.stderr}`)) {
       push('内核', 'ok', v || '可执行');
     } else if (r.error) {
-      push('内核', 'fail', `二进制无法执行（${r.error.message}）`, '重新下载: mihomo kernel');
+      push('内核', 'fail', `二进制无法执行（${r.error.message}）`, '重新下载: mihomo-cli kernel');
     } else {
-      push('内核', 'fail', `二进制无法执行（退出码 ${r.status}）`, '重新下载: mihomo kernel');
+      push('内核', 'fail', `二进制无法执行（退出码 ${r.status}）`, '重新下载: mihomo-cli kernel');
     }
   }
 
@@ -132,12 +132,12 @@ async function collectChecks(): Promise<Check[]> {
   const subs = getSubscriptionsWithCache();
   const active = getActiveSubscription();
   if (subs.length === 0) {
-    push('订阅', 'warn', '未配置', 'mihomo sub add <url>');
+    push('订阅', 'warn', '未配置', 'mihomo-cli sub add <url>');
   } else {
     push('订阅', 'ok', `${subs.length} 个${active ? `，当前: ${active.name}` : ''}`);
     if (active) {
       if (!readSubscriptionRawConfig(active.name)) {
-        push('订阅配置', 'fail', `当前订阅 "${active.name}" 有条目但无配置文件`, `mihomo sub update ${active.name}`);
+        push('订阅配置', 'fail', `当前订阅 "${active.name}" 有条目但无配置文件`, `mihomo-cli sub update ${active.name}`);
       } else {
         push('订阅配置', 'ok', `"${active.name}" 配置文件存在`);
       }
@@ -147,7 +147,7 @@ async function collectChecks(): Promise<Check[]> {
         const rel = formatRelativeTime(cached.updated_at);
         if (isSubscriptionStale(cached)) {
           // stale 判据要求 updated_at 不晚于当前时间，此时 rel 必非 null（?? 仅为类型兜底）
-          push('订阅新鲜度', 'warn', `${rel ?? '未知'}更新，已超过 ${resolveUpdateInterval(cached.update_interval)} 小时间隔`, 'mihomo sub update');
+          push('订阅新鲜度', 'warn', `${rel ?? '未知'}更新，已超过 ${resolveUpdateInterval(cached.update_interval)} 小时间隔`, 'mihomo-cli sub update');
         } else {
           // rel 为 null 只可能是未来/非法时间戳（时钟偏移或缓存被手改），如实标注
           push('订阅新鲜度', 'ok', rel ? `${rel}更新` : `更新时间记录异常（${formatDate(cached.updated_at)}）`);
@@ -160,16 +160,16 @@ async function collectChecks(): Promise<Check[]> {
   const service = getServiceStatus();
   const legacy = detectLegacySystemInstall();
   if (legacy) {
-    push('服务', 'fail', '检测到旧版本的系统级服务（root LaunchDaemon），会抢占端口', 'mihomo uninstall（需一次管理员密码）');
+    push('服务', 'fail', '检测到旧版本的系统级服务（root LaunchDaemon），会抢占端口', 'mihomo-cli uninstall（需一次管理员密码）');
   } else if (!service.installed && !service.loaded) {
-    push('服务', 'warn', '未安装（Mixed 模式需要）', 'mihomo install');
+    push('服务', 'warn', '未安装（Mixed 模式需要）', 'mihomo-cli install');
   } else if (!service.installed) {
-    push('服务', 'fail', 'plist 不存在但任务仍装载，KeepAlive 会持续拉起内核', 'mihomo uninstall');
+    push('服务', 'fail', 'plist 不存在但任务仍装载，KeepAlive 会持续拉起内核', 'mihomo-cli uninstall');
   } else if (service.running) {
     const abnormalExit = describeAbnormalExit(service);
     push('服务', 'ok', `运行中${service.disabled ? '（自启已关闭）' : ''}${abnormalExit ? `，上次异常退出（${abnormalExit}）` : ''}`);
     if (abnormalExit) {
-      push('服务稳定性', 'warn', `内核上次异常退出（${abnormalExit}）`, 'mihomo logs 0 查看原因');
+      push('服务稳定性', 'warn', `内核上次异常退出（${abnormalExit}）`, 'mihomo-cli logs 0 查看原因');
     }
   } else {
     // installed && !running：装着、自启开着、却没在跑且上次异常退出 —— 内核在被
@@ -177,7 +177,7 @@ async function collectChecks(): Promise<Check[]> {
     // 判据经 describeAbnormalExit 收口，信号死亡（不写 last exit code）同样能检出
     const abnormalExit = describeAbnormalExit(service);
     if (!service.disabled && abnormalExit) {
-      push('服务', 'fail', `内核上次异常退出（${abnormalExit}），launchd 正在反复拉起`, 'mihomo logs 0 查看原因，mihomo stop 停止重试');
+      push('服务', 'fail', `内核上次异常退出（${abnormalExit}），launchd 正在反复拉起`, 'mihomo-cli logs 0 查看原因，mihomo-cli stop 停止重试');
     } else {
       push('服务', 'ok', `已安装，未运行${service.disabled ? '（自启已关闭）' : ''}`);
     }
@@ -200,7 +200,7 @@ async function collectChecks(): Promise<Check[]> {
     if (isPortListening(mixedPort)) {
       push('端口', 'ok', `${mixedPort} 正在监听`);
     } else {
-      push('端口', 'fail', `内核在跑但 ${mixedPort} 未监听`, 'mihomo logs 0 查看原因');
+      push('端口', 'fail', `内核在跑但 ${mixedPort} 未监听`, 'mihomo-cli logs 0 查看原因');
     }
   } else if (isPortListening(mixedPort)) {
     push('端口', 'warn', `${mixedPort} 被其他进程占用，start 会失败`, `lsof -nP -iTCP:${mixedPort} 查看占用者`);
@@ -232,7 +232,7 @@ async function collectChecks(): Promise<Check[]> {
       // hint 带着内核原文与本次生效的覆写清单；只取 message 首行会把唯一有用的线索丢掉
       // （体检是紧凑列表，滤掉纯排版空行）
       const notes = e instanceof CliError ? e.hint.filter(l => l.trim().length > 0) : undefined;
-      push('配置构建', 'fail', (e as Error).message.split('\n')[0], '修正订阅或覆写后 mihomo start', notes);
+      push('配置构建', 'fail', (e as Error).message.split('\n')[0], '修正订阅或覆写后 mihomo-cli start', notes);
     }
   } else {
     push('配置构建', 'skip', active ? '未安装内核，跳过校验' : '无订阅，跳过');
@@ -244,7 +244,7 @@ async function collectChecks(): Promise<Check[]> {
     if (probe.ok) {
       push('代理连通', 'ok', `HTTP ${probe.statusCode}（${probe.durationMs}ms）`);
     } else {
-      push('代理连通', 'warn', `不通: ${probe.error}`, '节点可能失效，mihomo ui 切换节点');
+      push('代理连通', 'warn', `不通: ${probe.error}`, '节点可能失效，mihomo-cli ui 切换节点');
     }
   } else {
     push('代理连通', 'skip', '未运行');
@@ -257,7 +257,7 @@ async function collectChecks(): Promise<Check[]> {
   if (hasKernel() && kernelInfo === null) {
     push('内核版本', 'skip', 'GitHub 不可达，跳过检查');
   } else if (kernelInfo?.needsUpdate) {
-    push('内核版本', 'warn', `当前 ${kernelInfo.current}，最新 ${kernelInfo.latest}`, 'mihomo kernel');
+    push('内核版本', 'warn', `当前 ${kernelInfo.current}，最新 ${kernelInfo.latest}`, 'mihomo-cli kernel');
   } else if (kernelInfo) {
     push('内核版本', 'ok', `${kernelInfo.current}（最新）`);
   }
@@ -270,7 +270,7 @@ async function collectChecks(): Promise<Check[]> {
   if (latest === null) {
     push('CLI 版本', 'skip', 'npm registry 不可达，跳过检查');
   } else if (compareVersions(latest, VERSION) > 0) {
-    push('CLI 版本', 'warn', `当前 ${VERSION}，最新 ${latest}`, 'mihomo update');
+    push('CLI 版本', 'warn', `当前 ${VERSION}，最新 ${latest}`, 'mihomo-cli update');
   } else {
     push('CLI 版本', 'ok', `${VERSION}（最新）`);
   }
@@ -281,7 +281,7 @@ async function collectChecks(): Promise<Check[]> {
 export async function cmdDoctor(args: string[] = []): Promise<void> {
   assertKnownFlags(args.slice(1), [], 'doctor');
   // 不接受位置参数：校验先于探测/网络等慢速副作用
-  assertPositionalCount(args, 0, 1, 'mihomo doctor');
+  assertPositionalCount(args, 0, 1, 'mihomo-cli doctor');
   const checks = await collectChecks();
 
   console.log('');

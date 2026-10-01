@@ -15,7 +15,7 @@ import type { OverwriteFileInfo, ProxyProbeResult, StatusJson, SubscriptionUrgen
 function connectivityHint(urgency: SubscriptionUrgency): string {
   if (urgency === 'expired') return '订阅已过期，请续费或更换订阅';
   if (urgency === 'traffic-exhausted') return '订阅流量已用尽，请续费或更换订阅';
-  return '节点可能失效，可在 Web UI 中切换节点 (mihomo ui)';
+  return '节点可能失效，可在 Web UI 中切换节点 (mihomo-cli ui)';
 }
 
 /** 流量行的着色：用尽红、>=90% 黄 */
@@ -109,7 +109,7 @@ function buildStatusJson(args: {
 export async function printStatus(args: string[] = []): Promise<void> {
   assertKnownFlags(args, ['-j', '--json', '--no-probe'], 'status [--json] [--no-probe]');
   // 不接受位置参数：`status garbage` 此前被静默忽略
-  assertPositionalCount(args, 0, 1, 'mihomo status [-j|--json] [--no-probe]');
+  assertPositionalCount(args, 0, 1, 'mihomo-cli status [-j|--json] [--no-probe]');
   const asJson = hasFlag(args, '-j', '--json');
   const skipProbe = hasFlag(args, '--no-probe');
   // 服务状态只查一次：getRunningState 与 buildStatusJson/printServiceLines 共用，
@@ -202,11 +202,11 @@ export async function printStatus(args: string[] = []): Promise<void> {
   const abnormalExit = describeAbnormalExit(service);
   if (!running && service.installed && !service.disabled && abnormalExit) {
     console.log(colors.yellow(`  异常: 内核上次异常退出（${abnormalExit}），launchd 正在反复拉起`));
-    console.log(colors.gray('  查看原因: mihomo logs 0    停止重试: mihomo stop'));
+    console.log(colors.gray('  查看原因: mihomo-cli logs 0    停止重试: mihomo-cli stop'));
   }
   const kernelVersion = getKernelVersion();
   console.log(
-    kernelVersion ? `${colors.gray('内核: ')}${kernelVersion}` : `${colors.gray('内核: ')}${colors.yellow('未安装')} ${colors.gray('(下载: mihomo kernel)')}`,
+    kernelVersion ? `${colors.gray('内核: ')}${kernelVersion}` : `${colors.gray('内核: ')}${colors.yellow('未安装')} ${colors.gray('(下载: mihomo-cli kernel)')}`,
   );
 
   if (pid) {
@@ -242,7 +242,7 @@ export async function printStatus(args: string[] = []): Promise<void> {
     if (cached?.updated_at) {
       const rel = formatRelativeTime(cached.updated_at) || formatDate(cached.updated_at);
       if (isSubscriptionStale(cached)) {
-        console.log(colors.yellow(`更新: ${rel}（已超过 ${resolveUpdateInterval(cached.update_interval)} 小时间隔，建议 mihomo sub update）`));
+        console.log(colors.yellow(`更新: ${rel}（已超过 ${resolveUpdateInterval(cached.update_interval)} 小时间隔，建议 mihomo-cli sub update）`));
       } else {
         console.log(`${colors.gray('更新: ')}${rel}`);
       }
@@ -256,7 +256,7 @@ export async function printStatus(args: string[] = []): Promise<void> {
       console.log(`${colors.gray('到期: ')}${expireColor(formatTimestamp(cached.expire), urgency)}`);
     }
   } else {
-    console.log(`${colors.gray('订阅: ')}未配置 ${colors.gray('(添加: mihomo sub add <url>)')}`);
+    console.log(`${colors.gray('订阅: ')}未配置 ${colors.gray('(添加: mihomo-cli sub add <url>)')}`);
   }
 
   printOverwriteLines(overwriteEnabled, overwriteFiles, overwriteBroken, activeSub);
@@ -265,7 +265,7 @@ export async function printStatus(args: string[] = []): Promise<void> {
 
   // TUN 是临时 root 进程且不随终端退出消失，每次查看状态都提醒怎么收掉
   if (kind === 'tun') {
-    console.log(colors.gray('TUN 为临时进程；停止: mihomo stop（之后 mihomo start 恢复 Mixed）'));
+    console.log(colors.gray('TUN 为临时进程；停止: mihomo-cli stop（之后 mihomo-cli start 恢复 Mixed）'));
   }
 
   console.log('');
@@ -344,12 +344,12 @@ function printOverwriteLines(
 
 function printServiceLines(service: ReturnType<typeof getServiceStatus>, legacy: boolean): void {
   if (!service.installed && !service.loaded) {
-    console.log(`${colors.gray('服务: ')}${colors.yellow('未安装')} ${colors.gray('(mihomo install 安装后可用 Mixed 模式)')}`);
+    console.log(`${colors.gray('服务: ')}${colors.yellow('未安装')} ${colors.gray('(mihomo-cli install 安装后可用 Mixed 模式)')}`);
   } else if (!service.installed) {
     // plist 被手动删除但任务仍装载：KeepAlive 会持续拉起内核。不能报「已安装」——
     // 那与紧随其后的异常提示自相矛盾，用户无法判断到底装没装
     console.log(`${colors.gray('服务: ')}${colors.yellow('异常')} ${colors.gray('(plist 不存在，但服务仍处装载状态)')}`);
-    console.log(colors.gray('  KeepAlive 会持续拉起内核，清理: mihomo uninstall'));
+    console.log(colors.gray('  KeepAlive 会持续拉起内核，清理: mihomo-cli uninstall'));
     printAutoStart(service);
   } else {
     console.log(`${colors.gray('服务: ')}${colors.green('已安装')}`);
@@ -359,7 +359,7 @@ function printServiceLines(service: ReturnType<typeof getServiceStatus>, legacy:
   // 旧版本（v4.0 及更早）的 root LaunchDaemon 会与用户级服务抢端口，且用户态动不了它（D1）
   if (legacy) {
     console.log(colors.yellow('  异常: 检测到旧版本的系统级服务（root LaunchDaemon）'));
-    console.log(colors.gray('  它会抢占同一组端口，清理: mihomo uninstall（需一次管理员密码）'));
+    console.log(colors.gray('  它会抢占同一组端口，清理: mihomo-cli uninstall（需一次管理员密码）'));
   }
 }
 

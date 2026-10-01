@@ -320,7 +320,7 @@ export function getSubscriptions(settings: Settings = readSettings()): Subscript
   const list: unknown = settings.subscriptions;
   if (!Array.isArray(list)) {
     if (list !== undefined) {
-      console.warn('警告: settings.json 的 subscriptions 不是列表，已忽略（可用 mihomo sub add 重新添加）');
+      console.warn('警告: settings.json 的 subscriptions 不是列表，已忽略（可用 mihomo-cli sub add 重新添加）');
     }
     return [];
   }
@@ -353,7 +353,7 @@ export function addSubscription(url: string, name = 'default'): void {
   updateSettings(settings => {
     const subs = getSubscriptions(settings);
     if (subs.some(s => s.name === name)) {
-      throw new CliError(`订阅 "${name}" 已存在，请换个名称（mihomo sub add <url> <名称>），或先删除（mihomo sub remove ${name}）`);
+      throw new CliError(`订阅 "${name}" 已存在，请换个名称（mihomo-cli sub add <url> <名称>），或先删除（mihomo-cli sub remove ${name}）`);
     }
     subs.push({ name, url });
     const updates: Partial<Settings> = { subscriptions: subs };

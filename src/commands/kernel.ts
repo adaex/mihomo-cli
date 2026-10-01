@@ -21,13 +21,13 @@ export async function cmdKernel(args: string[]): Promise<void> {
   const proxyInfo = parseProxyArg(args);
   // 不接受位置参数：`kernel garbage` 此前被静默忽略；校验放在两个 flag 解析之后
   // （flag 侧的错误优先报出）、checkUpdate 之前（不碰网络）
-  assertPositionalCount(args, 0, 1, 'mihomo kernel [--mirror [镜像]] [--proxy <端口|地址>]', KERNEL_VALUE_FLAGS);
+  assertPositionalCount(args, 0, 1, 'mihomo-cli kernel [--mirror [镜像]] [--proxy <端口|地址>]', KERNEL_VALUE_FLAGS);
 
   // --mirror direct 的语义是「绕过一切代理直连」，与 --proxy 正交冲突，同时给出必是误解
   if (proxyInfo.proxy && mirrorInfo.isOverride && !mirrorInfo.mirror) {
     throw new CliError('--mirror direct 与 --proxy 不能同时使用', {
       label: '参数错误',
-      hint: ['--mirror direct 强制不经任何代理直连，需走代理时去掉它:', '  mihomo kernel --proxy <端口|地址>'],
+      hint: ['--mirror direct 强制不经任何代理直连，需走代理时去掉它:', '  mihomo-cli kernel --proxy <端口|地址>'],
     });
   }
 
@@ -112,15 +112,15 @@ export async function cmdKernel(args: string[]): Promise<void> {
       }
     } else if (!mirrorInfo.mirror) {
       if (apiProxy) {
-        hint.push('', '提示: 经代理查询 GitHub 失败，可检查代理是否可用，或 mihomo kernel --mirror direct 重试直连');
+        hint.push('', '提示: 经代理查询 GitHub 失败，可检查代理是否可用，或 mihomo-cli kernel --mirror direct 重试直连');
       } else {
         // 平时不打扰；仅直连失败时提示镜像/代理用法
         hint.push(
           '',
           '提示: 直连失败或下载过慢时可使用镜像或代理:',
-          '  mihomo kernel --mirror [镜像]   # 强制走镜像（裸 --mirror 固定裸域，可用 v6/v4/cdn 等别名）',
+          '  mihomo-cli kernel --mirror [镜像]   # 强制走镜像（裸 --mirror 固定裸域，可用 v6/v4/cdn 等别名）',
           `  可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`,
-          '  mihomo kernel --proxy <端口>    # 经本机其他代理工具出网',
+          '  mihomo-cli kernel --proxy <端口>    # 经本机其他代理工具出网',
         );
       }
     } else if (apiProxy) {
@@ -138,7 +138,7 @@ export async function cmdKernel(args: string[]): Promise<void> {
         '提示: 镜像只作用于内核下载，版本查询仍需直连 GitHub API（当前不通）。出路:',
         '  安装并登录 GitHub CLI（认证配额 5000 次/时）:',
         '    brew install gh && gh auth login',
-        '  或经本机代理工具查询: mihomo kernel --proxy <端口>',
+        '  或经本机代理工具查询: mihomo-cli kernel --proxy <端口>',
       );
     }
     throw new CliError(err.message, { label: '更新失败', hint });
@@ -165,8 +165,8 @@ export async function cmdKernel(args: string[]): Promise<void> {
         hint: [
           '',
           '下载通道按优先级自动选择: gh（GitHub CLI）> 本机代理 > 直连',
-          '手动指定: mihomo kernel --mirror [镜像]（强制镜像）/ mihomo kernel --mirror direct（强制直连）',
-          '          mihomo kernel --proxy <端口>（经本机其他代理工具出网）',
+          '手动指定: mihomo-cli kernel --mirror [镜像]（强制镜像）/ mihomo-cli kernel --mirror direct（强制直连）',
+          '          mihomo-cli kernel --proxy <端口>（经本机其他代理工具出网）',
         ],
       });
     }
@@ -176,7 +176,7 @@ export async function cmdKernel(args: string[]): Promise<void> {
     // 与 sub update 的重启提示同判据
     const state = getRunningState();
     if (state.running) {
-      const restartCommand = state.kind === 'tun' ? 'mihomo start tun' : 'mihomo start';
+      const restartCommand = state.kind === 'tun' ? 'mihomo-cli start tun' : 'mihomo-cli start';
       console.log(colors.yellow(`提示: 运行中的内核仍是旧版本，执行 ${restartCommand} 重启后生效`));
     }
     // ad-hoc 签名的 Go 二进制被替换后，macOS 可能按新可执行文件重新要求本地网络授权；

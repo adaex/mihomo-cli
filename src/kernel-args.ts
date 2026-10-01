@@ -73,7 +73,7 @@ function normalizeMirrorUrl(val: string): string | null {
  * 强制直连。重复指定报错，不静默以第一个为准。空值（`--mirror=` / `--mirror ""`）报错，
  * 与 `--proxy=` 同姿态。
  *
- * hint 里直接列出可用镜像，不说「见 mihomo kernel --help」——`--help` 只是顶层 help 的
+ * hint 里直接列出可用镜像，不说「见 mihomo-cli kernel --help」——`--help` 只是顶层 help 的
  * 别名，`kernel --help` 会撞上白名单报错，把人指向一个必定报错的命令比不给提示更糟。
  */
 export function parseMirrorArg(args: string[] | undefined): MirrorArg {
@@ -90,7 +90,7 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
   if (mirrorCount > 1) {
     throw new CliError('--mirror 只能指定一次', {
       label: '参数错误',
-      hint: ['用法: mihomo kernel [--mirror [镜像]]', `可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`, '不使用镜像: mihomo kernel --mirror direct'],
+      hint: ['用法: mihomo-cli kernel [--mirror [镜像]]', `可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`, '不使用镜像: mihomo-cli kernel --mirror direct'],
     });
   }
 
@@ -102,7 +102,7 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
     if (inline === '' || (mirrorIdx >= 0 && args[mirrorIdx + 1] === '')) {
       throw new CliError('--mirror 的值不能为空（单独的 --mirror 表示使用默认镜像域）', {
         label: '参数错误',
-        hint: ['用法: mihomo kernel [--mirror [镜像]]', `可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`, '不使用镜像: mihomo kernel --mirror direct'],
+        hint: ['用法: mihomo-cli kernel [--mirror [镜像]]', `可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`, '不使用镜像: mihomo-cli kernel --mirror direct'],
       });
     }
     const nextArg = inline ?? args[mirrorIdx + 1];
@@ -195,7 +195,7 @@ export function parseProxyArg(args: string[] | undefined): ProxyArg {
   if (hits.length > 1) {
     throw new CliError('--proxy 只能指定一次', {
       label: '参数错误',
-      hint: ['用法: mihomo kernel --proxy <端口|地址>', '例如: mihomo kernel --proxy 7897'],
+      hint: ['用法: mihomo-cli kernel --proxy <端口|地址>', '例如: mihomo-cli kernel --proxy 7897'],
     });
   }
 

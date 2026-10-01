@@ -369,7 +369,7 @@ ${argsXml}
  */
 export function ensureServiceSymlink(): void {
   if (!fs.existsSync(PATHS.mihomoBinary)) {
-    throw new CliError('未找到 mihomo 内核，请先下载内核', { hint: '下载内核: mihomo kernel' });
+    throw new CliError('未找到 mihomo 内核，请先下载内核', { hint: '下载内核: mihomo-cli kernel' });
   }
   try {
     const current = fs.readlinkSync(PATHS.serviceBinary);
@@ -498,7 +498,7 @@ export async function waitUntilUnloaded(target: string = serviceTarget()): Promi
 export interface RootResidueCleanupContext {
   /** 主体动作的结果描述，如「服务已停止，登录自启已关闭」；start 路径是「服务尚未启动」 */
   mainOutcome: string;
-  /** 重新尝试清理的命令，如 'mihomo stop' */
+  /** 重新尝试清理的命令，如 'mihomo-cli stop' */
   retryCommand: string;
 }
 
@@ -559,7 +559,7 @@ export function classifyResidueCleanup(result: Pick<CleanupResult, 'remaining' |
  * 服务路径的残留内核收口。唯一实现是 process-stop 的 cleanupAll
  * （用户态逐 pid 复核 / root 一次 sudo 脚本 + 死亡等待），抛错/警告判据见
  * classifyResidueCleanup。pid 文件免提权清理、失败只警告，非 TTY 的
- * `mihomo stop` 不会被一个无害残留挡成 exit 1
+ * `mihomo-cli stop` 不会被一个无害残留挡成 exit 1
  */
 async function cleanupKernelsOrThrow(ctx: RootResidueCleanupContext): Promise<void> {
   const result = await cleanupAll();
@@ -758,10 +758,10 @@ export async function startService(): Promise<{ started: boolean }> {
   ensureServiceSymlink();
 
   if (!isServiceInstalled()) {
-    throw new CliError('服务未安装', { hint: '安装服务: mihomo install' });
+    throw new CliError('服务未安装', { hint: '安装服务: mihomo-cli install' });
   }
   if (!fs.existsSync(PATHS.configFile)) {
-    throw new CliError('未找到运行时配置', { hint: '请先添加订阅: mihomo sub add <url>' });
+    throw new CliError('未找到运行时配置', { hint: '请先添加订阅: mihomo-cli sub add <url>' });
   }
 
   // 拒绝用 TUN 配置启动服务：服务以普通用户运行（用户级 LaunchAgent），无权创建 utun
@@ -775,14 +775,14 @@ export async function startService(): Promise<{ started: boolean }> {
         '服务以普通用户身份运行（用户级 LaunchAgent），无权创建 TUN 设备，',
         '强行启动只会让内核反复崩溃重启。',
         '',
-        '按 Mixed 重建配置并启动:  mihomo start mixed',
-        '确实要用 TUN:            mihomo tun',
+        '按 Mixed 重建配置并启动:  mihomo-cli start mixed',
+        '确实要用 TUN:            mihomo-cli tun',
       ],
     });
   }
 
   // tun 残留是 root 属主，会与服务抢端口；有才清（这是唯一可能弹密码的地方），无则免密
-  await cleanupKernelsOrThrow({ mainOutcome: '服务尚未启动', retryCommand: 'mihomo start' });
+  await cleanupKernelsOrThrow({ mainOutcome: '服务尚未启动', retryCommand: 'mihomo-cli start' });
 
   bootoutService();
   await waitUntilUnloaded();
@@ -864,7 +864,7 @@ export async function stopService(): Promise<void> {
 
   // bootout 通常已终止托管内核；tun 起的 root 内核与手动残留在此收口。
   // 重跑 stop 即可重试清理：此时服务已停，cmdStop 走「游离内核」路径再次提权
-  await cleanupKernelsOrThrow({ mainOutcome: '服务已停止，登录自启已关闭', retryCommand: 'mihomo stop' });
+  await cleanupKernelsOrThrow({ mainOutcome: '服务已停止，登录自启已关闭', retryCommand: 'mihomo-cli stop' });
 }
 
 /**
@@ -903,7 +903,7 @@ export async function uninstallService(): Promise<void> {
 
   // 重试入口是 stop 而非 uninstall：卸载完成后重跑 uninstall 会因「未安装且未装载」
   // 幂等返回，不会重试残留清理；stop 的游离内核路径（cleanupAll）才会再次提权
-  await cleanupKernelsOrThrow({ mainOutcome: '服务已卸载', retryCommand: 'mihomo stop' });
+  await cleanupKernelsOrThrow({ mainOutcome: '服务已卸载', retryCommand: 'mihomo-cli stop' });
 
   // 符号链是本工具装的，卸载时一并清掉（内核本体保留，那是 kernel 命令的资产）
   try {
@@ -1105,7 +1105,7 @@ export function concludeHotReload(stopEpochBefore: number, stopEpochNow: number)
  */
 export async function restartService(): Promise<{ hotReloaded: boolean; started: boolean }> {
   if (!isServiceInstalled()) {
-    throw new CliError('服务未安装，无法重启', { hint: '安装服务: mihomo install' });
+    throw new CliError('服务未安装，无法重启', { hint: '安装服务: mihomo-cli install' });
   }
 
   if (!logOversized() && (await tryHotReload())) {

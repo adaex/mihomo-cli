@@ -66,7 +66,7 @@ describe('多余位置参数报错', () => {
   ];
 
   for (const [desc, args] of cases) {
-    it(`${desc}（mihomo ${args.join(' ')}）报参数错误`, () => {
+    it(`${desc}（mihomo-cli ${args.join(' ')}）报参数错误`, () => {
       const { status, output } = run(args);
       assert.notEqual(status, 0, `多余位置参数必须让命令失败，实际输出: ${output}`);
       assert.match(output, /参数错误/);
@@ -129,7 +129,7 @@ describe('声明个数内的合法形态不触发参数错误', () => {
       ['start', '-'],
     ]) {
       const { status, output } = run(args);
-      assert.notEqual(status, 0, `mihomo ${args.join(' ')} 应报未知选项，实际: ${output}`);
+      assert.notEqual(status, 0, `mihomo-cli ${args.join(' ')} 应报未知选项，实际: ${output}`);
       assert.match(output, /未知的选项: -\n/);
     }
     assert.equal(fs.existsSync(path.join(dataDir, 'settings.json')), false, '拒绝必须发生在入库之前');

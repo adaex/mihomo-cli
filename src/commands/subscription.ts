@@ -21,7 +21,7 @@ import { confirmOrThrow, confirmPrompt, dispatchSubcommand, restartToApply, type
 function printRestartHintIfRunning(variant: 'update' | 'removed-active' = 'update'): void {
   const state = runtime.getRunningState();
   if (state.running) {
-    const hintCommand = state.kind === 'tun' ? 'mihomo start tun' : 'mihomo start';
+    const hintCommand = state.kind === 'tun' ? 'mihomo-cli start tun' : 'mihomo-cli start';
     const message =
       variant === 'removed-active'
         ? `提示: 运行中的实例仍在使用已删除订阅的配置，执行 ${hintCommand} 切换到新订阅`
@@ -37,7 +37,7 @@ function printSubscriptionList(): void {
   if (subs.length === 0) {
     console.log('没有订阅');
     console.log('');
-    console.log('添加订阅: mihomo sub add <url> [name]');
+    console.log('添加订阅: mihomo-cli sub add <url> [name]');
     console.log('');
     return;
   }
@@ -70,13 +70,13 @@ function printSubscriptionList(): void {
   // Subscription-Userinfo，刚 update 完仍无数据；这种「更新过却没数据」再提示会让用户
   // 反复 update 并怀疑工具坏了（列表面板不能被坏状态击穿，只提示）
   if (subs.some(s => s.updated_at == null) && subs.every(s => formatTraffic(s.upload, s.download, s.total) === null)) {
-    console.log(colors.gray('提示: 更新订阅后可显示流量与到期信息（mihomo sub update；机场不下发用量数据则无此信息）'));
+    console.log(colors.gray('提示: 更新订阅后可显示流量与到期信息（mihomo-cli sub update；机场不下发用量数据则无此信息）'));
   }
   console.log('');
-  console.log('切换订阅: mihomo sub use <name>');
-  console.log('新增订阅: mihomo sub add <url> [name]');
-  console.log('更新订阅: mihomo sub update [name]');
-  console.log('删除订阅: mihomo sub remove <name>');
+  console.log('切换订阅: mihomo-cli sub use <name>');
+  console.log('新增订阅: mihomo-cli sub add <url> [name]');
+  console.log('更新订阅: mihomo-cli sub update [name]');
+  console.log('删除订阅: mihomo-cli sub remove <name>');
   console.log('');
 }
 
@@ -100,7 +100,7 @@ function readUrlFromClipboard(): string | null {
 async function subAdd(args: string[]): Promise<void> {
   // url 与可选 name 至多两个：`sub add <url> <name> extra` 此前静默忽略 extra；
   // 校验先于入库/下载，避免半成品副作用
-  assertPositionalCount(args, 2, 2, 'mihomo sub add <url> [name]');
+  assertPositionalCount(args, 2, 2, 'mihomo-cli sub add <url> [name]');
   let url = args[2]?.trim();
   // 空串按显式提供处理并报错，而非静默落到 'default'——同仓其他命令（ui/dir open/
   // sub update）对空串位置参数一律报错，这里是对齐；静默改名会让「想传名字但传了空」
@@ -124,10 +124,10 @@ async function subAdd(args: string[]): Promise<void> {
       url = clipped;
     } else if (process.stdin.isTTY) {
       throw new CliError('剪贴板中没有有效的订阅 URL', {
-        hint: ['先复制订阅链接后重试，或显式传入:', '  mihomo sub add <url> [name]'],
+        hint: ['先复制订阅链接后重试，或显式传入:', '  mihomo-cli sub add <url> [name]'],
       });
     } else {
-      throw new CliError('请提供有效的订阅 URL', { hint: ['用法: mihomo sub add <url> [name]'] });
+      throw new CliError('请提供有效的订阅 URL', { hint: ['用法: mihomo-cli sub add <url> [name]'] });
     }
   }
 
@@ -158,7 +158,7 @@ async function subAdd(args: string[]): Promise<void> {
 
 async function subUpdate(args: string[]): Promise<void> {
   // 名称至多一个：`sub update foo bar` 此前静默忽略 bar
-  assertPositionalCount(args, 1, 2, 'mihomo sub update [name]');
+  assertPositionalCount(args, 1, 2, 'mihomo-cli sub update [name]');
   const nameArg = getNonFlagArg(args, 2);
   const subs = getSubscriptions();
 
@@ -169,7 +169,7 @@ async function subUpdate(args: string[]): Promise<void> {
   // 区分「无参数」（更新所有）与「空串参数」（`sub update ""`，变量展开为空的常见笔误），
   // 后者此前静默更新所有订阅
   if (nameArg === '') {
-    throw new CliError('请指定订阅名称', { hint: ['更新所有订阅直接执行: mihomo sub update', `更新指定订阅: mihomo sub update <名称>`] });
+    throw new CliError('请指定订阅名称', { hint: ['更新所有订阅直接执行: mihomo-cli sub update', `更新指定订阅: mihomo-cli sub update <名称>`] });
   }
 
   if (nameArg === null) {
@@ -192,7 +192,7 @@ async function subUpdate(args: string[]): Promise<void> {
     if (failedResults.length > 0) {
       const allFailed = failedResults.length === results.length;
       throw new CliError(allFailed ? '全部订阅更新失败' : `${failedResults.length} 个订阅更新失败: ${failedResults.map(r => r.name).join('、')}`, {
-        hint: failedResults.map(r => `重试: mihomo sub update ${r.name}`),
+        hint: failedResults.map(r => `重试: mihomo-cli sub update ${r.name}`),
       });
     }
     return;
@@ -213,14 +213,14 @@ async function subUpdate(args: string[]): Promise<void> {
 
 async function subUse(args: string[]): Promise<void> {
   // 名称至多一个：`sub use foo bar` 此前静默忽略 bar；带值选项的值（-u 5000）不算位置参数
-  assertPositionalCount(args, 1, 2, 'mihomo sub use <name>');
+  assertPositionalCount(args, 1, 2, 'mihomo-cli sub use <name>');
   // 即使未在运行、不触发重启，-u 缺值/非法值也在此刻报错，不静默吞掉
   assertRestartOptionValues(args);
   const name = getNonFlagArg(args, 2);
   const subs = getSubscriptions();
 
   if (subs.length === 0) {
-    throw new CliError('没有订阅，请先添加订阅', { hint: 'mihomo sub add <url> [name]' });
+    throw new CliError('没有订阅，请先添加订阅', { hint: 'mihomo-cli sub add <url> [name]' });
   }
 
   if (!name) {
@@ -256,7 +256,7 @@ async function subUse(args: string[]): Promise<void> {
 
 async function subRemove(args: string[]): Promise<void> {
   // 名称至多一个：`sub remove foo bar` 此前静默忽略 bar
-  assertPositionalCount(args, 1, 2, 'mihomo sub remove <name>');
+  assertPositionalCount(args, 1, 2, 'mihomo-cli sub remove <name>');
   // 用 getNonFlagArg 而非 args[2]：允许 -y 出现在名称之前（`sub remove -y foo`）
   const name = getNonFlagArg(args, 2);
   const subs = getSubscriptions();
@@ -264,7 +264,7 @@ async function subRemove(args: string[]): Promise<void> {
   // 与 use/update 同口径：零订阅先报「没有订阅」——环境里没有订阅时，
   // 「请指定名称」会把用户引去补一个不存在的参数
   if (subs.length === 0) {
-    throw new CliError('没有订阅，请先添加订阅', { hint: 'mihomo sub add <url> [name]' });
+    throw new CliError('没有订阅，请先添加订阅', { hint: 'mihomo-cli sub add <url> [name]' });
   }
 
   if (!name) {
@@ -285,7 +285,7 @@ async function subRemove(args: string[]): Promise<void> {
     if (
       !(await confirmOrThrow('此操作不可恢复，确认?', {
         nonTtyMessage: `模糊匹配到 "${target.name}"，非交互环境需确认`,
-        hint: [`请用完整名称: mihomo sub remove ${target.name}`, `或跳过确认: mihomo sub remove ${name} -y`],
+        hint: [`请用完整名称: mihomo-cli sub remove ${target.name}`, `或跳过确认: mihomo-cli sub remove ${name} -y`],
       }))
     ) {
       console.log('已取消');
@@ -345,13 +345,13 @@ export async function cmdSubscription(args: string[]): Promise<void> {
       if (action.startsWith('-')) {
         throw new CliError(`未知的选项: ${action}`, {
           label: '参数错误',
-          hint: ['裸 sub 只列出订阅，不接受选项', '', '用法: mihomo sub [use|add|update|remove]（裸 sub 即列表）'],
+          hint: ['裸 sub 只列出订阅，不接受选项', '', '用法: mihomo-cli sub [use|add|update|remove]（裸 sub 即列表）'],
         });
       }
       const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
       const suggestion = suggestSimilar(action, names);
       throw new CliError(`未知的订阅命令: ${action}`, {
-        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '用法: mihomo sub [use|add|update|remove]（裸 sub 即列表）'],
+        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '用法: mihomo-cli sub [use|add|update|remove]（裸 sub 即列表）'],
       });
     },
   });

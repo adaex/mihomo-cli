@@ -156,8 +156,8 @@ export function detectSystemProxy(mixedPort: number): SystemProxySummary | null 
 /**
  * start（mixed）成功后的系统代理提示：按检测结果分档。
  * - PAC/WPAD 接管：说明接管状态，**不给设置命令**——照敲手动代理命令会把本来可用的
- *   PAC 配置覆盖掉（脚本可能正把流量分给 mihomo），改不改是用户的决定
- * - 已指向 Mixed 端口：一句灰色确认；仍有其他条目指向别处时升级为黄色（部分流量不走 mihomo）
+ *   PAC 配置覆盖掉（脚本可能正把流量分给 mihomo-cli），改不改是用户的决定
+ * - 已指向 Mixed 端口：一句灰色确认；仍有其他条目指向别处时升级为黄色（部分流量不走 mihomo-cli）
  * - 指向别处/未设置：黄色提醒 + 可粘贴的 networksetup 命令（服务名让用户按实际替换）
  * - 检测不可用：原静态提示原样保留
  */
@@ -169,12 +169,12 @@ export function printSystemProxyHint(mixedPort: number): void {
   }
   if (summary.pac) {
     const desc = summary.pac.wpad ? 'WPAD 自动发现' : `PAC 文件${summary.pac.source ? `（${summary.pac.source}）` : ''}`;
-    console.log(colors.gray(`系统代理由 ${desc} 接管，是否走 mihomo 由脚本决定；如需固定全量走代理，可在系统设置改用手动代理 127.0.0.1:${mixedPort}`));
+    console.log(colors.gray(`系统代理由 ${desc} 接管，是否走 mihomo-cli 由脚本决定；如需固定全量走代理，可在系统设置改用手动代理 127.0.0.1:${mixedPort}`));
     return;
   }
   if (summary.matched) {
     if (summary.diverged.length > 0) {
-      console.log(colors.yellow(`提示: 部分系统代理已指向 127.0.0.1:${mixedPort}，但 ${summary.diverged.join('、')} 仍指向别处——对应流量可能不经 mihomo`));
+      console.log(colors.yellow(`提示: 部分系统代理已指向 127.0.0.1:${mixedPort}，但 ${summary.diverged.join('、')} 仍指向别处——对应流量可能不经 mihomo-cli`));
     } else {
       console.log(colors.gray(`系统代理已指向 127.0.0.1:${mixedPort}`));
     }

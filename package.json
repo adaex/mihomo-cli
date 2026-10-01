@@ -5,8 +5,6 @@
   "description": "A terminal-based mihomo (Clash.Meta) client for macOS",
   "bin": {
     "mihomo-cli": "dist/index.js",
-    "mihomo": "dist/index.js",
-    "mhm": "dist/index.js",
     "mh": "dist/index.js"
   },
   "files": [

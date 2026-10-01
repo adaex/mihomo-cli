@@ -7,7 +7,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 /**
- * `mihomo config` 凭据脱敏与缺文件提示（CLI 级）。
+ * `mihomo-cli config` 凭据脱敏与缺文件提示（CLI 级）。
  * 脱敏规则的单元覆盖在 redact.spec.ts，这里锁命令接线：默认上屏的是掩码、
  * --reveal 才给原文、JSON 信封带 redacted，以及缺文件时三处口径统一指向 sub update。
  */
@@ -87,7 +87,7 @@ describe('config：凭据默认脱敏', () => {
       const r = run(['config']);
       assert.notEqual(r.status, 0);
       assert.match(`${r.stdout}${r.stderr}`, /有条目但没有本地配置文件/);
-      assert.match(`${r.stdout}${r.stderr}`, /mihomo sub update demo/);
+      assert.match(`${r.stdout}${r.stderr}`, /mihomo-cli sub update demo/);
       assert.ok(!`${r.stdout}${r.stderr}`.includes('请先添加订阅'), '条目还在时正确动作是 update 不是 add');
     });
   });

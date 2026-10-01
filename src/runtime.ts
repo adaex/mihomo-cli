@@ -157,16 +157,16 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
  * 「启动被并发的停止取消」这条错误的唯一出处。两个消费点共用（锁内判据、健康确认失败后复读），
  * 文案只此一份——散写两份，改一处忘一处就是本仓反复栽的漂移。
  *
- * 文案刻意说「停止操作」而非「执行了 mihomo stop」：递增点不止 `stop`，`tun` 与 install
+ * 文案刻意说「停止操作」而非「执行了 mihomo-cli stop」：递增点不止 `stop`，`tun` 与 install
  * 首装同样会关闭自启并递增，说成 stop 是在讲一件没发生的事。
  */
 function cancelledByConcurrentStop(): CliError {
   return new CliError('启动已取消：期间检测到停止操作', {
     label: '启动失败',
     hint: [
-      '另一个终端在本次启动过程中关闭了服务自启（mihomo stop，或 tun / install 等同样会关闭自启的命令），已按最后一条命令保持停止。',
+      '另一个终端在本次启动过程中关闭了服务自启（mihomo-cli stop，或 tun / install 等同样会关闭自启的命令），已按最后一条命令保持停止。',
       '',
-      '确实要启动: mihomo start',
+      '确实要启动: mihomo-cli start',
     ],
   });
 }
@@ -195,10 +195,10 @@ export async function assertServiceHealthy(label = '启动失败'): Promise<numb
   throw new CliError(reason, {
     label,
     hint: [
-      ...(health.crashed ? ['launchd 会每隔约 10 秒反复拉起它，请先修正配置或执行 mihomo stop。'] : []),
+      ...(health.crashed ? ['launchd 会每隔约 10 秒反复拉起它，请先修正配置或执行 mihomo-cli stop。'] : []),
       ...(tail.length > 0 ? ['', '--- 日志尾部 ---', ...tail] : ['', `日志: ${PATHS.logFile}`]),
       '',
-      '完整日志: mihomo logs 0',
+      '完整日志: mihomo-cli logs 0',
     ],
   });
 }

@@ -101,7 +101,7 @@ export async function startTun(): Promise<StartResult> {
   // （内核没装、配置缺失）不该先动日志。sudo 取消路径的同类窗口无法完全消除
   // （rename 进不了 root 脚本），但校验前置消掉了最常见的形态
   if (!fs.existsSync(PATHS.mihomoBinary)) {
-    throw new CliError('未找到 mihomo 内核，请先下载内核', { hint: '下载内核: mihomo kernel' });
+    throw new CliError('未找到 mihomo-cli 内核，请先下载内核', { hint: '下载内核: mihomo-cli kernel' });
   }
   if (!fs.existsSync(PATHS.configFile)) {
     throw new CliError('未找到配置文件，请先添加订阅并启动');
@@ -119,7 +119,7 @@ export async function startTun(): Promise<StartResult> {
   // 已知残余，见 CODE_REVIEW「未覆盖与待复核」
   if (getServiceStatus().loaded) {
     throw new CliError('另一终端已启动 Mixed 服务，TUN 未启动', {
-      hint: ['两者会抢占同一组端口与配置。请先停止服务:', '  mihomo stop', '', '之后可重试 TUN: mihomo start tun'],
+      hint: ['两者会抢占同一组端口与配置。请先停止服务:', '  mihomo-cli stop', '', '之后可重试 TUN: mihomo-cli start tun'],
     });
   }
 
@@ -169,7 +169,7 @@ export async function startTun(): Promise<StartResult> {
   if (!finalPid || !isRunning()) {
     const tail = readLogTail();
     throw new CliError('TUN 启动失败（内核未能保持运行）', {
-      hint: [...(tail.length > 0 ? ['--- 日志尾部 ---', ...tail, ''] : [`日志: ${PATHS.logFile}`]), '', '完整日志: mihomo logs 0'],
+      hint: [...(tail.length > 0 ? ['--- 日志尾部 ---', ...tail, ''] : [`日志: ${PATHS.logFile}`]), '', '完整日志: mihomo-cli logs 0'],
     });
   }
 

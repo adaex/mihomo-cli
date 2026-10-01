@@ -9,7 +9,7 @@ import type { LogEntry } from '../types.js';
 export function cmdLogs(args: string[]): void {
   assertKnownFlags(args, ['-f', '--follow', '-n', '--lines', '-o', '--open'], 'logs [-f] [-n N] [编号] [-o]');
   // 编号至多一个：`logs 1 2` 此前静默忽略 2
-  assertPositionalCount(args, 1, 1, 'mihomo logs [编号] [-f] [-n N] [-o]');
+  assertPositionalCount(args, 1, 1, 'mihomo-cli logs [编号] [-f] [-n N] [-o]');
   const lines = parseIntArg(args, '-n', '--lines', 100);
   const openInViewer = hasFlag(args, '-o', '--open');
   const follow = hasFlag(args, '-f', '--follow');
@@ -21,7 +21,7 @@ export function cmdLogs(args: string[]): void {
   const targetName = getNonFlagArg(args, 1) ?? (follow || openInViewer || hasLinesFlag ? '0' : null);
 
   if (targetName) {
-    // 只认「当前」与列表序号：归档名是 mihomo.<时间戳>.log，没人会去敲它，
+    // 只认「当前」与列表序号：归档名是 mihomo-cli.<时间戳>.log，没人会去敲它，
     // 而支持按名/子串查找就得额外防路径穿越
     let logPath: string;
 
@@ -30,11 +30,11 @@ export function cmdLogs(args: string[]): void {
     } else {
       const parsedIdx = parseInt(targetName, 10);
       if (Number.isNaN(parsedIdx) || parsedIdx < 1 || String(parsedIdx) !== targetName) {
-        throw new CliError(`无效的日志编号 "${targetName}"`, { hint: '用法: mihomo logs <编号>（0=当前，1+=归档）；查看列表: mihomo logs' });
+        throw new CliError(`无效的日志编号 "${targetName}"`, { hint: '用法: mihomo-cli logs <编号>（0=当前，1+=归档）；查看列表: mihomo-cli logs' });
       }
       const archive = listLogs().archives[parsedIdx - 1];
       if (!archive) {
-        throw new CliError(`未找到日志 "${targetName}"`, { hint: '使用 "mihomo logs" 查看可用日志列表' });
+        throw new CliError(`未找到日志 "${targetName}"`, { hint: '使用 "mihomo-cli logs" 查看可用日志列表' });
       }
       logPath = archive.path;
     }
@@ -44,7 +44,7 @@ export function cmdLogs(args: string[]): void {
       // 在跟随刷新。互斥显式报错，与「用户以为选项生效了」的红线一致
       if (follow) {
         throw new CliError('-o（系统查看器打开）与 -f（终端跟随）互斥', {
-          hint: '跟随输出请去掉 -o: mihomo logs 0 -f',
+          hint: '跟随输出请去掉 -o: mihomo-cli logs 0 -f',
         });
       }
       openLogFile(logPath);
@@ -86,16 +86,16 @@ export function cmdLogs(args: string[]): void {
     console.log(` ${num}. ${name}`);
     console.log(`    时间: ${time}  大小: ${size}`);
     if (!log.isCurrent) {
-      console.log(`    查看: mihomo logs ${archiveCounter}  或  mihomo logs ${archiveCounter} -o`);
+      console.log(`    查看: mihomo-cli logs ${archiveCounter}  或  mihomo-cli logs ${archiveCounter} -o`);
     }
     console.log('');
   }
 
   console.log('用法:');
-  console.log('  mihomo logs 0          # 查看当前日志 (最后 100 行)');
-  console.log('  mihomo logs 0 -f       # 实时跟随当前日志');
-  console.log('  mihomo logs 1          # 查看第 1 个归档日志（最新）');
-  console.log('  mihomo logs 1 -n 200   # 查看 200 行');
-  console.log('  mihomo logs 1 -o       # 用系统默认程序打开');
+  console.log('  mihomo-cli logs 0          # 查看当前日志 (最后 100 行)');
+  console.log('  mihomo-cli logs 0 -f       # 实时跟随当前日志');
+  console.log('  mihomo-cli logs 1          # 查看第 1 个归档日志（最新）');
+  console.log('  mihomo-cli logs 1 -n 200   # 查看 200 行');
+  console.log('  mihomo-cli logs 1 -o       # 用系统默认程序打开');
   console.log('');
 }

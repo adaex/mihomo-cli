@@ -14,7 +14,7 @@ import { MAIN_INSTANCE_PATTERN } from './process-probe.js';
  * 这里锁的是一个「静默失效」缺陷：pattern 曾用 JS 的非捕获组 `(?:a|b)`，而 pgrep/pkill 走
  * POSIX ERE（`regcomp(REG_EXTENDED)`），ERE 里 `(` 后紧跟 `?` 是语法错误。后果不是报错而是
  * **全线静默失效**——pgrep 退出码 2、无输出，getMihomoPids 返回空；pkill 一个进程都不杀却
- * 照常返回。于是 `mihomo stop` 打印「已停止」，内核仍在跑。
+ * 照常返回。于是 `mihomo-cli stop` 打印「已停止」，内核仍在跑。
  *
  * 断言直接调真实 pgrep 编译该 pattern，不做字符串匹配：字符串断言（如「不含 `(?:`」）
  * 只能挡住已知的这一种写法，而任何 JS-only 的正则语法（`\d`、`(?=)`、`{,n}`）都会以同样的

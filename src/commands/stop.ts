@@ -22,7 +22,7 @@ export function handleStopResult(result: StopResult): void {
 export async function cmdStop(args: string[]): Promise<void> {
   assertKnownFlags(args.slice(1), [], 'stop');
   // 不接受位置参数（`stop tun` 之类的写法此前被静默忽略）；校验先于任何服务操作
-  assertPositionalCount(args, 0, 1, 'mihomo stop');
+  assertPositionalCount(args, 0, 1, 'mihomo-cli stop');
   // 遗留 root daemon 带 KeepAlive：不清理它，下面杀掉的内核约 10s 后就被拉回，
   // 「已停止」即成谎报。detectLegacySystemInstall 只查 plist 文件，不要求任务在跑，
   // 幂等清理无副作用
@@ -73,5 +73,5 @@ export async function cmdStop(args: string[]): Promise<void> {
     });
   }
 
-  console.log(`${colors.green('已停止')}${colors.gray('（已关闭登录自启，mihomo start 可重新启动）')}`);
+  console.log(`${colors.green('已停止')}${colors.gray('（已关闭登录自启，mihomo-cli start 可重新启动）')}`);
 }

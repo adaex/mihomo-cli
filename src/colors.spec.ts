@@ -7,7 +7,7 @@ import { colorEnabled } from './colors.js';
  * 设色判定的口径回归（no-color.org）：
  * - NO_COLOR 此前用 `!== undefined` 判定，空串 `NO_COLOR=` 也会关色，与规范相悖
  *   （规范：存在**且非空**才关色）
- * - 错误渲染走 stderr，设色必须按 stderr.isTTY 独立判定——`mihomo status | grep x`
+ * - 错误渲染走 stderr，设色必须按 stderr.isTTY 独立判定——`mihomo-cli status | grep x`
  *   时 stdout 是管道而 stderr 仍是终端，跟着 stdout 判会把错误输出一并剥色。
  *   判定已纯函数化（colorEnabled），stdout/stderr 两路只是传入的 isTTY 不同。
  */

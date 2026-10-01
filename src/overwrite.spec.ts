@@ -670,7 +670,7 @@ describe('覆写文件 enabled 开关', () => {
     try {
       const files = loadOverwriteFile();
       assert.deepEqual(Object.keys(files[0].config ?? {}), ['log-level']);
-      // 内核对未知顶层键宽松（实测 mihomo -t 放行 enabled: false），剥离只能靠这里
+      // 内核对未知顶层键宽松（实测 mihomo-cli -t 放行 enabled: false），剥离只能靠这里
       const merged = applyOverwrite({}, files, { mode: 'mixed' }).config;
       assert.ok(!('enabled' in merged), 'enabled 不得出现在合并结果中');
     } finally {

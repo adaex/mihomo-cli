@@ -112,7 +112,7 @@ export const COMMANDS: Command[] = [
   },
   // === 订阅 ===
   {
-    // 顶层快捷方式：`mihomo use <name>` = `mihomo subscription use <name>`（与 tun 同范式）
+    // 顶层快捷方式：`mihomo-cli use <name>` = `mihomo-cli subscription use <name>`（与 tun 同范式）
     name: 'use',
     aliases: [],
     handler: cmdSubscription,

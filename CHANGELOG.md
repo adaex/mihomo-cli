@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### 变更（breaking）
+
+- **命令入口收敛为 `mihomo-cli` + `mh`**：`mihomo` / `mhm` 别名移除——`mihomo` 与内核二进制同名，两个包管理器的全局 bin 会互相覆盖。从旧版升级后旧的 `mihomo` / `mhm` 链接由 npm 自动清理；全文命令示例与提示文案统一改用 `mihomo-cli`
+
+### 修复
+
+- **终端消毒漏剥 `\r`**：服务器可控字符串（内核校验输出里的节点名、机场错误页、订阅头解析值）携带回车符时可回行首覆盖已输出内容，伪造 `✗` 为 `✓`；现 C0 控制字符剥除与函数注释承诺一致
+- **凭据脱敏补 hysteria2 `obfs-password` 与 hysteria(1.x) `auth`**：`mihomo config` 不再明文输出混淆密码与旧版认证字段
+- **遗留 root 服务清理删 plist 不验收**：`rm -f` 静默失败仍报「已清理」，plist 残留会在下次开机被 launchd 重新加载（KeepAlive 幽灵复活）；现删除后复核存在性，失败报错并给手动清理命令
+- **健康轮询不再把 launchctl 瞬时失败报成「启动失败」**：`waitServiceHealthy` 轮询期间查询失败按「本轮未知、继续观察」处理，窗口内始终查询失败给出诚实结论；`start` 收尾的状态展示失败降级为警告，不再让启动成功以退出码 1 收场
+- **help 页别名与快捷命令补齐**：`命令别名` 行列出全部入口名，快捷命令节补上 `use <name>` 与 `restart`（此前仅 README 可见）
+- **`sub add <url> -名字` 报错引导对齐**：argv 层对 `-名字` 形态的报错指明「订阅名不能以 `-` 开头」，不再只报「该命令不接受任何选项」
+- `settings.json` 脱敏黑名单去除重复登记的 `api_key`（零行为影响），补枚举不重复的结构断言
+
+### 内部
+
+- `OverwriteScriptContext.warn` 注释修正为现行口径：仅 `start`/`config`/`doctor` 可见，`status` 走诊断旁路不执行脚本
+- sudo 密码窗口（spawnSync 最长 60s）期间 Ctrl+C 无响应的已知权衡记入 CODE_REVIEW
+
 ## [26.10.97] - 2026-10-01
 
 ### 修复

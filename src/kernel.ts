@@ -472,7 +472,7 @@ export async function downloadKernel(
           throw new Error('未找到 gh 命令（选择通道时明明可用），请重试或改用其他通道');
         }
         if ((ghResult.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {
-          throw new Error(`下载超时（gh ${Math.floor((KERNEL_DOWNLOAD_TIMEOUT + 30_000) / 1000)}s 未完成），GitHub 直连过慢时改用: mihomo kernel --mirror`);
+          throw new Error(`下载超时（gh ${Math.floor((KERNEL_DOWNLOAD_TIMEOUT + 30_000) / 1000)}s 未完成），GitHub 直连过慢时改用: mihomo-cli kernel --mirror`);
         }
         throw new Error(`下载失败: ${ghResult.error.message}`);
       }

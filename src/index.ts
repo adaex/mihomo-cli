@@ -62,7 +62,7 @@ function readSelfMixedPortEarly(): number {
  * 只清除指向**本机 Mixed 端口**的代理环境变量，其余保留。
  *
  * 无差别清除会误伤：企业网络或国内环境里，npm/gh/curl 出网本身就依赖用户 shell 里
- * export 的 https_proxy（指向公司代理或别的工具）；清掉后 `mihomo update`/`kernel`
+ * export 的 https_proxy（指向公司代理或别的工具）；清掉后 `mihomo-cli update`/`kernel`
  * 必然直连失败，而报错里没有任何代理线索。唯一必须清除的是「代理恰好是本工具自己」
  * 的死锁形态——下载经自己的端口，而重启会先停掉那个内核。
  */
@@ -77,7 +77,7 @@ function clearProxyEnv(): void {
 }
 
 /**
- * root 守卫：以 `sudo mihomo …` 运行会让所有服务操作静默失效，必须挡在最前面。
+ * root 守卫：以 `sudo mihomo-cli …` 运行会让所有服务操作静默失效，必须挡在最前面。
  *
  * 服务是**用户级 LaunchAgent**，域为 `gui/<uid>`。sudo 下 `process.getuid()` 是 0，
  * 域变成 `gui/0`——一个不存在的域，实测 launchctl 一律返回 **125**（`Bad request`），
@@ -98,7 +98,7 @@ function clearProxyEnv(): void {
  * （root 守卫与平台守卫共用同一份豁免名单——两者的豁免语义完全一致，没必要维护两张表）
  *
  * 名单同时决定 main() 是否跳过 ensureDirs：豁免免掉的是**副作用面**而不只是「拒绝」，
- * 否则 sudo mihomo version 会在 /var/root、非 macOS 上的 mihomo help 会在用户家目录
+ * 否则 sudo mihomo-cli version 会在 /var/root、非 macOS 上的 mihomo-cli help 会在用户家目录
  * 建出一套用户永远看不到的数据目录。
  */
 const GUARD_EXEMPT_COMMANDS = new Set(['help', 'version']);
@@ -108,14 +108,14 @@ function assertNotRoot(commandName: string): void {
   if (uid !== 0) return;
   if (GUARD_EXEMPT_COMMANDS.has(commandName)) return;
 
-  throw new CliError('请不要用 sudo 运行 mihomo', {
+  throw new CliError('请不要用 sudo 运行 mihomo-cli', {
     label: '身份错误',
     hint: [
       '服务是用户级 LaunchAgent（域 gui/<uid>）。以 root 运行时域变成 gui/0，',
       'launchctl 一律返回 125，而所有服务操作都会把它当成「未装载」静默跳过——',
       'stop 会报「已停止」但内核被 KeepAlive 拉回来，install/start 则装到错误的域。',
       '',
-      `请去掉 sudo 重试:  mihomo ${commandName}`,
+      `请去掉 sudo 重试:  mihomo-cli ${commandName}`,
       '',
       'TUN 模式需要的 root 权限由 CLI 内部按需申请，无需在外层加 sudo。',
     ],
@@ -187,7 +187,7 @@ async function main(): Promise<void> {
   if (!command) {
     const suggestion = suggestSimilar(token, allCommandTokens());
     throw new CliError(`未知命令: ${token}`, {
-      hint: [suggestion.length > 0 ? `是否想输入: ${suggestion.join(' / ')}?` : '使用 "mihomo help" 查看帮助'],
+      hint: [suggestion.length > 0 ? `是否想输入: ${suggestion.join(' / ')}?` : '使用 "mihomo-cli help" 查看帮助'],
     });
   }
 
@@ -215,7 +215,7 @@ async function main(): Promise<void> {
   // meta 不接受选项；help 可带一个命令名（help <命令>），version 不带任何位置参数
   if (command.group === 'meta') {
     assertKnownFlags(args.slice(1), [], command.name);
-    assertPositionalCount(args, command.name === 'help' ? 1 : 0, 1, `mihomo ${command.name}`);
+    assertPositionalCount(args, command.name === 'help' ? 1 : 0, 1, `mihomo-cli ${command.name}`);
   }
 
   // 命令级帮助：`<命令> -h|--help|help` 是最自然的试法。在分发前统一拦截、
@@ -230,7 +230,7 @@ async function main(): Promise<void> {
 }
 
 main().catch(e => {
-  // 错误渲染走 stderr：设色按 stderr.isTTY 判定（`mihomo status | grep x` 时
+  // 错误渲染走 stderr：设色按 stderr.isTTY 判定（`mihomo-cli status | grep x` 时
   // stdout 是管道而 stderr 仍是终端，共用 colors 会把错误输出一并剥色）
   if (e instanceof CliError) {
     console.error(`${stderrColors.red(`${e.label}:`)} ${e.message}`);

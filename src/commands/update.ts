@@ -28,7 +28,7 @@ export async function getLatestNpmVersion(timeoutMs: number = NPM_VIEW_TIMEOUT_M
 export async function cmdUpdate(args: string[] = []): Promise<void> {
   assertKnownFlags(args.slice(1), [], 'update');
   // 不接受位置参数：校验先于 npm 查询/安装等网络副作用
-  assertPositionalCount(args, 0, 1, 'mihomo update');
+  assertPositionalCount(args, 0, 1, 'mihomo-cli update');
   console.log(`当前版本: ${colors.cyan(VERSION)}`);
   console.log('');
   const latest = await withSpinner('查询 npm 最新版本', getLatestNpmVersion);

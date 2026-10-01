@@ -1,7 +1,7 @@
 import { maskUrl } from './settings.js';
 
 /**
- * 配置凭据脱敏：`mihomo config` 可能被录屏、`| pbcopy` 发给别人求助，
+ * 配置凭据脱敏：`mihomo-cli config` 可能被录屏、`| pbcopy` 发给别人求助，
  * 只脱敏顶层 secret 挡不住节点与 provider 里的明文凭据。
  *
  * 敏感键按上游各出站协议的实际凭据字段收集（小写带连字符形态）：
@@ -35,7 +35,7 @@ function walk(node: unknown, withinProvider: boolean, state: { changed: boolean 
     const out: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
       // '__proto__' 经对象字面赋值会命中原型 setter：own 键静默丢失、副本原型被换掉，
-      // 随后的 dumpYaml 抛「unacceptable kind of an object to dump」让 mihomo config
+      // 随后的 dumpYaml 抛「unacceptable kind of an object to dump」让 mihomo-cli config
       // 按程序 bug 渲染（订阅内容可携带 own __proto__ 键，与覆写合并层同族问题的展示路径漏网）。
       // defineProperty 绕开 setter，保住键与其内容，副本仍是普通对象
       const assign = (v: unknown): void => {

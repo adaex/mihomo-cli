@@ -599,7 +599,7 @@ describe('classifyResidueCleanup：三档处置', () => {
 });
 
 describe('buildRootResidueCleanupError', () => {
-  const ctx = { mainOutcome: '服务已停止，登录自启已关闭', retryCommand: 'mihomo stop' };
+  const ctx = { mainOutcome: '服务已停止，登录自启已关闭', retryCommand: 'mihomo-cli stop' };
 
   it('sudo 取消 → label「已取消」，hint 说清主体动作已完成、残留 PID 与重试入口', () => {
     const err = buildRootResidueCleanupError({ remaining: [4321, 8765], scriptError: new SudoAuthError(), pidError: null }, ctx);
@@ -615,7 +615,7 @@ describe('buildRootResidueCleanupError', () => {
       '残留 PID 应如实列出',
     );
     assert.ok(
-      err.hint.some(l => l.includes('mihomo stop')),
+      err.hint.some(l => l.includes('mihomo-cli stop')),
       '必须给出重试入口',
     );
     assert.ok(
@@ -634,7 +634,7 @@ describe('buildRootResidueCleanupError', () => {
   it('无 root 进程（仅 pid 文件）时残留描述与手动命令切换为 pid 文件版', () => {
     // remaining 为空、仅 pidError（免提权 unlink 的失败，非 SudoAuthError）：文案只说
     // 「未能清理」+ 具体错误，不断言文件属主（unlink 失败未必与 root 有关）
-    const startCtx = { mainOutcome: '服务尚未启动', retryCommand: 'mihomo start' };
+    const startCtx = { mainOutcome: '服务尚未启动', retryCommand: 'mihomo-cli start' };
     const err = buildRootResidueCleanupError({ remaining: [], scriptError: null, pidError: new Error('EACCES: permission denied') }, startCtx);
     assert.equal(err.label, '清理残留进程失败');
     assert.ok(err.hint.some(l => l.startsWith('pid 文件未能清理（EACCES: permission denied）')));
@@ -643,7 +643,7 @@ describe('buildRootResidueCleanupError', () => {
       err.hint.some(l => l.startsWith('手动清理: sudo rm -f ')),
       'pid 文件残留的手动命令是 rm 而非 pkill（提权是权限异常时的逃生口）',
     );
-    assert.ok(err.hint.some(l => l.includes('mihomo start')));
+    assert.ok(err.hint.some(l => l.includes('mihomo-cli start')));
   });
 
   it('remaining 非空但仅 pidError（没进过 root 分支）→ 残留是用户态的，不许说成 root 属主', () => {

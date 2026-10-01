@@ -15,7 +15,7 @@ import { sleep } from './utils.js';
  *
  * 「等进程退出」的轮询用 async 的 `sleep` 而非 `sleepSync`：后者是 `Atomics.wait`，
  * 会阻塞整个事件循环，**期间 SIGINT 完全不被处理**（实测 50×100ms 的忙等要等循环
- * 全部走完、5.3 秒后才响应 Ctrl+C）。用户在 `mihomo stop` 卡住时按 Ctrl+C 会以为
+ * 全部走完、5.3 秒后才响应 Ctrl+C）。用户在 `mihomo-cli stop` 卡住时按 Ctrl+C 会以为
  * CLI 挂死。改 async 后信号在下一个 await 间隙即可送达。
  * （`withFileLock` 里的忙等是另一回事，那里必须同步——持锁期间让出事件循环，
  * 慢速网络下另一进程会等到强夺陈旧锁，等于没锁。）
@@ -237,7 +237,7 @@ export async function stop(): Promise<StopResult> {
     // 进程是在死亡等待内自行退光的，不是被 sudo 清掉的，用户应知道区别
     warnPidCleanupFailed(result.pidError);
     if (result.scriptError) {
-      console.warn(colors.yellow(`警告: root 残留清理未完成（${describeSudoFailure(result.scriptError)}），进程目前已不在；再发现残留可重试 mihomo stop`));
+      console.warn(colors.yellow(`警告: root 残留清理未完成（${describeSudoFailure(result.scriptError)}），进程目前已不在；再发现残留可重试 mihomo-cli stop`));
     }
   }
 

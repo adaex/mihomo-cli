@@ -7,7 +7,7 @@ import { DIRS, PATHS } from './paths.js';
 import type { LogList } from './types.js';
 
 /**
- * mihomo 日志文件的轮转、清理与列表。与进程启停解耦：
+ * mihomo-cli 日志文件的轮转、清理与列表。与进程启停解耦：
  * 启动时调 rotateAndCleanupLogs，log/logs 命令调 listLogs/getLogPath。
  */
 

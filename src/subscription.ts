@@ -171,7 +171,7 @@ export function getActiveSubscription(): Subscription | null {
 export function requireActiveSubscription(): Subscription {
   const sub = getActiveSubscription();
   if (!sub) {
-    throw new CliError('没有订阅，请先添加订阅', { hint: '添加订阅: mihomo sub add <url>' });
+    throw new CliError('没有订阅，请先添加订阅', { hint: '添加订阅: mihomo-cli sub add <url>' });
   }
   return sub;
 }
@@ -217,7 +217,7 @@ export function resolveSubscription<T extends Subscription>(subs: T[], pattern: 
  * 校验下载内容确实是一份订阅配置，而非机场返回的错误/配额 JSON。
  * 必须在写盘前调用：saveSubscriptionRawConfig 是原子覆盖、无备份，一旦写入
  * `{"error":"quota exceeded"}` 这类「合法对象但无节点」的响应，磁盘上原本可用的
- * 订阅就被不可恢复地覆盖，而流程仍报「已更新 (0 节点)」，随后 mihomo 带零节点启动 → 断网。
+ * 订阅就被不可恢复地覆盖，而流程仍报「已更新 (0 节点)」，随后 mihomo-cli 带零节点启动 → 断网。
  * 判据放宽到三类来源之一存在即可（proxies / proxy-groups / proxy-providers），
  * 避免误伤纯 provider 型订阅。
  */
@@ -312,7 +312,7 @@ export async function prepareConfigForStart(mode: string, subName = 'default'): 
     // 条目还在、文件没了（手动删除/外部清理）：正确动作是重新下载而非重新添加，
     // 与 config/doctor 同口径，三处不能给两个方向
     throw new CliError(`订阅 "${subName}" 有条目但没有本地配置文件`, {
-      hint: `更新订阅: mihomo sub update ${subName}`,
+      hint: `更新订阅: mihomo-cli sub update ${subName}`,
     });
   }
 

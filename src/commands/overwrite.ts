@@ -56,8 +56,8 @@ function printOverwriteList(): void {
       console.log('');
     }
   }
-  console.log('启用覆写: mihomo ow on');
-  console.log('禁用覆写: mihomo ow off');
+  console.log('启用覆写: mihomo-cli ow on');
+  console.log('禁用覆写: mihomo-cli ow off');
   // 看到 [已禁用] 标记却不知道怎么改回来，是这个功能最直接的死路
   console.log('停用单个文件: 在该文件顶部写 enabled: false');
   console.log('');
@@ -66,7 +66,7 @@ function printOverwriteList(): void {
 /** 切换覆写开关：已是目标状态则仅提示；否则写入并（运行中）重启生效。 */
 async function setOverwrite(enabled: boolean, args: string[]): Promise<void> {
   // on/off 是唯一的位置 token：`ow on garbage` 此前静默忽略 garbage
-  assertPositionalCount(args, 0, 2, 'mihomo ow [on|off]');
+  assertPositionalCount(args, 0, 2, 'mihomo-cli ow [on|off]');
   // 即使未在运行、不触发重启，-u 缺值/非法值也在此刻报错，不静默吞掉
   assertRestartOptionValues(args);
   if (isOverwriteEnabled() === enabled) {
@@ -104,7 +104,7 @@ export async function cmdOverwrite(args: string[]): Promise<void> {
       if (action.startsWith('-')) {
         throw new CliError(`未知的选项: ${action}`, {
           label: '参数错误',
-          hint: ['裸 ow 只查看覆写状态，不接受选项', '', '用法: mihomo ow on|off [-s] [-u ms]'],
+          hint: ['裸 ow 只查看覆写状态，不接受选项', '', '用法: mihomo-cli ow on|off [-s] [-u ms]'],
         });
       }
       const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);

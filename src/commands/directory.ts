@@ -8,7 +8,7 @@ import { dispatchSubcommand, type SubCommand } from './shared.js';
 
 function openDirectory(args: string[]): void {
   // 目标至多一个：`dir open logs extra` 此前静默忽略 extra
-  assertPositionalCount(args, 1, 2, 'mihomo dir open [root|subs|logs|data|runtime|kernel]');
+  assertPositionalCount(args, 1, 2, 'mihomo-cli dir open [root|subs|logs|data|runtime|kernel]');
   const target = args[2];
 
   // 路径无条件打印：openUrl 是 detached spawn，检不出失败（见 open.ts），
@@ -52,7 +52,7 @@ function printDirectoryInfo(): void {
     console.log(`  ${key.padEnd(9)}${rel.padEnd(pathWidth + 2)}${colors.gray(val.label)}`);
   }
   console.log('');
-  console.log(`打开目录: mihomo dir open [${Object.keys(DIRECTORY_TARGETS).join('|')}]`);
+  console.log(`打开目录: mihomo-cli dir open [${Object.keys(DIRECTORY_TARGETS).join('|')}]`);
   console.log(colors.gray('  自定义根目录: 环境变量 MIHOMO_CLI_DIR'));
   console.log('');
 }
@@ -71,13 +71,13 @@ export async function cmdDirectory(args: string[]): Promise<void> {
       if (action.startsWith('-')) {
         throw new CliError(`未知的选项: ${action}`, {
           label: '参数错误',
-          hint: ['裸 dir 只展示目录信息，不接受选项', '', '用法: mihomo dir open [root|subs|logs|data|runtime|kernel]'],
+          hint: ['裸 dir 只展示目录信息，不接受选项', '', '用法: mihomo-cli dir open [root|subs|logs|data|runtime|kernel]'],
         });
       }
       const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
       const suggestion = suggestSimilar(action, names);
       throw new CliError(`未知的目录子命令: ${action}`, {
-        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '', '可用子命令: open', '打开指定目录: mihomo dir open <target>'],
+        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '', '可用子命令: open', '打开指定目录: mihomo-cli dir open <target>'],
       });
     },
   });

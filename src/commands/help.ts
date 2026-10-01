@@ -14,15 +14,15 @@ import type { Command, CommandGroup, UsageLine } from './registry.js';
  * 齐全后才显示常用命令。静态清单对老用户够用，但新用户照着敲 `start` 只会连撞三堵墙。
  */
 export function printShortHelp(): void {
-  console.log(`\n${colors.cyan(colors.bold(`mihomo-cli v${VERSION}`))}  (mihomo help 查看完整帮助)\n`);
+  console.log(`\n${colors.cyan(colors.bold(`mihomo-cli v${VERSION}`))}  (mihomo-cli help 查看完整帮助)\n`);
 
   const steps: [string, string][] = [];
-  if (!hasKernel()) steps.push(['mihomo kernel', '下载内核']);
-  if (getSubscriptions().length === 0) steps.push(['mihomo sub add <url>', '添加订阅']);
-  if (!getServiceStatus().installed) steps.push(['mihomo install', '安装服务（只需一次）']);
+  if (!hasKernel()) steps.push(['mihomo-cli kernel', '下载内核']);
+  if (getSubscriptions().length === 0) steps.push(['mihomo-cli sub add <url>', '添加订阅']);
+  if (!getServiceStatus().installed) steps.push(['mihomo-cli install', '安装服务（只需一次）']);
 
   if (steps.length > 0) {
-    steps.push(['mihomo start', '启动代理']);
+    steps.push(['mihomo-cli start', '启动代理']);
     const width = Math.max(...steps.map(([cmd]) => displayWidth(cmd)));
     console.log('开始使用:');
     steps.forEach(([cmd, desc], i) => {
@@ -60,7 +60,7 @@ const GROUP_TITLES: [CommandGroup, string][] = [
  * 签名含中文占位符（`[编号]`、`[镜像]`、`[目标...]`），按码点数算会让这几行少缩进。
  */
 function printHelp(commands: Command[]): void {
-  const lines: string[] = [`\n${colors.cyan(colors.bold(`mihomo-cli v${VERSION}`))}`, '', '命令别名: mihomo, mhm, mh', '', '用法:', '  mihomo <命令> [选项]'];
+  const lines: string[] = [`\n${colors.cyan(colors.bold(`mihomo-cli v${VERSION}`))}`, '', '命令别名: mh', '', '用法:', '  mihomo-cli <命令> [选项]'];
 
   const allUsage = commands.flatMap(c => c.usage);
   const signatureWidth = Math.max(...allUsage.map(u => displayWidth(u.signature)));
@@ -85,17 +85,19 @@ function printHelp(commands: Command[]): void {
     `${colors.cyan('示例:')}`,
     // 顺序即首次使用的依赖顺序（kernel → 订阅 → 服务 → 启动）：install 在无内核时会被
     // 拦下提示先跑 kernel，示例若把 install 放第一条，照着敲的新用户第一步就撞墙
-    '  mihomo kernel             # 下载内核（首次使用的第一步）',
-    '  mihomo sub add <url>      # 添加订阅 (sub 是 subscription 别名)',
-    '  mihomo install            # 安装服务（Mixed 模式的前置，只需一次）',
-    '  mihomo start              # 启动代理并开启登录自启',
-    '  mihomo stop               # 停止并关闭登录自启',
-    '  mihomo start tun          # 临时 TUN 透明代理（不走服务，需 sudo）',
-    '  mihomo start -s           # 跳过自动更新订阅',
-    '  mihomo ui                 # 打开 Web UI',
+    '  mihomo-cli kernel             # 下载内核（首次使用的第一步）',
+    '  mihomo-cli sub add <url>      # 添加订阅 (sub 是 subscription 别名)',
+    '  mihomo-cli install            # 安装服务（Mixed 模式的前置，只需一次）',
+    '  mihomo-cli start              # 启动代理并开启登录自启',
+    '  mihomo-cli stop               # 停止并关闭登录自启',
+    '  mihomo-cli start tun          # 临时 TUN 透明代理（不走服务，需 sudo）',
+    '  mihomo-cli start -s           # 跳过自动更新订阅',
+    '  mihomo-cli ui                 # 打开 Web UI',
     '',
     `${colors.cyan('快捷命令:')}`,
-    '  tun = start tun',
+    '  tun            = start tun',
+    '  use <name>     = subscription use <name>',
+    '  restart        = start（start 本身即重启）',
     '',
     `${colors.cyan('模式说明:')}`,
     '  mixed  HTTP + SOCKS5 混合端口 (默认)，由 launchd 服务托管，崩溃/登录自动拉起',
@@ -115,7 +117,7 @@ function printHelp(commands: Command[]): void {
  */
 export function printCommandHelp(command: Command): void {
   const aliasText = command.aliases.length > 0 ? colors.gray(`（别名: ${command.aliases.join(', ')}）`) : '';
-  const lines: string[] = ['', `${colors.cyan(colors.bold(`mihomo ${command.name}`))}${aliasText}`];
+  const lines: string[] = ['', `${colors.cyan(colors.bold(`mihomo-cli ${command.name}`))}${aliasText}`];
 
   if (command.usage.length > 0) {
     lines.push('', '用法:');
@@ -125,14 +127,14 @@ export function printCommandHelp(command: Command): void {
     }
   } else {
     // tun / use 这类无独立用法行的快捷命令
-    lines.push('', colors.gray('快捷命令，完整用法见 mihomo help'));
+    lines.push('', colors.gray('快捷命令，完整用法见 mihomo-cli help'));
   }
 
   console.log(lines.join('\n'));
 }
 
 /**
- * `mihomo help [命令]`：无参打印整页帮助；带命令名时只打印该命令的用法。
+ * `mihomo-cli help [命令]`：无参打印整页帮助；带命令名时只打印该命令的用法。
  * finder 由 registry 注入（help.ts 不反向 import registry，保持 commands 层无环）。
  */
 export function printHelpEntry(args: string[], commands: Command[], finder: (token: string) => Command | undefined): void {
@@ -148,7 +150,7 @@ export function printHelpEntry(args: string[], commands: Command[], finder: (tok
       commands.flatMap(c => [c.name, ...c.aliases]),
     );
     throw new CliError(`未知命令: ${token}`, {
-      hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '使用 "mihomo help" 查看全部命令'],
+      hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '使用 "mihomo-cli help" 查看全部命令'],
     });
   }
   printCommandHelp(command);

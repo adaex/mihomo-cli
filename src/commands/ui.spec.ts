@@ -82,7 +82,7 @@ describe('ui CLI：控制器地址与 secret 剪贴板策略', () => {
     const r = runCli(['ui'], { controller_secret: 'topsecret' });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /已配置访问密钥/);
-    assert.match(r.stdout, /mihomo ui -c/);
+    assert.match(r.stdout, /mihomo-cli ui -c/);
     assert.ok(!r.stdout.includes('已复制到剪贴板'), '默认不应出现复制成功文案');
     fs.rmSync(r.binDir, { recursive: true, force: true });
   });

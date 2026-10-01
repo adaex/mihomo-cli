@@ -125,7 +125,7 @@ export function assertConfigShape(config: Record<string, unknown>): void {
         if (typeof name !== 'string' || name === '') {
           throw new CliError(`${key}[${i}] 缺少有效的 name`, {
             label: '配置错误',
-            hint: [`${label}段（${key}）第 ${i + 1} 项没有 name 字段（或为空），mihomo 会拒绝启动。`],
+            hint: [`${label}段（${key}）第 ${i + 1} 项没有 name 字段（或为空），mihomo-cli 会拒绝启动。`],
           });
         }
       } else if (typeof item !== 'string') {
@@ -270,7 +270,7 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
 
 /** 锁定键告警的统一文案（YAML 覆写与 JS 脚本共用一份，避免两处解释漂移） */
 function renderLockedWarning(source: string, keys: string[]): string {
-  return `${source}系统锁定项已忽略: ${keys.join('、')}（入站端口、控制面、控制器证书与局域网/入站鉴权由 mihomo-cli 管理；端口与 controller secret 在 settings.json 配置，入站固定只监听回环，需要局域网入站请在本机另起一个 mihomo 实例）`;
+  return `${source}系统锁定项已忽略: ${keys.join('、')}（入站端口、控制面、控制器证书与局域网/入站鉴权由 mihomo-cli 管理；端口与 controller secret 在 settings.json 配置，入站固定只监听回环，需要局域网入站请在本机另起一个 mihomo-cli 实例）`;
 }
 
 export function writeMihomoConfig(configObj: Record<string, unknown>): void {
@@ -311,7 +311,7 @@ export function buildKernelRejectHint(detail: string, overwriteSummaries: string
     `${HINT_INDENT}请修正订阅或覆写；当前运行时配置未改动。`,
     // 「未知键/字段」类报错的另一个真实根因是内核落后于订阅：机场开始用新协议字段，
     // 旧内核 -t 一律按不认识拒绝。只提示「修正订阅或覆写」会把方向带反
-    `${HINT_INDENT}若订阅或覆写本身没有明显错误，也可能是内核版本过旧、不认识新配置键，可尝试: mihomo kernel`,
+    `${HINT_INDENT}若订阅或覆写本身没有明显错误，也可能是内核版本过旧、不认识新配置键，可尝试: mihomo-cli kernel`,
   );
   return hint;
 }
@@ -326,7 +326,7 @@ export function buildKernelRejectHint(detail: string, overwriteSummaries: string
  * 可选默认值会让新调用方静默丢覆写清单。
  */
 export async function validateConfigWithKernel(config: Record<string, unknown>, overwriteSummaries: string[]): Promise<void> {
-  if (!hasKernel()) throw new CliError('未找到内核', { hint: '下载内核: mihomo kernel' });
+  if (!hasKernel()) throw new CliError('未找到内核', { hint: '下载内核: mihomo-cli kernel' });
   ensureDirs();
   const stageDir = fs.mkdtempSync(path.join(DIRS.runtime, 'check-'));
   const stageFile = path.join(stageDir, 'config.yaml');
@@ -392,7 +392,7 @@ export function hasKernel(): boolean {
 
 /**
  * 内核版本探测。CLI 是短进程、调用点全在展示路径（status/doctor/help/kernel），
- * 每次直接 spawn 一次 `mihomo -v`（本地毫秒级）——不做进程内缓存：
+ * 每次直接 spawn 一次 `mihomo-cli -v`（本地毫秒级）——不做进程内缓存：
  * 缓存需要失效协议（下载/reset 换掉内核后要记得清），省一次重复探测的收益不抵这层状态。
  */
 export function getKernelVersion(): string | null {

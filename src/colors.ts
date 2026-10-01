@@ -33,7 +33,7 @@ export const colors = createColors(colorEnabled(process.env.NO_COLOR, process.st
 
 /**
  * 错误渲染（stderr）的设色：按 **stderr** 是否终端判定，与 colors 分开。
- * `mihomo status | grep x` 时 stdout 是管道而 stderr 仍是终端——共用 colors 会跟着
+ * `mihomo-cli status | grep x` 时 stdout 是管道而 stderr 仍是终端——共用 colors 会跟着
  * stdout 把错误输出一并剥色。NO_COLOR 对两路同时生效。
  */
 export const stderrColors = createColors(colorEnabled(process.env.NO_COLOR, process.stderr.isTTY));

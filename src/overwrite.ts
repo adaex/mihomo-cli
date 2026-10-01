@@ -58,7 +58,7 @@ function assertValidParsedKey(rawKey: string, parsed: ParsedOverrideKey): void {
   if (rawKey.includes('<') || rawKey.includes('>')) {
     throw new CliError(`覆写键 "${rawKey}" 用了已移除的尖括号转义`, {
       label: '覆写配置错误',
-      hint: ['<key> 转义已随 ~ 操作符移除——mihomo 顶层键不含尖括号，直接写键名即可。'],
+      hint: ['<key> 转义已随 ~ 操作符移除——mihomo-cli 顶层键不含尖括号，直接写键名即可。'],
     });
   }
   if (parsed.key === '') {
@@ -101,7 +101,7 @@ function describeValueKind(value: unknown): string {
 function protoKeyInOverwriteError(): CliError {
   return new CliError('覆写里出现了 "__proto__" 键', {
     label: '覆写配置错误',
-    hint: ['正常 mihomo 配置没有这个键，请检查覆写文件的内容与来源。'],
+    hint: ['正常 mihomo-cli 配置没有这个键，请检查覆写文件的内容与来源。'],
   });
 }
 
@@ -155,7 +155,7 @@ function mergeConfigLevel(target: unknown, override: unknown, parseOperators: bo
 
     if (arrayPrepend || arrayAppend) {
       // +key/key+ 是数组拼接语义，目标已存在且非数组时报错而非静默包成数组
-      // （`log-level+: debug` 会把字符串 log-level 变成 ["debug"]，mihomo 无法解析）。
+      // （`log-level+: debug` 会把字符串 log-level 变成 ["debug"]，mihomo-cli 无法解析）。
       // 这里判的是**合并期才看得见的目标值**：订阅自带的同键标量、前一个覆写文件
       // 刚写入的非数组值。系统默认值（BASE_CONFIG）里的非数组键在文件加载阶段由
       // assertFileLevelOperatorRules 静态拦截——BASE_CONFIG 在合并之后才注入，
@@ -503,7 +503,7 @@ export function selectActiveOverwriteFiles(files: OverwriteFileEntry[], scope?: 
   return files.filter(f => f.enabled !== false && matchesScope(f.match, scope));
 }
 
-/** 元数据键：在合并前被剥离，绝不进入最终 mihomo 配置。 */
+/** 元数据键：在合并前被剥离，绝不进入最终 mihomo-cli 配置。 */
 const METADATA_KEYS = new Set(['match', 'enabled']);
 
 /**
@@ -512,10 +512,10 @@ const METADATA_KEYS = new Set(['match', 'enabled']);
  *
  * - **操作符**：剥离发生在解构（早于 mergeConfigLevel 的操作符解析），`enabled!: false`
  *   会被 parseOverrideKey 规范成键 `enabled` 落进最终配置。代价是没有「写真名为
- *   enabled 的配置键」的逃生口，但 mihomo 顶层没有这个键，暂无实际影响
+ *   enabled 的配置键」的逃生口，但 mihomo-cli 顶层没有这个键，暂无实际影响
  *   （尖括号转义已随 DSL 裁剪移除，`<enabled>` 在合并层报「已移除的尖括号转义」）。
  * - **大小写/空白**：YAML 键大小写敏感，`Enabled: false` 既不是元数据键（不停用文件）
- *   又不是任何 mihomo 原生键（纯噪音）。判据是「小写去空白后等于元数据键、但原样不等于」——
+ *   又不是任何 mihomo-cli 原生键（纯噪音）。判据是「小写去空白后等于元数据键、但原样不等于」——
  *   与 isOverwriteFilenameTypo 同一思路（只认整体近失，不做模糊猜测）。
  */
 function assertNoMetadataKeyLookalikes(config: Record<string, unknown>, fileName: string): void {
@@ -610,7 +610,7 @@ function toBrokenFile(file: string, filePath: string, e: unknown): BrokenOverwri
   const message = (e as Error).message || String(e);
   // YAML 里 `*` 开头的标量是**别名语法**，`name: *edu`（后缀通配）会解析失败，
   // 光说「解析失败」用户想不到是引号问题
-  const hint = ['该文件当前未参与合并，请修正后重试（mihomo ow 可查看全部覆写文件）。'];
+  const hint = ['该文件当前未参与合并，请修正后重试（mihomo-cli ow 可查看全部覆写文件）。'];
   if (/alias/i.test(message)) {
     hint.push('若写了以 * 开头的通配值（如 name: *edu），YAML 会把它当别名语法，请加引号写成 name: "*edu"');
   }
@@ -692,7 +692,7 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
       // 顶层数组/标量不是合法覆写文件，与语法错同族的静默失效，统一收进 broken
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         // match / enabled 是元数据键：抽成结构化字段并从 config 剥离，确保它们永不进入
-        // 最终 mihomo 配置（内核对未知顶层键宽松，剥离是本 CLI 的责任）。
+        // 最终 mihomo-cli 配置（内核对未知顶层键宽松，剥离是本 CLI 的责任）。
         // 被停用的文件同样完整加载并校验 match：`ow` 列表要显示它的作用域，且避免
         // 「停用期间藏着错误、一启用就炸」
         const { match, enabled, ...config } = parsed;
@@ -810,7 +810,7 @@ export function applyOverwrite(
       } catch (e) {
         throw new CliError(`覆写脚本 "${file.name}" 执行失败: ${(e as Error).message?.split('\n')[0] ?? String(e)}`, {
           label: '覆写配置错误',
-          hint: ['本次构建已中止；修复脚本后重试（mihomo ow 可查看全部覆写文件与脚本）。'],
+          hint: ['本次构建已中止；修复脚本后重试（mihomo-cli ow 可查看全部覆写文件与脚本）。'],
         });
       }
       if (returned != null && typeof (returned as { then?: unknown }).then === 'function') {

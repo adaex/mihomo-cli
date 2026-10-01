@@ -41,7 +41,7 @@ const RESET_TARGETS: ResetTarget[] = [
         : [],
   },
   {
-    // 别名刻意不含 'config'：用户从 `mihomo config` 命令得到的直觉是「运行配置」
+    // 别名刻意不含 'config'：用户从 `mihomo-cli config` 命令得到的直觉是「运行配置」
     // （那属于 runtime 目标），而这里删的是 settings（订阅列表/端口/密钥）——
     // 静默对撞会让 reset config -y 删超预期的数据。未知目标报错 + 目标列表兜底
     id: 'settings',
@@ -76,7 +76,7 @@ export async function cmdReset(args: string[]): Promise<void> {
   // 内核/服务远超预期。矛盾输入显式报错，与全仓同姿态
   if (names.length > 0 && args.includes('--full')) {
     throw new CliError('不能同时指定重置目标与 --full', {
-      hint: [`只删指定目标: mihomo reset ${names.join(' ')}`, '重置全部: mihomo reset --full'],
+      hint: [`只删指定目标: mihomo-cli reset ${names.join(' ')}`, '重置全部: mihomo-cli reset --full'],
     });
   }
   const namedTargets = resolveResetTargets(names);
@@ -102,7 +102,7 @@ export async function cmdReset(args: string[]): Promise<void> {
   if (serviceTargeted && serviceActive) {
     console.log(colors.yellow('将卸载 launchd 服务（Mixed 模式需重新 install 才能使用）'));
   } else if (needsStop && serviceActive) {
-    console.log(colors.yellow('将停止服务并关闭登录自启（安装保留，mihomo start 可重新启动）'));
+    console.log(colors.yellow('将停止服务并关闭登录自启（安装保留，mihomo-cli start 可重新启动）'));
   }
   if ((needsStop || serviceTargeted) && legacy) {
     console.log(colors.yellow('将清理遗留的系统级服务（root LaunchDaemon，需要一次管理员密码）'));
@@ -118,7 +118,7 @@ export async function cmdReset(args: string[]): Promise<void> {
     !args.includes('--yes') &&
     !(await confirmOrThrow('确认?', {
       nonTtyMessage: '非交互环境无法确认',
-      hint: ['跳过确认请加 -y: mihomo reset ... -y'],
+      hint: ['跳过确认请加 -y: mihomo-cli reset ... -y'],
     }))
   ) {
     console.log('已取消');
@@ -152,7 +152,7 @@ export async function cmdReset(args: string[]): Promise<void> {
       // 留守卫是防 classify 判据将来改动后打出空「警告: 」，而非指望类型断言兜底
       if (reason) {
         console.warn(colors.yellow(`警告: ${reason}`));
-        console.warn(colors.gray('重试清理: mihomo stop'));
+        console.warn(colors.gray('重试清理: mihomo-cli stop'));
       }
     }
     // 与 cmdStop 的提前返回同族：serviceActive 为假时上面的 stopService/uninstallService

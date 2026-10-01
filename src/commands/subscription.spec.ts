@@ -53,7 +53,7 @@ describe('sub 的选项白名单按子命令校验', () => {
         const result = run(['sub', 'add', '-s']);
         assert.equal(result.status, 1, result.stderr);
         assert.match(result.stderr, /未知的选项: -s/);
-        assert.match(result.stderr, /用法: mihomo sub add <url> \[name\]/);
+        assert.match(result.stderr, /用法: mihomo-cli sub add <url> \[name\]/);
       }));
 
     it('add 的 -y 不再被静默吞掉（缺陷场景：曾被接受但 add 不读 -y）', () =>
@@ -70,7 +70,7 @@ describe('sub 的选项白名单按子命令校验', () => {
         const result = run(['sub', 'update', '-y']);
         assert.equal(result.status, 1, result.stderr);
         assert.match(result.stderr, /未知的选项: -y/);
-        assert.match(result.stderr, /用法: mihomo sub update \[name\]/);
+        assert.match(result.stderr, /用法: mihomo-cli sub update \[name\]/);
       }));
 
     it('remove 不接受 -u，提示只列 remove 可用的选项', () =>
@@ -79,7 +79,7 @@ describe('sub 的选项白名单按子命令校验', () => {
         assert.equal(result.status, 1, result.stderr);
         assert.match(result.stderr, /未知的选项: -u/);
         assert.match(result.stderr, /可用选项: -y, --yes/);
-        assert.match(result.stderr, /用法: mihomo sub remove <name>/);
+        assert.match(result.stderr, /用法: mihomo-cli sub remove <name>/);
         assert.equal(readSettings(dataDir).subscriptions?.length, 2, '拒绝时不得删除订阅');
       }));
 
@@ -249,7 +249,7 @@ describe('sub update 批量结果', () => {
       assert.match(stdout, /✗ beta: 失败/);
       assert.match(stdout, /更新完成: 1 个成功，1 个失败/);
       assert.match(stderr, /1 个订阅更新失败: beta/);
-      assert.match(stderr, /重试: mihomo sub update beta/);
+      assert.match(stderr, /重试: mihomo-cli sub update beta/);
       assert.ok(fs.existsSync(path.join(dataDir, 'subscriptions', 'alpha.yaml')), '成功的订阅必须照常落盘');
       assert.ok(!fs.existsSync(path.join(dataDir, 'subscriptions', 'beta.yaml')), '失败不得留下半成品');
     } finally {
@@ -279,7 +279,7 @@ describe('sub remove 删除当前订阅的运行中提示', () => {
         const removed = run(['sub', 'remove', 'alpha', '-y']);
         assert.equal(removed.status, 0, removed.stderr);
         assert.match(removed.stdout, /已自动切换到 "beta"/);
-        assert.match(removed.stdout, /仍在使用已删除订阅的配置，执行 mihomo start tun 切换到新订阅/);
+        assert.match(removed.stdout, /仍在使用已删除订阅的配置，执行 mihomo-cli start tun 切换到新订阅/);
 
         // 删非当前订阅（此时 active=beta）：配置来源没变，不提示
         const removed2 = run(['sub', 'remove', 'beta', '-y']);
