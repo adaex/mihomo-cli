@@ -52,7 +52,7 @@ npm link
 ### 1. 下载内核
 
 ```bash
-# 自动选择通道：gh > 本机代理 > 直连
+# 自动选择通道：本机代理在跑时优先（低速快速失败回退 gh）> gh > 直连
 mihomo-cli kernel
 
 # 国内网络强制走镜像（裸 --mirror 固定走裸域 gh-proxy.org）
