@@ -22,6 +22,13 @@ export const DIRS = {
   runtime: path.join(USER_DATA_DIR, 'runtime'),
 } as const;
 
+// 内核面板自升级（POST /upgrade）的固定目录，命名由内核 updater 写死：
+// meta-backup 存旧内核备份，meta-update 是下载暂存（成功后自清，残留即异常中断）。
+// **不放进 DIRS**：其生命周期由内核 updater 自管，ensureDirs 预建会让它们被反复
+//「复活」、doctor 永远误报
+export const KERNEL_SELF_BACKUP_DIR = path.join(DIRS.kernel, 'meta-backup');
+export const KERNEL_SELF_UPDATE_DIR = path.join(DIRS.kernel, 'meta-update');
+
 export const PATHS = {
   mihomoBinary: path.join(DIRS.kernel, 'mihomo'),
   /**

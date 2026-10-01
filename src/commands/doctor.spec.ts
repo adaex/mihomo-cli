@@ -107,6 +107,27 @@ describe('doctor：体检透传配置构建的 warnings', () => {
   });
 });
 
+describe('doctor：内核面板自升级残留', () => {
+  it('kernel 下存在 meta-backup/meta-update 时告警并给出删除口径', () => {
+    fs.mkdirSync(path.join(dataDir, 'kernel', 'meta-backup'));
+    fs.mkdirSync(path.join(dataDir, 'kernel', 'meta-update'));
+
+    const { stdout, output } = run(['doctor']);
+    assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
+    assert.match(stdout, /内核自升级残留/);
+    assert.match(stdout, /rm -rf .*meta-backup/);
+    assert.match(stdout, /meta-update/);
+    // 两类目录性质分别说明：备份可留作回滚、暂存可安全删
+    assert.match(stdout, /回滚/);
+    assert.match(stdout, /可安全删除/);
+  });
+
+  it('无残留时不出现该项', () => {
+    const { stdout } = run(['doctor']);
+    assert.ok(!stdout.includes('内核自升级残留'));
+  });
+});
+
 /**
  * npm registry 查询与本地检查重叠执行。
  *

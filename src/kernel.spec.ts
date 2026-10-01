@@ -6,10 +6,12 @@ import {
   buildGhReleaseDownloadArgs,
   buildKernelCurlArgs,
   buildReleaseApiCurlArgs,
+  describeCurlDownloadError,
   findMatchingAsset,
   parseCurlStatusOutput,
   pickLatestRelease,
   resolveDownloadChannel,
+  resolveDownloadChannels,
   translateReleaseApiCurlError,
 } from './kernel.js';
 import type { GitHubAsset, GitHubRelease } from './types.js';
@@ -118,19 +120,45 @@ describe('resolveDownloadChannel（下载通道优先级）', () => {
     assert.equal(ch.kind === 'proxy' && ch.proxy, 'http://192.168.1.2:7897');
   });
 
-  it('无显式选项时 gh 优先于代理', () => {
+  it('无显式选项、代理在跑时 proxy 首选（gh 退为回退候选）', () => {
     const ch = resolveDownloadChannel({ ...base, ghAvailable: true, proxyRunning: true, proxyPort: 7890 });
-    assert.equal(ch.kind, 'gh');
-  });
-
-  it('无 gh 时走代理，且地址为本机混合端口', () => {
-    const ch = resolveDownloadChannel({ ...base, proxyRunning: true, proxyPort: 7890 });
     assert.equal(ch.kind, 'proxy');
     assert.equal(ch.kind === 'proxy' && ch.proxy, 'http://127.0.0.1:7890');
   });
 
+  it('代理在跑且有 gh 时候选为 [proxy, gh]——回退重试让 url-test 重新选节点', () => {
+    const channels = resolveDownloadChannels({ ...base, ghAvailable: true, proxyRunning: true, proxyPort: 7890 });
+    assert.deepEqual(
+      channels.map(c => c.kind),
+      ['proxy', 'gh'],
+    );
+  });
+
+  it('代理在跑但无 gh 时候选只有 proxy', () => {
+    const channels = resolveDownloadChannels({ ...base, proxyRunning: true, proxyPort: 7890 });
+    assert.deepEqual(
+      channels.map(c => c.kind),
+      ['proxy'],
+    );
+  });
+
+  it('代理没跑时 gh 为唯一候选', () => {
+    assert.deepEqual(
+      resolveDownloadChannels({ ...base, ghAvailable: true }).map(c => c.kind),
+      ['gh'],
+    );
+  });
+
   it('全无条件时直连', () => {
     assert.equal(resolveDownloadChannel(base).kind, 'direct');
+  });
+
+  it('显式 --proxy 只有一个候选（显式意图不自动换通道）', () => {
+    const channels = resolveDownloadChannels({ ...base, ghAvailable: true, proxyOverride: 'http://127.0.0.1:7897' });
+    assert.deepEqual(
+      channels.map(c => c.kind),
+      ['proxy'],
+    );
   });
 });
 
@@ -168,6 +196,14 @@ describe('buildKernelCurlArgs', () => {
     assert.ok(args.includes('--fail-with-body'));
   });
 
+  it('恒含 --speed-limit / --speed-time：劣质节点低速慢传时 20s 快速失败切换通道', () => {
+    const args = buildKernelCurlArgs({ ...common, proxy: null });
+    const i = args.indexOf('--speed-limit');
+    assert.equal(args[i + 1], '50000');
+    const j = args.indexOf('--speed-time');
+    assert.equal(args[j + 1], '20');
+  });
+
   it('proxy 通道含 -x 且原样透传代理地址（本机端口或显式 --proxy 同一口径）', () => {
     const args = buildKernelCurlArgs({ ...common, proxy: 'socks5://127.0.0.1:7897' });
     const i = args.indexOf('-x');
@@ -184,6 +220,22 @@ describe('buildKernelCurlArgs', () => {
     const i = args.indexOf('-o');
     assert.equal(args[i + 1], '/tmp/x.gz');
     assert.equal(args[args.length - 1], common.url);
+  });
+});
+
+describe('describeCurlDownloadError（curl 退出码翻译）', () => {
+  it('22 = HTTP 错误', () => {
+    assert.match(describeCurlDownloadError(22), /HTTP 错误/);
+  });
+
+  it('28 = 超时或低速：点明速度过低，不再只给裸退出码', () => {
+    const msg = describeCurlDownloadError(28);
+    assert.match(msg, /超时/);
+    assert.match(msg, /速度过低/);
+  });
+
+  it('其他码保留退出码备查', () => {
+    assert.match(describeCurlDownloadError(7), /退出码 7/);
   });
 });
 
