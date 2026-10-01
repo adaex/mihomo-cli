@@ -52,7 +52,7 @@ npm link
 ### 1. 下载内核
 
 ```bash
-# 自动选择通道：本机代理在跑时优先（低速快速失败回退 gh）> gh > 直连
+# 自动选择通道：本机代理在跑时优先（低速快速失败改 gh 重试，仍经同一个本机代理）> gh > 直连
 mihomo-cli kernel
 
 # 国内网络强制走镜像（裸 --mirror 固定走裸域 gh-proxy.org）
@@ -152,7 +152,7 @@ mihomo-cli ui yacd     # YACD
 
 | 命令                              | 说明                                                                |
 | --------------------------------- | ------------------------------------------------------------------- |
-| `mihomo-cli kernel [--mirror [镜像]]` | 更新内核（自动选择通道：本机代理优先、回退 gh；`--mirror` 强制镜像，`--mirror direct` 强制直连） |
+| `mihomo-cli kernel [--mirror [镜像]]` | 更新内核（自动选择通道：本机代理优先、回退 gh 仍经同一本机代理；`--mirror` 强制镜像，`--mirror direct` 强制直连） |
 | `mihomo-cli update`                   | 更新 mihomo-cli（先查 npm 最新版，已是最新则跳过重装）              |
 | `mihomo-cli ui [zash\|dash\|yacd] [-c]` | 打开 Web UI（`-c` 把控制器访问密钥复制到剪贴板；默认只提示、不动剪贴板） |
 | `mihomo-cli dir`                      | 显示数据目录位置                                                    |
@@ -299,7 +299,7 @@ mihomo-cli logs 1       # 查看最新的归档
 
 `mihomo-cli kernel` 按优先级自动选择下载通道，无需手动指定：
 
-1. **本机代理**：mihomo-cli 代理在跑时经混合端口下载；速度过低或超时会快速失败并自动回退 gh
+1. **本机代理**：mihomo-cli 代理在跑时经混合端口下载；速度过低或超时会快速失败并改由 gh 重试（仍经同一个本机代理——只换客户端不换路径，低速通常是节点问题）
 2. **gh**：代理没跑，或代理通道失败时经 `gh release download` 下载
 3. **直连**：以上都不可用时
 

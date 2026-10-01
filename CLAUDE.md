@@ -4,7 +4,7 @@
 
 ## 项目与架构
 
-macOS 命令行客户端，TypeScript ESM，Node.js >= 22.22.1。入口 `src/index.ts`，tsx 开发，tsup 打包。别名 `mihomo`（推荐）/`mhm`/`mh`/`mihomo-cli`。
+macOS 命令行客户端，TypeScript ESM，Node.js >= 22.22.1。入口 `src/index.ts`，tsx 开发，tsup 打包。命令入口 `mihomo-cli`（全称）/`mh`（简写），package.json bin 是唯一登记表。
 
 | 模块 | 职责 |
 | --- | --- |
@@ -54,7 +54,7 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 
 ## 命名
 
-- 帮助与内部命名用全称单数（subscription/directory/overwrite），示例与提示用 `mihomo sub` / `dir` / `ow`；内部变量函数全称单数，常量全大写下划线
+- 帮助与内部命名用全称单数（subscription/directory/overwrite），示例与提示用 `mihomo-cli sub` / `dir` / `ow`；内部变量函数全称单数，常量全大写下划线
 - `dir open` 精确匹配 root/subs/logs/data/runtime/kernel
 
 ## 关键不变量（跨模块契约，论证见 decisions.md）
@@ -86,7 +86,8 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 
 **内核下载**
 - 镜像只作用产物下载、选择不持久化；版本查询代理可用时直接经代理（D8）
-- 守卫前清 env 代理只清指向本机 Mixed 端口的自指形态（D9）
+- 守卫前清 env 代理只清指向本机 Mixed 端口的自指形态（D9）；gh 无命令行代理选项，本机代理在跑时的 gh 回退候选由通道决策带 proxy、下载 spawn per-spawn 注入 env，不写回 process.env（kernel 下载中途不重启自己的代理，与 D9 的死锁防护并存）
+- 下载候选为列表、逐个尝试首个成功即用；显式 --mirror/--proxy 只有一个候选（显式意图不自动换道）
 
 ## Git 与流程
 

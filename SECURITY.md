@@ -2,7 +2,7 @@
 
 ## 支持范围
 
-只有 npm 上的最新版本会收到安全修复。本项目是单人维护的个人工具，不维护旧版本分支——请先 `mihomo update` 升到最新版再报告问题。
+只有 npm 上的最新版本会收到安全修复。本项目是单人维护的个人工具，不维护旧版本分支——请先 `mihomo-cli update` 升到最新版再报告问题。
 
 ## 报告漏洞
 
@@ -10,7 +10,7 @@
 
 - [Security Advisory](https://github.com/adaex/mihomo-cli/security/advisories/new)（推荐）
 
-请尽量附上：复现步骤、受影响的版本、`mihomo doctor` 的输出（注意它可能含订阅信息，脱敏后再贴）。
+请尽量附上：复现步骤、受影响的版本、`mihomo-cli doctor` 的输出（注意它可能含订阅信息，脱敏后再贴）。
 
 修复后会在 CHANGELOG 的「安全」分组记录。作为个人项目，这里不承诺响应时限。
 
@@ -44,9 +44,9 @@ CLI 会下载 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 的 releas
 
 ### 提权范围
 
-- CLI 本身**拒绝以 root 运行**（`sudo mihomo …` 会直接报错，因为服务是用户级 LaunchAgent，root 下域名错位会让所有服务操作静默失效）
+- CLI 本身**拒绝以 root 运行**（`sudo mihomo-cli …` 会直接报错，因为服务是用户级 LaunchAgent，root 下域名错位会让所有服务操作静默失效）
 - Mixed 模式全程免密，由用户级 LaunchAgent（`gui/<uid>`）托管
-- 只有 TUN 模式按需 `sudo` 启动临时进程（创建 utun 需要 root），用 `mihomo stop` 清理
+- 只有 TUN 模式按需 `sudo` 启动临时进程（创建 utun 需要 root），用 `mihomo-cli stop` 清理
 - 清理遗留的 root LaunchDaemon（v3.0–v4.0 遗留）需要一次管理员密码
 
 ### 平台

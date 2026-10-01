@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
   buildGhApiReleaseArgs,
+  buildGhDownloadEnv,
   buildGhReleaseDownloadArgs,
   buildKernelCurlArgs,
   buildReleaseApiCurlArgs,
@@ -126,12 +127,13 @@ describe('resolveDownloadChannel（下载通道优先级）', () => {
     assert.equal(ch.kind === 'proxy' && ch.proxy, 'http://127.0.0.1:7890');
   });
 
-  it('代理在跑且有 gh 时候选为 [proxy, gh]——回退重试让 url-test 重新选节点', () => {
+  it('代理在跑且有 gh 时候选为 [proxy, gh]——gh 带同一个本机代理，只换客户端不换路径（不保证重新选节点，局限见 resolveDownloadChannels 注释）', () => {
     const channels = resolveDownloadChannels({ ...base, ghAvailable: true, proxyRunning: true, proxyPort: 7890 });
     assert.deepEqual(
       channels.map(c => c.kind),
       ['proxy', 'gh'],
     );
+    assert.equal(channels[1]?.kind === 'gh' && channels[1].proxy, 'http://127.0.0.1:7890');
   });
 
   it('代理在跑但无 gh 时候选只有 proxy', () => {
@@ -142,11 +144,13 @@ describe('resolveDownloadChannel（下载通道优先级）', () => {
     );
   });
 
-  it('代理没跑时 gh 为唯一候选', () => {
+  it('代理没跑时 gh 为唯一候选且不带代理（入口 env 未被自指污染时的直连）', () => {
+    const channels = resolveDownloadChannels({ ...base, ghAvailable: true });
     assert.deepEqual(
-      resolveDownloadChannels({ ...base, ghAvailable: true }).map(c => c.kind),
+      channels.map(c => c.kind),
       ['gh'],
     );
+    assert.equal(channels[0]?.kind === 'gh' && channels[0].proxy, undefined);
   });
 
   it('全无条件时直连', () => {
@@ -177,6 +181,48 @@ describe('buildGhReleaseDownloadArgs', () => {
       '/tmp/x',
       '--clobber',
     ]);
+  });
+});
+
+describe('buildGhDownloadEnv（gh 回退的代理注入）', () => {
+  const priorHttpsProxy = process.env.HTTPS_PROXY;
+  const priorHttpsProxyLower = process.env.https_proxy;
+  const priorUnrelated = process.env.HOME;
+
+  it('带 proxy：大小写两种形式都注入，其余 env 保留', () => {
+    const env = buildGhDownloadEnv('http://127.0.0.1:7890');
+    assert.equal(env.HTTPS_PROXY, 'http://127.0.0.1:7890');
+    assert.equal(env.https_proxy, 'http://127.0.0.1:7890');
+    assert.equal(env.HOME, priorUnrelated, '继承的其他 env 必须保留');
+  });
+
+  it('带 proxy：只返回新对象，不写回 process.env（不污染同进程后续子进程）', () => {
+    process.env.HTTPS_PROXY = 'http://ambient.example:1';
+    process.env.https_proxy = 'http://ambient.example:1';
+    try {
+      const env = buildGhDownloadEnv('http://127.0.0.1:7890');
+      assert.equal(env.HTTPS_PROXY, 'http://127.0.0.1:7890');
+      assert.equal(process.env.HTTPS_PROXY, 'http://ambient.example:1', 'process.env 不应被改写');
+    } finally {
+      if (priorHttpsProxy === undefined) delete process.env.HTTPS_PROXY;
+      else process.env.HTTPS_PROXY = priorHttpsProxy;
+      if (priorHttpsProxyLower === undefined) delete process.env.https_proxy;
+      else process.env.https_proxy = priorHttpsProxyLower;
+    }
+  });
+
+  it('无 proxy：不新增代理键（独立 gh 候选按环境直连）', () => {
+    delete process.env.HTTPS_PROXY;
+    delete process.env.https_proxy;
+    try {
+      const env = buildGhDownloadEnv(null);
+      assert.equal(env.HTTPS_PROXY, undefined);
+      assert.equal(env.https_proxy, undefined);
+      assert.equal(env.HOME, priorUnrelated);
+    } finally {
+      if (priorHttpsProxy !== undefined) process.env.HTTPS_PROXY = priorHttpsProxy;
+      if (priorHttpsProxyLower !== undefined) process.env.https_proxy = priorHttpsProxyLower;
+    }
   });
 });
 

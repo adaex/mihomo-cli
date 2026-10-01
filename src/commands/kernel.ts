@@ -21,7 +21,8 @@ const KERNEL_VALUE_FLAGS: ReadonlySet<string> = new Set([...VALUE_FLAGS, '--mirr
 function channelLabel(channel: DownloadChannel): string {
   switch (channel.kind) {
     case 'gh':
-      return 'gh';
+      // gh 回退候选带本机代理时，失败汇总要能看出它与首选通道是同一路径
+      return channel.proxy ? `gh（经代理 ${channel.proxy}）` : 'gh';
     case 'proxy':
       return `代理 ${channel.proxy}`;
     case 'mirror':
@@ -34,7 +35,8 @@ function channelLabel(channel: DownloadChannel): string {
 /** 打印一行通道信息；isExplicitProxy 区分「代理」与「本机代理」措辞 */
 function printChannelLine(channel: DownloadChannel, isExplicitProxy: boolean): void {
   if (channel.kind === 'gh') {
-    console.log('下载通道: gh（GitHub CLI）');
+    // proxy 只可能由「本机代理在跑」的回退分支注入（显式 --proxy 是单候选、无 gh）
+    console.log(channel.proxy ? `下载通道: gh（GitHub CLI，经本机代理 ${channel.proxy}）` : '下载通道: gh（GitHub CLI）');
   } else if (channel.kind === 'proxy') {
     console.log(`下载通道: ${isExplicitProxy ? '代理' : '本机代理'} ${channel.proxy}`);
   } else if (channel.kind === 'mirror') {
@@ -197,7 +199,7 @@ export async function cmdKernel(args: string[]): Promise<void> {
           '若两条通道都是低速失败：问题在当前选中的机场节点（url-test 只按握手延迟选、不测带宽），',
           '在面板里手动给 Default Proxy 换个线路或节点后重试；也可换个时间等 url-test 重选',
           '',
-          '通道选择：本机代理在跑时自动优先（含低速快速失败），回退 gh；',
+          '通道选择：本机代理在跑时自动优先（含低速快速失败），失败回退 gh（仍经同一本机代理）；',
           '手动指定: mihomo-cli kernel --mirror [镜像]（强制镜像）/ mihomo-cli kernel --mirror direct（强制直连）',
           '          mihomo-cli kernel --proxy <端口>（经本机其他代理工具出网）',
         ],
