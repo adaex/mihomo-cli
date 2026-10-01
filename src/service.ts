@@ -915,8 +915,8 @@ export async function uninstallService(): Promise<void> {
 
 /**
  * 生成遗留安装清理脚本的 body（写盘 + chmod + sudo + 退出码映射由 runSudoScript 统一完成）。
- * 导出仅为测试退出码协议：脚本内部失败用 ≥2 的退出码（bootout 真实失败为 3），
- * 1 留给 sudo 鉴权取消/密码错误。
+ * 导出仅为测试退出码协议：脚本内部失败用 ≥2 的退出码（bootout 真实失败为 3，
+ * plist rm 后复核仍存在为 4），1 留给 sudo 鉴权取消/密码错误。
  *
  * 脚本**不删 pid 文件**：bootout 返回 113（daemon 未装载）时，pid 可能属于一个无关的
  * 活 TUN，脚本内无条件 rm 会删掉活进程的 isRunning 真相源。pid 由
@@ -934,6 +934,12 @@ export function buildLegacyCleanupScript(): string {
     `  exit 3`,
     `fi`,
     `rm -f ${shellQuote(PATHS.systemDaemonPlist)}`,
+    // rm -f 静默吞错：删失败（文件系统只读等极端态）不声不响，而残留 plist 会在
+    // 下次开机被 launchd 重新加载（KeepAlive 幽灵复活）——删除结果必须复核可见
+    `if [ -e ${shellQuote(PATHS.systemDaemonPlist)} ]; then`,
+    `  echo "遗留服务 plist 删除失败（rm 后仍存在）" >&2`,
+    `  exit 4`,
+    `fi`,
     `chown "$SUDO_UID:$SUDO_GID" ${shellQuote(PATHS.logFile)} 2>/dev/null || true`,
     `chown -R "$SUDO_UID:$SUDO_GID" ${shellQuote(DIRS.data)} 2>/dev/null || true`,
     'exit 0',
@@ -955,8 +961,9 @@ function cleanupLegacySystemInstall(): void {
     action: '清理遗留的系统级服务',
     file: 'legacy-cleanup.sh',
     // 3 = 脚本内 bootout 真实失败（见 buildLegacyCleanupScript 的分级）；
+    // 4 = plist rm 后复核仍存在（rm -f 静默失败的可见化）；
     // 具体退出码已由脚本 echo 到终端，故只指向「上方输出」
-    codeMessages: { 3: 'launchctl bootout 未能卸载旧 daemon（详见上方输出）' },
+    codeMessages: { 3: 'launchctl bootout 未能卸载旧 daemon（详见上方输出）', 4: '未能删除遗留服务的 plist（详见上方输出）' },
   });
 }
 

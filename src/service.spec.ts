@@ -712,4 +712,14 @@ describe('buildLegacyCleanupScript：sudo 脚本退出码协议', () => {
     const script = buildLegacyCleanupScript();
     assert.ok(!script.includes(PATHS.pidFile), '提权脚本删 pid = 绕过「活进程不删 isRunning 真相源」防线；pid 由包装层零进程复核后免提权收口');
   });
+
+  it('删 plist 后复核存在性：rm -f 静默失败必须可见（exit 4），不复核则残留 plist 下次开机被 launchd 重新加载', () => {
+    const script = buildLegacyCleanupScript();
+    // rm 之后必须有 -e 复核，且复核失败走 ≥2 退出码（不可 || true 吞掉）
+    const rmIndex = script.indexOf(`rm -f`);
+    const checkIndex = script.indexOf('-e');
+    assert.ok(rmIndex !== -1 && checkIndex > rmIndex, 'rm 之后必须有存在性复核');
+    assert.ok(script.includes('exit 4'), '复核失败应以 exit 4 报真实失败');
+    assert.ok(!/rm -f [^\n]*\|\| true/.test(script), 'rm 不得 || true 吞错');
+  });
 });
