@@ -59,7 +59,7 @@ const GROUP_TITLES: [CommandGroup, string][] = [
  * 说明列在整页里对不齐一眼就能看出来。宽度用 displayWidth 而非 `.length`——
  * 签名含中文占位符（`[编号]`、`[镜像]`、`[目标...]`），按码点数算会让这几行少缩进。
  */
-export function printHelp(commands: Command[]): void {
+function printHelp(commands: Command[]): void {
   const lines: string[] = [`\n${colors.cyan(colors.bold(`mihomo-cli v${VERSION}`))}`, '', '命令别名: mihomo, mhm, mh', '', '用法:', '  mihomo <命令> [选项]'];
 
   const allUsage = commands.flatMap(c => c.usage);

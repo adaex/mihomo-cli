@@ -761,13 +761,13 @@ function diffLockedKeys(before: Record<string, unknown>, after: Record<string, u
 }
 
 /** applyOverwrite 的执行参数：构造脚本 ctx 所需（YAML 合并不用） */
-export interface ApplyOverwriteOptions {
+interface ApplyOverwriteOptions {
   mode: 'mixed' | 'tun';
   scope?: OverwriteScope;
 }
 
 /** 脚本设置的锁定键命中，供 buildConfig 渲染告警（文案在 config.ts，只留一份） */
-export interface ScriptLockedHit {
+interface ScriptLockedHit {
   file: string;
   keys: string[];
 }

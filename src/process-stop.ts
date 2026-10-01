@@ -71,10 +71,10 @@ export function clearPid(): Error | null {
  * 超时也正常返回——是否仍有进程由调用方另行复核，不在此抛错。
  * cleanupAll 与 legacy 迁移后的 pid 收口共用这一份等待，不各写第二份
  */
-export async function waitUntilNoMihomo(attempts: number = PROCESS_WAIT_ATTEMPTS, interval: number = PROCESS_WAIT_INTERVAL): Promise<void> {
-  for (let i = 0; i < attempts; i++) {
+async function waitUntilNoMihomo(): Promise<void> {
+  for (let i = 0; i < PROCESS_WAIT_ATTEMPTS; i++) {
     if (getMihomoPids().length === 0) return;
-    await sleep(interval);
+    await sleep(PROCESS_WAIT_INTERVAL);
   }
 }
 
@@ -252,5 +252,5 @@ export async function stop(): Promise<StopResult> {
   }
 
   clearRuntime();
-  return { success: true, killed: result.killed };
+  return { success: true };
 }

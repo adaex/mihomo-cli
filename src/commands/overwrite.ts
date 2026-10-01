@@ -86,7 +86,7 @@ async function setOverwrite(enabled: boolean, args: string[]): Promise<void> {
   printOverwriteList();
 }
 
-export const SUBCOMMANDS: SubCommand[] = [
+const SUBCOMMANDS: SubCommand[] = [
   { name: 'on', aliases: ['enable'], handler: args => setOverwrite(true, args) },
   { name: 'off', aliases: ['disable'], handler: args => setOverwrite(false, args) },
 ];

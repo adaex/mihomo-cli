@@ -179,7 +179,6 @@ export interface StartResult {
 export interface StopResult {
   success: boolean;
   notRunning?: boolean;
-  killed?: number;
   remaining?: number[];
 }
 

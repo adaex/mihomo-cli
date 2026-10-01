@@ -142,7 +142,7 @@ export function getMihomoPids(): number[] {
     .filter(p => Number.isInteger(p) && p > 0);
 }
 
-export function isPidFileOwnedByRoot(): boolean {
+function isPidFileOwnedByRoot(): boolean {
   if (!fs.existsSync(PATHS.pidFile)) return false;
   try {
     const stat = fs.statSync(PATHS.pidFile);

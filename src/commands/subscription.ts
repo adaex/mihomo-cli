@@ -327,7 +327,7 @@ function withKnownFlags(usage: string, known: readonly string[], handler: (args:
 
 // list 刻意不注册：裸 `sub` 就是列表（fallback），与 `dir` / `ow` 同口径——
 // 同一批命令一半能敲 list 一半不能，用户只能靠试
-export const SUBCOMMANDS: SubCommand[] = [
+const SUBCOMMANDS: SubCommand[] = [
   { name: 'add', handler: withKnownFlags('sub add <url> [name]', [], subAdd) },
   { name: 'update', handler: withKnownFlags('sub update [name]', [], subUpdate) },
   { name: 'use', handler: withKnownFlags('sub use <name>', USE_FLAGS, subUse) },

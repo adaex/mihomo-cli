@@ -176,7 +176,7 @@ export function requireActiveSubscription(): Subscription {
   return sub;
 }
 
-export function findSubscriptionFuzzy<T extends Subscription>(subs: T[], pattern: string): T[] {
+function findSubscriptionFuzzy<T extends Subscription>(subs: T[], pattern: string): T[] {
   const lowerPattern = pattern.toLowerCase();
   const exact: T[] = [];
   const prefix: T[] = [];
@@ -198,7 +198,7 @@ export function findSubscriptionFuzzy<T extends Subscription>(subs: T[], pattern
   return includes;
 }
 
-export function pickSingleSubscription<T extends Subscription>(subs: T[], pattern: string): T {
+function pickSingleSubscription<T extends Subscription>(subs: T[], pattern: string): T {
   if (subs.length === 0) {
     throw new CliError(`未找到匹配 "${pattern}" 的订阅`);
   }

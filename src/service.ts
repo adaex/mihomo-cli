@@ -948,7 +948,7 @@ export function buildLegacyCleanupScript(): string {
  * 顺带把 root 属主的日志/数据归还当前用户——不归还的话，之后的用户级服务会因
  * EACCES 写不了日志而起不来。
  */
-export function cleanupLegacySystemInstall(): void {
+function cleanupLegacySystemInstall(): void {
   assertServiceLabelSafe();
 
   runSudoScript(buildLegacyCleanupScript(), {

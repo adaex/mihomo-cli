@@ -21,7 +21,7 @@ import type { ResetTarget, Settings } from '../types.js';
 import { confirmOrThrow } from './shared.js';
 
 /** 目标表只描述数据；服务操作与设置更新由 cmdReset 分阶段处理 */
-export const RESET_TARGETS: ResetTarget[] = [
+const RESET_TARGETS: ResetTarget[] = [
   { id: 'subs', aliases: ['sub', 'subs', 'subscription', 'subscriptions'], label: '订阅', paths: () => [DIRS.subscriptions], needsStop: true },
   { id: 'logs', aliases: ['log', 'logs'], label: '日志', paths: () => [DIRS.logs], needsStop: true },
   { id: 'data', aliases: ['data'], label: '运行数据', paths: () => [DIRS.data], needsStop: true },

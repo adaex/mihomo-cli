@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-
-import { LOCKED_CONFIG_KEYS } from './config.js';
-import { BASE_CONFIG } from './constants.js';
+import { BASE_CONFIG, LOCKED_CONFIG_KEYS } from './constants.js';
 
 /**
  * 锁定清单的**完整性**测试（与 config.spec.ts 的行为测试分开：那边测「锁了的键确实被剥」，

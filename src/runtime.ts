@@ -36,7 +36,7 @@ export type RuntimeMode = 'mixed' | 'tun';
  * 它**不反映实际在跑的东西**：`stop` 服务再 `start tun` 后，服务装着而 TUN 以 root
  * 在跑，本函数仍答 mixed。配置变更后的重启模式走 restartModeFor / restartModeOnChange。
  */
-export function getRuntimeMode(): RuntimeMode {
+function getRuntimeMode(): RuntimeMode {
   if (isServiceInstalled()) return 'mixed';
   return getConfigInfo()?.tun ? 'tun' : 'mixed';
 }

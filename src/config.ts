@@ -17,13 +17,10 @@ import type { BuildConfigResult, ConfigInfo, OverwriteScope } from './types.js';
  * js-yaml 5 默认 maxAliases=-1(无限制),恶意配置可借指数级别名膨胀撑爆内存/CPU。
  * 所有解析不可信来源(订阅、覆写、运行时配置)的 yaml.load 都应带上此选项。
  */
-export const SAFE_YAML_LOAD_OPTIONS: yaml.LoadOptions = { maxAliases: YAML_MAX_ALIASES };
-
-/** 锁定键清单的唯一真相源在 constants.ts（挪走理由见彼处注释）；此处 re-export 保持既有消费点不破 */
-export { LOCKED_CONFIG_KEYS };
+const SAFE_YAML_LOAD_OPTIONS: yaml.LoadOptions = { maxAliases: YAML_MAX_ALIASES };
 
 /** 统一入口:带别名上限的 yaml.load,替代裸 yaml.load。 */
-export function loadYamlSafe(content: string): unknown {
+function loadYamlSafe(content: string): unknown {
   return yaml.load(content, SAFE_YAML_LOAD_OPTIONS);
 }
 

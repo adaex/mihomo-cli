@@ -57,7 +57,7 @@ function printDirectoryInfo(): void {
   console.log('');
 }
 
-export const SUBCOMMANDS: SubCommand[] = [{ name: 'open', handler: openDirectory }];
+const SUBCOMMANDS: SubCommand[] = [{ name: 'open', handler: openDirectory }];
 
 export async function cmdDirectory(args: string[]): Promise<void> {
   assertKnownFlags(args.slice(1), [], 'dir');
