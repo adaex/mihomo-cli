@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { displayWidth, formatRelativeTime, formatTimestamp, padEndDisplay } from './format.js';
+import { displayWidth, formatBytes, formatRelativeTime, formatTimestamp, formatTraffic, padEndDisplay } from './format.js';
 
 describe('formatRelativeTime', () => {
   const now = Date.now();
@@ -80,5 +80,42 @@ describe('padEndDisplay：按显示宽度补齐', () => {
 
   it('已超出目标宽度时原样返回，不截断', () => {
     assert.equal(padEndDisplay('subscription remove <name>', 5), 'subscription remove <name>');
+  });
+});
+
+describe('formatTraffic：流量行对类型混淆的防护（手改缓存场景）', () => {
+  it('字符串 download 不与数字相加：已用显示「未知」，百分比分片不挂（不漏 NaN%）', () => {
+    const line = formatTraffic(0, 'oops' as unknown as number, 100);
+    assert.equal(line, '未知 / 100 B');
+    assert.ok(!line.includes('NaN'), `不得漏出 NaN: ${line}`);
+  });
+
+  it('数字形态字符串经 Number 化正常参与（total: "100" → 正常百分比）', () => {
+    assert.equal(formatTraffic(10, 20, '100' as unknown as number), '30 B / 100 B (30.0%)');
+  });
+
+  it('total 为非法字符串时不挂百分比', () => {
+    const line = formatTraffic(10, 20, 'oops' as unknown as number);
+    assert.equal(line, '30 B / 未知');
+    assert.ok(!line.includes('('), 'total 非数字时不挂百分比分片');
+  });
+
+  it('正常数字行为不变：百分比封顶 100%', () => {
+    assert.equal(formatTraffic(60, 60, 100), '120 B / 100 B (100.0%)');
+    assert.equal(formatTraffic(1, 1, 10), '2 B / 10 B (20.0%)');
+  });
+
+  it('download 与 total 都缺失返回 null（调用方跳过整行）', () => {
+    assert.equal(formatTraffic(undefined, undefined, undefined), null);
+  });
+
+  it('只缺 total：仍展示已用，无百分比', () => {
+    assert.equal(formatTraffic(1, 2, undefined), '3 B / 未知');
+  });
+
+  it('formatBytes 对字符串/NaN/负数统一「未知」（同族口径对照）', () => {
+    assert.equal(formatBytes('oops'), '未知');
+    assert.equal(formatBytes(NaN), '未知');
+    assert.equal(formatBytes(-5), '未知');
   });
 });

@@ -30,8 +30,10 @@ import { BASE_CONFIG, LOCKED_CONFIG_KEYS } from './constants.js';
  * `hub/executor.updateListeners()` 里逐个 ReCreate* 的入参对表：进得去那份名单的都能开监听。
  */
 
-/** 快照核对时间与来源：2026-09-13，上游 MetaCubeX/mihomo Meta 分支（内核 v1.19.30） */
-const UPSTREAM_SNAPSHOT_VERSION = 'v1.19.30';
+/** 快照核对时间与来源：2026-10-02 核对 v1.19.32，上游 MetaCubeX/mihomo Meta 分支（字段集与 v1.19.30 无差异）。
+ * 注意上游默认分支已变更为 main（一个同名 Python 项目），内核源码在 Meta 分支——
+ * 核对与引用必须带 ?ref=Meta，不带 ref 的 contents/tree API 拿到的是 Python 项目。 */
+const UPSTREAM_SNAPSHOT_VERSION = 'v1.19.32';
 
 /**
  * 上游 `config.Inbound` 结构体的字段全集（json tag），加上 `RawConfig` 顶层里同属

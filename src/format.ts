@@ -48,10 +48,14 @@ export function formatBytes(bytes: unknown): string {
  */
 export function formatTraffic(upload: number | undefined, download: number | undefined, total: number | undefined): string | null {
   if (download === undefined && total === undefined) return null;
-  const used = (upload || 0) + (download || 0);
+  // 手改缓存可能写入字符串（download: "oops"）：直接相加会字符串拼接出 "0oops"，
+  // formatBytes 有防护显示「未知」，但百分比除法漏出字面 NaN%。与 formatBytes/
+  // formatTimestamp 同款口径——参与运算的值先 Number 化，非有限则该分片不挂
+  const used = Number(upload || 0) + Number(download || 0);
+  const totalNum = total === undefined ? NaN : Number(total);
   let line = `${formatBytes(used)} / ${formatBytes(total)}`;
-  if (total && total > 0) {
-    line += ` (${Math.min((used / total) * 100, 100).toFixed(1)}%)`;
+  if (Number.isFinite(used) && Number.isFinite(totalNum) && totalNum > 0) {
+    line += ` (${Math.min((used / totalNum) * 100, 100).toFixed(1)}%)`;
   }
   return line;
 }
