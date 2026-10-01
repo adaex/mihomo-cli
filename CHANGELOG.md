@@ -16,7 +16,7 @@
 
 ### 内部
 
-- root 残留的 sudo 清理脚本不再 `rm pid`：pid 删除收口为 cleanupAll 末尾的唯一出口（复核 remaining 为空才免提权 unlink），消除「活进程不删 isRunning 真相源」在提权脚本内的唯一字面例外（此前仅靠「sudo 取消脚本不执行 + pkill 失败 exit 2」两道时序间接保证）；buildRootResidueCleanupError 在 scriptError 与 pidError 并存时改为 scriptError 优先（主归因「清理未走完」、pid 错误仅附带，手动命令给 pkill 而非 rm，防漏掉潜在存活进程）；reset 的警告理由去掉 `as Error` 断言、改显式空值守卫；补「脚本不得含 rm」的结构断言、只读文件免提权删除与双错误并存象限用例
+- root 残留清理脚本 buildKernelCleanupScript 不再 `rm pid`：cleanupAll 路径的 pid 删除统一在末尾、复核 remaining 为空才免提权 unlink，消除该路径「活进程不删 isRunning 真相源」在提权脚本内的字面例外（此前仅靠「sudo 取消脚本不执行 + pkill 失败 exit 2」两道时序间接保证；legacy 迁移脚本 buildLegacyCleanupScript 的 `rm pid` 属另一条路径、未在本次范围，边界见 CODE_REVIEW）；buildRootResidueCleanupError 在 scriptError 与 pidError 并存时改为 scriptError 优先（主归因「清理未走完」、pid 错误仅附带，手动命令给 pkill 而非 rm，防漏掉潜在存活进程）；reset 的警告理由去掉 `as Error` 断言、改显式空值守卫；补「脚本不得含 rm」的结构断言、只读文件免提权删除与双错误并存象限用例
 - `CleanupResult.sudoError` 拆为 `scriptError`（pkill 脚本）与 `pidError`（pid 文件删除）两个字段：进程死光但脚本没走完与仅 pid 文件残留是两种归因，合并字段让调用方提示说错事；处置判据 classifyResidueCleanup 同步（throw 档只看 scriptError，pidError 不参与拦截），reset 的警告判据也收口到它
 - `StaleState` 删除无消费方的 `needsSudo`/`hasRootPidFile`/`hasRootProcess` 字段；`clearPid` 的三态返回值（cancelled/failed/null）随免提权化收敛为 `Error | null`
 - 覆写数组拼接误用的「值类型描述」抽为 describeValueKind：文件级（系统默认值）与合并级（订阅现值）两处检查共用，消除已漂移的双实现

@@ -527,7 +527,7 @@ export function buildRootResidueCleanupError(result: Pick<CleanupResult, 'remain
       ? `root 残留清理未完成，进程目前已不在（死亡等待内自行退出，非 sudo 清理）${pidError ? `；${describePidCleanupFailure(pidError)}` : ''}`
       : pidError
         ? `${describePidCleanupFailure(pidError)}: ${PATHS.pidFile}`
-        : 'root 残留未被清理干净';
+        : 'root 残留未清理干净';
   const hint = [ctx.mainOutcome, residueHint, `重新运行可再次尝试清理: ${ctx.retryCommand}`];
   // 有 kernel 残留、或脚本没走完（可能仍有进程）→ pkill 幂等兜底；仅 pid 文件残留才引导 rm
   hint.push(hasKernelResidue || scriptError ? '手动清理: sudo pkill -9 mihomo' : `手动清理: sudo rm -f ${PATHS.pidFile}`);
