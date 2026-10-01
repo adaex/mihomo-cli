@@ -117,6 +117,9 @@ describe('doctor：内核面板自升级残留', () => {
     assert.match(stdout, /内核自升级残留/);
     assert.match(stdout, /rm -rf .*meta-backup/);
     assert.match(stdout, /meta-update/);
+    // 两类目录性质分别说明：备份可留作回滚、暂存可安全删
+    assert.match(stdout, /回滚/);
+    assert.match(stdout, /可安全删除/);
   });
 
   it('无残留时不出现该项', () => {

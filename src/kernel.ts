@@ -430,6 +430,22 @@ export function buildKernelCurlArgs(args: { url: string; proxy: string | null; m
 }
 
 /**
+ * 把内核下载的 curl 退出码翻译为可读原因（downloadKernel 在 curl 非零退出时用）：
+ * - 22：--fail-with-body 的 HTTP 错误（4xx/5xx）
+ * - 28：超时类——连接超时、低速中止（--speed-limit）、总超时都归此码，curl 不细分
+ * - 其余：保留退出码备查
+ */
+export function describeCurlDownloadError(status: number): string {
+  if (status === 22) {
+    return '镜像或服务器返回 HTTP 错误（4xx/5xx），请重试或改用其他通道（gh/本机代理/--mirror direct）';
+  }
+  if (status === 28) {
+    return '连接或传输超时：节点可能不可用、速度过低或被限速（经代理时通常是当前节点对 GitHub 带宽不足）';
+  }
+  return `下载失败 (curl 退出码 ${status})`;
+}
+
+/**
  * 构造 `gh release download` 参数。纯函数：gh 通道的信任锚是「gh 只与 GitHub 通信」
  * + 精确资产名（--pattern 是 glob），参数数组单测锁死。
  */
@@ -530,12 +546,9 @@ export async function downloadKernel(
       }
 
       if (curlResult.status !== 0) {
-        // 22 = --fail-with-body：HTTP 状态码 ≥ 400（错误体已写入临时文件，随 finally 删除）。
-        // 错误页经 --progress-bar 已显示在终端，这里点明是 HTTP 错误而非网络/超时
-        if (curlResult.status === 22) {
-          throw new Error('下载失败: 镜像或服务器返回 HTTP 错误（4xx/5xx），请重试或改用其他通道（gh/本机代理/--mirror direct）');
-        }
-        throw new Error(`下载失败 (curl 退出码 ${curlResult.status})`);
+        // 退出码翻译见 describeCurlDownloadError：22=HTTP 错误、28=超时/低速——
+        // 错误体已写入临时文件，随 finally 清理
+        throw new Error(`下载失败: ${describeCurlDownloadError(curlResult.status ?? 1)}`);
       }
     }
 

@@ -6,6 +6,7 @@ import {
   buildGhReleaseDownloadArgs,
   buildKernelCurlArgs,
   buildReleaseApiCurlArgs,
+  describeCurlDownloadError,
   findMatchingAsset,
   parseCurlStatusOutput,
   pickLatestRelease,
@@ -219,6 +220,22 @@ describe('buildKernelCurlArgs', () => {
     const i = args.indexOf('-o');
     assert.equal(args[i + 1], '/tmp/x.gz');
     assert.equal(args[args.length - 1], common.url);
+  });
+});
+
+describe('describeCurlDownloadError（curl 退出码翻译）', () => {
+  it('22 = HTTP 错误', () => {
+    assert.match(describeCurlDownloadError(22), /HTTP 错误/);
+  });
+
+  it('28 = 超时或低速：点明速度过低，不再只给裸退出码', () => {
+    const msg = describeCurlDownloadError(28);
+    assert.match(msg, /超时/);
+    assert.match(msg, /速度过低/);
+  });
+
+  it('其他码保留退出码备查', () => {
+    assert.match(describeCurlDownloadError(7), /退出码 7/);
   });
 });
 
