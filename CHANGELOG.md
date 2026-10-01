@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [26.10.99] - 2026-10-02
 
 ### 变更（breaking）
 
