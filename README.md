@@ -398,6 +398,13 @@ mihomo start --update-timeout=30000   # 长选项 + 等号
 
 可通过环境变量 `MIHOMO_CLI_DIR` 自定义数据目录位置。
 
+其他环境变量：
+
+| 变量 | 用途 |
+| --- | --- |
+| `MIHOMO_CLI_ALLOW_ANY_PLATFORM=1` | 非 macOS 上绕过平台守卫，仅供开发调试（功能不保证可用） |
+| `MIHOMO_CLI_DAEMON_LABEL` | 覆盖服务 label，仅供隔离测试使用（随意改名会遗留无法管理的自启进程，日常勿设） |
+
 ## 覆写配置
 
 覆写配置允许你在订阅配置基础上进行自定义修改，原始订阅文件保持独立
