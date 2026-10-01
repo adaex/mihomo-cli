@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { CliError } from './errors.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
@@ -218,3 +219,15 @@ export const BASE_CONFIG: Record<string, unknown> = {
 export const DEFAULT_UPDATE_INTERVAL_HOURS = 12;
 /** 启动时自动更新订阅的默认超时（毫秒），超时后使用缓存配置 */
 export const DEFAULT_AUTO_UPDATE_TIMEOUT = 10_000;
+
+/** 校验 MIHOMO_CLI_DAEMON_LABEL：该值经 path.join 折叠 `..` 后会成为 root 清理路径
+ * （`../../etc/sudoers.d/evil` → `/etc/sudoers.d/evil.plist`），不校验即提权原语。
+ * constants 已把非法值回退为默认标签，此处在执行写/删前拒绝并告知用户。 */
+export function assertServiceLabelSafe(): void {
+  if (RAW_SERVICE_LABEL_INPUT !== undefined && !isValidServiceLabel(RAW_SERVICE_LABEL_INPUT)) {
+    throw new CliError(`MIHOMO_CLI_DAEMON_LABEL 无效: "${RAW_SERVICE_LABEL_INPUT}"`, {
+      label: '配置错误',
+      hint: ['只允许字母、数字、点、下划线、短横线，且不能含 ".."。', '该值会成为 launchd plist 的文件名，并参与清理遗留安装时的 root 删除路径。'],
+    });
+  }
+}
