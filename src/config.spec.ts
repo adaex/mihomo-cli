@@ -165,6 +165,30 @@ describe('配置构建保留用户的节点和分流语义', () => {
   });
 });
 
+describe('dumpYaml 输出终端安全（config 展示路径依赖 dump 的转义，不经 sanitizeTerminal）', () => {
+  // 结构不变量：订阅可控的节点名/规则值可能携带控制字符（ESC 清屏、\r 覆盖、BEL）。
+  // mihomo-cli config 直接把 dump 结果打进终端，能注入的前提是 dump 输出含原始
+  // 控制字节——js-yaml 对不可打印字符一律转义为可见序列，此用例锁住这条性质：
+  // 若未来更换序列化实现或新增绕过 dump 的展示形态，这里必须转红并重新评估注入面
+  it('控制字符被转义为字面序列，输出无原始控制字节', () => {
+    const doc = {
+      proxies: [
+        { name: `evil${String.fromCharCode(27)}[2J${String.fromCharCode(27)}[1A` },
+        { name: `carriage${String.fromCharCode(13)}return` },
+        { name: `bell${String.fromCharCode(7)}` },
+        { name: `nul${String.fromCharCode(0)}end` },
+      ],
+    };
+    const out = dumpYaml(doc);
+    for (const code of [0x00, 0x07, 0x0d, 0x1b]) {
+      assert.ok(!out.includes(String.fromCharCode(code)), `输出不得含原始控制字节 0x${code.toString(16)}`);
+    }
+    // 转义形态可被 YAML 解析还原（数据无损，只是展示安全）
+    const roundTrip = parseConfigContent(out) as typeof doc;
+    assert.equal(roundTrip.proxies[0].name, doc.proxies[0].name);
+  });
+});
+
 describe('系统锁定项：订阅自带的端口与控制面字段不进运行配置', () => {
   const BASE = {
     proxies: [{ name: 'a', type: 'socks5', server: '127.0.0.1', port: 1080 }],

@@ -737,8 +737,15 @@ describe('waitServiceHealthy：轮询期间 launchctl 查询失败的容错', ()
   function writeStubLaunchctl(binDir: string, modeFile: string): void {
     const script = `#!/bin/bash
 if [ "$1" = "print" ]; then
-  if [ -f "${modeFile}" ] && [ "$(cat "${modeFile}")" = "fail" ]; then
+  mode="$(cat "${modeFile}" 2>/dev/null)"
+  if [ "$mode" = "fail" ]; then
     exit 112
+  fi
+  if [ "$mode" = "notrunning" ]; then
+    cat <<'FIXTURE'
+${REAL_PRINT_NOT_RUNNING}
+FIXTURE
+    exit 0
   fi
   cat <<'FIXTURE'
 ${REAL_PRINT_RUNNING}
@@ -805,6 +812,34 @@ exit 0
       assert.equal(health.pid, 5474);
     } finally {
       process.env.PATH = originalPath;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('第一阶段 not running + 宽限期查询全失败：陈旧快照不得直接当结论，进程活着则兜底 healthy:true', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-health-'));
+    const modeFile = path.join(tmpDir, 'mode');
+    const binDir = path.join(tmpDir, 'bin');
+    fs.mkdirSync(binDir);
+    writeStubLaunchctl(binDir, modeFile);
+    // 第一阶段快照 = not running（loaded）；窗口中途 launchctl 转 fail，宽限期查询全失败
+    fs.writeFileSync(modeFile, 'notrunning');
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${originalPath}`;
+    const kernelPid = spawnFakeKernel();
+    waitPgrepSeesPid(kernelPid);
+    try {
+      setTimeout(() => fs.writeFileSync(modeFile, 'fail'), 400);
+      const health = await waitServiceHealthy();
+      assert.equal(health.healthy, true, '宽限期查询全失败时陈旧快照不可信：进程活着须兜底判健康');
+      assert.equal(health.pid, kernelPid);
+    } finally {
+      process.env.PATH = originalPath;
+      try {
+        process.kill(kernelPid, 'SIGKILL');
+      } catch {
+        /* 已退出 */
+      }
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });

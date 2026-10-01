@@ -25,6 +25,24 @@ export async function getLatestNpmVersion(timeoutMs: number = NPM_VIEW_TIMEOUT_M
   }
 }
 
+/**
+ * update 的版本决策内核（纯函数，cmdUpdate 与测试共用）：
+ * - 'ahead'：当前领先 registry（预发/源码安装）——npm install 会静默降级，必须拦住
+ * - 'current'：已是最新，跳过
+ * - 'proceed'：落后、或版本号无法比较（非 semver）、或查询失败（null）——继续安装
+ */
+export function resolveUpdateAction(current: string, latest: string | null): 'ahead' | 'current' | 'proceed' {
+  if (latest === null) return 'proceed';
+  try {
+    const cmp = compareVersions(current, latest);
+    if (cmp > 0) return 'ahead';
+    if (cmp === 0) return 'current';
+  } catch {
+    /* 版本号无法比较（非 semver），按「继续更新」处理 */
+  }
+  return 'proceed';
+}
+
 export async function cmdUpdate(args: string[] = []): Promise<void> {
   assertKnownFlags(args.slice(1), [], 'update');
   // 不接受位置参数：校验先于 npm 查询/安装等网络副作用
@@ -32,23 +50,19 @@ export async function cmdUpdate(args: string[] = []): Promise<void> {
   console.log(`当前版本: ${colors.cyan(VERSION)}`);
   console.log('');
   const latest = await withSpinner('查询 npm 最新版本', getLatestNpmVersion);
+  const action = resolveUpdateAction(VERSION, latest);
 
+  if (action === 'ahead') {
+    // latest 非空是 resolveUpdateAction 返回 'ahead' 的前提（TS 无法跨函数关联缩小，?? 防御）
+    console.log(colors.yellow(`当前版本 (${VERSION}) 领先于 npm 最新版 (${latest ?? '未知'})，跳过更新（避免降级）`));
+    console.log(colors.gray('如需强制重装: npm install -g mihomo-cli'));
+    return;
+  }
+  if (action === 'current') {
+    console.log(`已是最新版本 (${colors.green(VERSION)})，无需更新`);
+    return;
+  }
   if (latest) {
-    try {
-      const cmp = compareVersions(VERSION, latest);
-      if (cmp > 0) {
-        // 当前版本领先 registry（预发/源码安装）：npm install 会静默降级，必须拦住
-        console.log(colors.yellow(`当前版本 (${VERSION}) 领先于 npm 最新版 (${latest})，跳过更新（避免降级）`));
-        console.log(colors.gray('如需强制重装: npm install -g mihomo-cli'));
-        return;
-      }
-      if (cmp === 0) {
-        console.log(`已是最新版本 (${colors.green(VERSION)})，无需更新`);
-        return;
-      }
-    } catch {
-      // 版本号无法比较（非 semver），按「不等于 latest」继续更新
-    }
     console.log(`最新版本: ${colors.cyan(latest)}`);
   } else {
     console.log(colors.yellow('无法查询最新版本（网络问题？），将直接尝试重新安装'));

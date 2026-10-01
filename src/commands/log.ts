@@ -21,7 +21,7 @@ export function cmdLogs(args: string[]): void {
   const targetName = getNonFlagArg(args, 1) ?? (follow || openInViewer || hasLinesFlag ? '0' : null);
 
   if (targetName) {
-    // 只认「当前」与列表序号：归档名是 mihomo-cli.<时间戳>.log，没人会去敲它，
+    // 只认「当前」与列表序号：归档名是 mihomo.<时间戳>.log，没人会去敲它，
     // 而支持按名/子串查找就得额外防路径穿越
     let logPath: string;
 

@@ -32,6 +32,27 @@ function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSync
   }
 }
 
+describe('整页 help 的入口信息与快捷命令节', () => {
+  it('命令别名行列出全部入口（mihomo-cli 与 mh），与 package.json bin 一致', () => {
+    withFixture((_d, run) => {
+      const r = run(['help']);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /命令别名: mh\n/);
+      assert.doesNotMatch(r.stdout, /命令别名:.*mhm/);
+    });
+  });
+
+  it('快捷命令节包含 tun / use / restart 三条（README 同口径，help 内可发现）', () => {
+    withFixture((_d, run) => {
+      const r = run(['help']);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /tun\s+= start tun/);
+      assert.match(r.stdout, /use <name>\s+= subscription use <name>/);
+      assert.match(r.stdout, /restart\s+= start（start 本身即重启）/);
+    });
+  });
+});
+
 describe('命令级帮助', () => {
   it('help <命令> 只显示该命令的用法行', () => {
     withFixture((_d, run) => {

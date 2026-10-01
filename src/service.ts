@@ -282,6 +282,7 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
   if (last.running) return { healthy: true, crashed: false, pid: last.pid, exitCode: null, terminatingSignal: null };
 
   // 第二阶段：窗口结束仍未 running（慢机器上内核起得慢，或正在 spawn 重试），再宽限一会儿
+  let graceQueried = false;
   while (Date.now() < graceDeadline) {
     await sleep(SERVICE_HEALTH_INTERVAL_MS);
     try {
@@ -289,6 +290,7 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
     } catch {
       continue;
     }
+    graceQueried = true;
 
     if (isCrashed(last)) {
       return { healthy: false, crashed: true, pid: null, exitCode: last.lastExitCode, terminatingSignal: last.lastTerminatingSignal };
@@ -297,14 +299,20 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
     if (last.running) return { healthy: true, crashed: false, pid: last.pid, exitCode: null, terminatingSignal: null };
   }
 
+  // 宽限期查询也无一成功：last 是第一阶段末尾的陈旧快照（not running），此刻服务
+  // 可能已 running 而观察不到——与第一阶段全失败同族，同一兜底判据
+  if (!graceQueried) return healthViaProcessProbe();
+
   return { healthy: false, crashed: false, pid: last.pid, exitCode: last.lastExitCode, terminatingSignal: last.lastTerminatingSignal };
 }
 
 /**
- * 观察窗内 launchctl 查询全部失败时的兜底判据：进程在 = 服务内核活着（launchd 拉起的
- * 进程，命令行匹配即强证据），返回健康并以进程 pid 为结果依据；pgrep 自身失败不致命——
- * 与「无进程」一样落回 healthy:false（assertServiceHealthy 报「未能进入运行状态」，
- * 日志尾部仍是有效线索）。
+ * 观察窗内 launchctl 查询全部失败时的兜底判据：进程在 = 内核活着（命令行匹配
+ * MAIN_INSTANCE_PATTERN 即强证据），返回健康并以进程 pid 为结果依据；pgrep 自身失败
+ * 不致命——与「无进程」一样落回 healthy:false（assertServiceHealthy 报「未能进入运行
+ * 状态」，日志尾部仍是有效线索）。已知边界：观察窗（≤3s、锁外）内并发启动的 TUN 进程
+ * 同样命中模式，极端交错下可能假阳性——终态（有内核在跑、mixed 未确认）无害，不为
+ * 消掉它引入 pgrep 之上的第二重判定。
  */
 function healthViaProcessProbe(): ServiceHealth {
   try {

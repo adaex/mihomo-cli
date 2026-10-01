@@ -14,6 +14,7 @@ describe('redactConfigSecrets：配置凭据脱敏', () => {
         { name: 'hy2', type: 'hysteria2', 'auth-str': 'hy-pw' },
         { name: 'hy2-obfs', type: 'hysteria2', obfs: 'salamander', 'obfs-password': 'obfs-secret' },
         { name: 'hy1', type: 'hysteria', auth: 'hy1-auth-b64' },
+        { name: 'hy2-realm', type: 'hysteria2', 'realm-opts': { enable: true, token: 'realm-token-789' } },
         {
           name: 'nested',
           type: 'whatever',
@@ -31,7 +32,8 @@ describe('redactConfigSecrets：配置凭据脱敏', () => {
     assert.equal(c.proxies[3]['auth-str'], '***');
     assert.equal(c.proxies[4]['obfs-password'], '***');
     assert.equal(c.proxies[5].auth, '***');
-    assert.equal((c.proxies[6]['plugin-opts'] as { password: string }).password, '***');
+    assert.equal((c.proxies[6]['realm-opts'] as { token: string }).token, '***');
+    assert.equal((c.proxies[7]['plugin-opts'] as { password: string }).password, '***');
     assert.equal(changed, true);
     // 输入不被原地修改
     assert.equal(input.proxies[0].password, 'ss-pw');
