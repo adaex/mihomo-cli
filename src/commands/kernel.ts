@@ -60,7 +60,8 @@ export async function cmdKernel(args: string[]): Promise<void> {
   }
 
   // 下载候选通道（按尝试顺序，首个成功即用）：显式 --mirror/--proxy 只有一个候选；
-  // 默认本机代理在跑时 proxy 首选、gh 回退（重试时 url-test 重新选节点）。
+  // 默认本机代理在跑时 proxy 首选、gh 回退（回退只换客户端，节点通常不变，
+  // 见 kernel.resolveDownloadChannels 的局限说明）。
   // 镜像选择不持久化，每次按当前环境独立决策；裸 --mirror 固定走裸域，
   // 不枚举网卡猜 IPv6（有 v6 地址不代表 v6 路由通），需要 v6 子域显式 --mirror v6。
   // 运行状态由命令层探测后注入——kernel.ts 不依赖 runtime/settings，通道决策保持纯函数可测
@@ -192,6 +193,9 @@ export async function cmdKernel(args: string[]): Promise<void> {
         label: '下载失败',
         hint: [
           ...failures,
+          '',
+          '若两条通道都是低速失败：问题在当前选中的机场节点（url-test 只按握手延迟选、不测带宽），',
+          '在面板里手动给 Default Proxy 换个线路或节点后重试；也可换个时间等 url-test 重选',
           '',
           '通道选择：本机代理在跑时自动优先（含低速快速失败），回退 gh；',
           '手动指定: mihomo kernel --mirror [镜像]（强制镜像）/ mihomo kernel --mirror direct（强制直连）',
