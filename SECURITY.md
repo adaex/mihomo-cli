@@ -25,8 +25,8 @@ CLI 会下载 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 的 releas
 - 资产地址在拼接任何镜像前缀**之前**校验（`assertTrustedAssetUrl`）：必须是 https，且主机在白名单内（`github.com`、`api.github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com`）。被篡改的 `browser_download_url` 无法让 CLI 去下载任意二进制
 - GitHub API **不经过镜像**；镜像只作为传输层前缀兜底
 - `gh` 通道按精确资产名下载，拒绝 glob 元字符与路径成分
-- curl 通道强制初始与重定向全链路 https、有大小上限，下载后比对 `asset.size` 并执行自检
-- 解包时同时检查条目路径与类型，**拒绝符号链接与硬链接**成员；遍历用 `lstat` 而非 `stat`（后者会跟随符号链接）
+- curl 通道强制初始与重定向全链路 https、有大小上限，下载后比对 `asset.size`
+- 上游 darwin 资产为单文件 gzip：经 `gzip -dc` 解出（不经过 shell 重定向），随后执行二进制自检（`-v`）并与 release tag 做版本对账，通过后才原子替换旧内核；旧的 tar 解包路径（含符号链接/硬链接成员检查）已随资产形态统一移除
 
 **上游目前未提供 checksums 文件**，因此完整性依赖上述来源约束与传输层校验，而非哈希比对。这是已知局限，不要理解为「已校验哈希」。
 
