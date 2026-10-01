@@ -6,7 +6,7 @@ import * as yaml from 'js-yaml';
 import { BASE_CONFIG, LOCKED_CONFIG_KEYS, YAML_MAX_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
 import { USER_DATA_DIR } from './paths.js';
-import { readSettings, writeSettings } from './settings.js';
+import { readSettings, SAFE_NAME_RE, writeSettings } from './settings.js';
 import type {
   BrokenOverwriteFile,
   OverwriteFileEntry,
@@ -48,7 +48,8 @@ export function parseOverrideKey(key: string): ParsedOverrideKey {
  * 这两种老写法会被当**字面键名**静默落进配置（内核对未知顶层键宽容），老用户无从得知要迁移。
  */
 function assertValidParsedKey(rawKey: string, parsed: ParsedOverrideKey): void {
-  if (rawKey.startsWith('~')) {
+  // 不只看 rawKey 开头：`+~rules` 的 ~ 被前缀 + 遮挡，剥完操作符后 parsed.key 仍是 ~rules
+  if (rawKey.startsWith('~') || parsed.key.includes('~')) {
     throw new CliError(`覆写键 "${rawKey}" 用了已移除的 ~ 操作符`, {
       label: '覆写配置错误',
       hint: ['按 name 合并/追加数组元素的 ~ 与 ~? 已移除，改用 JS 覆写脚本（README「覆写配置」章节的脚本一节）。'],
@@ -64,6 +65,14 @@ function assertValidParsedKey(rawKey: string, parsed: ParsedOverrideKey): void {
     throw new CliError(`覆写键名不能为空: "${rawKey}"`, {
       label: '覆写配置错误',
       hint: ['操作符（!、+）必须修饰一个真实的键名，如 rules+、dns!。'],
+    });
+  }
+  // 剥完合法操作符后仍残留 `!`：解析顺序的漏网形态 `rules!+`（! 在末位 + 之前、没被识别），
+  // 不能静默当字面键 rules!，矛盾输入与互斥组合同族
+  if (parsed.key.includes('!')) {
+    throw new CliError(`覆写键 "${rawKey}" 的操作符位置矛盾`, {
+      label: '覆写配置错误',
+      hint: ['整体覆盖的 ! 只能写在键名末尾、且不能与其他操作符同用（key!）。', '想向数组追加请只用 key+。'],
     });
   }
   const ops: string[] = [];
@@ -86,6 +95,14 @@ function describeValueKind(value: unknown): string {
   if (value === null) return 'null';
   if (typeof value === 'object') return '映射';
   return `标量（${typeof value}）`;
+}
+
+/** `__proto__` 键错误：文件级校验与合并期检查共用一份，两处口径不许漂移 */
+function protoKeyInOverwriteError(): CliError {
+  return new CliError('覆写里出现了 "__proto__" 键', {
+    label: '覆写配置错误',
+    hint: ['正常 mihomo 配置没有这个键，请检查覆写文件的内容与来源。'],
+  });
 }
 
 /**
@@ -131,10 +148,7 @@ function mergeConfigLevel(target: unknown, override: unknown, parseOperators: bo
     // 用户无从知道源头是覆写。在操作符解析之后拦，顺带覆盖 `__proto__!` 等操作符形态。
     // 订阅侧解析出的 own `__proto__` 不经本函数（无赋值动作），原样透传、内核按未知键忽略
     if (key === '__proto__') {
-      throw new CliError('覆写里出现了 "__proto__" 键', {
-        label: '覆写配置错误',
-        hint: ['正常 mihomo 配置没有这个键，请检查覆写文件的内容与来源。'],
-      });
+      throw protoKeyInOverwriteError();
     }
 
     const existingValue = result[key];
@@ -304,28 +318,42 @@ export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch |
       problems.push(`未知键 "${key}"`);
       continue;
     }
-    const arr = (Array.isArray(value) ? value : [value]).filter(v => typeof v === 'string' && v.length > 0) as string[];
+    // 先 trim 再过滤：`" corp.com"` 不规整会在后缀比对里恒不命中
+    const arr = (Array.isArray(value) ? value : [value])
+      .map(v => (typeof v === 'string' ? v.trim() : v))
+      .filter(v => typeof v === 'string' && v.length > 0) as string[];
     if (arr.length === 0) {
       problems.push(`键 "${key}" 的值为空或无有效字符串`);
       continue;
     }
-    // url-domain 只做字面后缀比对，不含通配语义——值里出现 `*`/`?` 恒不命中，
-    // 文件会静默对任何订阅都不生效，零提示的静默全不命中会被当成 bug，故显式报错
+    // url-domain 只做字面后缀比对——通配符、协议、路径、端口、空格都会让值恒不命中，
+    // 文件静默对任何订阅都不生效，零提示的静默全不命中会被当成 bug，故显式报错
     if (key === 'url-domain') {
-      const wildcard = arr.find(v => v.includes('*') || v.includes('?'));
-      if (wildcard) {
-        problems.push(`url-domain 不支持通配符（当前值 "${wildcard}"），只做字面后缀比对`);
+      const badEntry = arr.map(v => [v, urlDomainValueProblem(v)] as const).find(([, p]) => p !== undefined);
+      if (badEntry) {
+        problems.push(badEntry[1] as string);
         continue;
       }
     }
     if (key === 'name') {
-      const bad = arr.find(v => !isValidNamePattern(v));
-      if (bad !== undefined) {
-        throw new CliError(`覆写文件 "${fileName}" 的 name 通配写法不支持: "${bad}"`, {
+      const badWildcard = arr.find(v => !isValidNamePattern(v));
+      if (badWildcard !== undefined) {
+        throw new CliError(`覆写文件 "${fileName}" 的 name 通配写法不支持: "${badWildcard}"`, {
           label: '覆写配置错误',
           hint: [
             '订阅名匹配只支持两种通配：尾部 *（前缀，edu* 命中 edu1、不命中 xedu1）与头部 *（后缀，*edu）。',
             '单独一个 * 等于不限订阅（恒真），请删掉 match；更复杂的匹配写 JS 覆写脚本（README「覆写配置」章节）。',
+          ],
+        });
+      }
+      // 无通配的精确值按订阅名字符集预检：`edu1/`、`~x` 不可能命中任何订阅
+      const impossible = arr.find(v => !v.includes('*') && !SAFE_NAME_RE.test(v));
+      if (impossible !== undefined) {
+        throw new CliError(`覆写文件 "${fileName}" 的 name 值不可能匹配任何订阅: "${impossible}"`, {
+          label: '覆写配置错误',
+          hint: [
+            '订阅名只能含字母数字、下划线、连字符与中文（1-64 字符），请检查是否误带了 /、~、空格、点号等字符。',
+            '更复杂的匹配写 JS 覆写脚本（README「覆写配置」章节）。',
           ],
         });
       }
@@ -366,6 +394,25 @@ function isValidNamePattern(value: string): boolean {
   if (star === -1) return true;
   if (value.indexOf('*', star + 1) !== -1) return false;
   return star === 0 || star === value.length - 1;
+}
+
+/**
+ * 校验 url-domain 的单个值是否可能命中。返回 undefined 即合法。
+ * 匹配是 hostname 对裸域名的字面后缀比对，故凡 hostname 中不可能出现、或根本不是
+ * 裸域名的形态（从浏览器地址栏复制的完整 URL、尾斜杠、端口、内部空格）一律在加载
+ * 期报错，不能让文件静默永不生效
+ */
+function urlDomainValueProblem(value: string): string | undefined {
+  if (value.includes('*') || value.includes('?')) {
+    return `url-domain 不支持通配符（当前值 "${value}"），只做字面后缀比对`;
+  }
+  if (/[:/]/.test(value)) {
+    return `url-domain 只要裸域名（当前值 "${value}"）：不要带协议、路径或端口，请去掉 https://、尾斜杠与端口`;
+  }
+  if (/\s/.test(value)) {
+    return `url-domain 只要裸域名（当前值 "${value}"）：值中不能含空格`;
+  }
+  return undefined;
 }
 
 /** 一行摘要 match 作用域，供 `ow list` 展示；无限定返回 undefined。 */
@@ -515,6 +562,9 @@ function assertFileLevelOperatorRules(config: Record<string, unknown>, fileName:
   for (const rawKey of Object.keys(config)) {
     const parsed = parseOverrideKey(rawKey);
     assertValidParsedKey(rawKey, parsed);
+    // 与合并期同一个错误（protoKeyInOverwriteError）：诊断路径与合并路径必须都把
+    // 该文件判坏，不能 ow/status 列正常、启动才炸
+    if (parsed.key === '__proto__') throw protoKeyInOverwriteError();
     if (!parsed.arrayPrepend && !parsed.arrayAppend) continue;
 
     const base = BASE_CONFIG[parsed.key];

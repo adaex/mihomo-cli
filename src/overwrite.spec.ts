@@ -57,7 +57,8 @@ describe('parseOverrideKey', () => {
 
   it('互斥修饰的解析形态（报错在合并层，这里锁住各组合确实置出多个位）', () => {
     // 这些组合是否报错由下方合并层（mergeOnce）的断言锁；这里确认解析结果本身。
-    // 注意 `rules!+` 不在列：`!` 只在结尾识别，该形态解析为「追加到字面键 rules!」（历史行为）
+    // `rules!+` 的解析仍是「追加到字面键 rules!」，但 assertValidParsedKey 会按操作符
+    // 位置矛盾拦下它，断言在下方同 describe
     assert.equal(parseOverrideKey('+rules+').arrayPrepend && parseOverrideKey('+rules+').arrayAppend, true);
     assert.equal(parseOverrideKey('rules+!').arrayAppend && parseOverrideKey('rules+!').forceOverwrite, true);
   });
@@ -72,6 +73,13 @@ describe('互斥操作符与空键：合并层显式报错，不静默按分支�
       );
     });
   }
+
+  it('"rules!+" 的 ! 被末位 + 遮挡 → 报操作符位置矛盾，不静默当字面键 rules!', () => {
+    assert.throws(
+      () => mergeOnce({ rules: ['A'], dns: {} }, { 'rules!+': ['x'] }),
+      e => e instanceof CliError && /操作符位置矛盾/.test(e.message),
+    );
+  });
 
   it('合法的单一操作符不被误伤', () => {
     assert.doesNotThrow(() => mergeOnce({ rules: [] }, { '+rules': ['x'] }));
@@ -92,7 +100,7 @@ describe('互斥操作符与空键：合并层显式报错，不静默按分支�
 describe('已移除的操作符形态：显式报错给迁移指引，不当字面键静默落进配置', () => {
   // ~（按 name 合并）与 <x>（尖括号转义）已随 DSL 裁剪移除。内核对未知顶层键宽容，
   // 没有专属报错的话老写法会被当字面键静默写进运行配置——零反馈的语义消失
-  for (const key of ['~proxies', '~?proxy-groups', '~<weird>']) {
+  for (const key of ['~proxies', '~?proxy-groups', '~<weird>', '+~rules']) {
     it(`"${key}" → 报已移除的 ~ 操作符并指向 JS 脚本`, () => {
       assert.throws(
         () => mergeOnce({}, { [key]: [{ name: 'x' }] }),
@@ -438,6 +446,26 @@ describe('match name 通配：尾部 *（前缀）与头部 *（后缀），其�
     }
   });
 
+  it('精确值带非法字符（不可能命中任何订阅）加载时报错，不静默全不生效', () => {
+    // 订阅名字符集为 SAFE_NAME_RE；`edu1/`、`~x` 这类值与通配无关、恒不命中
+    for (const bad of ['edu1/', '~x', 'edu 1', 'a.b']) {
+      assert.throws(
+        () => normalizeMatch({ name: bad }, 'overwrite.yaml'),
+        (e: unknown) => {
+          assert.ok(e instanceof CliError);
+          assert.match((e as Error).message, /不可能匹配任何订阅/);
+          return true;
+        },
+        `name: ${bad} 应被拒绝`,
+      );
+    }
+  });
+
+  it('首尾空白被 trim：name: " edu1 " 等价于 edu1', () => {
+    const entry = fromYaml({ name: ' edu1 ' });
+    assert.equal(hits(entry, 'edu1'), true);
+  });
+
   it('fail-closed：scope 缺 subName 时带通配的 name 同样不应用', () => {
     assert.equal(selectActiveOverwriteFiles([fromYaml({ name: 'edu*' })], {}).length, 0);
   });
@@ -478,6 +506,15 @@ describe('文件级操作符校验：诊断路径与合并路径看到同一份�
 
   it('尖括号转义在文件加载阶段拦截', () => {
     assertBrokenOnBothPaths('overwrite.angle.yaml', '<dns>: {}\n', /已移除的尖括号转义/);
+  });
+
+  it('__proto__ 键在加载阶段即判坏（含 __proto__! 形态），诊断与合并路径结论一致', () => {
+    assertBrokenOnBothPaths('overwrite.proto.yaml', '__proto__: {}\n', /"__proto__" 键/);
+    assertBrokenOnBothPaths('overwrite.protof.yaml', '__proto__!: { evil: true }\n', /"__proto__" 键/);
+  });
+
+  it('rules!+（操作符位置矛盾）加载失败，不静默按字面键 rules! 放行', () => {
+    assertBrokenOnBothPaths('overwrite.rules.yaml', 'rules!+:\n  - x\n', /操作符位置矛盾/);
   });
 
   it('log-level+（系统默认值是标量）加载失败并给改写指引（不静默产出数组）', () => {
@@ -847,12 +884,27 @@ describe('summarizeMatch 作用域摘要（经 listOverwriteFile）', () => {
   });
 });
 
-describe('match 的 url-domain 通配符拦截', () => {
-  // 回归：url-domain 只做字面后缀比对，值含通配符恒不命中——文件静默对任何订阅
-  // 都不生效且零提示。订阅名 glob 推广后这是自然的误写方向
+describe('match 的 url-domain 非法值拦截', () => {
+  // 回归：url-domain 只做字面后缀比对，值含通配符或非裸域名形态时恒不命中——
+  // 文件静默对任何订阅都不生效且零提示。从浏览器地址栏复制完整 URL 是自然误写方向
   it('url-domain 值含 * 或 ? → 报错并说明只做字面后缀比对', () => {
     assert.throws(() => normalizeMatch({ 'url-domain': '*.example.com' }, 'overwrite.yaml'), /url-domain 不支持通配符/);
     assert.throws(() => normalizeMatch({ 'url-domain': ['corp.com', 'gh?.com'] }, 'overwrite.yaml'), /gh\?\.com/);
+  });
+
+  it('带协议、尾斜杠、路径或端口（不是裸域名）→ 报错并点明只要裸域名', () => {
+    for (const bad of ['https://corp.com', 'corp.com/', 'corp.com:443', 'https://corp.com/']) {
+      assert.throws(
+        () => normalizeMatch({ 'url-domain': bad }, 'overwrite.yaml'),
+        e => e instanceof CliError && /只要裸域名/.test(e.message),
+        `url-domain: ${bad} 应被拒绝`,
+      );
+    }
+  });
+
+  it('值内外层空白被 trim、内部空格报错', () => {
+    assert.deepEqual(normalizeMatch({ 'url-domain': ' corp.com ' }, 'overwrite.yaml'), { 'url-domain': ['corp.com'] });
+    assert.throws(() => normalizeMatch({ 'url-domain': 'corp .com' }, 'overwrite.yaml'), /不能含空格/);
   });
 
   it('纯字面 url-domain 不受影响', () => {
