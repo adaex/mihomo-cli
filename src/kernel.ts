@@ -42,7 +42,7 @@ const ALLOWED_ASSET_HOSTS = new Set(['github.com', 'api.github.com', 'objects.gi
  * 校验必须针对**加镜像前**的上游 URL：加了前缀后整串以镜像域名开头，无从判断来源。
  * gh 通道不使用该 URL（gh 按 tag + 资产名自行解析），校验照跑——验证 API 响应未被篡改。
  */
-function assertTrustedAssetUrl(rawUrl: string): void {
+export function assertTrustedAssetUrl(rawUrl: string): void {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);

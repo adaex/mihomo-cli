@@ -125,4 +125,46 @@ describe('createHttpClient：4xx 诊断与降级守卫行为', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it('声明 Content-Length 超上限：读 body 前预拒，不把 GB 级 body 拉进内存', async () => {
+    const base = await startServer((_req, res) => {
+      // 谎报 Content-Length 后只发一小段：预拒必须发生在读取之前，不看真实 body 大小
+      res.writeHead(200, { 'content-length': String(51 * 1024 * 1024) });
+      res.end('tiny');
+    });
+    const client = createHttpClient({ timeout: 10_000 });
+    await assert.rejects(client.get(`${base}/big`), e => {
+      assert.match((e as Error).message, /响应体过大/);
+      return true;
+    });
+  });
+
+  it('不声明 Content-Length 的分块传输：流式计数超限即中止（声明预拒拦不住的形态）', async () => {
+    const base = await startServer((_req, res) => {
+      res.writeHead(200);
+      // 52MB 超过 50MB 上限；回环传输秒级
+      res.end(Buffer.alloc(52 * 1024 * 1024, 0x61));
+    });
+    const client = createHttpClient({ timeout: 30_000 });
+    await assert.rejects(client.get(`${base}/chunked`), e => {
+      assert.match((e as Error).message, /响应体超过大小上限/);
+      return true;
+    });
+  });
+
+  it('错误体超过 64KB：限量取前缀，超大错误体不撑爆内存', async () => {
+    const base = await startServer((_req, res) => {
+      res.writeHead(502, { 'content-type': 'text/plain' });
+      res.end(Buffer.alloc(200 * 1024, 0x62));
+    });
+    const client = createHttpClient({ timeout: 10_000 });
+    await assert.rejects(client.get(`${base}/err`), e => {
+      const err = e as Error & { response?: { status?: number; data?: unknown } };
+      assert.equal(err.message, 'HTTP 502');
+      assert.equal(err.response?.status, 502);
+      // 非 JSON 前缀解析失败 → 无 data，status 仍可定位
+      assert.equal(err.response?.data, undefined);
+      return true;
+    });
+  });
 });

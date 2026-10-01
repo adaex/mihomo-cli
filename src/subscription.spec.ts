@@ -213,3 +213,78 @@ describe('downloadSubscription：缓存写失败的回滚与错误包装', () =>
     }
   });
 });
+
+describe('assertLooksLikeSubscription：写盘闸门（防错误 JSON 覆盖好配置）', () => {
+  /**
+   * 这是订阅链路唯一的数据完整性写闸：机场返回 `{"error":"quota exceeded"}` 这类
+   * 「合法对象但无节点来源」的响应时若照常写盘，磁盘上可用订阅被不可恢复地覆盖、
+   * 流程仍报成功，随后零节点启动断网。历史上有 cache 回滚用例（上个 describe），
+   * 但拒收闸门本身此前零覆盖——重构成回归时无护栏。
+   */
+  function runDownloadCase(serverBody: string, preExisting: string | null): { stdout: string } {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-dl-gate-'));
+    const subscriptionPath = path.resolve('src/subscription.ts');
+    const script = [
+      "import http from 'node:http';",
+      "import fs from 'node:fs';",
+      'const server = http.createServer((req, res) => {',
+      "  res.setHeader('Content-Type', 'text/yaml');",
+      `  res.end(${JSON.stringify(serverBody)});`,
+      '});',
+      "await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));",
+      'const port = server.address().port;',
+      'const dir = process.env.MIHOMO_CLI_DIR;',
+      "fs.mkdirSync(dir + '/subscriptions', { recursive: true });",
+      preExisting ? `fs.writeFileSync(dir + '/subscriptions/probe.yaml', ${JSON.stringify(JSON.stringify(preExisting))});` : '',
+      `const { downloadSubscription } = await import(${JSON.stringify(subscriptionPath)});`,
+      'try {',
+      "  await downloadSubscription(`http://127.0.0.1:${port}/sub`, 'probe');",
+      "  console.log('RESULT:NO-THROW');",
+      '} catch (e) {',
+      "  console.log('RESULT:' + JSON.stringify({ name: e.name, message: e.message, hint: e.hint }));",
+      '} finally { server.close(); }',
+      "const yamlPath = dir + '/subscriptions/probe.yaml';",
+      "console.log('YAML_NOW:' + JSON.stringify(fs.existsSync(yamlPath) ? fs.readFileSync(yamlPath, 'utf8') : '<absent>'));",
+    ].join('\n');
+    try {
+      const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: { ...process.env, MIHOMO_CLI_DIR: dataDir },
+      });
+      assert.equal(r.status, 0, r.stderr);
+      return { stdout: r.stdout };
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  }
+
+  it('错误 JSON（无任何节点来源）拒收：抛订阅无效、透出服务端消息、原文件分毫未动', () => {
+    const oldContent = 'proxies:\n  - {name: keep, type: ss, server: 1.1.1.1, port: 8388, cipher: aes-256-gcm, password: k}\n';
+    const { stdout } = runDownloadCase('{"error":"quota exceeded"}', oldContent);
+    const resultLine = stdout.split('\n').find(l => l.startsWith('RESULT:'));
+    assert.ok(resultLine && !resultLine.includes('NO-THROW'), '拒收必须抛错');
+    assert.match(resultLine, /订阅内容不含任何节点来源/);
+    assert.match(resultLine, /quota exceeded/, '服务端错误消息透出');
+    assert.match(resultLine, /磁盘上原有的订阅配置未被覆盖/);
+    const yamlLine = stdout.split('\n').find(l => l.startsWith('YAML_NOW:'));
+    assert.ok(yamlLine && yamlLine.includes('name: keep'), '磁盘上原文件必须保持旧内容');
+  });
+
+  it('空对象（无服务端消息字段）同样拒收，不因取消息而崩', () => {
+    const { stdout } = runDownloadCase('{"ret": 1, "data": []}', null);
+    const resultLine = stdout.split('\n').find(l => l.startsWith('RESULT:'));
+    assert.ok(resultLine && !resultLine.includes('NO-THROW'));
+    assert.match(resultLine, /订阅无效|不含任何节点来源/);
+    assert.doesNotMatch(resultLine, /服务端返回: undefined/);
+  });
+
+  it('纯 proxy-providers 型订阅放行（判据放宽到三类来源之一，避免误伤）', () => {
+    const body = 'proxy-providers:\n  air1:\n    type: http\n    url: https://example.com/pp\n    path: ./pp.yaml\n';
+    const { stdout } = runDownloadCase(body, null);
+    const resultLine = stdout.split('\n').find(l => l.startsWith('RESULT:'));
+    assert.ok(resultLine?.includes('NO-THROW'), `provider-only 应放行: ${resultLine}`);
+    const yamlLine = stdout.split('\n').find(l => l.startsWith('YAML_NOW:'));
+    assert.ok(yamlLine && yamlLine.includes('proxy-providers'), '内容应已写盘');
+  });
+});

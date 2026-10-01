@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
+  assertTrustedAssetUrl,
   buildGhApiReleaseArgs,
   buildGhDownloadEnv,
   buildGhReleaseDownloadArgs,
@@ -434,5 +439,160 @@ describe('pickLatestRelease', () => {
 
   it('prerelease 字段为真但 tag 名干净时同样不当稳定版', () => {
     assert.throws(() => pickLatestRelease([rel('v2.0.0', true)]), /未找到稳定版内核/);
+  });
+});
+
+describe('assertTrustedAssetUrl（来源钉死是主要防线，上游无 checksums）', () => {
+  // 产物随后 chmod 755 且以 root 运行：白名单被放宽/误删时这里必须红
+  const url = (host: string) => `https://${host}/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo.gz`;
+
+  it('github.com 与 api/objects/release-assets 变体放行（GitHub 资产的真实落点）', () => {
+    for (const host of ['github.com', 'api.github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com']) {
+      assert.doesNotThrow(() => assertTrustedAssetUrl(url(host)), host);
+    }
+  });
+
+  it('非白名单主机拒绝（被篡改的 browser_download_url 不能让 CLI 下载任意二进制）', () => {
+    assert.throws(() => assertTrustedAssetUrl(url('evil.example.com')), /不在白名单内/);
+    assert.throws(() => assertTrustedAssetUrl(url('github.com.evil.io')), /不在白名单内/);
+  });
+
+  it('明文 http 拒绝（镜像注入的降级地址）', () => {
+    assert.throws(() => assertTrustedAssetUrl('http://github.com/x.gz'), /必须是 https/);
+  });
+
+  it('无法解析的地址拒绝', () => {
+    assert.throws(() => assertTrustedAssetUrl('not a url'), /无法解析/);
+  });
+});
+
+describe('downloadKernel：下载后完整性闸门（子进程 + PATH 桩 curl/gzip 端到端）', () => {
+  /**
+   * 大小对账 / 自检 / 版本对账是防恶意镜像的最后几道闸，此前全模块零覆盖——
+   * 把 `actual !== asset.size` 放宽成 `>=` 或误删白名单 host，测试全绿直接发版。
+   * 桩 curl 按 env 写出指定字节数（绕过网络），桩 gzip 按 env 输出「二进制」内容
+   * （一段 -v 时输出版本号的 shell 脚本），真实跑完下载→解压→自检→对账→原子替换链。
+   * MIHOMO_CLI_DIR 隔离数据目录；预摆旧内核断言「失败时旧内核未受影响」。
+   */
+  function runKernelDownloadCase(opts: { assetSize: number; curlBody: string; binaryContent: string; downloadUrl?: string; preExisting?: string }): {
+    stdout: string;
+  } {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-kernel-gate-'));
+    const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-kernel-gate-bin-'));
+    const kernelPath = path.resolve('src/kernel.ts');
+    const script = [
+      "import fs from 'node:fs';",
+      `const { downloadKernel } = await import(${JSON.stringify(kernelPath)});`,
+      'const dir = process.env.MIHOMO_CLI_DIR;',
+      "fs.mkdirSync(dir + '/kernel', { recursive: true });",
+      opts.preExisting !== undefined ? `fs.writeFileSync(dir + '/kernel/mihomo', ${JSON.stringify(JSON.stringify(opts.preExisting))});` : '',
+      'const releaseInfo = {',
+      "  tag_name: 'v1.19.30',",
+      '  assets: [{',
+      '    name: `mihomo-darwin-${process.arch}-v1.19.30.gz`,',
+      `    browser_download_url: ${JSON.stringify(opts.downloadUrl ?? `https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-darwin-${process.arch}-v1.19.30.gz`)},`,
+      `    size: ${opts.assetSize},`,
+      '  }],',
+      '};',
+      'try {',
+      "  await downloadKernel(null, { kind: 'direct' }, releaseInfo);",
+      "  console.log('RESULT:NO-THROW');",
+      '} catch (e) {',
+      "  console.log('RESULT:' + JSON.stringify({ message: e.message }));",
+      '}',
+      "const mihomo = dir + '/kernel/mihomo';",
+      "console.log('BINARY_NOW:' + JSON.stringify(fs.existsSync(mihomo) ? fs.readFileSync(mihomo, 'utf8') : '<absent>'));",
+    ].join('\n');
+    try {
+      fs.writeFileSync(
+        path.join(fakeBin, 'curl'),
+        `#!/bin/bash
+out=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$a"; fi
+  prev="$a"
+done
+printf '%s' "$MIHOMO_TEST_CURL_BODY" > "$out"
+exit 0
+`,
+      );
+      fs.chmodSync(path.join(fakeBin, 'curl'), 0o755);
+      fs.writeFileSync(
+        path.join(fakeBin, 'gzip'),
+        `#!/bin/bash
+# 只认 -dc <file> 形态；输出内容由 env 控制
+printf '%s' "$MIHOMO_TEST_BINARY_CONTENT"
+exit 0
+`,
+      );
+      fs.chmodSync(path.join(fakeBin, 'gzip'), 0o755);
+      const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          MIHOMO_CLI_DIR: dataDir,
+          PATH: `${fakeBin}:${process.env.PATH}`,
+          MIHOMO_TEST_CURL_BODY: opts.curlBody,
+          MIHOMO_TEST_BINARY_CONTENT: opts.binaryContent,
+        },
+      });
+      assert.equal(r.status, 0, r.stderr);
+      return { stdout: r.stdout };
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      fs.rmSync(fakeBin, { recursive: true, force: true });
+    }
+  }
+
+  const resultLineOf = (stdout: string) => stdout.split('\n').find(l => l.startsWith('RESULT:')) ?? '';
+  const binaryLineOf = (stdout: string) => stdout.split('\n').find(l => l.startsWith('BINARY_NOW:')) ?? '';
+
+  it('大小与 release 元数据不符（截断/偷换）拒收，旧内核分毫未动', () => {
+    const { stdout } = runKernelDownloadCase({ assetSize: 100, curlBody: 'abc', binaryContent: '', preExisting: 'OLD-KERNEL' });
+    assert.match(resultLineOf(stdout), /大小与 release 元数据不符/);
+    assert.match(resultLineOf(stdout), /期望 100 字节，实际 3 字节/);
+    assert.match(binaryLineOf(stdout), /OLD-KERNEL/, '失败时旧内核必须原样保留');
+  });
+
+  it('自检失败（二进制损坏/架构不符）拒收，旧内核未受影响', () => {
+    const { stdout } = runKernelDownloadCase({ assetSize: 3, curlBody: 'abc', binaryContent: '#!/bin/sh\nexit 1\n', preExisting: 'OLD-KERNEL' });
+    assert.match(resultLineOf(stdout), /内核自检失败/);
+    assert.match(binaryLineOf(stdout), /OLD-KERNEL/);
+  });
+
+  it('版本不匹配（镜像返回旧资产）拒收：报已更新但二进制没变的形态不可达', () => {
+    const { stdout } = runKernelDownloadCase({
+      assetSize: 3,
+      curlBody: 'abc',
+      binaryContent: '#!/bin/sh\necho "Mihomo Meta v9.9.9 darwin"\n',
+      preExisting: 'OLD-KERNEL',
+    });
+    assert.match(resultLineOf(stdout), /内核版本不匹配（期望 1\.19\.30，实际 9\.9\.9）/);
+    assert.match(binaryLineOf(stdout), /OLD-KERNEL/);
+  });
+
+  it('白名单外的资产地址在下载前即拒（校验先于任何写盘）', () => {
+    const { stdout } = runKernelDownloadCase({
+      assetSize: 3,
+      curlBody: 'abc',
+      binaryContent: '',
+      downloadUrl: 'https://evil.example.com/mihomo.gz',
+      preExisting: 'OLD-KERNEL',
+    });
+    assert.match(resultLineOf(stdout), /不在白名单内/);
+    assert.match(binaryLineOf(stdout), /OLD-KERNEL/);
+  });
+
+  it('全链通过时原子替换：新内核为解压产物', () => {
+    const { stdout } = runKernelDownloadCase({
+      assetSize: 3,
+      curlBody: 'abc',
+      binaryContent: '#!/bin/sh\necho "Mihomo Meta v1.19.30 darwin"\n',
+      preExisting: 'OLD-KERNEL',
+    });
+    assert.match(resultLineOf(stdout), /NO-THROW/);
+    assert.match(binaryLineOf(stdout), /v1\.19\.30/);
+    assert.doesNotMatch(binaryLineOf(stdout), /OLD-KERNEL/);
   });
 });
