@@ -55,6 +55,6 @@ describe('shellQuote', () => {
     const quoted = shellQuote('$(rm -rf /) `id` "x" $HOME');
     // 首尾必须是引号；内嵌单引号已转义为 '\''，串内不再有「裸露」的引号边界
     assert.ok(quoted.startsWith("'") && quoted.endsWith("'"));
-    assert.equal(quoted, "'$(rm -rf /) `id` \"x\" $HOME'");
+    assert.equal(quoted, '\'$(rm -rf /) `id` "x" $HOME\'');
   });
 });

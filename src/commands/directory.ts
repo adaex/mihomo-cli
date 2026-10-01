@@ -77,7 +77,12 @@ export async function cmdDirectory(args: string[]): Promise<void> {
       const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
       const suggestion = suggestSimilar(action, names);
       throw new CliError(`未知的目录子命令: ${action}`, {
-        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '', '可用子命令: open', '打开指定目录: mihomo-cli dir open <target>'],
+        hint: [
+          ...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []),
+          '',
+          '可用子命令: open',
+          '打开指定目录: mihomo-cli dir open <target>',
+        ],
       });
     },
   });

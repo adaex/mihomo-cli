@@ -8,8 +8,8 @@ import { isValidServiceLabel, RAW_SERVICE_LABEL_INPUT, SERVICE_BINARY_NAME, SERV
 import { CliError } from './errors.js';
 import { allocateArchivePath, cleanupOldLogs, rotateAndCleanupLogs } from './log-files.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './paths.js';
-import { cleanupAll, describePidCleanupFailure, reapPidWhenQuiet } from './process-stop.js';
 import { getMihomoPids } from './process-probe.js';
+import { cleanupAll, describePidCleanupFailure, reapPidWhenQuiet } from './process-stop.js';
 import { getPorts, readSettings } from './settings.js';
 import { runSudoScript, SudoAuthError } from './sudo.js';
 import { shellQuote } from './text.js';

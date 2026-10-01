@@ -206,7 +206,9 @@ export async function printStatus(args: string[] = []): Promise<void> {
   }
   const kernelVersion = getKernelVersion();
   console.log(
-    kernelVersion ? `${colors.gray('内核: ')}${kernelVersion}` : `${colors.gray('内核: ')}${colors.yellow('未安装')} ${colors.gray('(下载: mihomo-cli kernel)')}`,
+    kernelVersion
+      ? `${colors.gray('内核: ')}${kernelVersion}`
+      : `${colors.gray('内核: ')}${colors.yellow('未安装')} ${colors.gray('(下载: mihomo-cli kernel)')}`,
   );
 
   if (pid) {

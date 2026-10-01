@@ -112,7 +112,10 @@ describe('选项白名单只接受当前支持的写法', () => {
     // `-name` 是「想给订阅起名 -name」的典型笔误：只报「该命令不接受任何选项」会把用户
     // 引向去查选项列表，而不是改掉前导 -
     const nameErr = catchErr(() => assertKnownFlags(['sub', 'add', 'http://x', '-name'], [], 'sub add <url> [name]'));
-    assert.ok(nameErr.hint.some(l => l.includes('名称不能以')), '名称引导缺失');
+    assert.ok(
+      nameErr.hint.some(l => l.includes('名称不能以')),
+      '名称引导缺失',
+    );
     // 单字符拼错的短选项：「可用选项」列表即修正指引，不追加名称引导
     const shortErr = catchErr(() => assertKnownFlags(['-x'], ['-y'], 'reset'));
     assert.ok(!shortErr.hint.some(l => l.includes('名称不能以')));
