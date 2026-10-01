@@ -4,7 +4,14 @@ import { hasKernel } from '../config.js';
 import { DEFAULT_AUTO_UPDATE_TIMEOUT } from '../constants.js';
 import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
-import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, disableServiceAutoStart, getServiceStatus, recordServiceStopped } from '../service.js';
+import {
+  captureStopEpochBaseline,
+  cleanupLegacyInstallOrThrow,
+  detectLegacySystemInstall,
+  disableServiceAutoStart,
+  getServiceStatus,
+  recordServiceStopped,
+} from '../service.js';
 import { getPorts } from '../settings.js';
 import * as subscription from '../subscription.js';
 import { printSystemProxyHint } from '../system-proxy.js';
@@ -67,11 +74,11 @@ export async function cmdStart(args: string[]): Promise<void> {
     }
 
     // 判据是 loaded 而非 installed：`mh stop` 之后服务虽仍装着但不会被拉起，
-    // 此时起 TUN 是正常用法。只看 installed 会把它一并拦掉，与「stop 后可用 tun」矛盾
+    // 此时起 TUN 是正常用法。只看 installed 会把它一并拦掉，与「stop 后可用 tun」矛盾。
+    // 快照用入口时值（快）；启动前还有一次现值复核（runtime.assertTunStartNotRaced），
+    // 兜住快照之后才被并发 bootstrap 的服务
     if (serviceBefore.loaded) {
-      throw new CliError('服务正在运行，无法启动 TUN', {
-        hint: ['两者会抢占同一组端口与配置。请先停止服务:', '  mihomo-cli stop', '', 'TUN 用完后 mihomo-cli start 可恢复服务'],
-      });
+      throw runtime.tunBlockedByRunningService();
     }
 
     // 服务未装载但自启位还开着时，必须先关掉自启再起 TUN。
@@ -98,6 +105,13 @@ export async function cmdStart(args: string[]): Promise<void> {
       // 抢同一组端口。mixed 侧防「stop 被 start 覆盖」的防线（D2）管不到这个反方向
       recordServiceStopped();
     }
+
+    // 两条分支都会递增停止计数（disableServiceAutoStart 在确认 disable 位生效后 bump、
+    // recordServiceStopped 同理）。基线在命令入口捕获（D4），不处理的话，下面慢速阶段
+    // 之后的启动前复核（runtime.assertTunStartNotRaced）会把自己这次的递增误判成并发
+    // 停止。重捕获把「本命令造成的世界状态」设为新基线——他人的 bump（并发
+    // stop/install/reset）才触发取消，自己的不算（终态与用户最后一条命令一致）
+    captureStopEpochBaseline();
   } else if (!serviceBefore.installed) {
     // Mixed 恒由 launchd 服务托管，没有用户态直启路径。
     // 「plist 已删但任务仍装载」的孤儿态单独指引——此时叫用户 install 只会撞上

@@ -19,7 +19,9 @@ process.env.MIHOMO_CLI_DAEMON_LABEL = `com.mihomo-cli.spec-${process.pid}`;
 const { SERVICE_LABEL } = await import('./constants.js');
 const { PATHS, DIRS } = await import('./paths.js');
 const { isRunning, MAIN_INSTANCE_PATTERN } = await import('./process-probe.js');
-const { restartModeFor, restartModeOnChange } = await import('./runtime.js');
+const { assertTunStartNotRaced, restartModeFor, restartModeOnChange, tunBlockedByRunningService } = await import('./runtime.js');
+const { captureStopEpochBaseline, recordServiceStopped } = await import('./service.js');
+const { CliError } = await import('./errors.js');
 
 /** 与 getRunningState 的构造口径一致：running 与 kind 同真同假 */
 function stateOf(kind: RunningState['kind']): RunningState {
@@ -105,5 +107,94 @@ describe('restartModeOnChange：真实探测下的模式决策', () => {
 
     killLeftovers();
     fs.rmSync(PATHS.pidFile, { force: true });
+  });
+});
+
+/**
+ * TUN 启动前的并发复核（C1，全对枚举推演确认的秒级窗口）：TUN 的慢速阶段（订阅
+ * 更新约 10s、sudo 密码窗最长 60s）全在锁外，期间并发的 stop / mixed start 必须能
+ * 撤销在途 TUN——否则终态与用户最后一条命令相反（D2 语义在 TUN 方向的覆盖面）。
+ * 桩 launchctl 三态：unloaded（113）/ running / fail（112）。
+ */
+describe('assertTunStartNotRaced：TUN 启动前的并发复核', () => {
+  const modeFile = path.join(tmpDir, 'launchctl-mode');
+  const stubBin = path.join(tmpDir, 'stub-bin');
+  fs.mkdirSync(stubBin, { recursive: true });
+  fs.writeFileSync(
+    path.join(stubBin, 'launchctl'),
+    `#!/bin/bash
+mode="$(cat "${modeFile}" 2>/dev/null)"
+if [ "$1" = "print" ]; then
+  if [ "$mode" = "fail" ]; then exit 112; fi
+  if [ "$mode" = "running" ]; then
+    printf 'state = running\\npid = 4321\\n'
+    exit 0
+  fi
+  exit 113
+fi
+exit 0
+`,
+    { mode: 0o755 },
+  );
+  const originalPath = process.env.PATH;
+
+  function withStub(mode: string, fn: () => void): void {
+    fs.writeFileSync(modeFile, mode);
+    process.env.PATH = `${stubBin}:${originalPath}`;
+    try {
+      fn();
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  }
+
+  it('服务已装载 → 抛「服务正在运行」（与入口快照检查同一文案出处）', () => {
+    withStub('running', () => {
+      const err = (() => {
+        try {
+          assertTunStartNotRaced();
+        } catch (e) {
+          return e as Error;
+        }
+        return null;
+      })();
+      assert.ok(err instanceof CliError, '应为 CliError');
+      assert.equal(err.message, tunBlockedByRunningService().message);
+      assert.equal(err.message, '服务正在运行，无法启动 TUN');
+    });
+  });
+
+  it('未装载 + 基线重捕获后无他人 bump → 通过（C1 面 a 的正常路径）', () => {
+    withStub('unloaded', () => {
+      recordServiceStopped(); // 模拟本命令 TUN 分支自己的 bump
+      captureStopEpochBaseline(); // 命令层 bump 后的重捕获：自己的递增不计
+      assert.doesNotThrow(() => assertTunStartNotRaced());
+    });
+  });
+
+  it('未装载 + 重捕获后他人再 bump（并发 stop）→ 取消，终态听最后一条命令', () => {
+    withStub('unloaded', () => {
+      recordServiceStopped();
+      captureStopEpochBaseline();
+      recordServiceStopped(); // 并发 stop 的 bump
+      const err = (() => {
+        try {
+          assertTunStartNotRaced();
+        } catch (e) {
+          return e as Error;
+        }
+        return null;
+      })();
+      assert.ok(err instanceof CliError, '应为 CliError');
+      assert.match(err.message, /启动已取消/);
+    });
+  });
+
+  it('不重捕获则自己的 bump 会自触发取消（重捕获必要性的对照）', () => {
+    withStub('unloaded', () => {
+      captureStopEpochBaseline();
+      recordServiceStopped(); // 自己的 bump，但没有重捕获
+      assert.throws(() => assertTunStartNotRaced(), /启动已取消/);
+    });
   });
 });

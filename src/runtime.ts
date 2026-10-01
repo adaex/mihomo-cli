@@ -106,7 +106,7 @@ export function restartModeOnChange(): RuntimeMode | null {
  * 启动内核，或(服务已在跑时)重启使新配置生效，返回 PID。
  * **不负责停止旧进程**——TUN 的清理由其启动脚本内的 pkill 完成。
  *   mixed → 已在跑走 restartService(优先热重载，免密)；否则 startService(enable + bootstrap)
- *   tun   → startTun()
+ *   tun   → 启动前复核（assertTunStartNotRaced），再 startTun()
  *
  * Mixed 路径必须做健康确认：`launchctl bootstrap` 成功只代表任务被装载，不代表进程活着
  * （详见 waitServiceHealthy）。热重载路径无需确认：它没有重启进程，且配置被拒时会
@@ -114,10 +114,12 @@ export function restartModeOnChange(): RuntimeMode | null {
  *
  * 并发基线是命令入口捕获的进程基线（service.ts 的 captureStopEpochBaseline，D4）：
  * `startService` / `restartService` 内部与下方健康确认后的复读都读同一份，
- * 无需透传。TUN 分支不消费基线（TUN 侧的并发防线是命令层的 bump + startTun 复核）。
+ * 无需透传。TUN 分支在命令层 bump 自启后已重捕获基线（见 cmdStart），此处的复核
+ * 消费的正是重捕获后的同一份——判据仍是 shouldAbortStartOnDisable 唯一出口（D2）。
  */
 export async function launchOrRestart(mode: RuntimeMode): Promise<number | null> {
   if (mode === 'tun') {
+    assertTunStartNotRaced();
     const result = await startTun();
     return result.pid;
   }
@@ -163,8 +165,9 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
 }
 
 /**
- * 「启动被并发的停止取消」这条错误的唯一出处。两个消费点共用（锁内判据、健康确认失败后复读），
- * 文案只此一份——散写两份，改一处忘一处就是本仓反复栽的漂移。
+ * 「启动已取消：期间检测到停止操作」这条错误的唯一出处。三个消费点共用（锁内判据、
+ * 健康确认失败后复读、TUN 启动前复核），文案只此一份——散写两份，改一处忘一处就是
+ * 本仓反复栽的漂移。
  *
  * 文案刻意说「停止操作」而非「执行了 mihomo-cli stop」：递增点不止 `stop`，`tun` 与 install
  * 首装同样会关闭自启并递增，说成 stop 是在讲一件没发生的事。
@@ -178,6 +181,31 @@ function cancelledByConcurrentStop(): CliError {
       '确实要启动: mihomo-cli start',
     ],
   });
+}
+
+/**
+ * 「服务在跑，TUN 起不来」的唯一文案出处。入口快照（cmdStart）与 TUN 启动前复核
+ * （assertTunStartNotRaced）共用一份，散写两份会漂移。
+ */
+export function tunBlockedByRunningService(): CliError {
+  return new CliError('服务正在运行，无法启动 TUN', {
+    hint: ['两者会抢占同一组端口与配置。请先停止服务:', '  mihomo-cli stop', '', 'TUN 用完后 mihomo-cli start 可恢复服务'],
+  });
+}
+
+/**
+ * TUN 启动前的并发复核。TUN 的慢速阶段（订阅更新约 10s、sudo 密码窗最长 60s）全在
+ * 锁外，没有这道复核的话（C1，全对枚举推演确认的两条矛盾交错）：
+ * ① 并发 stop 在密码窗期间执行「无事可做」并 bump 后，TUN 照常启动——终态与用户
+ *    最后一条命令相反；窗口是秒级（密码窗），不是已接受的毫秒级探测交错；
+ * ② 并发的 mixed start 在本命令 bump 之后完成 bootstrap（其锁内判定的基线是本命令
+ *    bump 后的值，不触发它的取消），TUN 脚本的 pkill 会杀掉它的服务内核。
+ * ①用 epoch 判据（本命令已在 bump 后重捕获基线，自己的递增不计入）；②复核装载态。
+ * 两个判据都不写第二份比较——epoch 判据仍是 shouldAbortStartOnDisable 唯一出口（D2）。
+ */
+export function assertTunStartNotRaced(): void {
+  if (shouldAbortStartOnDisable(stopEpochBaseline(), readStopEpoch())) throw cancelledByConcurrentStop();
+  if (getServiceStatus().loaded) throw tunBlockedByRunningService();
 }
 
 /**

@@ -33,19 +33,21 @@ function loadYamlSafe(content: string): unknown {
 export function parseConfigContent(content: string, errorMsg?: string): Record<string, unknown> {
   const label = errorMsg || '内容';
   if (!content?.trim()) {
-    throw new Error(`${label}为空`);
+    throw new CliError(`${label}为空`, { label: '配置错误' });
   }
 
   let result: unknown;
   try {
     result = loadYamlSafe(content);
   } catch (e) {
-    // YAML 的报错含行列号，对定位笔误很有用，原样带出（首行即可，堆栈无意义）
-    throw new Error(`${label}格式错误，无法解析: ${(e as Error).message.split('\n')[0]}`);
+    // YAML 的报错含行列号，对定位笔误很有用，原样带出（首行即可，堆栈无意义）。
+    // CliError 而非裸 Error：config 命令直接消费本函数，裸 Error 会按「未预期错误」
+    // 渲染完整堆栈——预期错误（订阅内容坏）被当成程序 bug 呈现
+    throw new CliError(`${label}格式错误，无法解析: ${(e as Error).message.split('\n')[0]}`, { label: '配置错误' });
   }
 
   if (result == null || typeof result !== 'object' || Array.isArray(result)) {
-    throw new Error(`${label}不是有效的配置对象（顶层需为映射，当前是${Array.isArray(result) ? '列表' : typeof result}）`);
+    throw new CliError(`${label}不是有效的配置对象（顶层需为映射，当前是${Array.isArray(result) ? '列表' : typeof result}）`, { label: '配置错误' });
   }
   return result as Record<string, unknown>;
 }

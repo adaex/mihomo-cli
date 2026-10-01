@@ -165,6 +165,36 @@ describe('配置构建保留用户的节点和分流语义', () => {
   });
 });
 
+describe('parseConfigContent：预期错误是 CliError 而非裸 Error', () => {
+  // fuzz 抓到的渲染缺陷：坏订阅（重复键/空内容/顶层数组）经 config 命令直接消费本
+  // 函数时，裸 Error 被 main().catch 按「未预期错误 = 程序 bug」渲染完整堆栈——
+  // 预期错误必须是 CliError（label 配置错误），与 start 链路的包装口径一致
+  it('YAML 语法错（重复键）→ CliError，label 配置错误，不带堆栈', () => {
+    const err = (() => {
+      try {
+        parseConfigContent('proxies: []\nproxies: []\n', '订阅内容');
+      } catch (e) {
+        return e as Error;
+      }
+      return null;
+    })();
+    assert.ok(err instanceof CliError, `应为 CliError，实际 ${err?.constructor.name}`);
+    assert.equal(err.label, '配置错误');
+    assert.match(err.message, /订阅内容格式错误/);
+  });
+
+  it('空内容与顶层数组同样走 CliError', () => {
+    assert.throws(
+      () => parseConfigContent('   ', '订阅内容'),
+      (e: unknown) => e instanceof CliError && /为空/.test((e as Error).message),
+    );
+    assert.throws(
+      () => parseConfigContent('- a\n- b\n', '订阅内容'),
+      (e: unknown) => e instanceof CliError && /不是有效的配置对象/.test((e as Error).message),
+    );
+  });
+});
+
 describe('dumpYaml 输出终端安全（config 展示路径依赖 dump 的转义，不经 sanitizeTerminal）', () => {
   // 结构不变量：订阅可控的节点名/规则值可能携带控制字符（ESC 清屏、\r 覆盖、BEL）。
   // mihomo-cli config 直接把 dump 结果打进终端，能注入的前提是 dump 输出含原始
