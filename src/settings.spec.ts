@@ -514,3 +514,16 @@ describe('removeSubscription：数据最终状态（子进程真实模块）', (
     }
   });
 });
+
+describe('maskUrl：畸形输入的降级路径（fuzz 抓出的尾部泄漏）', () => {
+  it('无法解析的长串只保留前缀——token 位于尾部（query），不得带进截断窗口', () => {
+    const bad = 'broken url with token=ABCDEFGHIJKLMNOPQRSTUVWXYZ123456';
+    const masked = maskUrl(bad);
+    assert.ok(!masked.includes(bad.slice(-10)), '尾部 10 字符不得出现');
+    assert.match(masked, /^broken url with\.\.\.$/);
+  });
+
+  it('短畸形串（<=30）原样返回', () => {
+    assert.equal(maskUrl('short-bad-url'), 'short-bad-url');
+  });
+});

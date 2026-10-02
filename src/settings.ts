@@ -176,8 +176,11 @@ function maskSingleUrl(url: string): string {
       .join('/');
     return parsed.toString();
   } catch {
+    // 无法解析的畸形输入（复制不全的订阅 URL 等）：只保留前缀——token 位于
+    // query（尾部），保头舍尾既留排错线索（scheme/host 在头部）又不把凭据
+    // 尾段带进错误消息（fuzz 抓出旧「前15...后10」会展示尾部 10 字符）
     if (url.length > 30) {
-      return `${url.slice(0, 15)}...${url.slice(-10)}`;
+      return `${url.slice(0, 15)}...`;
     }
     return url;
   }

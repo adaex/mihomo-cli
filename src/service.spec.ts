@@ -993,3 +993,57 @@ describe('服务入口的 label 校验（assertServiceLabelSafe）', () => {
     }
   });
 });
+
+describe('getServiceStatus：探测失败 ≠ 未装载（print 只认 113）', () => {
+  /**
+   * 关键不变量的消费层验证：print 退 112/125/执行失败必须抛错——谎答 loaded:false
+   * 会让 stop 静默跳过、status 谎报（root 守卫挡掉的 125 只是来源之一，label 异常/
+   * 超时/缺失都到这）。退 113 是唯一合法的「未装载」答案（负向对照）。
+   * 子进程 + PATH 桩 launchctl；此前所有桩恒退 0/113，112/125 形态零覆盖。
+   */
+  function runStatusCase(exitCode: number): { stdout: string } {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-status-probe-'));
+    const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-status-probe-bin-'));
+    const label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
+    const servicePath = path.resolve('src/service.ts');
+    fs.writeFileSync(path.join(fakeBin, 'launchctl'), `#!/bin/bash\nif [ "$1" = "print" ]; then exit ${exitCode}; fi\nexit 0\n`);
+    fs.chmodSync(path.join(fakeBin, 'launchctl'), 0o755);
+    const script = [
+      `const { getServiceStatus } = await import(${JSON.stringify(servicePath)});`,
+      'try {',
+      '  const s = getServiceStatus();',
+      "  console.log('STATUS:' + JSON.stringify({ loaded: s.loaded, running: s.running }));",
+      '} catch (e) {',
+      "  console.log('THREW:' + e.message.split('\\n')[0]);",
+      '}',
+    ].join('\n');
+    try {
+      const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: label, PATH: `${fakeBin}:${process.env.PATH}` },
+      });
+      assert.equal(r.status, 0, r.stderr);
+      return { stdout: r.stdout };
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      fs.rmSync(fakeBin, { recursive: true, force: true });
+    }
+  }
+
+  it('print 退 125/112：抛错而非答「未装载」（谎答会让 stop 静默跳过）', () => {
+    for (const code of [125, 112]) {
+      const { stdout } = runStatusCase(code);
+      const line = stdout.split('\n').find(l => l.startsWith('THREW:') || l.startsWith('STATUS:'));
+      assert.ok(line?.startsWith('THREW:'), `print 退 ${code} 必须抛错: ${line}`);
+      assert.match(line ?? '', /无法|退出码/);
+    }
+  });
+
+  it('print 退 113：合法的「未装载」答案（负向对照，不得抛错）', () => {
+    const { stdout } = runStatusCase(113);
+    const line = stdout.split('\n').find(l => l.startsWith('THREW:') || l.startsWith('STATUS:'));
+    assert.ok(line?.startsWith('STATUS:'), `113 是未装载的合法答案: ${line}`);
+    assert.match(line ?? '', /"loaded":false/);
+  });
+});

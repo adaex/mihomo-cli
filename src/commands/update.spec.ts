@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -215,5 +216,73 @@ describe('getLatestNpmVersion：入口清掉的自指代理 env 按端口存活 
       process.env.PATH = originalPath;
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('入口自指代理清除的接线（D9 契约的最后一环，端到端）', () => {
+  /**
+   * 纯决策件（proxyEnvPointsAtSelf/restoreProxyEnvForNpm）已各自有测；此前盲区是
+   * 接线本身——main() 入口的 clearProxyEnv 六键循环 + readSelfMixedPortEarly 守卫前
+   * 读原始 JSON。回归方向是下载死锁（自指代理没被清掉）。端到端：子进程跑 update
+   * （npm view 输出 0.0.1 → 领先跳过 install），桩 npm dump 收到的 env 断言。
+   */
+  function runUpdateWithProxyEnv(settingsJson: string | null, proxyEnv: Record<string, string>): Record<string, string> | null {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-clearproxy-'));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-clearproxy-bin-'));
+    const dumpFile = path.join(binDir, 'env-dump');
+    try {
+      if (settingsJson !== null) fs.writeFileSync(path.join(dataDir, 'settings.json'), settingsJson);
+      fs.writeFileSync(path.join(binDir, 'npm'), `#!/bin/bash\nif [ "$1" = "view" ]; then\n  env > "${dumpFile}"\n  echo "0.0.1"\n  exit 0\nfi\nexit 0\n`);
+      fs.chmodSync(path.join(binDir, 'npm'), 0o755);
+      const entry = path.resolve('src/index.ts');
+      const r = spawnSync(process.execPath, ['--import', 'tsx', entry, 'update'], {
+        encoding: 'utf8',
+        timeout: 60_000,
+        env: {
+          ...process.env,
+          MIHOMO_CLI_DIR: dataDir,
+          MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(dataDir)}`,
+          NO_COLOR: '1',
+          PATH: `${binDir}:${process.env.PATH}`,
+          ...proxyEnv,
+        },
+      });
+      assert.equal(r.status, 0, r.stderr || r.stdout);
+      assert.match(r.stdout, /领先/, '桩 view 输出 0.0.1 应走「领先跳过」');
+      if (!fs.existsSync(dumpFile)) return null;
+      const env: Record<string, string> = {};
+      for (const line of fs.readFileSync(dumpFile, 'utf8').split('\n')) {
+        const eq = line.indexOf('=');
+        if (eq > 0) env[line.slice(0, eq)] = line.slice(eq + 1);
+      }
+      return env;
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+  }
+
+  it('https_proxy 指向自己的 Mixed 端口（17890）：入口清除，npm 收不到该 env', () => {
+    const env = runUpdateWithProxyEnv(JSON.stringify({ ports: { mixed: 17890 } }), {
+      https_proxy: 'http://127.0.0.1:17890',
+      HTTPS_PROXY: 'http://127.0.0.1:17890',
+    });
+    assert.ok(env, '桩 npm 应被调用');
+    assert.equal(env.https_proxy, undefined, '自指代理必须被入口清除（否则下载死锁）');
+    assert.equal(env.HTTPS_PROXY, undefined);
+  });
+
+  it('https_proxy 指向别的端口（9999）：原样保留（企业代理不误伤）', () => {
+    const env = runUpdateWithProxyEnv(JSON.stringify({ ports: { mixed: 17890 } }), {
+      https_proxy: 'http://127.0.0.1:9999',
+    });
+    assert.ok(env);
+    assert.equal(env.https_proxy, 'http://127.0.0.1:9999');
+  });
+
+  it('settings 损坏：按默认端口 7890 判定，自指（7890）仍被清除且守卫前不抛错', () => {
+    const env = runUpdateWithProxyEnv('{broken json', { https_proxy: 'http://127.0.0.1:7890' });
+    assert.ok(env, '损坏的 settings 不该让 update 崩掉');
+    assert.equal(env.https_proxy, undefined);
   });
 });
