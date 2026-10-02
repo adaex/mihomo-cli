@@ -54,6 +54,13 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 - reset 流程固定：解析与确认 → 停止或卸载服务 → 清理进程 → 删除目标 → 更新相关设置；确认前不做破坏性操作；删除失败必须报错，成功提示以实际删除为准
 - 服务 label 固定 `com.mihomo-cli.daemon`，可用 `MIHOMO_CLI_DAEMON_LABEL` 隔离；label 是持久化注册键，随意改名会遗留无法管理的自启进程
 
+## 用户配置（本机）
+
+- 查/改 mihomo 配置只操作 `~/.mihomo-cli` 下文件：`settings.json`、`overwrite*.yaml`、`overwrite*.mjs`
+- 这些文件由 `~/space/dotfiles` 维护（快照 `dots/dot-mihomo-cli.md`）；改完必须 `dot save` 同步回 dotfiles 并在该仓提交，新机恢复用 `dot apply`；`dot save -n` 可先看差异
+- 配置文件改坏了从快照还原：`dot apply -n` 先看差异、`dot apply -y` 非交互执行；不要手搓 sed 修文件（多行清理易留残迹，机制还原才是干净基线）
+- dotfiles 快照里的说明性注释（各订阅作用域、Seal 出口依赖）改配置时同步更新，不只存文件内容
+
 ## 命名
 
 - 帮助与内部命名用全称单数（subscription/directory/overwrite），示例与提示用 `mihomo-cli sub` / `dir` / `ow`；内部变量函数全称单数，常量全大写下划线
