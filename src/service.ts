@@ -33,17 +33,12 @@ export { concludeHotReload } from './hot-reload.js';
 // 消费方（commands、runtime、spec）仍统一从 './service.js' 取——导出清单是跨模块契约，
 // 拆分不该迫使全仓改 import。新代码内部引用走各自模块。
 export {
-  bootstrapDomain,
   buildPlist,
   getServiceStatus,
   isServiceInstalled,
-  LAUNCHCTL_TIMEOUT_MS,
   parseDisabledList,
   parseServicePrint,
-  runLaunchctl,
-  runLaunchctlOrThrow,
   SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS,
-  serviceTarget,
   waitUntilUnloaded,
 } from './launchctl.js';
 export {
@@ -339,11 +334,9 @@ export async function installService(wasRunning: boolean): Promise<{ restoreSkip
     // 原子落位（同目录 tmp + rename）：copyFileSync 直写被 kill/掉电打断会留半截
     // plist，launchd 解析失败不加载，用户只见「install 像没生效」；stage 只留作 lint 载体。
     // tmp 名以 .tmp 结尾，launchd 不会把崩溃残留当 plist 扫（open→rename 间被杀残留的
-    // .tmp 在 LaunchAgents、不在数据目录清扫范围，窗口毫秒级，接受）。落位后显式
-    // chmod：open(2) 的 mode 受 umask 掩蔽（umask 077 下实际 0600），plist 的 0644
-    // 是与其他消费者（诊断工具）的契约，不能随用户 shell 的 umask 漂移
+    // .tmp 在 LaunchAgents、不在数据目录清扫范围，窗口毫秒级，接受）。mode 0644 经
+    // atomicWriteFileSync 的 fchmod 落定（不受 umask 掩蔽，见其注释）
     atomicWriteFileSync(PATHS.userAgentPlist, fs.readFileSync(stagePath, 'utf8'), { mode: 0o644 });
-    fs.chmodSync(PATHS.userAgentPlist, 0o644);
 
     if (wasRunning) {
       // 并发的 stop 若在重装期间跑完（重装含 bootout + 等待，有真实窗口），这里的
@@ -582,6 +575,9 @@ export async function uninstallService(): Promise<void> {
 // === 热重载与重启 ===
 
 export async function restartService(): Promise<{ hotReloaded: boolean; started: boolean }> {
+  // 与 install/start/stop 同款入口校验：kickstart 与锁内 enable+bootstrap 都不经
+  // startService 的断言，缺了这行非法 label 会静默作用于默认 label
+  assertServiceLabelSafe();
   if (!isServiceInstalled()) {
     throw new CliError('服务未安装，无法重启', { hint: '安装服务: mihomo-cli install' });
   }

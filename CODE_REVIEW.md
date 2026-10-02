@@ -1,8 +1,10 @@
+最近审查：2026-10-02，第十轮终审（独立 agent 审第九轮 diff + 主仓冒烟），修 5 项：①第九轮声称收窄 7 个 re-export 实际只删了 2 个——格式化把其余 5 个留在块里，三条声明失实（本文件「文档与流程复盘」写过「『已核对』的记述会被后人当成已核对」，正是该形态），终审以基线比对抓出并补齐；②atomicWriteFileSync 改 fchmod 落定权限（open(2) 的 mode 受 umask 掩蔽，fchmod 不受），installService 事后 chmod 删除；③restartService 补 assertServiceLabelSafe（kickstart 路径既存缺口）；④paths.ts 两处 copyFileSync 旧措辞残留；⑤冒烟实测全命令面/错误路径/空串口径/脱敏出口/dist 产物全部通过。核对无误项：parseIntArg 逐形态推演（含 start -u -s 与 a9ca602 一致、顺带修复第八轮收集式引入的 -n -n 误诊回归）、mirrorIneffective gating、runtime 挪位、hot-reload 注释、README 通道段一致性。全量 typecheck / 898 测试 / Biome / build 全绿。
+
 # 代码审查：现行结论与边界
 
 规则见 CLAUDE.md，决策论证见 docs/decisions.md，版本历史见 CHANGELOG。本文只保留**现行有效**的三样东西：实测结论、未覆盖风险、流程教训。历轮审查的逐项验证流水不在此堆放——看当轮 CHANGELOG 条目与 git 历史；每轮审查收尾时，把仍然成立的结论合并进对应节，过时的删掉。改相关代码时同步更新对应节。
 
-最近审查：2026-10-02，第九轮复审（自查 + code-review 过第八轮合入批次 a9ca602..HEAD），修 10 项：reset 确认后重读与 legacy sudo 窗口的顺序（重读挪清理后）；installService 原子写丢 chmod 的 umask 掩蔽；`logs ""` 空串口径同族漏网（getNonFlagArg 空串 vs null）；parseIntArg 漏值形态误报重复（重写为跳值式，先诊断值再诊断重复）；mirror 前缀未作用时的矛盾提示；runtime 注释错位与五处过时注释；re-export 面收窄 7 个零消费符号。拆分验证结论：符号级比对 58 个符号代码体零变化（除两处有意修改），行级比对仅丢一行分节注释（已补）。中途一次全量 813+3 失败为 node --test 并发下 spec 加载偶发（测试总数掉落即加载被吞），重跑连续三次 898 全绿。全量验证 typecheck / 898 测试 / Biome（101 文件，仅 1 既存 noProto warning）/ build 全绿。
+前一轮审查：2026-10-02，第九轮复审（自查 + code-review 过第八轮合入批次 a9ca602..HEAD），修 10 项：reset 确认后重读与 legacy sudo 窗口的顺序（重读挪清理后）；installService 原子写丢 chmod 的 umask 掩蔽；`logs ""` 空串口径同族漏网（getNonFlagArg 空串 vs null）；parseIntArg 漏值形态误报重复（重写为跳值式，先诊断值再诊断重复）；mirror 前缀未作用时的矛盾提示；runtime 注释错位与五处过时注释；re-export 面收窄（实收 2 个、余 5 个由第十轮终审补齐）。拆分验证结论：符号级比对 58 个符号代码体零变化（除两处有意修改），行级比对仅丢一行分节注释（已补）。中途一次全量 813+3 失败为 node --test 并发下 spec 加载偶发（测试总数掉落即加载被吞），重跑连续三次 898 全绿。全量验证 typecheck / 898 测试 / Biome（101 文件，仅 1 既存 noProto warning）/ build 全绿。
 
 前一轮审查：2026-10-02，第八轮全仓复审（四路模块深审 + 主仓抽查验证关键发现），共 20 项修复 + 6 块闸门补测 + service.ts 拆分，逐项见 CHANGELOG Unreleased 节。要点：sub 列表 web_page_url 与降级守卫错误消息两处脱敏边角（其余 URL 出口均已脱敏、机制齐全但出口枚举有漏）；空覆写文档在 js-yaml 5 下抛异常而非返回 null（注释按 js-yaml 4 写的，升级后行为失实）；reset 确认窗口 TOCTOU（确认后重读服务状态）；带值选项重复静默取先者（与 kernel 口径相悖）；waitServiceHealthy 用例违反 D11 隔离纪律（改子进程 + MIHOMO_CLI_DIR）；补齐六块安全关键闸门的零覆盖（downloadKernel 完整性闸门、assertTrustedAssetUrl、assertLooksLikeSubscription 写闸、http 大小上限、waitUntilUnloaded 耗尽与 disable 位复核、log 命令行为），全部做过反向验证；service.ts 拆四节（launchctl/stop-epoch/legacy-cleanup/hot-reload），re-export 保持导出清单、全仓 import 不变。记录不修：process-stop 的 stop() warn 分档与 classifyResidueCleanup 语义等价但未合并（合并需动行为语义，拆分后 classifyResidueCleanup 已是唯一判据出口，漂移面已缩小，收益不抵风险）；stopService/uninstallService 的同形锁体未抽（两处各四行、注释各带不可拆理由，抽取收益低）。全量验证 typecheck / 893 测试 / Biome（96 文件，仅 1 个既存 noProto warning）/ build 全绿。
 
@@ -88,6 +90,7 @@
 - TUN 运行中 `sub use`/`ow` 的按原模式重启与更新提示（`start tun`）已修，但真实 TUN 提权流程的端到端（sudo 弹窗、路由切换、恢复）未复测，仅经 runtime.spec 的桩内核路径验证决策
 - 深审其余未修的低危项：`unhandledRejection`/`uncaughtException` 已统一口径但渲染函数本身不可注入测试；`NO_COLOR`/stderr 设色经 pty 手工验证、无自动化；clearProxyEnv 对企业 env 代理网络的影响已文档化（CLAUDE）但无提示机制。`npm_config_proxy` 等 npm 专属代理变量未清——npm 读 npmrc 不依赖该 env、gh/curl 不识别，不构成下载死锁，保持现状
 - 曾记录但未修（判定接受或不可自动化）：`FORCE_COLOR` 不支持、`TERM=dumb` 仍出色；无 `--` 结束选项约定（当前无需要它的入口，订阅名已禁止 `-` 开头）；gh 资产名未拦前导 `-`（仅 GitHub API 被篡改时可达）；代理探测 curl 未加 `--proto =https`（只看 204 无机密）
+- **reset 确认后重读仍有的残余窗口**（终审推演确认，记录接受）：危险分支（重读时 serviceActive=false）里，重读之后到删除 kernel/config 之间还隔着 cleanupAll 的 root 残留提权（sudo 密码窗最长 60s）；serviceActive=true 分支还隔 stop/uninstall 自身的锁等待（≤10s）与 bootout+waitUntilUnloaded（≤5s）。并发 install+start 整体落进这些窗口时其锁内判定放行（epoch 基线取自最近 bump 之后），删除后 KeepAlive 崩溃循环——与「stop 游离路径」同族同方向，但触发窗在有 root 残留时是秒到 60 秒级。不修的理由：删除前再读再 stop 会引入第二层窗口（uninstall 自身窗口内又可有并发，无穷回归），且触发需「root 残留内核存在 + 并发 install+start 恰在窗口完成 bootstrap」双重前置；若将来 reset 支持并发场景，优先考虑把删除段并入 serviceLock 临界区
 - npm 不执行 uninstall 生命周期钩子（npm 11.19.0 三场景实测 + 官方文档注明未实现），preuninstall 设施已删除——卸载提醒只能靠 README 的顺序说明，别指望恢复钩子（README 卸载段已如实写）
 
 ## 已评估未采纳

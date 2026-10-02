@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### 修复（第十轮终审：独立 agent 审第九轮 diff + 主仓冒烟实测）
+
+- **re-export 收窄补齐**：第九轮提交声称收窄 7 个符号、实际只删了 2 个（其余 5 个留在 launchctl 的 re-export 块里）——终审以 a9ca602 基线比对抓出，公共契约面现真正与拆分前一致；三条失实声明（提交信息/CHANGELOG/CODE_REVIEW）已更正
+- **atomicWriteFileSync 内改用 fchmod 落定权限**：fchmod 作用于 fd、不受 umask 掩蔽，mode 是调用方契约（plist 0644）不随用户 shell 的 umask 漂移；installService 的事后 chmodSync 随之删除（无 0600 中间窗口）
+- **restartService 入口补 assertServiceLabelSafe**：kickstart 与锁内 enable+bootstrap 不经 startService 的断言，非法 label 会静默作用于默认 label（既存缺口，constants.ts 新括注把它说成全覆盖时暴露）
+- **paths.ts 的 stage 注释两处 copyFileSync 旧措辞残留**（机制描述已按原子写更新）
+- 冒烟实测通过：空环境全命令面、错误路径、空串口径（sub/ow/dir/logs）、sub 列表与 config 的脱敏出口、dist 产物可执行
+
 ### 修复（第九轮复审：自查 + code-review 过第八轮合入批次）
 
 - **reset 的确认后并发复核补齐 legacy sudo 窗口**：重读原在 legacy 清理之前，清理的密码窗（约 60s）内并发 `install && start` 仍会漏停漏卸、删 kernel 后落 KeepAlive 崩溃循环；重读挪到清理之后，窗口闭合
@@ -10,7 +18,7 @@
 - **parseIntArg 的漏值形态诊断**：`-n -n` / `-n -n 200` 按「需要正整数」报错，不再误报「只能指定一次」（用户会去找并不存在的重复项）
 - **mirror 前缀未作用时不再打矛盾的「经镜像中转」提示**；警告补改用 gh 通道的指引
 - **runtime.ts 修注释错位**（startCommandForCurrentMode 插进了并发复核注释块与函数之间，两段 doc 叠放）；**五处过时/违规注释**（timer 预算范围、stage 原子写、拆分后的位置论证、历史叙事删除、行号自引）
-- **service.ts re-export 面收窄**：拆分时顺手导出的 7 个零消费符号收回，公共契约面与拆分前一致
+- **service.ts re-export 面收窄**：拆分时意外扩大的导出面收回（7 个零消费符号，首轮收窄仅 2 个、终审补齐其余 5 个），公共契约面与拆分前一致
 
 ### 修复（第八轮复审）
 

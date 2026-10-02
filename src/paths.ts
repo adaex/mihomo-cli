@@ -48,9 +48,9 @@ export const PATHS = {
   pidFile: path.join(DIRS.runtime, 'pid'),
   /**
    * installService 的 plist 暂存文件（plutil -lint 校验通过后才原子写
-   * 到 LaunchAgents，见 service.ts 的 atomicWriteFileSync 落位）。**不放 runtime/**：stage 要活到 copy 那一刻，中间隔着 plutil、
+   * 到 LaunchAgents，见 service.ts 的 atomicWriteFileSync 落位）。**不放 runtime/**：stage 要活到原子写落位那一刻，中间隔着 plutil、
    * bootout、waitUntilUnloaded（最多 5s）——此窗口并发 stop（游离内核路径 rmrf runtime/）
-   * 或含 runtime 目标的 reset 删掉目录，copyFileSync 就裸 ENOENT。与锁文件同族
+   * 或含 runtime 目标的 reset 删掉目录，读 stage 就裸 ENOENT。与锁文件同族
    * （「runtime 会被整体删除，不能放有生命周期的文件」），用后即删（service.ts finally）
    */
   servicePlistStage: path.join(USER_DATA_DIR, 'service.plist.stage'),
@@ -124,6 +124,10 @@ export function atomicWriteFileSync(filePath: string, content: string, options?:
   try {
     const fd = fs.openSync(tmp, 'w', options?.mode ?? 0o600);
     try {
+      // open(2) 的 mode 受 umask 掩蔽（mode 0644 在 umask 077 下实际 0600）；
+      // fchmod 作用于 fd、不受掩蔽——mode 是调用方契约（如 plist 的 0644），
+      // 不能随用户 shell 的 umask 漂移
+      fs.fchmodSync(fd, options?.mode ?? 0o600);
       fs.writeFileSync(fd, content);
       fs.fsyncSync(fd);
     } finally {
