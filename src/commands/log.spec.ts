@@ -69,6 +69,13 @@ describe('logs：编号省略与归档序号映射', () => {
       assert.doesNotMatch(r.stdout, /archive-old-content/);
     }));
 
+  it('logs ""（空串编号）显式报错，不静默落列表（变量展开为空的笔误要有反馈）', () =>
+    withLogs(run => {
+      const r = run(['logs', '']);
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /无效的日志编号 ""/);
+    }));
+
   it('logs 9 越界报「未找到日志」，不静默回列表', () =>
     withLogs(run => {
       const r = run(['logs', '9']);

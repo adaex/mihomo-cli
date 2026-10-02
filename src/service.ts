@@ -575,6 +575,8 @@ export async function uninstallService(): Promise<void> {
  * 复读（热重载探测有真实耗时窗口），kickstart 失败的 enable+bootstrap 回退在锁内复读
  * （热重载探测加 kickstart 最长可达 60s）——期间的并发 stop 只有它们兜得住。
  */
+// === 热重载与重启 ===
+
 export async function restartService(): Promise<{ hotReloaded: boolean; started: boolean }> {
   if (!isServiceInstalled()) {
     throw new CliError('服务未安装，无法重启', { hint: '安装服务: mihomo-cli install' });

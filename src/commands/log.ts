@@ -18,7 +18,13 @@ export function cmdLogs(args: string[]): void {
   // `logs -f` 是跟随当前日志的自然写法，不能无声无息地只打印列表
   // -n 的三种形式判定与白名单/解析共用 matchValueFlagToken，不再本地手写
   const hasLinesFlag = args.some(a => matchValueFlagToken(a)?.spec.forms.includes('-n') === true);
-  const targetName = getNonFlagArg(args, 1) ?? (follow || openInViewer || hasLinesFlag ? '0' : null);
+  const positional = getNonFlagArg(args, 1);
+  // 空串按显式提供处理（与 ui ""/sub update "" 同口径）：getNonFlagArg 对空串返回 '' 而非
+  // null，下方 if (targetName) 会把它当缺省静默落列表——变量展开为空的笔误要有反馈
+  if (positional === '') {
+    throw new CliError('无效的日志编号 ""', { hint: '用法: mihomo-cli logs <编号>（0=当前，1+=归档）；查看列表: mihomo-cli logs' });
+  }
+  const targetName = positional ?? (follow || openInViewer || hasLinesFlag ? '0' : null);
 
   if (targetName) {
     // 只认「当前」与列表序号：归档名是 mihomo.<时间戳>.log，没人会去敲它，
