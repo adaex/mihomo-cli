@@ -8,7 +8,7 @@ import type { LogList } from './types.js';
 
 /**
  * mihomo-cli 日志文件的轮转、清理与列表。与进程启停解耦：
- * 启动时调 rotateAndCleanupLogs，log/logs 命令调 listLogs/getLogPath。
+ * 启动时调 rotateAndCleanupLogs，log/logs 命令调 listLogs。
  */
 
 const DEFAULT_LOG_RETENTION_DAYS = 7;
@@ -36,10 +36,6 @@ export function isArchiveLogFilename(filename: string): boolean {
 export function rotateAndCleanupLogs(): void {
   rotateLog();
   cleanupOldLogs();
-}
-
-export function getLogPath(): string {
-  return PATHS.logFile;
 }
 
 /**

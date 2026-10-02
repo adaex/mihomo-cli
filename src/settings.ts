@@ -130,8 +130,12 @@ export function getPorts(settings: Settings = readSettings()): { mixed: number; 
   return { mixed, controller };
 }
 
-/** 遮蔽单条 URL 里的敏感信息（query token / userinfo / 路径型令牌）。 */
-function maskSingleUrl(url: string): string {
+/**
+ * 遮蔽 URL 中的敏感信息（query token / userinfo / 路径型令牌）。
+ * 不对逗号做任何切分：逗号在 query/path 中合法（`?nodes=us,hk&token=xxx`），
+ * 切开后两段都不含可识别的 token 参数，反而会让密钥明文输出。
+ */
+export function maskUrl(url: string): string {
   try {
     const parsed = new URL(url);
     // 已知 token 参数名（值可能很短，如 ?token=abc）。黑名单靠人工维护、已补录
@@ -197,16 +201,6 @@ export function getControllerPortOrNull(): number | null {
   } catch {
     return null;
   }
-}
-
-/**
- * 遮蔽 URL 中的敏感信息。
- * 不对逗号做任何切分：逗号在 query/path 中合法（`?nodes=us,hk&token=xxx`），
- * 切开后两段都不含可识别的 token 参数，反而会让密钥明文输出。
- */
-export function maskUrl(url: string): string {
-  if (!url) return url;
-  return maskSingleUrl(url);
 }
 
 // === Subscription cache ===

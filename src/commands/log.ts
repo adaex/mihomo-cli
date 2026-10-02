@@ -2,8 +2,9 @@ import { assertKnownFlags, assertPositionalCount, getNonFlagArg, hasFlag, parseI
 import { CliError } from '../errors.js';
 import { matchValueFlagToken } from '../flags.js';
 import { formatBytes, formatDate } from '../format.js';
-import { getLogPath, listLogs } from '../log-files.js';
+import { listLogs } from '../log-files.js';
 import { openLogFile, viewLogWithTail } from '../open.js';
+import { PATHS } from '../paths.js';
 import type { LogEntry } from '../types.js';
 
 export function cmdLogs(args: string[]): void {
@@ -32,7 +33,7 @@ export function cmdLogs(args: string[]): void {
     let logPath: string;
 
     if (targetName === '0') {
-      logPath = getLogPath();
+      logPath = PATHS.logFile;
     } else {
       const parsedIdx = parseInt(targetName, 10);
       if (Number.isNaN(parsedIdx) || parsedIdx < 1 || String(parsedIdx) !== targetName) {
@@ -91,9 +92,6 @@ export function cmdLogs(args: string[]): void {
 
     console.log(` ${num}. ${name}`);
     console.log(`    时间: ${time}  大小: ${size}`);
-    if (!log.isCurrent) {
-      console.log(`    查看: mihomo-cli logs ${archiveCounter}  或  mihomo-cli logs ${archiveCounter} -o`);
-    }
     console.log('');
   }
 

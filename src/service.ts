@@ -47,8 +47,6 @@ export {
   classifyResidueCleanup,
   cleanupLegacyInstallOrThrow,
   detectLegacySystemInstall,
-  type ResidueCleanupVerdict,
-  type RootResidueCleanupContext,
 } from './legacy-cleanup.js';
 export { captureStopEpochBaseline, readStopEpoch, recordServiceStopped, shouldAbortStartOnDisable, stopEpochBaseline } from './stop-epoch.js';
 
