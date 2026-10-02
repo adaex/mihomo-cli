@@ -16,6 +16,7 @@ import type {
   OverwriteScriptContext,
   OverwriteTransform,
   ParsedOverrideKey,
+  ScriptMatch,
 } from './types.js';
 
 export function parseOverrideKey(key: string): ParsedOverrideKey {
@@ -639,7 +640,7 @@ function loadOverwriteScript(filePath: string, fileName: string): OverwriteTrans
     throw new CliError(`覆写脚本 "${fileName}" 缺少变换函数`, {
       label: '覆写配置错误',
       hint: [
-        '写法（就地修改传入的 config，返回值忽略）:',
+        '写法（就地修改传入的 config；return true 表示命中当前订阅，其余返回值忽略）:',
         '  export default function (config, ctx) { ... }',
         'CommonJS 写法 module.exports = function (config, ctx) { ... } 同样认。',
       ],
@@ -794,19 +795,23 @@ interface ScriptLockedHit {
  * （顺序由 readOverwriteFiles 的排序保证，两类混在同一 files 数组里按 transform 分派）。
  * 不额外读取设置或改变节点池。
  *
- * 脚本契约（README 同步承诺）：就地修改传入的 config、返回值忽略、必须同步
- * （返回 Promise 报错——buildConfig 是同步管线）。脚本抛错按坏文件同款姿态：
- * CLI 包装为带文件名的 CliError，合并路径硬失败。脚本设置的锁定键经前后快照检出，
- * 由调用方渲染告警——剥除照常发生（安全边界不破），但不静默。
+ * 脚本契约（README 同步承诺）：就地修改传入的 config、必须同步（返回 Promise 报错
+ * ——buildConfig 是同步管线）。返回值约定：`return true` 表示命中当前订阅（脚本没有
+ * YAML 的 match 声明，靠返回值向 CLI 报告「这次变换是否适用」，status/config 的
+ * 生效提示据此显示）；其余返回值（undefined/其他）一律视为未命中，不影响合并本身。
+ * 脚本抛错按坏文件同款姿态：CLI 包装为带文件名的 CliError，合并路径硬失败。
+ * 脚本设置的锁定键经前后快照检出，由调用方渲染告警——剥除照常发生（安全边界不破），
+ * 但不静默。
  */
 export function applyOverwrite(
   baseConfig: Record<string, unknown>,
   files: OverwriteFileEntry[],
   opts: ApplyOverwriteOptions,
-): { config: Record<string, unknown>; scriptWarnings: string[]; scriptLockedHits: ScriptLockedHit[] } {
+): { config: Record<string, unknown>; scriptWarnings: string[]; scriptLockedHits: ScriptLockedHit[]; scriptMatches: ScriptMatch[] } {
   let result = { ...baseConfig };
   const scriptWarnings: string[] = [];
   const scriptLockedHits: ScriptLockedHit[] = [];
+  const scriptMatches: ScriptMatch[] = [];
 
   let host = '';
   try {
@@ -837,13 +842,16 @@ export function applyOverwrite(
         });
       }
       scriptWarnings.push(...notes.map(message => `${message}（脚本 ${file.name}）`));
+      // 命中判据严格 === true：脚本返回 truthy 的其他值（如对象/字符串）不算——
+      // 约定只有显式 return true 才宣告命中，避免「顺手 return 了 config」被误读
+      scriptMatches.push({ file: file.name, matched: returned === true });
       const keys = diffLockedKeys(before, result);
       if (keys.length > 0) scriptLockedHits.push({ file: file.name, keys });
       continue;
     }
     result = mergeConfigLevel(result, file.config ?? {}, true);
   }
-  return { config: result, scriptWarnings, scriptLockedHits };
+  return { config: result, scriptWarnings, scriptLockedHits, scriptMatches };
 }
 
 /**

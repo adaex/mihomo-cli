@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### 功能（JS 覆写脚本命中约定）
+
+- **脚本 `return true` = 命中当前订阅**：脚本没有 match 声明，status 的「生效/不适用」此前对脚本永远报生效——作用域不中的脚本混在生效清单里，与「match 不命中的 YAML」同一种误读。约定刻意最简：判据过了在函数末尾 `return true`，其余（提前退出、无返回值）一律未命中；严格 `=== true`，返回 config 等对象不算（防「顺手 return」被误读）。判定只供展示、不参与合并闸门（selectActiveOverwriteFiles 不看它）：status 文本行与 `--json` 的 `applied` 据此把未命中脚本列进「不适用（脚本未返回 true）」，config 提示段给一行事实性提示（不断言「没改配置」）；status 用活跃订阅的缓存正文跑一次真实构建取判定，构建失败按未判定降级（诊断面不崩，D7 同款姿态）。README 脚本示例与契约、CLAUDE.md 不变量、decisions.md D13 尾段同步更新
+
 ## [26.10.100] - 2026-10-02
 
 ### 文档（第十七轮：文档冗余与归档专项）

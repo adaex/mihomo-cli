@@ -1160,6 +1160,40 @@ describe('JS 覆写脚本', () => {
     }
   });
 
+  it('return true → scriptMatches 记命中；提前退出与 truthy 非真 → 未命中（严格 === true）', () => {
+    // 脚本没有 match 声明，命中与否只能靠返回值报告——只有显式 return true 算命中，
+    // 「顺手 return 了 config / 字符串」不得被误读为命中
+    write('overwrite.hit.js', 'export default function (config) { config.a = 1; return true; }\n');
+    write('overwrite.miss.js', 'export default function () { return; }\n');
+    write('overwrite.truthy.js', 'export default function () { return "yes"; }\n');
+    try {
+      const r = applyOverwrite({}, loadOverwriteFile(), { mode: 'mixed' });
+      assert.deepEqual(r.scriptMatches, [
+        { file: 'overwrite.hit.js', matched: true },
+        { file: 'overwrite.miss.js', matched: false },
+        { file: 'overwrite.truthy.js', matched: false },
+      ]);
+      // 命中与否不影响合并本身：命中脚本的变换照常生效、未命中脚本无豁免
+      assert.equal(r.config.a, 1);
+    } finally {
+      cleanup('overwrite.hit.js');
+      cleanup('overwrite.miss.js');
+      cleanup('overwrite.truthy.js');
+    }
+  });
+
+  it('YAML 文件不进 scriptMatches（脚本专属清单，YAML 命中走 match 静态判定）', () => {
+    write('overwrite.plain.js', 'export default function () { return true; }\n');
+    write('overwrite.y.yaml', 'log-level: debug\n');
+    try {
+      const r = applyOverwrite({}, loadOverwriteFile(), { mode: 'mixed' });
+      assert.deepEqual(r.scriptMatches, [{ file: 'overwrite.plain.js', matched: true }]);
+    } finally {
+      cleanup('overwrite.plain.js');
+      cleanup('overwrite.y.yaml');
+    }
+  });
+
   it('脚本改非锁定键不产生命中；嵌套内部的锁定键改动检不出（浅层快照，与 YAML 侧键级检测同粒度）', () => {
     write(
       'overwrite.nolock.js',

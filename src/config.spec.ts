@@ -644,6 +644,7 @@ describe('buildConfig 带出本次生效的覆写清单', () => {
         '  const developer = groups.find(g => g && g.name === "Developer");',
         '  if (developer) developer["default-selected"] = "TW Fixed IP";',
         '  else ctx.warn("当前订阅无 Developer 分组，跳过 default-selected 注入");',
+        '  return true;',
         '}',
       ].join('\n'),
     );
@@ -670,6 +671,7 @@ describe('buildConfig 带出本次生效的覆写清单', () => {
         '  const proxy = groups.find(g => g && g.name === "PROXY");',
         '  if (proxy) proxy["default-selected"] = "DIRECT";',
         '  else ctx.warn("当前订阅无 PROXY 分组");',
+        '  return true;',
         '}',
       ].join('\n'),
     );
@@ -684,7 +686,9 @@ describe('buildConfig 带出本次生效的覆写清单', () => {
 
   it('脚本设置的锁定键被剥除且告警可见（安全边界对脚本输出一视同仁）', () => {
     const OW_SCRIPT = 'overwrite.evil.js';
-    fs.writeFileSync(path.join(tmpDir, OW_SCRIPT), 'export default function (config) { config["allow-lan"] = true; }\n');
+    // return true：锁定键用例关心的是剥除与告警，不关心命中提示的叠加——
+    // 不写的话「未返回 true」会多出第二条 warning，超出本用例断言范围
+    fs.writeFileSync(path.join(tmpDir, OW_SCRIPT), 'export default function (config) { config["allow-lan"] = true; return true; }\n');
     try {
       const { config, warnings } = buildConfig(SUB, 'mixed');
       assert.equal(config['allow-lan'], false, '剥除后由 systemConfig 恒定写 false');

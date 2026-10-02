@@ -445,11 +445,13 @@ hosts:
 
 ### JS 覆写脚本
 
-YAML 操作符只保留最简单的三种，其余一律写脚本自由处理。脚本是一个默认导出的函数，**就地修改**传入的 `config`（订阅解析后的配置），返回值忽略；YAML 覆写在全部脚本之后才声明式合并：
+YAML 操作符只保留最简单的三种，其余一律写脚本自由处理。脚本是一个默认导出的函数，**就地修改**传入的 `config`（订阅解析后的配置）；脚本没有 `match` 声明，靠**返回值报告命中**——走到最后 `return true` 表示「适用于当前订阅、已生效」，其余情况（提前 `return`、不写返回值）都视为不适用。YAML 覆写在全部脚本之后才声明式合并：
 
 ```js
 // ~/.mihomo-cli/overwrite.custom.js
 export default function (config, ctx) {
+  // 作用域判据不中：提前退出（= 未命中，status 会把它列进「不适用」）
+  if (!ctx.subscription.name.startsWith('edu')) return;
   // 把订阅下发的 Developer 分组默认选中改为 TW Fixed IP；
   // 该分组不存在时跳过并提示（不用为它改 match 作用域）
   const groups = config['proxy-groups'] || [];
@@ -459,6 +461,7 @@ export default function (config, ctx) {
   } else {
     ctx.warn('当前订阅无 Developer 分组，跳过 default-selected 注入');
   }
+  return true; // 命中当前订阅
 }
 ```
 
@@ -470,15 +473,16 @@ export default function (config, ctx) {
 | `ctx.subscription.url` | 订阅原始 URL |
 | `ctx.subscription.host` | 预解析的 URL hostname（解析失败为空串），按域名限定作用域时用它 |
 | `ctx.mode` | 本次构建的运行模式：`'mixed'` 或 `'tun'` |
-| `ctx.warn(message)` | 发一条提示进 warnings 通道，`config` / `doctor` / `start` 的输出可见（`status` 走诊断旁路、不执行脚本，看不到） |
+| `ctx.warn(message)` | 发一条提示进 warnings 通道，`config` / `doctor` / `start` 的输出可见（`status` 不显示 `ctx.warn` 的内容） |
 
 约定与边界：
 
 - **必须同步**：返回 Promise 会报错。脚本是纯数据变换，没有要等网络的场景
+- **`return true` = 命中当前订阅**：脚本没有 `match` 声明，`status` / `config` 靠返回值区分「生效中」与「不适用于当前订阅」——判据过了就在最后 `return true`，不中就提前退出。判定严格认 `true`（返回别的 truthy 值不算），也不影响合并本身
 - **全信任**：脚本以你的用户身份运行（和 `.zshrc` 一个待遇），不做沙箱与超时——别装来路不明的覆写脚本
 - **改不动系统锁定项**：`mixed-port`、`external-controller`、`allow-lan` 等入站与控制面键由 CLI 管理，脚本设置了会被剥除并提示（与 YAML 覆写同一条边界）
 - **脚本先于 YAML 执行**：脚本看到的是订阅原始配置，读不到 YAML 覆写注入的内容；需要脚本处理 YAML 注入项时，把那段逻辑也写进脚本
-- **只读命令也会加载脚本**：`ow` / `status` 扫描文件时会加载脚本，模块顶层代码随之执行（顶层只定义函数，变换都在导出函数里做）；导出的变换函数在 `config` / `doctor` / `start` 构建时才调用，`status` 不调用、也不显示它的 `ctx.warn`
+- **只读命令也会加载脚本**：`ow` / `status` 扫描文件时会加载脚本，模块顶层代码随之执行（顶层只定义函数，变换都在导出函数里做）；导出的变换函数在 `config` / `doctor` / `start` 构建时调用；`status` 有活跃订阅时也会跑一次构建来判定各脚本是否命中（`return true`），但不显示 `ctx.warn` 的内容
 - 加载失败（语法错误、缺少导出、顶层抛错）与坏 YAML 同款姿态：`ow` / `status` 里「加载失败」可见，`config` / `start` / `doctor` 硬失败并带文件名；变换函数执行中抛错只在后三者报出（`ow` / `status` 不执行函数体）
 - 脚本受 `mihomo-cli ow off` 全局开关管理；想临时停用单个脚本，改个扩展名（如 `.bak`）即可
 
@@ -503,7 +507,7 @@ export default function (config, ctx) {
 
 `match` 块**写错会直接报错**（键名拼错、值为空、空块、写已移除的 `subscription` 键），而不是静默忽略后对所有订阅生效——写了 `match` 显然是想限定作用域，悄悄放宽比报错危险得多。历史写法 `subscription` 与 `name` 同义、已收掉，写它直接报错指明改写 `name`。
 
-> `url-domain` 命中该域名下的**所有**订阅。同一机场的多条订阅（如 `edu1`、`mini1`）URL 往往同域名，用 `url-domain` 会一并生效；要在同机场内按套餐区分，用 `name: edu*`。若只是担心某条订阅没有要改的分组，在 JS 脚本里判（找不到就 `ctx.warn` 跳过），不必为此改作用域；`match` 应当按「这份覆写在语义上属于哪些订阅」来写。JS 脚本没有 match 机制——作用域判断写在脚本开头（`if (!ctx.subscription.name.startsWith('edu')) return;`）。
+> `url-domain` 命中该域名下的**所有**订阅。同一机场的多条订阅（如 `edu1`、`mini1`）URL 往往同域名，用 `url-domain` 会一并生效；要在同机场内按套餐区分，用 `name: edu*`。若只是担心某条订阅没有要改的分组，在 JS 脚本里判（找不到就 `ctx.warn` 跳过），不必为此改作用域；`match` 应当按「这份覆写在语义上属于哪些订阅」来写。JS 脚本没有 match 机制——作用域判断写在脚本开头（`if (!ctx.subscription.name.startsWith('edu')) return;`），判据过了在函数末尾 `return true`，`status` 便能把命中的脚本列进「生效」、未命中的列进「不适用」。
 
 `mihomo-cli status` 会按当前活跃订阅区分「生效」与「不适用」，括号里只列本次真正参与合并的文件：
 
@@ -512,7 +516,7 @@ export default function (config, ctx) {
   glados 不适用于当前订阅 mini1（作用域 name=edu*）
 ```
 
-「不适用」指文件本身是启用的，只是 `match` 没命中当前订阅——切到命中的订阅（`sub use`）或改 `match` 才会生效，与 `enabled: false` 的「已禁用」是两回事。`mihomo-cli ow` 列表不做这个判断（它不绑定某条订阅），那里的作用域一栏只说明该文件管哪些订阅。`--json` 形态下 `overwrite.applied` 是生效清单（`ow off` 全局关闭时为空数组），`overwrite.files` 仍是「未被 `enabled: false` 停用」的全部文件；语法或元数据键写错的文件进 `overwrite.errors`（不混进 files/applied）。
+「不适用」指文件本身是启用的，只是 `match` 没命中当前订阅（JS 脚本则是没走到 `return true`）——切到命中的订阅（`sub use`）、改 `match` 或脚本判据才会生效，与 `enabled: false` 的「已禁用」是两回事。`mihomo-cli ow` 列表不做这个判断（它不绑定某条订阅），那里的作用域一栏只说明该文件管哪些订阅。`--json` 形态下 `overwrite.applied` 是生效清单（`ow off` 全局关闭时为空数组），`overwrite.files` 仍是「未被 `enabled: false` 停用」的全部文件；语法或元数据键写错的文件进 `overwrite.errors`（不混进 files/applied）。
 
 **坏文件不阻断诊断、但阻断启动**：YAML 语法错误（含 `enabled: no` 这类元数据键错误）的文件在 `mihomo-cli ow` 与 `status` 中以「加载失败」红字标出，诊断命令永远可用；但该文件不参与合并，`mihomo-cli start`/`doctor` 会硬失败并给出原因——曾经语法错只警告一行就跳过、退出码 0，启动成功但覆写根本没生效。
 

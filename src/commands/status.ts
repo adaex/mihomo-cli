@@ -1,13 +1,13 @@
 import { assertKnownFlags, assertPositionalCount, hasFlag } from '../argv.js';
 import { colors } from '../colors.js';
-import { getConfigInfo, getKernelVersion, hasKernel } from '../config.js';
+import { buildConfig, getConfigInfo, getKernelVersion, hasKernel } from '../config.js';
 import { VERSION } from '../constants.js';
 import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic } from '../format.js';
 import { listOverwriteFile } from '../overwrite.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
-import { getControllerPortOrNull, getSubscriptionsWithCache, subscriptionUrgency } from '../settings.js';
+import { getControllerPortOrNull, getSubscriptionsWithCache, readSubscriptionRawConfig, subscriptionUrgency } from '../settings.js';
 import { formatProxySummary, getActiveSubscription, isSubscriptionStale, resolveUpdateInterval } from '../subscription.js';
 import type { OverwriteFileInfo, ProxyProbeResult, StatusJson, SubscriptionUrgency } from '../types.js';
 
@@ -125,6 +125,25 @@ export async function printStatus(args: string[] = []): Promise<void> {
     files: overwriteFiles,
     broken: overwriteBroken,
   } = listOverwriteFile(activeSub ? { subName: activeSub.name, subUrl: activeSub.url } : undefined);
+  // 脚本没有 match 声明，静态判不了命中；用活跃订阅的缓存正文跑一遍真实构建管线
+  // （与 start 同一条路），拿各脚本 return true 的判定合并进 matched。构建可能因
+  // 坏文件/坏订阅抛错——诊断面不因它崩（D7 哲学），失败时脚本按「未判定」处理
+  // （matched 留 undefined，与无订阅时的语义一致）
+  if (activeSub && overwriteEnabled) {
+    const rawContent = readSubscriptionRawConfig(activeSub.name);
+    if (rawContent) {
+      try {
+        const mode = info?.tun ? 'tun' : 'mixed';
+        const { scriptMatches } = buildConfig(rawContent, mode, { subName: activeSub.name, subUrl: activeSub.url });
+        const matchedByName = new Map(scriptMatches.map(m => [m.file, m.matched]));
+        for (const f of overwriteFiles) {
+          if (f.kind === 'script' && matchedByName.has(f.name)) f.matched = matchedByName.get(f.name);
+        }
+      } catch {
+        // 未判定：保持 listOverwriteFile 的静态值
+      }
+    }
+  }
   const cached = activeSub ? getSubscriptionsWithCache().find(s => s.name === activeSub.name) : undefined;
   const legacy = detectLegacySystemInstall();
   // 控制器端口在 settings 非法时不应让整个 status 崩掉（doctor 另有一项专查非法 ports）
@@ -327,8 +346,8 @@ function printOverwriteLines(
   // 作用域与当前订阅名——三者凑齐才看得出为什么没命中。停用的不展开：那是用户自己
   // 在文件里写的 enabled: false，改法也写在 `ow` 列表的固定提示里
   for (const f of unmatched) {
-    const scope = f.scope ? `作用域 ${f.scope}` : '作用域受限';
-    console.log(colors.gray(`  ${shortOverwriteName(f.name)} 不适用于当前订阅${activeSub ? ` ${activeSub.name}` : ''}（${scope}）`));
+    const reason = f.kind === 'script' ? '脚本未返回 true' : f.scope ? `作用域 ${f.scope}` : '作用域受限';
+    console.log(colors.gray(`  ${shortOverwriteName(f.name)} 不适用于当前订阅${activeSub ? ` ${activeSub.name}` : ''}（${reason}）`));
   }
 
   // 加载失败的文件不参与任何分类，红字给出原因、灰字给出修复指引；

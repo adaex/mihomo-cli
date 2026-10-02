@@ -69,7 +69,7 @@ readSettings() 无进程级缓存：CLI 是短进程，缓存省不了多少，�
 
 判据与 v4.13.0 删补全子系统同一条：设施规模与真实使用面不匹配。`~key`/`~?key`（按 name 合并数组元素 + 未命中追加/跳过两态）是唯一「一句话说不清」的操作符，历史上贡献了 v4.8.1 的残缺分组事故；`<x>` 尖括号转义与嵌套形似告警服务的是不存在的键名形态（mihomo 顶层键无 `+`/`~`/`!`/尖括号），零使用记录。保留 `key!`（替换）、`+key`（前插）、`key+`（追加）——纯数据、无逻辑；match 的 `subscription` 同义键一并收掉（同 D11「一套判据」的取向）。
 
-复杂变换由 JS 脚本承担（`overwrite.js` / `overwrite.*.{js,mjs,cjs}`，默认导出函数）：**全信任模型**——脚本以用户身份运行、不沙箱不超时（同 `.zshrc`，README 明示别装来路不明的脚本），但**必须同步**（返回 Promise 报错：buildConfig 是同步管线，require(esm)（Node ≥22.12，本仓下界 22.22.1）同步加载、`await import` 会把整条合并链传染性 async 化，而纯转换没有要等网络的场景）。管线位置是安全关键：脚本执行 → YAML 合并 → 剥 LOCKED_CONFIG_KEYS → 系统配置注入（段序的翻转与论证见 D13）——脚本设置的锁定键被剥除（安全边界对脚本输出一视同仁）但经前后浅快照检出并告警（不静默，脚本作者会困惑「设置了怎么没生效」）；systemConfig 最后注入，脚本改不掉端口与控制面。脚本无 match/enabled 机制（作用域写在脚本里，想停用改扩展名），受 `ow` 全局开关与 selectActiveOverwriteFiles 闸门管理；加载失败/执行抛错与坏 YAML 同款双路径姿态（D7）。脚本的锁定键告警文案与 YAML 侧共用一份（renderLockedWarning），清单 LOCKED_CONFIG_KEYS 物理上住 constants.ts（overwrite.ts 要读它做快照、config.ts import overwrite.ts，反向会循环依赖）。
+复杂变换由 JS 脚本承担（`overwrite.js` / `overwrite.*.{js,mjs,cjs}`，默认导出函数）：**全信任模型**——脚本以用户身份运行、不沙箱不超时（同 `.zshrc`，README 明示别装来路不明的脚本），但**必须同步**（返回 Promise 报错：buildConfig 是同步管线，require(esm)（Node ≥22.12，本仓下界 22.22.1）同步加载、`await import` 会把整条合并链传染性 async 化，而纯转换没有要等网络的场景）。管线位置是安全关键：脚本执行 → YAML 合并 → 剥 LOCKED_CONFIG_KEYS → 系统配置注入（段序的翻转与论证见 D13）——脚本设置的锁定键被剥除（安全边界对脚本输出一视同仁）但经前后浅快照检出并告警（不静默，脚本作者会困惑「设置了怎么没生效」）；systemConfig 最后注入，脚本改不掉端口与控制面。脚本无 match/enabled 机制（作用域写在脚本里，想停用改扩展名；命中与否由 `return true` 报告，见 D13 尾段），受 `ow` 全局开关与 selectActiveOverwriteFiles 闸门管理；加载失败/执行抛错与坏 YAML 同款双路径姿态（D7）。脚本的锁定键告警文案与 YAML 侧共用一份（renderLockedWarning），清单 LOCKED_CONFIG_KEYS 物理上住 constants.ts（overwrite.ts 要读它做快照、config.ts import overwrite.ts，反向会循环依赖）。
 
 订阅名匹配同轮裁边：只留尾部 `*`（前缀）与头部 `*`（后缀）两种字面比对（startsWith/endsWith，无回溯结构），其余通配报错——通用 glob 匹配器曾有灾难性回溯事故（70 秒挂死，见 CODE_REVIEW），而真实使用面只有前缀区分一种；复杂匹配脚本里自己写。
 
@@ -80,3 +80,5 @@ D12 原定「YAML 全部合并 → 脚本执行」（声明式基底，程序化
 Breaking 面：脚本看到的始终是订阅配置，读不到 YAML 注入项（ctx 只提供订阅信息）；依赖旧顺序的写法需把那段逻辑并入脚本。顺序唯一真相仍是 `overwriteSortKey`：段序（脚本 0 / YAML 1）→ 主文件优先 → 文件名码点序；`ow` 列表与合并共用同一排序，列表即执行序。
 
 安全边界不随段序移动：剥 LOCKED_CONFIG_KEYS 在**全部**覆写之后、systemConfig 最后注入，两类覆写都改不掉入站与控制面；脚本锁定键检测是执行前后浅快照（before 是订阅配置，本就含机场下发的端口键），不依赖 YAML 先合并；YAML 侧锁定键检测作用于最终合并配置，与文件顺序无关。
+
+脚本的命中报告走返回值（`return true`）：脚本没有 match 声明，`selectActiveOverwriteFiles` 恒放行，status 的「生效/不适用」此前对脚本永远报生效——作用域不中的脚本混在生效清单里，与「match 不命中的 YAML」同一种误读。约定刻意最简：判据过了在函数末尾 `return true`，其余（提前退出、无返回值）一律未命中；严格 `=== true`，返回 config 等对象不算（防「顺手 return」被误读）。判定不参与合并闸门（selectActiveOverwriteFiles 不看它），只供展示：buildConfig 透传 `scriptMatches`，status 用活跃订阅的缓存正文跑一次构建取判定（构建失败按未判定降级，诊断面不崩——D7 同款姿态），config 的提示段对未命中脚本给一行事实性提示（不断言「没改配置」——漏写 return true 的脚本可能已改了配置，提示只报告约定信号）。

@@ -232,6 +232,53 @@ describe('status 覆写行按 match 区分是否适用当前订阅', () => {
 });
 
 /**
+ * 脚本没有 match 声明，status 对脚本是否适用当前订阅的判定来自渲染时的
+ * return true 约定（真实构建管线试跑一次，与 start 同一条路）。此前脚本的
+ * matched 恒为 true——作用域不中的脚本永远列在「生效」里，正是这组用例要拦的回归。
+ */
+describe('status/config 按脚本返回值区分是否适用当前订阅', () => {
+  it('未返回 true 的脚本移出生效清单，理由是「脚本未返回 true」而非作用域', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(
+        path.join(dataDir, 'overwrite.hit.js'),
+        'export default function (config, ctx) { if (ctx.subscription.name !== "edu1") return; config["log-level"] = "debug"; return true; }\n',
+      );
+      fs.writeFileSync(path.join(dataDir, 'overwrite.miss.js'), 'export default function () { return; }\n');
+      const out = run(['status', '--no-probe']).stdout;
+      assert.match(out, /覆写:.*已启用 \(hit，1 个不适用\)/);
+      assert.match(out, /miss 不适用于当前订阅 edu1（脚本未返回 true）/);
+      assert.ok(!/\(hit, miss/.test(out), '未命中的脚本不得出现在生效清单里');
+    });
+  });
+
+  it('status --json 的 applied 不含未命中脚本（与 YAML match 不命中同款口径）', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'overwrite.hit.js'), 'export default function () { return true; }\n');
+      fs.writeFileSync(path.join(dataDir, 'overwrite.miss.js'), 'export default function () { return; }\n');
+      const json = JSON.parse(run(['status', '--json', '--no-probe']).stdout);
+      assert.deepEqual(json.overwrite.applied, ['overwrite.hit.js']);
+    });
+  });
+
+  it('config 提示段列出未返回 true 的脚本（只说事实，不断言没改配置）', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'overwrite.miss.js'), 'export default function () { return; }\n');
+      const out = run(['config']).stdout;
+      assert.match(out, /# 覆写脚本 overwrite\.miss\.js 未返回 true，不视为命中当前订阅 edu1/);
+    });
+  });
+
+  it('全部脚本都命中时无提示行（常态不加噪音）', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'overwrite.a.js'), 'export default function () { return true; }\n');
+      const out = run(['status', '--no-probe']).stdout;
+      assert.match(out, /覆写:.*已启用 \(a\)$/m);
+      assert.ok(!out.includes('不适用'), '没有落选脚本时不该出现该措辞');
+    });
+  });
+});
+
+/**
  * 主文件在 status 覆写行里的显示名。
  *
  * `overwrite.yaml` 是最常见的配置形态（多数用户只有这一个文件），而剥前缀与剥扩展名

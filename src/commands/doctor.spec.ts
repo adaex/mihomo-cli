@@ -79,7 +79,7 @@ describe('doctor：体检透传配置构建的 warnings', () => {
     // 覆写脚本 ctx.warn 的提示正是 buildResult.warnings 要暴露、而 doctor 此前丢弃的信号
     fs.writeFileSync(
       path.join(dataDir, 'overwrite.js'),
-      'export default function (config, ctx) { ctx.warn("分组 TYPO-GROUP 未匹配到当前订阅中的同名元素，已跳过"); }\n',
+      'export default function (config, ctx) { ctx.warn("分组 TYPO-GROUP 未匹配到当前订阅中的同名元素，已跳过"); return true; }\n',
     );
 
     const { stdout, output } = run(['doctor']);
