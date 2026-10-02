@@ -18,7 +18,7 @@
 - 🩺 **体检诊断** - `mihomo-cli doctor` 一键检查内核/服务/端口/订阅/配置/连通性/内核与 CLI 版本并给修复指引
 - 🔌 **端口逃生口** - 默认 7890/9090 可经 `settings.json` 的 `ports` 覆盖，status 与 `mihomo-cli ui` 会显示实际端口
 - 🔌 **连通性探测** - 启动与状态展示独立确认「代理真的通」，不通时归因到订阅过期/流量用尽/节点失效
-- 🔎 **查看生效配置** - `mihomo-cli config [--json] [--reveal]` 展示由订阅与覆写推导出的运行配置，停止状态下同样可用；节点密码、UUID、provider 订阅 token 等凭据默认脱敏
+- 🔎 **查看生效配置** - `mihomo-cli config [-j|--json] [--reveal]` 展示由订阅与覆写推导出的运行配置，停止状态下同样可用；节点密码、UUID、provider 订阅 token 等凭据默认脱敏
 - 📝 **日志管理** - 每次启动归档上一次日志，保留 7 天，支持列表/跟随/编号查看
 - 🎨 **Web UI** - 一键打开 Web 控制面板 (zash/metacubexd/yacd)
 - 🔄 **内核更新** - 自动检查更新，支持 GitHub 镜像加速
@@ -144,7 +144,7 @@ mihomo-cli ui yacd     # YACD
 | `mihomo-cli ow`                  | 查看覆写配置状态和文件列表（别名 `enable`/`disable` 亦可用于开关） |
 | `mihomo-cli ow on`                   | 启用覆写配置（**默认已启用**，自动重启，可透传 `-s`/`-u` 等启动选项） |
 | `mihomo-cli ow off`                  | 禁用覆写配置（自动重启，可透传 `-s`/`-u` 等启动选项）              |
-| `mihomo-cli config [--json] [--reveal]` | 查看当前生效的运行配置（由订阅与覆写推导，停止状态下同样可用；凭据默认脱敏，`--reveal` 显示原文） |
+| `mihomo-cli config [-j|--json] [--reveal]` | 查看当前生效的运行配置（由订阅与覆写推导，停止状态下同样可用；凭据默认脱敏，`--reveal` 显示原文） |
 
 > `ow on`/`ow off` 是**全局总开关**（一次开关所有覆写）。只想停用某一个文件，在该文件里写 `enabled: false`，见[单个文件的开关](#单个文件的开关enabled)
 
@@ -158,7 +158,7 @@ mihomo-cli ui yacd     # YACD
 | `mihomo-cli dir`                      | 显示数据目录位置                                                    |
 | `mihomo-cli dir open [target]`        | 打开指定目录（`root`, `subs`, `logs`, `data`, `runtime`, `kernel`）  |
 | `mihomo-cli reset [目标...] [--full] [-y]` | 重置用户数据（可用目标：`subs`, `logs`, `data`, `runtime`, `settings`, `kernel`, `overwrites`, `service`；`--full` 删全部，`-y` 跳过确认） |
-| `mihomo-cli doctor`                   | 体检诊断（内核/服务/端口/订阅/配置/连通性/CLI 版本，有异常退出码 1） |
+| `mihomo-cli doctor`                   | 体检诊断（内核/服务/端口/订阅/配置/连通性/内核与 CLI 版本，有异常退出码 1） |
 | `mihomo-cli version`                  | 显示版本信息                                                        |
 | `mihomo-cli help [命令]`             | 显示帮助（无参数显示全部；也可用 `mihomo-cli <命令> -h`）               |
 

@@ -11,6 +11,26 @@ let tmpDir: string;
 /** 锁文件路径。withFileLock 收的就是锁本身（不再是被保护的数据文件 + 内部拼 .lock） */
 let lockPath: string;
 
+/**
+ * 轮询等待子进程写出的时刻标记，读到**完整数字串**才算就绪，超时返回 null。
+ * 不能只看文件存在就读：writeFileSync 是 open→write 的非原子序列，高负载下
+ * 子进程可能被抢占在 open 与 write 之间——此刻文件存在但内容为空，而
+ * Number('') === 0，时刻断言会拿 0 去和真实时间戳比较，误报
+ * 「子进程提前进入临界区」（并行负载下实测偶发）。读到空内容继续轮询。
+ */
+function waitForMoment(file: string, deadlineAt: number): number | null {
+  while (Date.now() < deadlineAt) {
+    try {
+      const raw = fs.readFileSync(file, 'utf8').trim();
+      if (/^\d+$/.test(raw)) return Number(raw);
+    } catch {
+      /* 尚未创建，继续等 */
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
+  return null;
+}
+
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-lock-'));
   lockPath = path.join(tmpDir, 'settings.lock');
@@ -104,15 +124,12 @@ describe('withFileLock', () => {
     });
 
     // 等子进程拿到锁。注意不能等 child.exitCode：本用例全程同步阻塞事件循环，
-    // 'exit' 事件永远派发不了，只能轮询文件系统这个跨进程可见的信号。
-    const deadline = Date.now() + 10_000;
-    while (!fs.existsSync(marker) && Date.now() < deadline) {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-    }
+    // 'exit' 事件永远派发不了，只能轮询文件系统这个跨进程可见的信号
+    // （waitForMoment：存在 ≠ 写完，见其注释）
+    const childAcquiredAt = waitForMoment(marker, Date.now() + 10_000);
     child.kill();
 
-    assert.equal(fs.existsSync(marker), true, '放锁后子进程应能拿到锁');
-    const childAcquiredAt = Number(fs.readFileSync(marker, 'utf8'));
+    assert.ok(childAcquiredAt !== null, '放锁后子进程应能拿到锁');
     assert.ok(childAcquiredAt >= releasedAt, '子进程必须在主进程放锁之后才拿到锁');
   });
 
@@ -153,14 +170,11 @@ describe('withFileLock', () => {
       releasedAt = Date.now();
     });
 
-    const enteredDeadline = Date.now() + 10_000;
-    while (!fs.existsSync(entered) && Date.now() < enteredDeadline) {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-    }
+    const enteredAt = waitForMoment(entered, Date.now() + 10_000);
     child.kill();
 
-    assert.equal(fs.existsSync(entered), true, '放锁后子进程应能拿到锁');
-    assert.ok(Number(fs.readFileSync(entered, 'utf8')) >= releasedAt, '子进程必须在主进程放锁之后才拿到锁');
+    assert.ok(enteredAt !== null, '放锁后子进程应能拿到锁');
+    assert.ok(enteredAt >= releasedAt, '子进程必须在主进程放锁之后才拿到锁');
   });
 
   it('双等待者临界区不重叠：只按锁龄排队，绝不删等待者同伴刚建的锁', async () => {
@@ -232,6 +246,23 @@ describe('withFileLock', () => {
     assert.ok(bEnter < bExit && cEnter < cExit, '进入时刻必须早于退出时刻（标记文件损坏？）');
     assert.ok(bEnter >= createdA + 250, `B 只能经陈旧强夺进入：最早也得等 A 的锁龄超过 B 的 staleMs(250ms)，实际提前到 ${bEnter - createdA}ms`);
     assert.ok(bExit <= cEnter || cExit <= bEnter, `两个等待者的临界区重叠：B [${bEnter}, ${bExit}]，C [${cEnter}, ${cExit}]（等待者删掉了同伴刚建的新鲜锁）`);
+  });
+});
+
+describe('时刻标记的就绪判据（waitForMoment）', () => {
+  it('空文件（子进程停在 open 与 write 之间的窗口形态）：数字判据不误读为 0，写入完成后才返回', () => {
+    const f = path.join(tmpDir, 'moment-marker');
+    // 空窗的稳态再现：writeFileSync 先 open（文件立即可见）后 write（内容才可见），
+    // 高负载下子进程被抢停在两者之间就是这个形态——真实竞态没法确定性复现，
+    // 直接构造空文件验证判据行为
+    fs.writeFileSync(f, '');
+    assert.equal(fs.existsSync(f), true, '前置：空文件已可见（存在性判据此刻就会放行）');
+    assert.equal(Number(fs.readFileSync(f, 'utf8')), 0, 'Number("") === 0：存在即读会拿 0 与真实时间戳比较，误报「提前进入临界区」');
+    assert.equal(waitForMoment(f, Date.now() + 100), null, '未就绪必须返回 null（调用方报「应能拿到锁」），不得把空内容读成时刻 0');
+
+    const written = Date.now();
+    fs.writeFileSync(f, String(written));
+    assert.equal(waitForMoment(f, Date.now() + 1000), written, '写入完成后读到所写时刻');
   });
 });
 

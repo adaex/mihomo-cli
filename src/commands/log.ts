@@ -9,7 +9,7 @@ import type { LogEntry } from '../types.js';
 export function cmdLogs(args: string[]): void {
   assertKnownFlags(args, ['-f', '--follow', '-n', '--lines', '-o', '--open'], 'logs [-f] [-n N] [编号] [-o]');
   // 编号至多一个：`logs 1 2` 此前静默忽略 2
-  assertPositionalCount(args, 1, 1, 'mihomo-cli logs [编号] [-f] [-n N] [-o]');
+  assertPositionalCount(args, 1, 1, 'mihomo-cli logs [-f] [-n N] [编号] [-o]');
   const lines = parseIntArg(args, '-n', '--lines', 100);
   const openInViewer = hasFlag(args, '-o', '--open');
   const follow = hasFlag(args, '-f', '--follow');
@@ -100,7 +100,7 @@ export function cmdLogs(args: string[]): void {
   console.log('用法:');
   console.log('  mihomo-cli logs 0          # 查看当前日志 (最后 100 行)');
   console.log('  mihomo-cli logs 0 -f       # 实时跟随当前日志');
-  console.log('  mihomo-cli logs 1          # 查看第 1 个归档日志（最新）');
+  console.log('  mihomo-cli logs 1          # 查看第 1 个归档日志(最新)');
   console.log('  mihomo-cli logs 1 -n 200   # 查看 200 行');
   console.log('  mihomo-cli logs 1 -o       # 用系统默认程序打开');
   console.log('');

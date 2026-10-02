@@ -102,10 +102,10 @@ export async function startTun(): Promise<StartResult> {
   // （内核没装、配置缺失）不该先动日志。sudo 取消路径的同类窗口无法完全消除
   // （rename 进不了 root 脚本），但校验前置消掉了最常见的形态
   if (!fs.existsSync(PATHS.mihomoBinary)) {
-    throw new CliError('未找到 mihomo-cli 内核，请先下载内核', { hint: '下载内核: mihomo-cli kernel' });
+    throw new CliError('未找到 mihomo 内核，请先下载内核', { hint: '下载内核: mihomo-cli kernel' });
   }
   if (!fs.existsSync(PATHS.configFile)) {
-    throw new CliError('未找到配置文件，请先添加订阅并启动');
+    throw new CliError('未找到运行时配置', { hint: '请先添加订阅: mihomo-cli sub add <url>' });
   }
 
   // pkill 前最后一道复核（存在性校验之后、日志轮转**之前**）：cmdStart 的 loaded

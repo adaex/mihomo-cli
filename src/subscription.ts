@@ -401,7 +401,7 @@ export async function autoUpdateStaleSubscription(options: { timeout?: number } 
     const interval = resolveUpdateInterval(sub.update_interval);
     console.log(`订阅 "${sub.name}" 超过 ${interval} 小时未更新，正在更新...`);
   } else {
-    console.log(`检查到 ${staleSubs.length} 个订阅需要更新，正在并行更新...`);
+    console.log(`检测到 ${staleSubs.length} 个订阅需要更新，正在并行更新...`);
   }
 
   const timeoutMs = options.timeout ?? DEFAULT_AUTO_UPDATE_TIMEOUT;

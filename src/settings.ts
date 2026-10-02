@@ -176,10 +176,12 @@ function maskSingleUrl(url: string): string {
       .join('/');
     return parsed.toString();
   } catch {
-    // 无法解析的畸形输入（复制不全的订阅 URL 等）：只保留前缀——token 位于
-    // query（尾部），保头舍尾既留排错线索（scheme/host 在头部）又不把凭据
-    // 尾段带进错误消息（fuzz 抓出旧「前15...后10」会展示尾部 10 字符）
-    if (url.length > 30) {
+    // 无法解析的畸形输入（复制不全的订阅 URL、误把整条 token 当 URL 粘入等）：
+    // 只保留前缀——token 位于 query（尾部）或整条就是凭据，保头舍尾既留排错线索
+    // （scheme/host 在头部）又不把凭据带进错误消息（fuzz 抓出旧「前15...后10」
+    // 会展示尾部 10 字符）。截断阈值与前缀等宽：≤15 原样（泄漏上限与截断保留量
+    // 等量），>15 一律截断——「短就安全」不成立，短串可能整条就是凭据
+    if (url.length > 15) {
       return `${url.slice(0, 15)}...`;
     }
     return url;

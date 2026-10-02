@@ -139,7 +139,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdConfig,
     group: 'config',
-    usage: [{ signature: 'config [--json] [--reveal]', description: '查看当前生效的运行配置（由订阅与覆写推导，凭据默认脱敏）' }],
+    usage: [{ signature: 'config [-j|--json] [--reveal]', description: '查看当前生效的运行配置（由订阅与覆写推导，凭据默认脱敏）' }],
   },
   {
     name: 'overwrite',

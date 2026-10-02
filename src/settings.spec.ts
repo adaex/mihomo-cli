@@ -523,7 +523,16 @@ describe('maskUrl：畸形输入的降级路径（fuzz 抓出的尾部泄漏）'
     assert.match(masked, /^broken url with\.\.\.$/);
   });
 
-  it('短畸形串（<=30）原样返回', () => {
+  it('短畸形串（≤15）原样返回：无害短串完整保留，泄漏上限与前缀截断等量', () => {
     assert.equal(maskUrl('short-bad-url'), 'short-bad-url');
+  });
+
+  it('16–30 的短串同样截断：误把整条 token 当 URL 粘入时不得原样进错误消息', () => {
+    // 真实形态：sub add 只粘了 token（无 scheme/host，fetch 报 invalid URL，
+    // 降级分支渲染错误消息）——「短就安全」不成立，这整条串就是凭据
+    const token = 'a9f8b7c6d5e4f3a2b1c0d0';
+    const masked = maskUrl(token);
+    assert.notEqual(masked, token, '不得原样返回');
+    assert.match(masked, /^a9f8b7c6d5e4f3a\.\.\.$/);
   });
 });

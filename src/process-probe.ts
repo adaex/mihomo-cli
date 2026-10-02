@@ -122,7 +122,7 @@ export function getMihomoPids(): number[] {
   // spawnSync 自身失败(ENOENT/超时): status 为 null。pgrep 不存在于 macOS 之外的环境时不该崩,
   // 但也不能假装「没有进程」——同样归入探测失败
   if (result.error || result.status === null) {
-    throw new CliError('无法探测 mihomo-cli 进程（pgrep 执行失败）', {
+    throw new CliError('无法探测内核进程（pgrep 执行失败）', {
       hint: ['这不代表内核未运行，只表示查不到。', '请手动确认: pgrep -fl mihomo-cli'],
     });
   }
