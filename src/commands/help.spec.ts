@@ -94,7 +94,7 @@ describe('命令级帮助', () => {
         assert.equal(r.status, 0, `${args.join(' ')} 应退出 0：${r.stderr}`);
         assert.ok(r.stdout.includes('用法:'), `${args.join(' ')} 应打印用法`);
       }
-      assert.match(run(['sub', '--help']).stdout, /subscription add <url>/);
+      assert.match(run(['sub', '--help']).stdout, /subscription add \[url\] \[name\]/);
       assert.match(run(['ow', 'help']).stdout, /overwrite on\|off/);
     });
   });

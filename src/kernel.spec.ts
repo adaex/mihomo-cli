@@ -489,6 +489,8 @@ describe('downloadKernel：下载后完整性闸门（子进程 + PATH 桩 curl/
   }): {
     stdout: string;
     stderr: string;
+    /** 桩 curl 是否被调用过（白名单用例断言拒绝先于下载） */
+    curlCalled: boolean;
   } {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-kernel-gate-'));
     const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-kernel-gate-bin-'));
@@ -520,6 +522,7 @@ describe('downloadKernel：下载后完整性闸门（子进程 + PATH 桩 curl/
       fs.writeFileSync(
         path.join(fakeBin, 'curl'),
         `#!/bin/bash
+printf '' > "$MIHOMO_TEST_CURL_MARKER"
 out=""; prev=""
 for a in "$@"; do
   if [ "$prev" = "-o" ]; then out="$a"; fi
@@ -548,10 +551,11 @@ exit 0
           PATH: `${fakeBin}:${process.env.PATH}`,
           MIHOMO_TEST_CURL_BODY: opts.curlBody,
           MIHOMO_TEST_BINARY_CONTENT: opts.binaryContent,
+          MIHOMO_TEST_CURL_MARKER: path.join(dataDir, 'curl-called'),
         },
       });
       assert.equal(r.status, 0, r.stderr);
-      return { stdout: r.stdout, stderr: r.stderr };
+      return { stdout: r.stdout, stderr: r.stderr, curlCalled: fs.existsSync(path.join(dataDir, 'curl-called')) };
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });
       fs.rmSync(fakeBin, { recursive: true, force: true });
@@ -586,7 +590,7 @@ exit 0
   });
 
   it('白名单外的资产地址在下载前即拒（校验先于任何写盘）', () => {
-    const { stdout } = runKernelDownloadCase({
+    const { stdout, curlCalled } = runKernelDownloadCase({
       assetSize: 3,
       curlBody: 'abc',
       binaryContent: '',
@@ -595,6 +599,8 @@ exit 0
     });
     assert.match(resultLineOf(stdout), /不在白名单内/);
     assert.match(binaryLineOf(stdout), /OLD-KERNEL/);
+    // 校验先于下载：白名单拒绝时 curl 一次都不能被调用（不向未知 host 发请求）
+    assert.equal(curlCalled, false, '白名单外的地址不得发起下载');
   });
 
   it('全链通过时原子替换：新内核为解压产物', () => {

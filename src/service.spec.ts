@@ -958,3 +958,38 @@ esac
     assert.match(stdout.split('\n').find(l => l.startsWith('EPOCH_EXISTS:')) ?? '', /EPOCH_EXISTS:true/);
   });
 });
+
+describe('服务入口的 label 校验（assertServiceLabelSafe）', () => {
+  /**
+   * install/start/stop/restart 四个入口共用 constants.ts 的断言——非法
+   * MIHOMO_CLI_DAEMON_LABEL（路径成分）不得静默作用于默认 label。restart 的
+   * kickstart 与锁内 enable+bootstrap 不经 startService 的断言，入口必须自带；
+   * 此前该防线零测试（终审抓出）。子进程跑：env 变量在模块加载期求值。
+   */
+  it('restart 对非法 label 报 CliError，不静默作用于默认 label 的服务', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-label-guard-'));
+    const servicePath = path.resolve('src/service.ts');
+    const script = [
+      `const { restartService } = await import(${JSON.stringify(servicePath)});`,
+      'try {',
+      '  await restartService();',
+      "  console.log('RESULT:NO-THROW');",
+      '} catch (e) {',
+      "  console.log('RESULT:' + JSON.stringify({ name: e.name, message: e.message }));",
+      '}',
+    ].join('\n');
+    try {
+      const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: '../evil' },
+      });
+      assert.equal(r.status, 0, r.stderr);
+      const line = r.stdout.split('\n').find(l => l.startsWith('RESULT:'));
+      assert.ok(line && !line.includes('NO-THROW'), `非法 label 必须在入口报错: ${line}`);
+      assert.match(line, /MIHOMO_CLI_DAEMON_LABEL 无效/);
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});

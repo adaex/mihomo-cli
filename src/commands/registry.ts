@@ -128,7 +128,7 @@ export const COMMANDS: Command[] = [
     usage: [
       { signature: 'subscription', description: '列出所有订阅（别名 sub/subs）' },
       { signature: 'subscription use <name>', description: '切换当前订阅（自动重启；重启透传 -s/-u 等启动选项）' },
-      { signature: 'subscription add <url> [name]', description: '添加订阅' },
+      { signature: 'subscription add [url] [name]', description: '添加订阅（无 url 时交互读取剪贴板）' },
       { signature: 'subscription update [name]', description: '更新订阅（无参更新所有）' },
       { signature: 'subscription remove <name>', description: '删除订阅（模糊匹配需确认，-y 跳过）' },
     ],

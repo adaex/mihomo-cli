@@ -49,10 +49,14 @@ describe('createHttpError：HTTP 错误的统一形态（直连 fetch 与代理 
   });
 
   it('超大错误体只取限量前缀做摘录（截断后解析失败即无 data，不整体解析）', () => {
-    const error = createHttpError(500, 'x'.repeat(100 * 1024));
+    // fixture 必须是「整体是合法 JSON、截断后不再是」的判别形态——纯垃圾字节
+    // （'x'×100KB）在任何前缀长度下都解析失败，无截断的实现同样给 undefined，
+    // 用例恒真（终审抓出）。合法 JSON 拆在 64KB 边界内才咬得住截断行为
+    const bigJson = `{"msg":"${'y'.repeat(200 * 1024)}"}`;
+    const error = createHttpError(500, bigJson);
     assert.equal(error.message, 'HTTP 500');
     assert.equal(error.response.status, 500);
-    assert.equal(error.response.data, undefined);
+    assert.equal(error.response.data, undefined, '截断后的前缀不是合法 JSON，不得给出 data');
   });
 });
 
@@ -152,7 +156,11 @@ describe('createHttpClient：4xx 诊断与降级守卫行为', () => {
     });
   });
 
-  it('错误体超过 64KB：限量取前缀，超大错误体不撑爆内存', async () => {
+  it('错误体超过 64KB：读被限量中止并吞掉（不升级为整体失败），status 仍可定位', async () => {
+    // 该形态实际锁的是：错误路径超限读取被 readBodyWithLimit 中止后**吞掉**，
+    // 不升级成「响应体超过大小上限」——err.message 必须仍是 HTTP 502。
+    // （前缀截断行为由上面 createHttpError 的单元用例锁，错误路径的 text
+    // 在中止后为空串，e2e 层观测不到前缀内容）
     const base = await startServer((_req, res) => {
       res.writeHead(502, { 'content-type': 'text/plain' });
       res.end(Buffer.alloc(200 * 1024, 0x62));
@@ -160,9 +168,8 @@ describe('createHttpClient：4xx 诊断与降级守卫行为', () => {
     const client = createHttpClient({ timeout: 10_000 });
     await assert.rejects(client.get(`${base}/err`), e => {
       const err = e as Error & { response?: { status?: number; data?: unknown } };
-      assert.equal(err.message, 'HTTP 502');
+      assert.equal(err.message, 'HTTP 502', '错误体的限量读取不得升级为整体大小失败');
       assert.equal(err.response?.status, 502);
-      // 非 JSON 前缀解析失败 → 无 data，status 仍可定位
       assert.equal(err.response?.data, undefined);
       return true;
     });

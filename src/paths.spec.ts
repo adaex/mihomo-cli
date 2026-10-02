@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -418,6 +418,39 @@ describe('cleanupStaleTmpFiles：崩溃残留清扫', () => {
         child.on('error', () => resolve(-1));
       });
       assert.equal(code, 0, '子进程退出码非 0 表示清扫断言失败');
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('atomicWriteFileSync：mode 经 fchmod 落定，不受 umask 掩蔽', () => {
+  /**
+   * 回归背景：open(2) 的 mode 会被 umask 掩蔽（mode 0644 在 umask 077 下实际 0600），
+   * mode 是调用方契约（如 LaunchAgent plist 的 0644），不能随用户 shell 的 umask 漂移；
+   * fchmod 作用于 fd、不受掩蔽。umask 是进程级状态，用子进程设掩蔽环境跑真实模块。
+   */
+  it('umask 077 下 0644 恒定落位、默认（0600）不受影响', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-atomic-mode-'));
+    try {
+      const code = `
+process.umask(0o077);
+const fs = await import('node:fs');
+const { atomicWriteFileSync } = await import(${JSON.stringify(path.resolve('src/paths.ts'))});
+atomicWriteFileSync(${JSON.stringify(path.join(dataDir, 'plist-like'))}, 'x', { mode: 0o644 });
+atomicWriteFileSync(${JSON.stringify(path.join(dataDir, 'secret-like'))}, 'y');
+const mode = p => (fs.statSync(p).mode & 0o777).toString(8);
+console.log('PLIST_MODE:' + mode(${JSON.stringify(path.join(dataDir, 'plist-like'))}));
+console.log('SECRET_MODE:' + mode(${JSON.stringify(path.join(dataDir, 'secret-like'))}));
+`;
+      const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code], {
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: { ...process.env, MIHOMO_CLI_DIR: dataDir },
+      });
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /PLIST_MODE:644/, 'umask 077 下 0644 不得被掩蔽成 0600');
+      assert.match(r.stdout, /SECRET_MODE:600/);
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });
     }
