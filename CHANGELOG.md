@@ -2,7 +2,18 @@
 
 ## [Unreleased]
 
-### 修复
+### 修复（第九轮复审：自查 + code-review 过第八轮合入批次）
+
+- **reset 的确认后并发复核补齐 legacy sudo 窗口**：重读原在 legacy 清理之前，清理的密码窗（约 60s）内并发 `install && start` 仍会漏停漏卸、删 kernel 后落 KeepAlive 崩溃循环；重读挪到清理之后，窗口闭合
+- **installService 落位后补显式 chmod 0o644**：原子写的 open(2) mode 受 umask 掩蔽（umask 077 下实际 0600），改原子写时丢了原 chmodSync 的权限保证
+- **`logs ""`（空串编号）显式报错**：空串经 getNonFlagArg 返回 `''` 而非 null，被当缺省静默落列表——空串口径（`sub ""` 等已修）的最后同族漏网
+- **parseIntArg 的漏值形态诊断**：`-n -n` / `-n -n 200` 按「需要正整数」报错，不再误报「只能指定一次」（用户会去找并不存在的重复项）
+- **mirror 前缀未作用时不再打矛盾的「经镜像中转」提示**；警告补改用 gh 通道的指引
+- **runtime.ts 修注释错位**（startCommandForCurrentMode 插进了并发复核注释块与函数之间，两段 doc 叠放）；**五处过时/违规注释**（timer 预算范围、stage 原子写、拆分后的位置论证、历史叙事删除、行号自引）
+- **service.ts re-export 面收窄**：拆分时顺手导出的 7 个零消费符号收回，公共契约面与拆分前一致
+
+### 修复（第八轮复审）
+
 
 - **`sub` 列表的面板 URL 脱敏**：`web_page_url`（服务器可控的 `profile-web-page-url` 响应头）常带机场自动登录 token，此前唯独常驻列表原样上屏，其余 URL 出口均已脱敏
 - **https→http 降级守卫的错误消息脱敏**：token 常被服务器保留在重定向查询串里，恰在该守卫要防的攻击形态下经「获取订阅失败：」前缀明文带出（后面补的 URL 反而是掩码）
