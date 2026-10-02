@@ -37,7 +37,7 @@ function printOverwriteList(): void {
         console.log(`    ${colors.gray('作用域: ')}${f.scope}`);
       }
       if (f.kind === 'script') {
-        console.log(`    ${colors.gray('类型: ')}JS 脚本（在全部 YAML 覆写之前执行）`);
+        console.log(`    ${colors.gray('类型: ')}JS 脚本（在全部 YAML 覆写之前执行；适用于当前订阅时末尾 return true，status 据此区分生效与不适用）`);
       } else if (f.keys.length > 0) {
         console.log(`    ${colors.gray('字段: ')}${f.keys.join(', ')}`);
       }

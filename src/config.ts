@@ -10,7 +10,7 @@ import { applyOverwrite, describeOverwriteScope, loadOverwriteFile, parseOverrid
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
 import { getPorts, readSettings } from './settings.js';
 import { sanitizeTerminal } from './text.js';
-import type { BuildConfigResult, ConfigInfo, OverwriteScope } from './types.js';
+import type { BuildConfigResult, ConfigInfo, OverwriteFileEntry, OverwriteScope, ScriptMatch } from './types.js';
 
 /**
  * 安全 YAML 解析选项:限制别名展开次数,防御远程订阅/覆写里的 YAML 别名炸弹(alias bomb)DoS。
@@ -280,6 +280,44 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
 /** 锁定键告警的统一文案（YAML 覆写与 JS 脚本共用一份，避免两处解释漂移） */
 function renderLockedWarning(source: string, keys: string[]): string {
   return `${source}系统锁定项已忽略: ${keys.join('、')}（入站端口、控制面、控制器证书与局域网/入站鉴权由 mihomo-cli 管理；端口与 controller secret 在 settings.json 配置，入站固定只监听回环，需要局域网入站请在本机另起一个 mihomo-cli 实例）`;
+}
+
+/**
+ * status 的脚本命中判定：只读、永不抛（诊断面，D7 姿态）。与 buildConfig 的差别：
+ * 加载由调用方把 listOverwriteFile 的 entries 传进来——坏文件已在 broken 里、
+ * **不在 entries 也不抛**，一个坏 YAML 不会把全部脚本的判定打回「未判定＝生效」；
+ * 不做系统合并与形状断言（判定只关心脚本返回值，不产出可运行配置）。脚本变换
+ * 在独立解析的副本上执行，不触碰任何运行态。解析失败（坏订阅）返回空 matches，
+ * 调用方按未判定降级。
+ */
+export function judgeScriptMatches(
+  subRawContent: string,
+  mode: string,
+  scope: OverwriteScope | undefined,
+  entries: OverwriteFileEntry[],
+): { matches: ScriptMatch[]; error?: string } {
+  try {
+    const subscriptionConfig = parseConfigContent(subRawContent, '订阅内容');
+    const settings = readSettings();
+    // 全局开关与 selectActiveOverwriteFiles 闸门与 buildConfig 同款（脚本恒过 match 筛）
+    const active = settings.overwrite_enabled !== false ? selectActiveOverwriteFiles(entries, scope) : [];
+    const { scriptMatches } = applyOverwrite(subscriptionConfig, active, {
+      mode: mode === 'tun' ? 'tun' : 'mixed',
+      scope,
+    });
+    return { matches: scriptMatches };
+  } catch (e) {
+    return { matches: [], error: (e as Error).message?.split('\n')[0] ?? String(e) };
+  }
+}
+
+/**
+ * 推导路径的运行模式判据（唯一真相）：当前落盘配置有 tun 即 TUN，否则 Mixed。
+ * config / status / doctor 三处共用；runtime.ts 的 getRuntimeMode 是另一套——
+ * 它带「服务安装优先 Mixed」的前置条件，不在此收敛。
+ */
+export function deriveRuntimeMode(info: ConfigInfo | null): 'tun' | 'mixed' {
+  return info?.tun ? 'tun' : 'mixed';
 }
 
 export function writeMihomoConfig(configObj: Record<string, unknown>): void {

@@ -1,6 +1,6 @@
 import { assertKnownFlags, assertPositionalCount, hasFlag } from '../argv.js';
 import { colors } from '../colors.js';
-import { buildConfig, dumpYaml, getConfigInfo } from '../config.js';
+import { buildConfig, deriveRuntimeMode, dumpYaml, getConfigInfo } from '../config.js';
 import { CliError } from '../errors.js';
 import { redactConfigSecrets } from '../redact.js';
 import { readSubscriptionRawConfig } from '../settings.js';
@@ -38,7 +38,7 @@ export function cmdConfig(args: string[] = []): void {
   }
 
   // 与 status/doctor 一致：当前是 TUN 就按 TUN 推导，否则 Mixed
-  const mode = getConfigInfo()?.tun ? 'tun' : 'mixed';
+  const mode = deriveRuntimeMode(getConfigInfo());
   const { config, warnings } = buildConfig(rawContent, mode, { subName: active.name, subUrl: active.url });
 
   // 默认凭据脱敏：顶层 secret 之外，节点的 password/uuid/private-key/auth-str 与

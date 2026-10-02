@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { compareVersions } from 'compare-versions';
 import { assertKnownFlags, assertPositionalCount } from '../argv.js';
 import { colors } from '../colors.js';
-import { getConfigInfo, getKernelVersion, hasKernel } from '../config.js';
+import { deriveRuntimeMode, getConfigInfo, getKernelVersion, hasKernel } from '../config.js';
 import { DEFAULT_MIXED_PORT, VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
 import { formatDate, formatRelativeTime } from '../format.js';
@@ -236,7 +236,7 @@ async function collectChecks(): Promise<Check[]> {
   // === 配置原生校验 ===
   if (active && hasKernel()) {
     try {
-      const mode = info?.tun ? 'tun' : 'mixed';
+      const mode = deriveRuntimeMode(info);
       const prepared = await prepareConfigForStart(mode, active.name);
       const warnings = prepared.buildResult.warnings;
       if (warnings.length > 0) {

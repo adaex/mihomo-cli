@@ -482,8 +482,8 @@ export default function (config, ctx) {
 - **全信任**：脚本以你的用户身份运行（和 `.zshrc` 一个待遇），不做沙箱与超时——别装来路不明的覆写脚本
 - **改不动系统锁定项**：`mixed-port`、`external-controller`、`allow-lan` 等入站与控制面键由 CLI 管理，脚本设置了会被剥除并提示（与 YAML 覆写同一条边界）
 - **脚本先于 YAML 执行**：脚本看到的是订阅原始配置，读不到 YAML 覆写注入的内容；需要脚本处理 YAML 注入项时，把那段逻辑也写进脚本
-- **只读命令也会加载脚本**：`ow` / `status` 扫描文件时会加载脚本，模块顶层代码随之执行（顶层只定义函数，变换都在导出函数里做）；导出的变换函数在 `config` / `doctor` / `start` 构建时调用；`status` 有活跃订阅时也会跑一次构建来判定各脚本是否命中（`return true`），但不显示 `ctx.warn` 的内容
-- 加载失败（语法错误、缺少导出、顶层抛错）与坏 YAML 同款姿态：`ow` / `status` 里「加载失败」可见，`config` / `start` / `doctor` 硬失败并带文件名；变换函数执行中抛错只在后三者报出（`ow` / `status` 不执行函数体）
+- **只读命令也会加载脚本**：`ow` / `status` 扫描文件时会加载脚本，模块顶层代码随之执行（顶层只定义函数，变换都在导出函数里做）；导出的变换函数在 `config` / `doctor` / `start` 构建时调用；`status` 有活跃订阅时也会执行一次判定构建（独立副本，坏覆写文件不影响判定），但不显示 `ctx.warn` 的内容
+- 加载失败（语法错误、缺少导出、顶层抛错）与坏 YAML 同款姿态：`ow` / `status` 里「加载失败」可见，`config` / `start` / `doctor` 硬失败并带文件名；变换函数执行中抛错只在后三者报出（`status` 的判定构建会执行函数体，但把执行失败按「未判定」降级、不显示错误）
 - 脚本受 `mihomo-cli ow off` 全局开关管理；想临时停用单个脚本，改个扩展名（如 `.bak`）即可
 
 ### 作用域限定（match）
@@ -571,6 +571,7 @@ export default function (config, ctx) {
     // 精简套餐没有该分组：提示并跳过，不追加残缺分组
     ctx.warn('当前订阅无 Developer 分组，跳过 default-selected 注入');
   }
+  return true; // 命中当前订阅（status 据此区分生效与不适用）
 }
 ```
 

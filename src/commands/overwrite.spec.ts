@@ -276,6 +276,28 @@ describe('status/config 按脚本返回值区分是否适用当前订阅', () =>
       assert.ok(!out.includes('不适用'), '没有落选脚本时不该出现该措辞');
     });
   });
+
+  it('坏 YAML 在场时判定不降级：未命中脚本仍列「不适用」', () => {
+    // 判定若走 buildConfig 的硬失败门（loadOverwriteFile），一个坏 YAML 会把全部
+    // 脚本打回「未判定＝生效」——坏文件在场时正是最需要判定的时刻
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'overwrite.bad.yaml'), 'match: [broken\n');
+      fs.writeFileSync(path.join(dataDir, 'overwrite.miss.js'), 'export default function () { return; }\n');
+      const out = run(['status', '--no-probe']).stdout;
+      assert.match(out, /miss 不适用于当前订阅 edu1（脚本未返回 true）/);
+      assert.match(out, /加载失败|解析失败/, '坏文件本身仍要红字可见');
+    });
+  });
+
+  it('近失文件名的 stderr 警告只打一次（判定复用列表的同一次读目录）', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'overwrite.yml'), 'log-level: debug\n');
+      fs.writeFileSync(path.join(dataDir, 'overwrite.a.js'), 'export default function () { return true; }\n');
+      const r = run(['status', '--no-probe']);
+      const count = (r.stderr.match(/不会被当作覆写文件加载/g) || []).length;
+      assert.equal(count, 1, `警告应只打一次（列表与判定共用一次读目录），实际 ${count} 次`);
+    });
+  });
 });
 
 /**

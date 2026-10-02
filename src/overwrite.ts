@@ -864,6 +864,11 @@ export function applyOverwrite(
  * 合并闸门始终是 selectActiveOverwriteFiles，不要拿 matched 去筛要合并的文件。
  * 不传 scope 则 matched 恒为 undefined（= 未判定），`ow` 列表走这条路径：它不绑定
  * 某条订阅，判不了也不该判。broken 条目不判 match（文件根本没解析出来）。
+ *
+ * entries 同时返回 ok 的完整条目（含 transform/config）：status 拿它喂
+ * judgeScriptMatches 判脚本命中——**判定复用这同一次读目录**（独立再读会打两遍
+ * typo 警告、解析两遍 YAML），且不走 loadOverwriteFile 的硬失败门（一个坏 YAML
+ * 不把判定打回「未判定＝生效」——恰是判定要消灭的误读）。ow 列表不消费它。
  */
 export function listOverwriteFile(scope?: OverwriteScope): OverwriteListResult {
   const { ok, broken } = readOverwriteFiles();
@@ -872,6 +877,7 @@ export function listOverwriteFile(scope?: OverwriteScope): OverwriteListResult {
   return {
     enabled,
     dir: USER_DATA_DIR,
+    entries: ok,
     files: ok.map(f => ({
       name: f.name,
       path: f.path,

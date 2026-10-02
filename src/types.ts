@@ -112,12 +112,14 @@ export interface OverwriteFileEntry {
 }
 
 /**
- * JS 覆写脚本的变换函数：**就地修改**传入的 config，返回值忽略。必须同步——
+ * JS 覆写脚本的变换函数：**就地修改**传入的 config。返回值约定：`return true`
+ * 表示命中当前订阅（脚本没有 match 声明，status/config 靠它区分生效与不适用），
+ * 其余返回值（含无返回值）一律视为未命中、不影响合并。必须同步——
  * 返回 Promise 报错（buildConfig 是同步管线，纯转换也没有要等网络的场景）。
  * 全信任模型：脚本以当前用户身份运行（同 .zshrc），不沙箱、不超时；
  * 但它改不动系统锁定项——脚本执行后 LOCKED_CONFIG_KEYS 照常剥除（见 buildConfig）
  */
-export type OverwriteTransform = (config: Record<string, unknown>, ctx: OverwriteScriptContext) => void;
+export type OverwriteTransform = (config: Record<string, unknown>, ctx: OverwriteScriptContext) => void | true;
 
 /** 传给覆写脚本的上下文 */
 export interface OverwriteScriptContext {
@@ -128,7 +130,7 @@ export interface OverwriteScriptContext {
   subscription: { name: string; url: string; host: string };
   /** 本次构建的运行模式 */
   mode: 'mixed' | 'tun';
-  /** 发一条告警进 warnings 通道（`start` / `config` / `doctor` 的输出可见；`status` 走诊断旁路、不执行脚本，看不到） */
+  /** 发一条告警进 warnings 通道（`start` / `config` / `doctor` 的输出可见；`status` 判定脚本命中时会执行它，但不显示 warn 的内容） */
   warn: (message: string) => void;
 }
 
@@ -317,6 +319,12 @@ export interface OverwriteListResult {
   enabled: boolean;
   dir: string;
   files: OverwriteFileInfo[];
+  /**
+   * 加载成功的完整条目（含 transform/config），与 files 同一次读目录的产出：
+   * status 喂 judgeScriptMatches 判脚本命中，复用它避免二次扫目录（typo 警告与
+   * YAML 解析不跑两遍）。ow 列表不消费。不进 status --json（序列化的是 files）
+   */
+  entries: OverwriteFileEntry[];
   /** 加载失败的文件（语法错/元数据键非法）；诊断面据此红字列出，合并路径会硬失败 */
   broken: BrokenOverwriteFile[];
 }

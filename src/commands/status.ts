@@ -1,6 +1,6 @@
 import { assertKnownFlags, assertPositionalCount, hasFlag } from '../argv.js';
 import { colors } from '../colors.js';
-import { buildConfig, getConfigInfo, getKernelVersion, hasKernel } from '../config.js';
+import { deriveRuntimeMode, getConfigInfo, getKernelVersion, hasKernel, judgeScriptMatches } from '../config.js';
 import { VERSION } from '../constants.js';
 import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic } from '../format.js';
 import { listOverwriteFile } from '../overwrite.js';
@@ -123,24 +123,20 @@ export async function printStatus(args: string[] = []): Promise<void> {
   const {
     enabled: overwriteEnabled,
     files: overwriteFiles,
+    entries: overwriteEntries,
     broken: overwriteBroken,
   } = listOverwriteFile(activeSub ? { subName: activeSub.name, subUrl: activeSub.url } : undefined);
-  // 脚本没有 match 声明，静态判不了命中；用活跃订阅的缓存正文跑一遍真实构建管线
-  // （与 start 同一条路），拿各脚本 return true 的判定合并进 matched。构建可能因
-  // 坏文件/坏订阅抛错——诊断面不因它崩（D7 哲学），失败时脚本按「未判定」处理
-  // （matched 留 undefined，与无订阅时的语义一致）
-  if (activeSub && overwriteEnabled) {
+  // 脚本没有 match 声明，静态判不了命中；有活跃订阅且目录里有脚本时，用订阅缓存
+  // 正文跑一遍判定（judgeScriptMatches：复用上面同一次读目录的 entries、坏文件
+  // 不抛——D7 判定旁路；无脚本时跳过，不为空判定白跑一次订阅解析）。无缓存/
+  // 解析失败按「未判定」处理（matched 留 undefined，与无订阅时的语义一致）
+  if (activeSub && overwriteEnabled && overwriteFiles.some(f => f.kind === 'script')) {
     const rawContent = readSubscriptionRawConfig(activeSub.name);
     if (rawContent) {
-      try {
-        const mode = info?.tun ? 'tun' : 'mixed';
-        const { scriptMatches } = buildConfig(rawContent, mode, { subName: activeSub.name, subUrl: activeSub.url });
-        const matchedByName = new Map(scriptMatches.map(m => [m.file, m.matched]));
-        for (const f of overwriteFiles) {
-          if (f.kind === 'script' && matchedByName.has(f.name)) f.matched = matchedByName.get(f.name);
-        }
-      } catch {
-        // 未判定：保持 listOverwriteFile 的静态值
+      const { matches } = judgeScriptMatches(rawContent, deriveRuntimeMode(info), { subName: activeSub.name, subUrl: activeSub.url }, overwriteEntries);
+      const matchedByName = new Map(matches.map(m => [m.file, m.matched]));
+      for (const f of overwriteFiles) {
+        if (f.kind === 'script' && matchedByName.has(f.name)) f.matched = matchedByName.get(f.name);
       }
     }
   }

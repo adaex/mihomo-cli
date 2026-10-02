@@ -6,6 +6,12 @@
 
 - **脚本 `return true` = 命中当前订阅**：脚本没有 match 声明，status 的「生效/不适用」此前对脚本永远报生效——作用域不中的脚本混在生效清单里，与「match 不命中的 YAML」同一种误读。约定刻意最简：判据过了在函数末尾 `return true`，其余（提前退出、无返回值）一律未命中；严格 `=== true`，返回 config 等对象不算（防「顺手 return」被误读）。判定只供展示、不参与合并闸门（selectActiveOverwriteFiles 不看它）：status 文本行与 `--json` 的 `applied` 据此把未命中脚本列进「不适用（脚本未返回 true）」，config 提示段给一行事实性提示（不断言「没改配置」）；status 用活跃订阅的缓存正文跑一次真实构建取判定，构建失败按未判定降级（诊断面不崩，D7 同款姿态）。README 脚本示例与契约、CLAUDE.md 不变量、decisions.md D13 尾段同步更新
 
+### 修复与评审（命中判定的诊断面收口）
+
+- **status 判定改走独立旁路（judgeScriptMatches），不再经 buildConfig**：后者吃 loadOverwriteFile 硬失败门，一个坏 YAML 会把全部脚本的判定打回「未判定＝生效」——恰是判定要消灭的误读、且坏文件在场时正是最需要判定的时刻（评审实验复现）。判定复用 listOverwriteFile 同一次读目录的 ok 条目（新 entries 字段），近失文件名的 stderr 警告不再打两遍、YAML 不再解析两次；无脚本的目录直接跳过判定（不为空判定白跑一次订阅解析）。两个降级语义均有回归用例（坏文件在场判定不降级、警告恰好一次），均反向验证
+- **mode 推导判据收敛为 deriveRuntimeMode**（config/status/doctor 三处共用；runtime.ts 的 getRuntimeMode 带服务安装前置条件、不属同一判据）：防止三份 `info?.tun ? 'tun' : 'mixed'` 拷贝将来漂移，脚本按 ctx.mode 得到矛盾的生效结论
+- **文档承诺同步**：README「变换函数执行中抛错」条目改为如实描述（status 的判定构建会执行函数体、把执行失败按未判定降级）；`ow` 列表的脚本行补 return true 约定提示（用户从 status 的「脚本未返回 true」跳到 ow 排查时能看到改法）；types.ts 的 OverwriteTransform 契约注释与类型签名（`void | true`）对齐
+
 ## [26.10.100] - 2026-10-02
 
 ### 文档（第十七轮：文档冗余与归档专项）
