@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import { assertKnownFlags, assertPositionalCount } from '../argv.js';
 import { colors } from '../colors.js';
-import { hasKernel } from '../config.js';
+import { assertKernelInstalled } from '../config.js';
 import { CliError } from '../errors.js';
 import { PATHS } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
+import { MANUAL_PKILL_HINT } from '../process-stop.js';
 import * as runtime from '../runtime.js';
 import {
-  cleanupLegacyInstallOrThrow,
+  announceLegacyCleanupOrThrow,
   detectLegacySystemInstall,
   getServiceStatus,
   installService,
@@ -28,19 +29,11 @@ import {
 /**
  * 遗留的系统级安装（v3.0–v4.0 的 `daemon on`）会与用户级服务抢端口，
  * 且带 KeepAlive 会持续拉起内核。安装前必须先清掉，否则两个实例互相打架。
+ * 前后提示统一走 announceLegacyCleanupOrThrow（stop/start 同源）。
  */
 async function handleLegacyInstall(): Promise<void> {
   if (!detectLegacySystemInstall()) return;
-
-  console.log(colors.yellow('检测到旧版本安装的系统级服务（root LaunchDaemon）'));
-  console.log(colors.gray('  它会与新的用户级服务抢占同一组端口，需先清理'));
-  console.log(colors.gray('  清理需要一次管理员密码（删除 root 拥有的文件）'));
-  console.log('');
-
-  await cleanupLegacyInstallOrThrow();
-
-  console.log(`${colors.green('已清理遗留的系统级服务')}`);
-  console.log('');
+  await announceLegacyCleanupOrThrow('需先清理', ['  它会与新的用户级服务抢占同一组端口']);
 }
 
 /**
@@ -60,9 +53,7 @@ function printRestoreSkipped(): void {
 export async function cmdInstall(args: string[]): Promise<void> {
   assertKnownFlags(args.slice(1), [], 'install');
   assertPositionalCount(args, 0, 1, 'mihomo-cli install');
-  if (!hasKernel()) {
-    throw new CliError('未找到内核', { hint: '下载内核: mihomo-cli kernel' });
-  }
+  assertKernelInstalled();
 
   // 并发判定基线由 main() 在命令入口捕获（service.ts captureStopEpochBaseline），
   // 必须早于任何慢速阶段：下面的 handleLegacyInstall 可能卡在交互式 sudo 密码输入上
@@ -143,16 +134,14 @@ export async function cmdUninstall(args: string[]): Promise<void> {
   }
 
   if (legacy) {
-    console.log(colors.gray('检测到旧版本的系统级服务，清理需要一次管理员密码'));
-    await cleanupLegacyInstallOrThrow();
-    console.log(colors.green('已清理遗留的系统级服务'));
+    await announceLegacyCleanupOrThrow('卸载时一并清理');
   }
 
   const remaining = getMihomoPids();
   if (remaining.length > 0) {
     console.log('');
     console.log(colors.yellow(`仍有内核进程残留 (PID ${remaining.join(', ')})`));
-    console.log('手动清理: sudo pkill -9 mihomo');
+    console.log(MANUAL_PKILL_HINT);
   }
 
   console.log(colors.gray('重新安装: mihomo-cli install'));

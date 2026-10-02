@@ -1,9 +1,27 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import type { ProxyProbeResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * lsof 查端口监听 pid（doctor 端口检查 / 热重载身份核对共用）：flags、超时与
+ * 「查不到按无监听处理」的口径单点维护。返回 null 表示 lsof 本身不可用/调用失败
+ * （探测失败 ≠ 端口没人听）；空数组 = 调用成立但无人监听。
+ */
+export function lsofListenPids(port: number): number[] | null {
+  try {
+    const r = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', timeout: 5000 });
+    if (r.status !== 0) return null;
+    return r.stdout
+      .split('\n')
+      .map(line => Number.parseInt(line.trim(), 10))
+      .filter(pid => Number.isInteger(pid) && pid > 0);
+  } catch {
+    return null;
+  }
+}
 
 /** 探测目标：gstatic generate_204 是连通性检查的事实标准，经代理访问应返回 204 */
 const PROBE_URL = 'https://www.gstatic.com/generate_204';

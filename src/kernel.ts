@@ -4,7 +4,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { compareVersions } from 'compare-versions';
-import { getKernelVersion } from './config.js';
+import { getKernelVersion, probeKernelVersion } from './config.js';
 import { VERSION } from './constants.js';
 import { createHttpClient, createHttpError } from './http.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
@@ -292,6 +292,11 @@ export interface ReleaseQueryOptions {
   signal?: AbortSignal;
   /** gh 首选查询失败、改走回退路径（代理 curl / 直连 fetch）时回调一次 */
   onGhFallback?: () => void;
+  /**
+   * 调用方已探测过的当前版本（doctor 一次体检内同一份 probe 结果复用，免二次 spawn）；
+   * 不传则在此自行探测。null 语义与 getKernelVersion 一致（未安装）
+   */
+  currentVersion?: string | null;
 }
 
 /**
@@ -377,7 +382,7 @@ async function getLatestRelease(repo: string, opts: ReleaseQueryOptions = { prox
 }
 
 export async function checkUpdate(opts: ReleaseQueryOptions): Promise<KernelUpdateInfo> {
-  const currentVersion = getKernelVersion();
+  const currentVersion = opts.currentVersion !== undefined ? opts.currentVersion : getKernelVersion();
   // gh 首选但失败回退直连时（无代理可用才会首选 gh；回退目标即直连 fetch），
   // 让命令层知道实际响应没走 gh，补一行说明
   let ghFallbackToDirect = false;
@@ -515,9 +520,8 @@ export async function downloadKernel(
 
   // fallback 查询（cmdKernel 总是传入 releaseInfo，此路径仅在直接调用时走到）的出网
   // 方式见 resolveFallbackQueryOptions。apiProxy 单独取值：它同时是下面 curl 下载的
-  // 传输层代理（mirror 通道不带 proxy 时为 null）
-  const apiProxy: string | null =
-    channel.kind === 'proxy' ? channel.proxy : channel.kind === 'mirror' ? (channel.proxy ?? null) : channel.kind === 'gh' ? (channel.proxy ?? null) : null;
+  // 传输层代理（mirror/gh 通道不带 proxy 时为 null；direct 恒 null）
+  const apiProxy: string | null = channel.kind === 'direct' ? null : (channel.proxy ?? null);
   const latest = releaseInfo || (await getLatestRelease(GITHUB_REPO, resolveFallbackQueryOptions(channel)));
   const arch = getArch();
   const platform = process.platform;
@@ -538,7 +542,7 @@ export async function downloadKernel(
   // 镜像前缀只拼 github.com 形态的地址（其他 GitHub 资产 host 套不进去）；上游若迁移
   // 资产地址形态，显式 --mirror 会静默退化成直连——被墙网络下只见超时，没有任何
   // 「镜像没起作用」的线索，必须点破
-  const mirrorIneffective = channel.kind === 'mirror' && channel.mirror !== null && downloadUrl === asset.browser_download_url;
+  const mirrorIneffective = channel.kind === 'mirror' && downloadUrl === asset.browser_download_url;
   if (mirrorIneffective) {
     console.warn('警告: 镜像前缀未能作用于该资产地址（host 非 github.com），本次为直连下载；若直连超时可改用 gh 通道（mihomo-cli kernel）');
   }
@@ -658,17 +662,16 @@ export async function downloadKernel(
       progressCallback('校验内核...');
     }
     fs.chmodSync(foundBinary, 0o755);
-    const check = spawnSync(foundBinary, ['-v'], { encoding: 'utf8', timeout: 5000 });
-    const checkOutput = `${check.stdout || ''}${check.stderr || ''}`.trim();
-    if (check.error || check.status !== 0 || !/v?\d+\.\d+\.\d+/.test(checkOutput)) {
-      throw new Error(`内核自检失败（可能下载损坏或架构不匹配），旧内核未受影响\n  退出码: ${check.status}\n  输出: ${checkOutput || '(空)'}`);
+    // 可执行性判据与版本提取走同一份 probe（正则单点维护，与 doctor/config 同源）
+    const probe = probeKernelVersion(foundBinary);
+    if (probe.spawnError || probe.status !== 0 || probe.version === null) {
+      throw new Error(`内核自检失败（可能下载损坏或架构不匹配），旧内核未受影响\n  退出码: ${probe.status}\n  输出: ${probe.output || '(空)'}`);
     }
 
     // 版本对账：自检通过不代表版本对——归档可能含旧版本二进制（镜像返回错误资产等）。
     // 与 latest.tag_name 比对，不一致即失败，避免「报已更新但二进制没变」。
-    const versionMatch = checkOutput.match(/v?(\d+\.\d+\.\d+)/);
-    if (versionMatch && latest.tag_name) {
-      const binaryVersion = versionMatch[1];
+    if (probe.version && latest.tag_name) {
+      const binaryVersion = probe.version.replace(/^v/, '');
       const expectedVersion = latest.tag_name.replace(/^v/, '');
       if (binaryVersion !== expectedVersion) {
         throw new Error(`内核版本不匹配（期望 ${expectedVersion}，实际 ${binaryVersion}），旧内核未受影响`);

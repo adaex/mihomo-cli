@@ -6,15 +6,14 @@ import { createHttpClient } from './http.js';
 import {
   getSubscriptions,
   getSubscriptionsWithCache,
-  maskUrl,
   readSettings,
-  readSubscriptionRawConfig,
   removeSubscriptionRawConfig,
+  requireSubscriptionRawConfig,
   saveSubscriptionCache,
   saveSubscriptionRawConfig,
 } from './settings.js';
 import { withSpinner } from './spinner.js';
-import { sanitizeTerminal } from './text.js';
+import { maskUrl, sanitizeTerminal } from './text.js';
 import type {
   AutoUpdateResult,
   ConfigSummary,
@@ -307,14 +306,9 @@ export async function downloadSubscription(url: string, subName = 'default', sig
 
 /** 构建配置并交给内核校验；不替换现有 config.yaml，不停止正在运行的内核 */
 export async function prepareConfigForStart(mode: string, subName = 'default'): Promise<PreparedConfig> {
-  const rawContent = readSubscriptionRawConfig(subName);
-  if (!rawContent) {
-    // 条目还在、文件没了（手动删除/外部清理）：正确动作是重新下载而非重新添加，
-    // 与 config/doctor 同口径，三处不能给两个方向
-    throw new CliError(`订阅 "${subName}" 有条目但没有本地配置文件`, {
-      hint: `更新订阅: mihomo-cli sub update ${subName}`,
-    });
-  }
+  // 条目还在、文件没了（手动删除/外部清理）→ 指引重新下载：守卫收口在
+  // requireSubscriptionRawConfig（与 config/doctor 同口径，三处不出现两个方向）
+  const rawContent = requireSubscriptionRawConfig(subName);
 
   const subUrl = getSubscriptions().find(s => s.name === subName)?.url;
   const buildResult = buildConfig(rawContent, mode, { subName, subUrl });

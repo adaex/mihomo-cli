@@ -6,11 +6,11 @@ import { CliError } from '../errors.js';
 import { START_RESTART_FLAGS } from '../flags.js';
 import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic } from '../format.js';
 import * as runtime from '../runtime.js';
-import { addSubscription, getSubscriptions, getSubscriptionsWithCache, maskUrl, removeSubscription, setDefaultSubscription } from '../settings.js';
+import { addSubscription, getSubscriptions, getSubscriptionsWithCache, removeSubscription, setDefaultSubscription } from '../settings.js';
 import { withSpinner } from '../spinner.js';
 import * as subscription from '../subscription.js';
-import { suggestSimilar } from '../suggest.js';
-import { confirmOrThrow, confirmPrompt, dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
+import { maskUrl } from '../text.js';
+import { confirmOrThrow, confirmPrompt, dispatchSubcommand, restartToApply, type SubCommand, unknownSubcommandError } from './shared.js';
 
 /** 订阅内容更新后，运行中的实例仍用旧配置，提示重启生效。
  * 提示的命令须与 restartToApply 选出的重启模式一致：TUN 在跑时裸 start 默认 Mixed，
@@ -344,21 +344,13 @@ export async function cmdSubscription(args: string[]): Promise<void> {
   // 选项校验已随白名单下沉到各子命令（见 SUBCOMMANDS / withKnownFlags），
   // 分发后按实际命中的子命令校验，不再分发前对全组放行同一份白名单
   await dispatchSubcommand(args, SUBCOMMANDS, {
-    // 无子命令 → 列表；未知子命令 → 报错
+    // 无子命令 → 列表；未知子命令 → 报错（守卫与 did-you-mean 拼装收口在 shared）
     fallback: printSubscriptionList,
-    onUnknown: action => {
-      // 选项出现在子命令位置：裸 sub 是只读列表、不消费任何选项，按未知选项报错
-      if (action.startsWith('-')) {
-        throw new CliError(`未知的选项: ${action}`, {
-          label: '参数错误',
-          hint: ['裸 sub 只列出订阅，不接受选项', '', '用法: mihomo-cli sub [use|add|update|remove]（裸 sub 即列表）'],
-        });
-      }
-      const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
-      const suggestion = suggestSimilar(action, names);
-      throw new CliError(`未知的订阅命令: ${action}`, {
-        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '用法: mihomo-cli sub [use|add|update|remove]（裸 sub 即列表）'],
-      });
-    },
+    onUnknown: action =>
+      unknownSubcommandError(action, SUBCOMMANDS, {
+        what: '订阅命令',
+        optionHint: ['裸 sub 只列出订阅，不接受选项', '', '用法: mihomo-cli sub [use|add|update|remove]（裸 sub 即列表）'],
+        unknownHint: ['用法: mihomo-cli sub [use|add|update|remove]（裸 sub 即列表）'],
+      }),
   });
 }

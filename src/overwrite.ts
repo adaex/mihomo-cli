@@ -421,8 +421,7 @@ function summarizeMatch(match?: OverwriteMatch): string | undefined {
   if (!match) return undefined;
   const parts: string[] = [];
   for (const [key, value] of Object.entries(match)) {
-    const vals = Array.isArray(value) ? value : [value];
-    parts.push(`${key}=${vals.join('/')}`);
+    parts.push(`${key}=${value.join('/')}`);
   }
   return parts.length > 0 ? parts.join(', ') : undefined;
 }
@@ -470,14 +469,13 @@ function matchesScope(match: OverwriteMatch | undefined, scope?: OverwriteScope)
   if (!match) return true;
 
   if (match.name) {
-    const names = Array.isArray(match.name) ? match.name : [match.name];
     if (!scope?.subName) return false;
     const subName = scope.subName;
-    if (!names.some(n => nameMatchesPattern(subName, n))) return false;
+    if (!match.name.some(n => nameMatchesPattern(subName, n))) return false;
   }
 
   if (match['url-domain']) {
-    const domains = Array.isArray(match['url-domain']) ? match['url-domain'] : [match['url-domain']];
+    const domains = match['url-domain'];
     if (!scope?.subUrl) return false;
     let host: string;
     try {

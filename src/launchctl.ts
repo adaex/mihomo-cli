@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { SERVICE_LABEL } from './constants.js';
 import { CliError } from './errors.js';
 import { DIRS, PATHS } from './paths.js';
+import { escapeRegExp } from './text.js';
 import type { ServiceStatus } from './types.js';
 import { sleep } from './utils.js';
 
@@ -86,7 +87,7 @@ export function parseServicePrint(output: string): {
  */
 export function parseDisabledList(output: string, label: string): boolean {
   // label 可能含正则元字符（`.` 是合法 label 字符且极常见），必须转义
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = escapeRegExp(label);
   const match = output.match(new RegExp(`^\\s*"${escaped}" => (\\S+)$`, 'm'));
   if (!match) return false;
   const value = match[1].toLowerCase();

@@ -1,8 +1,8 @@
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 
 import { getServiceStatus } from './launchctl.js';
 import { PATHS } from './paths.js';
+import { lsofListenPids } from './proxy-probe.js';
 import { getPorts, readSettings } from './settings.js';
 import { shouldAbortStartOnDisable } from './stop-epoch.js';
 
@@ -52,8 +52,10 @@ export async function tryHotReload(): Promise<boolean> {
     const status = getServiceStatus({ withDisabled: false });
     if (!status.running || status.pid === null) return false;
 
-    // 端口经 settings.ports 解析（默认 9090），与 buildConfig 写进配置的值同源
-    const baseUrl = `http://127.0.0.1:${getPorts().controller}`;
+    // 端口经 settings.ports 解析（默认 9090），与 buildConfig 写进配置的值同源；
+    // 只读一次，下面的 PUT 与 lsof 核对同一端口（两次读之间 settings 变更会自相矛盾）
+    const { controller: controllerPort } = getPorts();
+    const baseUrl = `http://127.0.0.1:${controllerPort}`;
     // 配置了 controller_secret 时必须带 Bearer，否则内核返回 401 → 热重载恒失败回退重启。
     // 只接受字符串：非字符串在 buildConfig 已 fail-closed（start 链路先构建配置），
     // 这里是纵深防御，别把数字/对象拼进 Authorization
@@ -75,11 +77,8 @@ export async function tryHotReload(): Promise<boolean> {
 
       // /version 只确认「端口上是个 mihomo」，挡不住「另一个 mihomo」（手工起的实例、
       // 端口冲突）。用 lsof 取监听 pid 与服务 pid 比对，不一致则回退 kickstart
-      const port = getPorts().controller;
-      const lsofResult = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', timeout: 5000 });
-      if (lsofResult.status !== 0) return false;
-      const listenerPid = Number.parseInt(lsofResult.stdout.trim(), 10);
-      if (!Number.isFinite(listenerPid) || listenerPid !== status.pid) return false;
+      const listenerPids = lsofListenPids(controllerPort);
+      if (listenerPids === null || listenerPids[0] !== status.pid) return false;
 
       const res = await fetch(`${baseUrl}/configs?force=true`, {
         method: 'PUT',

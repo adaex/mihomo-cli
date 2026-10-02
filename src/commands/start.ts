@@ -1,12 +1,12 @@
 import { assertKnownFlags, assertPositionalCount, getNonFlagArg, hasFlag, parseIntArg } from '../argv.js';
 import { colors } from '../colors.js';
-import { hasKernel } from '../config.js';
+import { assertKernelInstalled } from '../config.js';
 import { DEFAULT_AUTO_UPDATE_TIMEOUT } from '../constants.js';
 import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
 import {
+  announceLegacyCleanupOrThrow,
   captureStopEpochBaseline,
-  cleanupLegacyInstallOrThrow,
   detectLegacySystemInstall,
   disableServiceAutoStart,
   getServiceStatus,
@@ -47,9 +47,7 @@ export async function cmdStart(args: string[]): Promise<void> {
   // TUN 分支若在弹密码前关了服务自启，启动失败/取消时错误提示要带上自启位的最终状态
   let disabledAutoStartForTun = false;
 
-  if (!hasKernel()) {
-    throw new CliError('未找到内核', { hint: '下载内核: mihomo-cli kernel' });
-  }
+  assertKernelInstalled();
 
   // 并发判定的基线由 main() 在命令入口捕获（service.ts captureStopEpochBaseline），
   // 不在这里取：它必须早于订阅自动更新等慢速阶段、且不晚于本命令第一次状态观察，
@@ -66,11 +64,7 @@ export async function cmdStart(args: string[]): Promise<void> {
     // 遗留 root daemon 与 TUN 抢同一组端口：KeepAlive 会反复拉起旧内核，
     // 不清理的话 TUN 内核与它互抢，两边都不稳（停止侧的 cmdStop 同样先清它）
     if (detectLegacySystemInstall()) {
-      console.log(colors.yellow('检测到旧版本安装的系统级服务（root LaunchDaemon），启动 TUN 前需清理'));
-      console.log(colors.gray('  清理需要一次管理员密码（删除 root 拥有的文件）'));
-      await cleanupLegacyInstallOrThrow();
-      console.log(colors.green('已清理遗留的系统级服务'));
-      console.log('');
+      await announceLegacyCleanupOrThrow('启动 TUN 前需清理');
     }
 
     // 判据是 loaded 而非 installed：`mh stop` 之后服务虽仍装着但不会被拉起，

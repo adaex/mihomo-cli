@@ -4,7 +4,7 @@ import { VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
 import { displayWidth, padEndDisplay } from '../format.js';
 import { USER_DATA_DIR } from '../paths.js';
-import { getServiceStatus } from '../service.js';
+import { isServiceInstalled } from '../service.js';
 import { getSubscriptions } from '../settings.js';
 import { suggestSimilar } from '../suggest.js';
 import type { Command, CommandGroup, UsageLine } from './registry.js';
@@ -19,7 +19,9 @@ export function printShortHelp(): void {
   const steps: [string, string][] = [];
   if (!hasKernel()) steps.push(['mihomo-cli kernel', '下载内核']);
   if (getSubscriptions().length === 0) steps.push(['mihomo-cli sub add <url>', '添加订阅']);
-  if (!getServiceStatus().installed) steps.push(['mihomo-cli install', '安装服务（只需一次）']);
+  // 只需要「装没装」：一次文件存在性检查即可，别为此跑整轮 launchctl 查询
+  // （print + print-disabled），那还会把帮助路径暴露在 launchctl 抛错面下
+  if (!isServiceInstalled()) steps.push(['mihomo-cli install', '安装服务（只需一次）']);
 
   if (steps.length > 0) {
     steps.push(['mihomo-cli start', '启动代理']);

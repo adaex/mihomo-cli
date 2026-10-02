@@ -293,10 +293,12 @@ export interface OverwriteMatch {
    * 精确值、尾部单个 `*`（前缀，如 `edu*`）、头部单个 `*`（后缀，如 `*edu`）；
    * 其余通配形态（多 `*`、中间 `*`、`?`）在加载时报错——通用匹配器已删，
    * 更复杂的匹配写 JS 脚本（见 OverwriteTransform）
+   *
+   * 类型恒为数组：YAML 里的裸 string 形态在 normalizeMatch 归一，消费方不再各自防御
    */
-  name?: string | string[];
+  name?: string[];
   /** 按订阅 URL 的 hostname 后缀匹配（字面比对，无通配） */
-  'url-domain'?: string | string[];
+  'url-domain'?: string[];
 }
 
 /** 构建配置时的订阅上下文，用于按 match 过滤覆写文件 */

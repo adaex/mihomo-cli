@@ -63,7 +63,10 @@ export interface RunningState {
  *   避免 getServiceStatus 内部的 launchctl print + print-disabled 重复执行）
  */
 export function getRunningState(serviceStatus?: ServiceStatus): RunningState {
-  const service = serviceStatus ?? getServiceStatus();
+  // RunningState 只消费 running/pid，不透出 disabled——默认查询跳过 print-disabled
+  //（白多一次的阻塞 spawn，withDisabled:false 先例见 tryHotReload）；需要 disabled
+  // 的调用方（status）自行查完整状态后经 serviceStatus 传入
+  const service = serviceStatus ?? getServiceStatus({ withDisabled: false });
   if (service.running) {
     return { running: true, pid: service.pid, kind: 'service', processInfo: null };
   }

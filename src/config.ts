@@ -373,7 +373,7 @@ export function buildKernelRejectHint(detail: string, overwriteSummaries: string
  * 可选默认值会让新调用方静默丢覆写清单。
  */
 export async function validateConfigWithKernel(config: Record<string, unknown>, overwriteSummaries: string[]): Promise<void> {
-  if (!hasKernel()) throw new CliError('未找到内核', { hint: '下载内核: mihomo-cli kernel' });
+  assertKernelInstalled();
   ensureDirs();
   const stageDir = fs.mkdtempSync(path.join(DIRS.runtime, 'check-'));
   const stageFile = path.join(stageDir, 'config.yaml');
@@ -406,7 +406,7 @@ export async function validateConfigWithKernel(config: Record<string, unknown>, 
   }
 }
 
-export function hasConfig(): boolean {
+function hasConfig(): boolean {
   return fs.existsSync(PATHS.configFile);
 }
 
@@ -437,19 +437,49 @@ export function hasKernel(): boolean {
   return fs.existsSync(PATHS.mihomoBinary);
 }
 
+/** 「内核未安装」的统一报错与指引（start/install/tun 启动/服务符号链/内核校验共用，措辞单点维护） */
+export function assertKernelInstalled(): void {
+  if (!hasKernel()) throw new CliError('未找到内核', { hint: '下载内核: mihomo-cli kernel' });
+}
+
+/** 「运行时配置缺失」的统一报错与指引（服务启动/TUN 启动共用）：配置由 start 按订阅重建 */
+export function assertRuntimeConfigPresent(): void {
+  if (!fs.existsSync(PATHS.configFile)) throw new CliError('未找到运行时配置', { hint: '请先添加订阅: mihomo-cli sub add <url>' });
+}
+
+/** 一次 `mihomo -v` spawn 的探测结果：可执行性判据与版本提取共用一份正则（doctor 检查项、kernel 下载自检、checkUpdate 消费） */
+export interface KernelProbe {
+  /** spawn 本身的失败（ENOENT/超时等），区别于非零退出 */
+  spawnError: Error | null;
+  /** 退出码；spawnError 时为 null */
+  status: number | null;
+  /** stdout+stderr 合并（已 trim） */
+  output: string;
+  /** 版本串（三段数字，可能带 v 前缀）；输出不含该形态时为 null */
+  version: string | null;
+}
+
+/** 一次 spawn 拿可执行性与版本两类结论（此前同一信息要 2-3 次 spawn 各自提取） */
+export function probeKernelVersion(binary: string = PATHS.mihomoBinary): KernelProbe {
+  const r = spawnSync(binary, ['-v'], { encoding: 'utf8', timeout: 5000 });
+  const output = `${r.stdout || ''}${r.stderr || ''}`.trim();
+  const match = output.match(/v?\d+\.\d+\.\d+/);
+  return { spawnError: r.error ?? null, status: r.status ?? null, output, version: match ? match[0] : null };
+}
+
 /**
  * 内核版本探测。CLI 是短进程、调用点全在展示路径（status/doctor/help/kernel），
  * 每次直接 spawn 一次 `mihomo-cli -v`（本地毫秒级）——不做进程内缓存：
  * 缓存需要失效协议（下载/reset 换掉内核后要记得清），省一次重复探测的收益不抵这层状态。
+ *
+ * 已持有 probe 结果的调用方（doctor 一次体检内复用同一份）经参数传入，免二次 spawn。
  */
-export function getKernelVersion(): string | null {
+export function getKernelVersion(probe?: KernelProbe): string | null {
   if (!hasKernel()) return null;
   try {
-    const result = spawnSync(PATHS.mihomoBinary, ['-v'], { encoding: 'utf8', timeout: 5000 });
-    const output = `${result.stdout || ''}${result.stderr || ''}`.trim();
-    if (!output) return 'unknown';
-    const match = output.match(/v?[\d]+\.[\d]+\.[\d]+/);
-    return match ? match[0] : output.split('\n')[0];
+    const p = probe ?? probeKernelVersion();
+    if (!p.output) return 'unknown';
+    return p.version ?? p.output.split('\n')[0];
   } catch {
     return 'unknown';
   }

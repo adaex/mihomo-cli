@@ -1,10 +1,8 @@
 import path from 'node:path';
 import { assertKnownFlags, assertPositionalCount, assertRestartOptionValues } from '../argv.js';
 import { colors } from '../colors.js';
-import { CliError } from '../errors.js';
 import { isOverwriteEnabled, listOverwriteFile, setOverwriteEnabled } from '../overwrite.js';
-import { suggestSimilar } from '../suggest.js';
-import { dispatchSubcommand, restartToApply, type SubCommand } from './shared.js';
+import { dispatchSubcommand, restartToApply, type SubCommand, unknownSubcommandError } from './shared.js';
 
 function printOverwriteList(): void {
   const info = listOverwriteFile();
@@ -94,24 +92,17 @@ const SUBCOMMANDS: SubCommand[] = [
 export async function cmdOverwrite(args: string[]): Promise<void> {
   assertKnownFlags(args, ['-s', '--no-update', '-u', '--update-timeout'], 'ow [on|off]');
   await dispatchSubcommand(args, SUBCOMMANDS, {
-    // 无子命令 → 列表；未知子命令 → 报错（与 sub/dir 同构，避免 `ow onn` 静默当成 list）
+    // 无子命令 → 列表；未知子命令 → 报错（守卫与 did-you-mean 拼装收口在 shared）
     fallback: () => {
       console.log('');
       printOverwriteList();
     },
-    onUnknown: action => {
-      // 选项出现在子命令位置：裸 ow 只展示状态，重启透传选项必须跟在 on/off 后
-      if (action.startsWith('-')) {
-        throw new CliError(`未知的选项: ${action}`, {
-          label: '参数错误',
-          hint: ['裸 ow 只查看覆写状态，不接受选项', '', '用法: mihomo-cli ow on|off [-s] [-u ms]'],
-        });
-      }
-      const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
-      const suggestion = suggestSimilar(action, names);
-      throw new CliError(`未知的覆写子命令: ${action}`, {
-        hint: [...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []), '', '可用子命令: on, off'],
-      });
-    },
+    onUnknown: action =>
+      unknownSubcommandError(action, SUBCOMMANDS, {
+        what: '覆写子命令',
+        // 重启透传选项必须跟在 on/off 后，裸 ow 不消费任何选项
+        optionHint: ['裸 ow 只查看覆写状态，不接受选项', '', '用法: mihomo-cli ow on|off [-s] [-u ms]'],
+        unknownHint: ['', '可用子命令: on, off'],
+      }),
   });
 }

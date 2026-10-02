@@ -4,7 +4,7 @@ import { colors } from './colors.js';
 import { assertServiceLabelSafe, SERVICE_LABEL } from './constants.js';
 import { CliError } from './errors.js';
 import { DIRS, PATHS } from './paths.js';
-import { cleanupAll, describePidCleanupFailure, reapPidWhenQuiet } from './process-stop.js';
+import { cleanupAll, describePidCleanupFailure, MANUAL_PKILL_HINT, reapPidWhenQuiet } from './process-stop.js';
 import { runSudoScript, SudoAuthError } from './sudo.js';
 import { shellQuote } from './text.js';
 import type { CleanupResult } from './types.js';
@@ -63,7 +63,7 @@ export function buildRootResidueCleanupError(result: Pick<CleanupResult, 'remain
         : 'root 残留未清理干净';
   const hint = [ctx.mainOutcome, residueHint, `重新运行可再次尝试清理: ${ctx.retryCommand}`];
   // 有 kernel 残留、或脚本没走完（可能仍有进程）→ pkill 幂等兜底；仅 pid 文件残留才引导 rm
-  hint.push(hasKernelResidue || scriptError ? '手动清理: sudo pkill -9 mihomo' : `手动清理: sudo rm -f ${PATHS.pidFile}`);
+  hint.push(hasKernelResidue || scriptError ? MANUAL_PKILL_HINT : `手动清理: sudo rm -f ${PATHS.pidFile}`);
   if (cancelled) {
     return new CliError('管理员密码未输入或有误，root 残留未被清理', { label: '已取消', hint });
   }
@@ -185,4 +185,18 @@ export async function cleanupLegacyInstallOrThrow(): Promise<void> {
   if (pidError) {
     console.warn(colors.yellow(`警告: ${describePidCleanupFailure(pidError)}，下次 stop 会再次尝试`));
   }
+}
+
+/**
+ * 遗留 root 安装的前后提示编排（stop / start(tun) / install / uninstall 四处共用）：
+ * reason 是场景短语（「停止前需清理」「启动 TUN 前需清理」等），动作本体统一走
+ * cleanupLegacyInstallOrThrow。此前各命令内联这套话术，措辞已漂移出三种说法。
+ */
+export async function announceLegacyCleanupOrThrow(reason: string, extraNotes: string[] = []): Promise<void> {
+  console.log(colors.yellow(`检测到旧版本安装的系统级服务（root LaunchDaemon），${reason}`));
+  for (const note of extraNotes) console.log(colors.gray(note));
+  console.log(colors.gray('  清理需要一次管理员密码（删除 root 拥有的文件）'));
+  await cleanupLegacyInstallOrThrow();
+  console.log(colors.green('已清理遗留的系统级服务'));
+  console.log('');
 }

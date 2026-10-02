@@ -6,23 +6,28 @@ import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './pa
 import type { Settings, Subscription, SubscriptionCache, SubscriptionCacheEntry, SubscriptionUrgency, SubscriptionWithCache } from './types.js';
 
 /**
- * 备份损坏的 settings.json 并告警，返回默认设置。
+ * 备份损坏的数据文件并告警（settings.json / 订阅缓存同款语义，此前两份内联文案已漂移）。
  *
  * 备份只保留第一份：之后回退默认并写回，若文件再次损坏（外部反复覆写），
- * 覆盖 `.bak` 会用默认内容/新损坏盖掉唯一的用户原件。
+ * 覆盖 `.bak` 会用默认内容/新损坏盖掉唯一的用户原件。备份失败不阻塞读取。
  */
-function backupCorruptSettings(reason: string): Settings {
-  const backup = `${PATHS.settingsFile}.bak`;
+function backupCorruptFile(file: string, noun: string, reason: string, fallbackNote: string): void {
+  const backup = `${file}.bak`;
   try {
     if (fs.existsSync(backup)) {
-      console.warn(`警告: settings.json ${reason}，使用默认设置（原件已在早前备份: ${backup}，未覆盖）`);
+      console.warn(`警告: ${noun} ${reason}，${fallbackNote}（原件已在早前备份: ${backup}，未覆盖）`);
     } else {
-      fs.copyFileSync(PATHS.settingsFile, backup);
-      console.warn(`警告: settings.json ${reason}，已备份到 ${backup}，使用默认设置`);
+      fs.copyFileSync(file, backup);
+      console.warn(`警告: ${noun} ${reason}，已备份到 ${backup}，${fallbackNote}`);
     }
   } catch {
-    console.warn(`警告: settings.json ${reason}，使用默认设置`);
+    console.warn(`警告: ${noun} ${reason}，${fallbackNote}`);
   }
+}
+
+/** 备份损坏的 settings.json 并告警，返回默认设置（策略见 backupCorruptFile） */
+function backupCorruptSettings(reason: string): Settings {
+  backupCorruptFile(PATHS.settingsFile, 'settings.json', reason, '使用默认设置');
   return {};
 }
 
@@ -130,74 +135,23 @@ export function getPorts(settings: Settings = readSettings()): { mixed: number; 
   return { mixed, controller };
 }
 
-/**
- * 遮蔽 URL 中的敏感信息（query token / userinfo / 路径型令牌）。
- * 不对逗号做任何切分：逗号在 query/path 中合法（`?nodes=us,hk&token=xxx`），
- * 切开后两段都不含可识别的 token 参数，反而会让密钥明文输出。
- */
-export function maskUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    // 已知 token 参数名（值可能很短，如 ?token=abc）。黑名单靠人工维护、已补录
-    // 多轮（uuid/sid/id 都曾漏网），加载期断言「枚举不重复」挡漂移
-    const TOKEN_KEY_NAMES = [
-      'token',
-      'key',
-      'secret',
-      'pass',
-      'password',
-      'auth',
-      'access_token',
-      'api_key',
-      'uuid',
-      'sid',
-      'id',
-      'sub',
-      'user',
-      'email',
-      'passwd',
-      'apikey',
-      'access',
-    ];
-    if (new Set(TOKEN_KEY_NAMES).size !== TOKEN_KEY_NAMES.length) {
-      throw new Error('tokenKeys 存在重复登记');
-    }
-    const tokenKeys = new Set(TOKEN_KEY_NAMES);
-    // 启发式：值长度 ≥16 的 query 参数一律遮蔽（token 几乎都是长串，误伤率低）。
-    // 黑名单永远枚举不完（uuid/sid/id 等都曾漏网），启发式更耐久。
-    for (const [key, value] of parsed.searchParams) {
-      if (tokenKeys.has(key.toLowerCase()) || value.length >= 16) {
-        parsed.searchParams.set(key, '***');
-      }
-    }
-    if (parsed.username) parsed.username = '***';
-    if (parsed.password) parsed.password = '***';
-    // 路径型 token（如 /api/v1/client/subscribe/<长串>）：对疑似令牌的长路径段做遮蔽，
-    // 保留结构可读。阈值 16，保留首尾 4 位便于用户辨认是哪条订阅。
-    parsed.pathname = parsed.pathname
-      .split('/')
-      .map(seg => (seg.length >= 16 ? `${seg.slice(0, 4)}***${seg.slice(-4)}` : seg))
-      .join('/');
-    return parsed.toString();
-  } catch {
-    // 无法解析的畸形输入（复制不全的订阅 URL、误把整条 token 当 URL 粘入等）：
-    // 只保留前缀——token 位于 query（尾部）或整条就是凭据，保头舍尾既留排错线索
-    // （scheme/host 在头部）又不把凭据带进错误消息（fuzz 抓出旧「前15...后10」
-    // 会展示尾部 10 字符）。截断阈值与前缀等宽：≤15 原样（泄漏上限与截断保留量
-    // 等量），>15 一律截断——「短就安全」不成立，短串可能整条就是凭据
-    if (url.length > 15) {
-      return `${url.slice(0, 15)}...`;
-    }
-    return url;
-  }
-}
-
 /** 控制器端口的安全读取：ports 配置非法（如两端口相同）时返回 null 而非抛错。
  * status/ui 这类只读展示命令不应被坏设置挡死——控制器地址是排查「连不上」的唯一
  * 可见线索；doctor 另有专查非法 ports 的检查项 */
 export function getControllerPortOrNull(): number | null {
   try {
     return getPorts().controller;
+  } catch {
+    return null;
+  }
+}
+
+/** Mixed 端口的安全读取，与 getControllerPortOrNull 同款降级：探测/展示路径
+ * （doctor 端口检查、kernel 通道决策）不该在做正事之前被坏设置挡住；非法值
+ * 本身由 doctor 的「端口配置」检查项单独报出 */
+export function getMixedPortOrNull(): number | null {
+  try {
+    return getPorts().mixed;
   } catch {
     return null;
   }
@@ -238,23 +192,9 @@ export function readSubscriptionCache(): SubscriptionCache {
   return empty();
 }
 
-/**
- * 备份损坏的订阅缓存并告警，返回空缓存。与 backupCorruptSettings 同款语义：
- * 备份只保留第一份（覆盖 `.bak` 会用新损坏盖掉唯一可能更早的原件），
- * 备份失败不阻塞读取（探测缓存不该让 start 抛错）。
- */
+/** 备份损坏的订阅缓存并告警，返回空缓存（策略与 backupCorruptSettings 同源） */
 function backupCorruptSubscriptionCache(reason: string): SubscriptionCache {
-  const cacheBackup = `${PATHS.subscriptionsCacheFile}.bak`;
-  try {
-    if (fs.existsSync(cacheBackup)) {
-      console.warn(`警告: 订阅缓存${reason}，已忽略（早前备份保留在 ${cacheBackup}，未覆盖）`);
-    } else {
-      fs.copyFileSync(PATHS.subscriptionsCacheFile, cacheBackup);
-      console.warn(`警告: 订阅缓存${reason}，已备份到 ${cacheBackup}`);
-    }
-  } catch {
-    console.warn(`警告: 订阅缓存${reason}，已忽略`);
-  }
+  backupCorruptFile(PATHS.subscriptionsCacheFile, '订阅缓存', reason, '已忽略');
   return Object.create(null) as SubscriptionCache;
 }
 
@@ -459,4 +399,17 @@ export function readSubscriptionRawConfig(subName: string): string | null {
   const filePath = getSubscriptionRawConfigPath(subName);
   if (!fs.existsSync(filePath)) return null;
   return fs.readFileSync(filePath, 'utf8');
+}
+
+/**
+ * 「订阅有条目但本地配置文件没了」的统一守卫（start 配置准备 / config 推导 / doctor
+ * 检查项共用）：正确动作是重新下载而非重新添加，指引单点维护，三处不再各写一份。
+ * 名称非法的 CliError 由路径防御透传（getSubscriptionRawConfigPath）。
+ */
+export function requireSubscriptionRawConfig(subName: string): string {
+  const content = readSubscriptionRawConfig(subName);
+  if (content === null) {
+    throw new CliError(`订阅 "${subName}" 有条目但没有本地配置文件`, { hint: `更新订阅: mihomo-cli sub update ${subName}` });
+  }
+  return content;
 }

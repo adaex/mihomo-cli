@@ -2,8 +2,8 @@ import { assertKnownFlags, assertPositionalCount } from '../argv.js';
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { getMihomoPids } from '../process-probe.js';
-import { stop } from '../process-stop.js';
-import { cleanupLegacyInstallOrThrow, detectLegacySystemInstall, getServiceStatus, recordServiceStopped, stopService } from '../service.js';
+import { MANUAL_PKILL_HINT, stop } from '../process-stop.js';
+import { announceLegacyCleanupOrThrow, detectLegacySystemInstall, getServiceStatus, recordServiceStopped, stopService } from '../service.js';
 import type { StopResult } from '../types.js';
 
 /**
@@ -13,7 +13,7 @@ import type { StopResult } from '../types.js';
  */
 export function handleStopResult(result: Pick<StopResult, 'remaining'>): void {
   if (result.remaining && result.remaining.length > 0) {
-    throw new CliError(result.remaining.join(', '), { label: '部分进程未终止', hint: '请手动运行: sudo pkill -9 mihomo' });
+    throw new CliError(result.remaining.join(', '), { label: '部分进程未终止', hint: MANUAL_PKILL_HINT });
   }
 }
 
@@ -31,11 +31,7 @@ export async function cmdStop(args: string[]): Promise<void> {
   // 「已停止」即成谎报。detectLegacySystemInstall 只查 plist 文件，不要求任务在跑，
   // 幂等清理无副作用
   if (detectLegacySystemInstall()) {
-    console.log(colors.yellow('检测到旧版本安装的系统级服务（root LaunchDaemon），停止前需清理'));
-    console.log(colors.gray('  清理需要一次管理员密码（删除 root 拥有的文件）'));
-    await cleanupLegacyInstallOrThrow();
-    console.log(colors.green('已清理遗留的系统级服务'));
-    console.log('');
+    await announceLegacyCleanupOrThrow('停止前需清理');
   }
 
   const status = getServiceStatus();

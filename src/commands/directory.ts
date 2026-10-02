@@ -3,8 +3,7 @@ import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { openUrl } from '../open.js';
 import { DIRECTORY_TARGETS, USER_DATA_DIR } from '../paths.js';
-import { suggestSimilar } from '../suggest.js';
-import { dispatchSubcommand, type SubCommand } from './shared.js';
+import { dispatchSubcommand, type SubCommand, unknownSubcommandError } from './shared.js';
 
 function openDirectory(args: string[]): void {
   // 目标至多一个：`dir open logs extra` 此前静默忽略 extra
@@ -66,24 +65,12 @@ export async function cmdDirectory(args: string[]): Promise<void> {
   // CliError 会变成未处理的 Promise 拒绝，绕过 main().catch 的统一渲染（丢 label/hint）
   await dispatchSubcommand(args, SUBCOMMANDS, {
     fallback: printDirectoryInfo,
-    onUnknown: action => {
-      // 选项出现在子命令位置：裸 dir 只展示目录信息（选项由分发前的白名单统一拦）
-      if (action.startsWith('-')) {
-        throw new CliError(`未知的选项: ${action}`, {
-          label: '参数错误',
-          hint: ['裸 dir 只展示目录信息，不接受选项', '', '用法: mihomo-cli dir open [root|subs|logs|data|runtime|kernel]'],
-        });
-      }
-      const names = SUBCOMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]);
-      const suggestion = suggestSimilar(action, names);
-      throw new CliError(`未知的目录子命令: ${action}`, {
-        hint: [
-          ...(suggestion.length > 0 ? [`是否想输入: ${suggestion.join(' / ')}?`] : []),
-          '',
-          '可用子命令: open',
-          '打开指定目录: mihomo-cli dir open <target>',
-        ],
-      });
-    },
+    // 裸 dir 只展示目录信息（选项由分发前的白名单统一拦）；守卫收口在 shared
+    onUnknown: action =>
+      unknownSubcommandError(action, SUBCOMMANDS, {
+        what: '目录子命令',
+        optionHint: ['裸 dir 只展示目录信息，不接受选项', '', '用法: mihomo-cli dir open [root|subs|logs|data|runtime|kernel]'],
+        unknownHint: ['', '可用子命令: open', '打开指定目录: mihomo-cli dir open <target>'],
+      }),
   });
 }

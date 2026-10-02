@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 
+import { assertKernelInstalled, assertRuntimeConfigPresent } from './config.js';
 import { CliError } from './errors.js';
 import { readLogTail, rotateAndCleanupLogs } from './log-files.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
@@ -8,6 +9,7 @@ import { getServiceStatus } from './service.js';
 import { runSudoScript } from './sudo.js';
 import { shellQuote } from './text.js';
 import type { StartResult } from './types.js';
+import { sleep } from './utils.js';
 
 /**
  * TUN 内核的启动（临时 sudo 脚本，不走 launchd）。
@@ -101,12 +103,8 @@ export async function startTun(): Promise<StartResult> {
   // 内核（fd 指向被改名的 inode、O_APPEND）会继续往「归档文件」写——秒失败错误
   // （内核没装、配置缺失）不该先动日志。sudo 取消路径的同类窗口无法完全消除
   // （rename 进不了 root 脚本），但校验前置消掉了最常见的形态
-  if (!fs.existsSync(PATHS.mihomoBinary)) {
-    throw new CliError('未找到 mihomo 内核，请先下载内核', { hint: '下载内核: mihomo-cli kernel' });
-  }
-  if (!fs.existsSync(PATHS.configFile)) {
-    throw new CliError('未找到运行时配置', { hint: '请先添加订阅: mihomo-cli sub add <url>' });
-  }
+  assertKernelInstalled();
+  assertRuntimeConfigPresent();
 
   // pkill 前最后一道复核（存在性校验之后、日志轮转**之前**）：cmdStart 的 loaded
   // 守卫读的是命令开头的快照，此后隔着订阅更新与配置构建两个慢速阶段；期间另一
@@ -161,7 +159,7 @@ export async function startTun(): Promise<StartResult> {
     codeMessages: { 2: 'TUN 启动失败（详见上方日志）' },
   });
 
-  await new Promise(resolve => setTimeout(resolve, TUN_MODE_POST_WAIT_MS));
+  await sleep(TUN_MODE_POST_WAIT_MS);
 
   // 复核存活而非只读 pid 文件：脚本观察窗（1.2s）结束后内核仍可能退出（端口冲突等
   // 晚期失败），pid 文件还在而进程已死——只读文件会把这报成启动成功。

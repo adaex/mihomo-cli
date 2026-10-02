@@ -294,17 +294,17 @@ describe('matchesScope 订阅名大小写不敏感', () => {
   const file = (match: OverwriteMatch): OverwriteFileEntry => ({ name: 'overwrite.x.yaml', path: '/x', config: {}, match });
 
   it('match 值小写命中大写订阅名（与 sub use 的解析口径一致）', () => {
-    const files = [file({ name: 'home' })];
+    const files = [file({ name: ['home'] })];
     assert.equal(selectActiveOverwriteFiles(files, { subName: 'Home' }).length, 1);
   });
 
   it('match 值大写命中小写订阅名', () => {
-    const files = [file({ name: 'HOME' })];
+    const files = [file({ name: ['HOME'] })];
     assert.equal(selectActiveOverwriteFiles(files, { subName: 'home' }).length, 1);
   });
 
   it('名称不同仍不命中', () => {
-    const files = [file({ name: 'work' })];
+    const files = [file({ name: ['work'] })];
     assert.equal(selectActiveOverwriteFiles(files, { subName: 'home' }).length, 0);
   });
 

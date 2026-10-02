@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { getConfigInfo } from './config.js';
+import { assertKernelInstalled, assertRuntimeConfigPresent, getConfigInfo } from './config.js';
 import { assertServiceLabelSafe, SERVICE_BINARY_NAME } from './constants.js';
 import { CliError } from './errors.js';
 import { concludeHotReload, logOversized, tryHotReload } from './hot-reload.js';
@@ -42,6 +42,7 @@ export {
   waitUntilUnloaded,
 } from './launchctl.js';
 export {
+  announceLegacyCleanupOrThrow,
   buildLegacyCleanupScript,
   buildRootResidueCleanupError,
   classifyResidueCleanup,
@@ -208,9 +209,7 @@ export function describeAbnormalExit(status: ServiceStatus): string | null {
  * 不影响符号链，但 `reset kernel` 会连同删除，因此 install 与 start 都要调一次。
  */
 export function ensureServiceSymlink(): void {
-  if (!fs.existsSync(PATHS.mihomoBinary)) {
-    throw new CliError('未找到 mihomo 内核，请先下载内核', { hint: '下载内核: mihomo-cli kernel' });
-  }
+  assertKernelInstalled();
   try {
     const current = fs.readlinkSync(PATHS.serviceBinary);
     if (current === 'mihomo') return;
@@ -394,9 +393,7 @@ export async function startService(): Promise<{ started: boolean }> {
   if (!isServiceInstalled()) {
     throw new CliError('服务未安装', { hint: '安装服务: mihomo-cli install' });
   }
-  if (!fs.existsSync(PATHS.configFile)) {
-    throw new CliError('未找到运行时配置', { hint: '请先添加订阅: mihomo-cli sub add <url>' });
-  }
+  assertRuntimeConfigPresent();
 
   // 拒绝用 TUN 配置启动服务：服务以普通用户运行（用户级 LaunchAgent），无权创建 utun
   // 设备，真启起来就是崩溃后被 KeepAlive 每约 10s 拉起一次，日志刷爆而代理不通。
@@ -475,6 +472,24 @@ export function disableServiceAutoStart(timeoutMs: number = LAUNCHCTL_TIMEOUT_MS
 }
 
 /**
+ * 锁内停止序列（stopService / uninstallService 共用，此前两处逐字重复）：
+ * 锁内 bootout + 禁自启（与 startService 的 enable/bootstrap 串行化），锁外等任务卸载。
+ *
+ * 锁内三次 launchctl（bootout + disable + print-disabled 复核）全部走
+ * SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS，最坏 9s < 锁强夺阈值 10s（预算论证见该常量注释，
+ * 关系由 service-concurrency.spec 的常量断言锁死）。
+ * 不加 await：withFileLock 是同步的，且要求 fn 同步（持锁期间让出事件循环等于没锁）。
+ */
+async function bootoutAndDisableInLock(): Promise<void> {
+  withFileLock(PATHS.serviceLock, () => {
+    bootoutService(SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS);
+    disableServiceAutoStart(SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS);
+  });
+
+  await waitUntilUnloaded();
+}
+
+/**
  * 停止服务并禁止自启。
  *
  * `disable` 不能省：只 bootout 的话 enable 位还在，下次登录 launchd 扫到 plist 又会拉起，
@@ -485,16 +500,7 @@ export function disableServiceAutoStart(timeoutMs: number = LAUNCHCTL_TIMEOUT_MS
 export async function stopService(): Promise<void> {
   assertServiceLabelSafe();
 
-  // 跨进程锁：与 startService 的 enable/bootstrap 串行化。锁内三次 launchctl
-  // （bootout + disable + print-disabled 复核）全部走 SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS，
-  // 最坏 9s < 锁强夺阈值 10s（预算论证见该常量注释）
-  // 不加 await：withFileLock 是同步的，且要求 fn 同步（持锁期间让出事件循环等于没锁）
-  withFileLock(PATHS.serviceLock, () => {
-    bootoutService(SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS);
-    disableServiceAutoStart(SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS);
-  });
-
-  await waitUntilUnloaded();
+  await bootoutAndDisableInLock();
 
   // bootout 通常已终止托管内核；tun 起的 root 内核与手动残留在此收口。
   // 重跑 stop 即可重试清理：此时服务已停，cmdStop 走「游离内核」路径再次提权
@@ -514,14 +520,8 @@ export async function stopService(): Promise<void> {
 export async function uninstallService(): Promise<void> {
   assertServiceLabelSafe();
 
-  // 跨进程锁：与 startService 的 enable/bootstrap 串行化（withFileLock 同步，见 stopService）。
-  // 锁内三次 launchctl 同样走 SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS，预算论证见该常量注释
-  withFileLock(PATHS.serviceLock, () => {
-    bootoutService(SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS);
-    disableServiceAutoStart(SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS);
-  });
-
-  await waitUntilUnloaded();
+  // 锁内停止序列与 stopService 同一份（bootoutAndDisableInLock），预算注释见该函数
+  await bootoutAndDisableInLock();
 
   // rm 失败必须可见：plist 还在的话登录时又被扫到，「已卸载」就是谎报
   try {
@@ -580,11 +580,15 @@ export async function restartService(): Promise<{ hotReloaded: boolean; started:
     throw new CliError('服务未安装，无法重启', { hint: '安装服务: mihomo-cli install' });
   }
 
-  if (!logOversized() && (await tryHotReload())) {
+  // 判据单次取值：是否 oversized 决定「跳热重载」与「copy-truncate」两件事，
+  // 取一次让它们天然一致（热重载探测的数秒窗口内日志越过阈值的极端时序不构成语义）
+  const oversized = logOversized();
+
+  if (!oversized && (await tryHotReload())) {
     return concludeHotReload(stopEpochBaseline(), readStopEpoch());
   }
 
-  if (logOversized()) {
+  if (oversized) {
     // 归档路径经 allocateArchivePath（log-files.ts 的单一命名规则）：同一秒内两次轮转
     // 会互相覆盖归档（copyFileSync 静默覆盖），它负责追加序号后缀
     const archiveFile = allocateArchivePath();

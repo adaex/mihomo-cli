@@ -1,19 +1,18 @@
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 
 import { compareVersions } from 'compare-versions';
 import { assertKnownFlags, assertPositionalCount } from '../argv.js';
 import { colors } from '../colors.js';
-import { deriveRuntimeMode, getConfigInfo, getKernelVersion, hasKernel } from '../config.js';
+import { deriveRuntimeMode, getConfigInfo, getKernelVersion, hasKernel, probeKernelVersion } from '../config.js';
 import { DEFAULT_MIXED_PORT, VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
 import { formatDate, formatRelativeTime } from '../format.js';
 import { checkUpdate, hasGh } from '../kernel.js';
 import { KERNEL_SELF_BACKUP_DIR, KERNEL_SELF_UPDATE_DIR, PATHS, USER_DATA_DIR } from '../paths.js';
-import { probeProxyConnectivity } from '../proxy-probe.js';
+import { lsofListenPids, probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
-import { getPorts, getSubscriptionsWithCache, isValidSettingsContent, readSubscriptionRawConfig } from '../settings.js';
+import { getMixedPortOrNull, getPorts, getSubscriptionsWithCache, isValidSettingsContent, requireSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription, isSubscriptionStale, prepareConfigForStart, resolveUpdateInterval } from '../subscription.js';
 import type { KernelUpdateInfo } from '../types.js';
 import { getLatestNpmVersion } from './update.js';
@@ -43,12 +42,7 @@ interface Check {
 
 /** 端口是否有进程在监听（lsof；查不到/无 lsof 都按「未监听」处理，不夸大也不吓人） */
 function isPortListening(port: number): boolean {
-  try {
-    const r = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8', timeout: 5_000 });
-    return r.status === 0 && (r.stdout || '').trim().length > 0;
-  } catch {
-    return false;
-  }
+  return (lsofListenPids(port)?.length ?? 0) > 0;
 }
 
 async function collectChecks(): Promise<Check[]> {
@@ -64,7 +58,7 @@ async function collectChecks(): Promise<Check[]> {
   // 本地部分太短，只省约 47ms，此时耗时下界就是 npm 查询本身。
   //
   // 尾随的 `.catch` 是**纵深防御，当前不承载行为**：promise 提前创建、await 推迟到函数
-  // 末尾，中间任一 push 路径若抛错（如订阅名非法时 readSubscriptionRawConfig 抛 CliError），
+  // 末尾，中间任一 push 路径若抛错（如订阅名非法时 requireSubscriptionRawConfig 抛 CliError），
   // 这个 promise 就没人 await 了——真 reject 的话会被 index.ts 的 unhandledRejection
   // 处理器捕获、以退出码 1 终止，体检在报出真正的问题之前先崩掉。实测目前不会发生：
   // getLatestNpmVersion 自身 try/catch 吞掉一切并返回 null，摘掉这个 catch 行为不变
@@ -77,38 +71,38 @@ async function collectChecks(): Promise<Check[]> {
   // 超时，4s 的体检预算被耗干，「内核版本 ok」退化成 skip，还拖住进程退出（子进程句柄）。
   // 4s 超时/失败一律降级 skip——体检不该被 registry 之外再多一个网络故障拖红。
   // 与 npm 项并列后，「CLI 与内核各有一条更新线、该更新哪个」不再需要用户自己记
-  const earlyState = getRunningState();
-  let kernelProxyPort: number | null = null;
-  try {
-    kernelProxyPort = earlyState.running ? getPorts().mixed : null;
-  } catch {
-    kernelProxyPort = null;
-  }
-  const kernelVersionPromise: Promise<KernelUpdateInfo | null> = hasKernel()
+  //
+  // 服务状态与内核 -v 各只探测一次：earlyService/earlyState/kernelProbe 贯穿全函数
+  // （服务/端口/内核各检查段之间没有任何 await，重复探测结论必然一致）；checkUpdate
+  // 复用同一份 probe 结果，不再自行 spawn
+  const earlyService = getServiceStatus();
+  const earlyState = getRunningState(earlyService);
+  // 端口只用于选通道：settings.ports 损坏时降级为「不探测本机代理」（getMixedPortOrNull），
+  // 非法值由下方「端口配置」检查项单独报出
+  const kernelProxyPort = earlyState.running ? getMixedPortOrNull() : null;
+  const kernelProbe = hasKernel() ? probeKernelVersion() : null;
+  const kernelVersionPromise: Promise<KernelUpdateInfo | null> = kernelProbe
     ? withAbortableTimeout(
         signal =>
           checkUpdate({
             proxy: kernelProxyPort !== null ? `http://127.0.0.1:${kernelProxyPort}` : null,
             useGh: kernelProxyPort === null && hasGh(),
             signal,
+            currentVersion: getKernelVersion(kernelProbe),
           }),
         4_000,
       ).catch(() => null)
     : Promise.resolve(null);
 
   // === 内核 ===
-  if (!hasKernel()) {
+  if (!kernelProbe) {
     push('内核', 'fail', '未安装', 'mihomo-cli kernel');
+  } else if (kernelProbe.status === 0 && kernelProbe.version !== null) {
+    push('内核', 'ok', getKernelVersion(kernelProbe) || '可执行');
+  } else if (kernelProbe.spawnError) {
+    push('内核', 'fail', `二进制无法执行（${kernelProbe.spawnError.message}）`, '重新下载: mihomo-cli kernel');
   } else {
-    const v = getKernelVersion();
-    const r = spawnSync(PATHS.mihomoBinary, ['-v'], { encoding: 'utf8', timeout: 5_000 });
-    if (r.status === 0 && /v?\d+\.\d+\.\d+/.test(`${r.stdout}${r.stderr}`)) {
-      push('内核', 'ok', v || '可执行');
-    } else if (r.error) {
-      push('内核', 'fail', `二进制无法执行（${r.error.message}）`, '重新下载: mihomo-cli kernel');
-    } else {
-      push('内核', 'fail', `二进制无法执行（退出码 ${r.status}）`, '重新下载: mihomo-cli kernel');
-    }
+    push('内核', 'fail', `二进制无法执行（退出码 ${kernelProbe.status}）`, '重新下载: mihomo-cli kernel');
   }
 
   // === 内核面板自升级目录 ===
@@ -151,20 +145,15 @@ async function collectChecks(): Promise<Check[]> {
   } else {
     push('订阅', 'ok', `${subs.length} 个${active ? `，当前: ${active.name}` : ''}`);
     if (active) {
-      // 名称非法（手改 settings.json 写入路径形态等）会让路径构造抛 CliError——
-      // 体检是诊断面，不能被坏状态击穿（同列表面板的姿态），包成 fail 检查项继续
-      let rawConfig: string | null | Error;
+      // 名称非法（手改 settings.json 写入路径形态等）或条目在而本地文件没了，
+      // 都由 requireSubscriptionRawConfig 抛 CliError——体检是诊断面，不能被坏状态
+      // 击穿（同列表面板的姿态），包成 fail 检查项继续；fix 直接取错误自带的指引
       try {
-        rawConfig = readSubscriptionRawConfig(active.name);
-      } catch (e) {
-        rawConfig = e as Error;
-      }
-      if (rawConfig instanceof Error) {
-        push('订阅配置', 'fail', `${rawConfig.message}`, '手工修正 settings.json 中的订阅名后重试');
-      } else if (!rawConfig) {
-        push('订阅配置', 'fail', `当前订阅 "${active.name}" 有条目但无配置文件`, `mihomo-cli sub update ${active.name}`);
-      } else {
+        requireSubscriptionRawConfig(active.name);
         push('订阅配置', 'ok', `"${active.name}" 配置文件存在`);
+      } catch (e) {
+        const err = e as CliError;
+        push('订阅配置', 'fail', err.message, err.hint[0] ?? '手工修正 settings.json 中的订阅名后重试');
       }
       // 缓存新鲜度：超过更新间隔未更新 → 提醒（不判失败，start 会自动更新）
       const cached = subs.find(s => s.name === active.name);
@@ -182,7 +171,7 @@ async function collectChecks(): Promise<Check[]> {
   }
 
   // === 服务 ===
-  const service = getServiceStatus();
+  const service = earlyService;
   const legacy = detectLegacySystemInstall();
   if (legacy) {
     push('服务', 'fail', '检测到旧版本的系统级服务（root LaunchDaemon），会抢占端口', 'mihomo-cli uninstall（需一次管理员密码）');
@@ -211,7 +200,7 @@ async function collectChecks(): Promise<Check[]> {
   // === 端口 ===
   // getPorts 对非法 ports 抛错：转成检查项（fail），不能让整个体检崩在半路。
   // 兜底用默认端口继续查——配置非法已单独报出，端口检查项用默认值不产生误导
-  const state = getRunningState();
+  const state = earlyState;
   const info = getConfigInfo();
   let mixedPortDefault = DEFAULT_MIXED_PORT;
   try {

@@ -7,7 +7,7 @@ import type { DownloadChannel } from '../kernel.js';
 import * as kernel from '../kernel.js';
 import { parseMirrorArg, parseProxyArg } from '../kernel-args.js';
 import { getRunningState, startCommandForCurrentMode } from '../runtime.js';
-import { getPorts } from '../settings.js';
+import { getMixedPortOrNull } from '../settings.js';
 import { withSpinner } from '../spinner.js';
 
 /**
@@ -112,16 +112,10 @@ export async function cmdKernel(args: string[]): Promise<void> {
   // 不枚举网卡猜 IPv6（有 v6 地址不代表 v6 路由通），需要 v6 子域显式 --mirror v6。
   // 运行状态由命令层探测后注入——kernel.ts 不依赖 runtime/settings，通道决策保持纯函数可测
   const proxyRunning = getRunningState().running;
-  // 端口只用于选通道，settings.ports 损坏（getPorts 抛错）时降级为「不探测本机代理」
-  // 走 gh/直连——与 doctor/status 对同一调用的降级姿态一致，不该在做任何下载前就中止
-  let proxyPort: number | null = null;
-  if (proxyRunning) {
-    try {
-      proxyPort = getPorts().mixed;
-    } catch {
-      proxyPort = null;
-    }
-  }
+  // 端口只用于选通道，settings.ports 损坏时降级为「不探测本机代理」走 gh/直连
+  // （getMixedPortOrNull，与 doctor/status 对同一调用的降级姿态一致），
+  // 不该在做任何下载前就中止；非法值由 doctor 的「端口配置」检查项单独报出
+  const proxyPort = proxyRunning ? getMixedPortOrNull() : null;
   const forceDirect = mirrorInfo.isOverride && !mirrorInfo.mirror;
   // gh 探测只在做决策的形态下花这一次子进程（判据见 ghProbeNeeded）；
   // 不需要时传 false——resolveDownloadChannels 对显式覆盖形态本就不看这个输入

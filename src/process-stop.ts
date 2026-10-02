@@ -42,6 +42,12 @@ export function describePidCleanupFailure(err: Error): string {
 }
 
 /**
+ * 杀不掉的内核进程的幂等兜底命令，五处提示（stop/handleStopResult/reset/
+ * legacy-cleanup/uninstall）共用——前缀曾漂移出「请手动运行/手动命令/手动清理」三种说法
+ */
+export const MANUAL_PKILL_HINT = '手动清理: sudo pkill -9 mihomo';
+
+/**
  * pid 文件清理失败的可见警告（进程已不在时的唯一出口）。语气由调用方决定——
  * 游离 stop 与服务路径都要让用户知道文件还在、下次会再试，不能静默
  */
@@ -241,12 +247,14 @@ export async function stop(): Promise<StopResult> {
     }
   }
 
-  const remaining = getMihomoPids();
+  // cleanupAll 的返回值刚在死亡等待后复核过 remaining，中间只隔两条警告——
+  // 重发一次 pgrep 是重复观察，且两次结果不一致时反而说不清哪份是真的
+  const remaining = result.remaining;
   if (remaining.length > 0) {
     console.log('');
     console.log('仍有进程残留，需要手动清理:');
     console.log(`进程 PID: ${remaining.join(', ')}`);
-    console.log('手动命令: sudo pkill -9 mihomo');
+    console.log(MANUAL_PKILL_HINT);
     console.log('');
     return { success: true, remaining };
   }

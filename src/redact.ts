@@ -1,4 +1,4 @@
-import { maskUrl } from './settings.js';
+import { maskUrl } from './text.js';
 
 /**
  * 配置凭据脱敏：`mihomo-cli config` 可能被录屏、`| pbcopy` 发给别人求助，

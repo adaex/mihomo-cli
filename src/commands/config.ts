@@ -3,7 +3,7 @@ import { colors } from '../colors.js';
 import { buildConfig, deriveRuntimeMode, dumpYaml, getConfigInfo } from '../config.js';
 import { CliError } from '../errors.js';
 import { redactConfigSecrets } from '../redact.js';
-import { readSubscriptionRawConfig } from '../settings.js';
+import { requireSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription } from '../subscription.js';
 
 /**
@@ -32,10 +32,7 @@ export function cmdConfig(args: string[] = []): void {
     throw new CliError('尚无订阅，无法推导配置', { hint: '添加订阅: mihomo-cli sub add <url>' });
   }
 
-  const rawContent = readSubscriptionRawConfig(active.name);
-  if (!rawContent) {
-    throw new CliError(`订阅 "${active.name}" 有条目但没有本地配置文件`, { hint: `更新订阅: mihomo-cli sub update ${active.name}` });
-  }
+  const rawContent = requireSubscriptionRawConfig(active.name);
 
   // 与 status/doctor 一致：当前是 TUN 就按 TUN 推导，否则 Mixed
   const mode = deriveRuntimeMode(getConfigInfo());

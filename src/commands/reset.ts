@@ -5,7 +5,7 @@ import { CliError } from '../errors.js';
 import { isOverwriteFilename, listTypoOverwriteFiles } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
-import { cleanupAll, describePidCleanupFailure } from '../process-stop.js';
+import { cleanupAll, describePidCleanupFailure, MANUAL_PKILL_HINT } from '../process-stop.js';
 import {
   classifyResidueCleanup,
   cleanupLegacyInstallOrThrow,
@@ -146,7 +146,7 @@ export async function cmdReset(args: string[]): Promise<void> {
     if (cleanup.remaining.length > 0) {
       throw new CliError(cleanup.remaining.join(', '), {
         label: '进程未能停止，重置中止',
-        hint: ['请手动运行: sudo pkill -9 mihomo'],
+        hint: [MANUAL_PKILL_HINT],
       });
     }
     // remaining 复核已空、但清理有收尾错误（判据与 stop/服务路径同源 classifyResidueCleanup
