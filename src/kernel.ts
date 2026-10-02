@@ -538,8 +538,9 @@ export async function downloadKernel(
   // 镜像前缀只拼 github.com 形态的地址（其他 GitHub 资产 host 套不进去）；上游若迁移
   // 资产地址形态，显式 --mirror 会静默退化成直连——被墙网络下只见超时，没有任何
   // 「镜像没起作用」的线索，必须点破
-  if (channel.kind === 'mirror' && channel.mirror && downloadUrl === asset.browser_download_url) {
-    console.warn(`警告: 镜像前缀未能作用于该资产地址（host 非 github.com），本次为直连下载`);
+  const mirrorIneffective = channel.kind === 'mirror' && channel.mirror !== null && downloadUrl === asset.browser_download_url;
+  if (mirrorIneffective) {
+    console.warn('警告: 镜像前缀未能作用于该资产地址（host 非 github.com），本次为直连下载；若直连超时可改用 gh 通道（mihomo-cli kernel）');
   }
 
   // 下载、解压、自检都在临时目录里完成，自检通过后才原子替换旧内核——
@@ -551,7 +552,9 @@ export async function downloadKernel(
   const sizeMB = (asset.size / 1024 / 1024).toFixed(2);
 
   try {
-    if (channel.kind === 'mirror' && progressCallback) {
+    // 「经镜像中转」的完整性提示只在前缀真的生效时打——前缀未作用时打这条会与
+    // 上方的直连警告在同一次输出里互相矛盾
+    if (channel.kind === 'mirror' && progressCallback && !mirrorIneffective) {
       progressCallback('提示: 经第三方镜像中转下载，无法验证来源完整性，建议改用 gh/本机代理通道或自行校验产物');
     }
 

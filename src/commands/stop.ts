@@ -9,7 +9,7 @@ import type { StopResult } from '../types.js';
 /**
  * 检查停止结果：若有进程未终止则报错并退出。只消费 remaining——服务路径只有
  * pid 复核结果（无 StopResult 全字段），与 stop() 的结果共用同一出口，改一处文案
- * 两边同步（此前服务路径内联同形 CliError，是文案漂移的形态）
+ * 两边同步
  */
 export function handleStopResult(result: Pick<StopResult, 'remaining'>): void {
   if (result.remaining && result.remaining.length > 0) {

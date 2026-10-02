@@ -164,8 +164,9 @@ function cleanupLegacySystemInstall(): void {
  * 否则 sudo 取消密码 / 非 TTY 这类常规操作会带完整堆栈按「未预期错误」渲染。
  * install / uninstall / stop / start(tun) / reset 共用。
  *
- * 放 service.ts 而非 commands/shared.ts：shared.ts 被 start.ts 导入（restartToApply），
- * 若 start.ts 再反向导入 shared.ts 就成环。放这里依赖方向单向（commands → service）。
+ * 放 legacy-cleanup.ts 而非 commands/shared.ts：shared.ts 被 start.ts 导入
+ * （restartToApply），若 start.ts 再反向导入它就成环；本模块经 service.ts
+ * re-export，依赖方向保持单向（commands → service → legacy-cleanup）。
  */
 export async function cleanupLegacyInstallOrThrow(): Promise<void> {
   try {

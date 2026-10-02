@@ -203,17 +203,17 @@ export function tunBlockedByRunningService(): CliError {
  * ①用 epoch 判据（本命令已在 bump 后重捕获基线，自己的递增不计入）；②复核装载态。
  * 两个判据都不写第二份比较——epoch 判据仍是 shouldAbortStartOnDisable 唯一出口（D2）。
  */
+export function assertTunStartNotRaced(): void {
+  if (shouldAbortStartOnDisable(stopEpochBaseline(), readStopEpoch())) throw cancelledByConcurrentStop();
+  // withDisabled:false——本判据只消费 loaded，print-disabled 是白多一次的阻塞查询
+  if (getServiceStatus({ withDisabled: false }).loaded) throw tunBlockedByRunningService();
+}
+
 /** 按当前运行模式给出重启提示命令：TUN 在跑时裸 `mihomo-cli start` 会静默切回
  * Mixed（还要一次 sudo），必须给 `start tun`。sub update / sub remove / kernel
  * 更新的重启提示共用此判据——各写一份会在改判据时漏一边 */
 export function startCommandForCurrentMode(state: RunningState): string {
   return state.kind === 'tun' ? 'mihomo-cli start tun' : 'mihomo-cli start';
-}
-
-export function assertTunStartNotRaced(): void {
-  if (shouldAbortStartOnDisable(stopEpochBaseline(), readStopEpoch())) throw cancelledByConcurrentStop();
-  // withDisabled:false——本判据只消费 loaded，print-disabled 是白多一次的阻塞查询
-  if (getServiceStatus({ withDisabled: false }).loaded) throw tunBlockedByRunningService();
 }
 
 /**

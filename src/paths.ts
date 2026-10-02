@@ -47,8 +47,8 @@ export const PATHS = {
   logFile: path.join(DIRS.logs, 'mihomo.log'),
   pidFile: path.join(DIRS.runtime, 'pid'),
   /**
-   * installService 的 plist 暂存文件（plutil -lint 校验通过后才 copyFileSync 到
-   * LaunchAgents）。**不放 runtime/**：stage 要活到 copy 那一刻，中间隔着 plutil、
+   * installService 的 plist 暂存文件（plutil -lint 校验通过后才原子写
+   * 到 LaunchAgents，见 service.ts 的 atomicWriteFileSync 落位）。**不放 runtime/**：stage 要活到 copy 那一刻，中间隔着 plutil、
    * bootout、waitUntilUnloaded（最多 5s）——此窗口并发 stop（游离内核路径 rmrf runtime/）
    * 或含 runtime 目标的 reset 删掉目录，copyFileSync 就裸 ENOENT。与锁文件同族
    * （「runtime 会被整体删除，不能放有生命周期的文件」），用后即删（service.ts finally）

@@ -125,16 +125,18 @@ export async function cmdReset(args: string[]): Promise<void> {
     return;
   }
 
-  // 确认通过后重读服务状态：交互确认的等待无上界，期间另一终端 install+start 会把
-  // 服务装上。按确认前快照判定 serviceActive=false 会既不停也不卸载，直接删
-  // config/kernel 目录——已 bootstrap 的服务不受下方 recordServiceStopped 的 epoch
-  // 防线保护（它只拦「enable/bootstrap 之前」的并发 start），KeepAlive 会对着已删
-  // 文件落入崩溃循环。与 start.ts 的「快照 + 现值」双读同姿态（D2/D4 的并发防线精神）
+  // 先停止/卸载托管服务，使 KeepAlive 失效，再清理游离内核
+  if ((needsStop || serviceTargeted) && legacy) await cleanupLegacyInstallOrThrow();
+
+  // 服务状态在 legacy 清理之后、停止/卸载判定之前重读：交互确认的等待与 legacy 清理的
+  // sudo 密码窗（最长约 60s）期间，另一终端 install+start 都可能把服务装上。按确认前
+  // 快照判定 serviceActive=false 会既不停也不卸载，直接删 config/kernel 目录——已
+  // bootstrap 的服务不受下方 recordServiceStopped 的 epoch 防线保护（它只拦
+  // 「enable/bootstrap 之前」的并发 start），KeepAlive 会对着已删文件落入崩溃循环。
+  // 与 start.ts 的「快照 + 现值」双读同姿态（D2/D4 的并发防线精神）
   const current = getServiceStatus();
   serviceActive = current.installed || current.loaded;
 
-  // 先停止/卸载托管服务，使 KeepAlive 失效，再清理游离内核
-  if ((needsStop || serviceTargeted) && legacy) await cleanupLegacyInstallOrThrow();
   if (serviceActive) {
     if (serviceTargeted) await uninstallService();
     else if (needsStop) await stopService();

@@ -338,8 +338,12 @@ export async function installService(wasRunning: boolean): Promise<{ restoreSkip
     fs.mkdirSync(path.dirname(PATHS.userAgentPlist), { recursive: true });
     // 原子落位（同目录 tmp + rename）：copyFileSync 直写被 kill/掉电打断会留半截
     // plist，launchd 解析失败不加载，用户只见「install 像没生效」；stage 只留作 lint 载体。
-    // tmp 名以 .tmp 结尾，launchd 不会把崩溃残留当 plist 扫
+    // tmp 名以 .tmp 结尾，launchd 不会把崩溃残留当 plist 扫（open→rename 间被杀残留的
+    // .tmp 在 LaunchAgents、不在数据目录清扫范围，窗口毫秒级，接受）。落位后显式
+    // chmod：open(2) 的 mode 受 umask 掩蔽（umask 077 下实际 0600），plist 的 0644
+    // 是与其他消费者（诊断工具）的契约，不能随用户 shell 的 umask 漂移
     atomicWriteFileSync(PATHS.userAgentPlist, fs.readFileSync(stagePath, 'utf8'), { mode: 0o644 });
+    fs.chmodSync(PATHS.userAgentPlist, 0o644);
 
     if (wasRunning) {
       // 并发的 stop 若在重装期间跑完（重装含 bootout + 等待，有真实窗口），这里的

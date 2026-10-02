@@ -60,9 +60,10 @@ export async function tryHotReload(): Promise<boolean> {
     const secret = readSettings().controller_secret;
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (typeof secret === 'string' && secret) headers.Authorization = `Bearer ${secret}`;
-    // timer 起表在状态查询之后、第一个 fetch 之前：abort 预算只覆盖网络探测与 PUT，
-    // 不被前置的 launchctl 查询分食——launchctl 病态慢（print 各 2-3s）时 timer 在
-    // fetch 前已到点会令热重载恒不可用，每次 restart 都退化为完整重启（代理瞬断）
+    // timer 起表在状态查询之后、第一个 fetch 之前：abort 预算覆盖 /version 探测、
+    // lsof（自带 5s 超时的同步调用，夹在两个 fetch 之间）与 PUT，唯独不被前置的
+    // launchctl 查询分食——launchctl 病态慢（print 各 2-3s）时 timer 在 fetch 前已
+    // 到点会令热重载恒不可用，每次 restart 都退化为完整重启（代理瞬断）
     const timer = setTimeout(() => controller.abort(), HOT_RELOAD_TIMEOUT_MS);
     try {
       // /version 是 mihomo 特有端点，返回体带 version 字段；用它确认应答方是 mihomo

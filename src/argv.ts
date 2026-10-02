@@ -112,28 +112,42 @@ export function parseIntArg(args: string[] | undefined, short: string, long: str
     return val;
   };
 
-  // 先收集全部命中再解析：exact 形式的值在下一 token（null 表示缺值），
-  // attached/等号形式自包含（'' 表示等号后为空，交 parse 报「需要正整数」）
-  const hits: { value: string | null; flag: string }[] = [];
+  // 顺序扫描：exact 命中若值缺失或值本身是 flag 形态（`-n -n`，用户漏写了值），
+  // 立即按缺值/非法值报错——先记重复会把「漏值」误诊成「选项重复」，指向不存在的
+  // 问题。值合法则跳过该值 token 继续找后续命中（重复才报重复）
+  let first: { value: string; flag: string } | null = null;
+  let count = 0;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === short || args[i] === long) {
-      hits.push({ value: i + 1 < args.length ? args[i + 1] : null, flag: args[i] });
+      if (first === null && count === 0) {
+        // 第一个 exact 命中：值缺失按「缺少值」报（末尾 parse('') 只会报「收到空串」，
+        // 不如缺值准）；随后跳过值 token——漏值形态（`-n -n`）的第二个 -n 是第一个
+        // 的「值」，不会被数成第二次命中，最终按「需要正整数,收到 "-n"」报错
+        if (i + 1 >= args.length) {
+          throw new CliError(`选项 ${args[i]} 缺少值`, { hint: [`例如: ${args[i]} ${defaultValue}`] });
+        }
+        first = { value: args[i + 1], flag: args[i] };
+        i++; // 跳过值 token
+        count++;
+        continue;
+      }
+      count++;
       continue;
     }
     const match = matchValueFlagToken(args[i]);
     if (match && match.form !== 'exact' && (match.spec.forms.includes(short) || match.spec.forms.includes(long))) {
-      hits.push({ value: match.inlineValue ?? '', flag: match.baseForm });
+      if (first === null && count === 0) {
+        first = { value: match.inlineValue ?? '', flag: match.baseForm };
+      }
+      count++;
     }
   }
-  if (hits.length > 1) {
-    throw new CliError(`选项 ${hits[0].flag} 只能指定一次（出现 ${hits.length} 次）`, { hint: [`例如: ${hits[0].flag} ${defaultValue}`] });
+  if (count > 1) {
+    const flag = first?.flag ?? short;
+    throw new CliError(`选项 ${flag} 只能指定一次（出现 ${count} 次）`, { hint: [`例如: ${flag} ${defaultValue}`] });
   }
-  if (hits.length === 1) {
-    const [hit] = hits;
-    if (hit.value === null) {
-      throw new CliError(`选项 ${hit.flag} 缺少值`, { hint: [`例如: ${hit.flag} ${defaultValue}`] });
-    }
-    return parse(hit.value, hit.flag);
+  if (first !== null) {
+    return parse(first.value, first.flag);
   }
   return defaultValue;
 }

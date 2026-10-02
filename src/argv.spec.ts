@@ -221,3 +221,37 @@ describe('assertPositionalCount：多余位置参数报错、合法形态不误�
     assert.throws(() => assertPositionalCount(['kernel', 'garbage'], 0, 1, 'mihomo-cli kernel', kernelFlags), CliError);
   });
 });
+
+describe('parseIntArg：值形态的诊断准确性（先诊断值、再诊断重复）', () => {
+  // 回归：收集式实现曾把 `-n -n`（漏写值的自然形态）误报成「只能指定一次」，
+  // 用户去找并不存在的重复项，真实问题（值缺失）被掩盖
+  it('值位置是 flag 形态（logs -n -n）按「需要正整数」报错，不误报重复', () => {
+    assert.throws(
+      () => parseIntArg(['logs', '-n', '-n'], '-n', '--lines', 50),
+      (e: unknown) => e instanceof CliError && /需要正整数/.test((e as CliError).message),
+    );
+  });
+
+  it('末尾裸选项（logs -n）仍报「缺少值」（越界与非法值是两种诊断）', () => {
+    assert.throws(
+      () => parseIntArg(['logs', '-n'], '-n', '--lines', 50),
+      (e: unknown) => e instanceof CliError && /缺少值/.test((e as CliError).message),
+    );
+  });
+
+  it('值位置是 flag 且后面还有 token（-n -n 200）仍按值非法报错——守卫的靶形态', () => {
+    // 无守卫的收集式实现会把第一个 -n 的值 '-n' 记下、跳过后数到第二个 -n，
+    // 误报「只能指定一次」；真实问题（第一个 -n 漏了值）必须先行诊断
+    assert.throws(
+      () => parseIntArg(['logs', '-n', '-n', '200'], '-n', '--lines', 50),
+      (e: unknown) => e instanceof CliError && /需要正整数/.test((e as CliError).message),
+    );
+  });
+
+  it('首命中合法、后续真重复（-n 200 -n）仍报「只能指定一次」', () => {
+    assert.throws(
+      () => parseIntArg(['logs', '-n', '200', '-n'], '-n', '--lines', 50),
+      (e: unknown) => e instanceof CliError && /只能指定一次/.test((e as CliError).message),
+    );
+  });
+});

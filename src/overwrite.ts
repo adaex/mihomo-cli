@@ -688,8 +688,8 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
       }
       const content = fs.readFileSync(filePath, 'utf8');
       // 空白/纯注释文档前置跳过：js-yaml 5 对这类输入抛「expected a document」而非
-      // 返回 null（js-yaml 4 的行为，709 行注释即按它写的），落入 catch 会让 start/config/doctor
-      // 硬失败——先建空骨架文件再编辑是自然操作顺序
+      // 返回 null（js-yaml 4 的行为，下方 parsed === null 分支的注释即按它写的），
+      // 落入 catch 会让 start/config/doctor 硬失败——先建空骨架文件再编辑是自然操作顺序
       if (isBlankYamlDocument(content)) continue;
       // 别名上限防 YAML 炸弹 DoS（同 config.ts SAFE_YAML_LOAD_OPTIONS，此处内联避免与 config 循环依赖）
       const parsed = yaml.load(content, { maxAliases: YAML_MAX_ALIASES }) as Record<string, unknown> | null;

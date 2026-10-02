@@ -69,8 +69,8 @@ export const UI_URLS: Record<string, string> = {
  * 系统级在 /Library/LaunchDaemons/）。
  * 可用 MIHOMO_CLI_DAEMON_LABEL 覆盖，供隔离测试使用一次性 label，避免碰生产 plist 文件名。
  *
- * 非法值在此静默回退到默认标签，另由 assertServiceLabelSafe()（service.ts 的写操作入口）
- * 抛出可读错误——不能在模块顶层抛：constants 在 import 阶段求值，早于 index.ts 的
+ * 非法值在此静默回退到默认标签，另由本文件的 assertServiceLabelSafe()
+ * （launchctl 写操作与 root 清理脚本的入口校验）抛出可读错误——不能在模块顶层抛：constants 在 import 阶段求值，早于 index.ts 的
  * main().catch 注册，抛出会直接打印堆栈而绕过统一收口。
  *
  * **值与环境变量名都保持 `daemon` 字样不变**：改了值会让老用户 v4.0 及更早装的
