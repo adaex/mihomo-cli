@@ -52,20 +52,11 @@ npm link
 ### 1. 下载内核
 
 ```bash
-# 自动选择通道：本机代理在跑时优先（低速快速失败改 gh 重试，仍经同一个本机代理）> gh > 直连
+# 自动选择通道：本机代理在跑时优先 > gh > 直连
 mihomo-cli kernel
-
-# 国内网络强制走镜像（裸 --mirror 固定走裸域 gh-proxy.org）
-mihomo-cli kernel --mirror
-
-# 或用短别名指定镜像（纯 IPv6 网络用 v6）
-mihomo-cli kernel --mirror cdn
-mihomo-cli kernel --mirror v6
-
-# mihomo-cli 没在跑、但本机有别的代理工具时，经指定代理出网（纯端口视为 127.0.0.1）
-mihomo-cli kernel --proxy 7897
-mihomo-cli kernel --proxy socks5://127.0.0.1:7897
 ```
+
+镜像与代理覆盖（国内网络、纯 IPv6、本机有别的代理工具等场景）见[内核更新通道](#内核更新通道)。
 
 ### 2. 添加订阅
 
@@ -118,7 +109,7 @@ mihomo-cli ui yacd     # YACD
 | `mihomo-cli start [tun\|mixed]` | 启动代理并开启登录自启（`-s` 跳过订阅更新，`-u` 更新超时） |
 | `mihomo-cli stop`               | 停止代理并关闭登录自启                                                       |
 | `mihomo-cli uninstall`          | 卸载服务                                                                     |
-| `mihomo-cli status`             | 查看运行状态（含订阅流量、到期、更新新鲜度；`--json` 机器可读，`--no-probe` 跳过连通性探测）             |
+| `mihomo-cli status`             | 查看运行状态（含订阅流量、到期、更新新鲜度；`[-j|--json]` 机器可读，`--no-probe` 跳过连通性探测）             |
 | `mihomo-cli logs`               | 列出所有日志（当前 + 历史归档）                                              |
 | `mihomo-cli logs <编号>`        | 查看指定日志（`0`=当前，`1+`=归档，`-f` 实时跟随，`-n N` 行数，`-o` 打开）  |
 | `mihomo-cli logs -f`            | 跟随当前日志（省略编号时默认当前，等价 `logs 0 -f`）                        |
@@ -253,8 +244,6 @@ mihomo-cli status          # 查看状态
 自己运行 `ssh -D 127.0.0.1:1080` 并把节点指向它，不受本地网络授权影响
 只有节点直接指向 `192.168.x.x`、`10.x.x.x`、`*.local` 这类地址时才会触发。
 
-服务始终以当前用户运行，局域网节点按 macOS 的授权流程处理
-
 若 `/Library/LaunchDaemons` 仍有旧 root 服务，它可能持续自启并抢占端口；`install`/`uninstall`/`stop`/`tun` 和需要停机的 `reset` 会检测并清理，删除 root 文件时需要一次管理员密码
 
 若确实有局域网节点且始终不弹框、连不通，本地网络授权**没有便捷的重置手段**（它不在 TCC 数据库里，
@@ -351,6 +340,7 @@ mihomo-cli kernel --proxy socks5://127.0.0.1:7897  # 完整代理地址；可与
 | --- | --- | --- | --- |
 | `-u` | `--update-timeout` | 启动时自动更新订阅超时（ms） | 10000 |
 | `-n` | `--lines` | 日志显示行数 | 100 |
+| `-p` | `--proxy` | 内核下载经指定代理出网（见[内核更新通道](#内核更新通道)） | — |
 
 ```bash
 mihomo-cli start -u 30000            # 短选项 + 空格
@@ -550,21 +540,6 @@ enabled: false    # 暂时停用这份覆写，不用改名或删除
 
 ```yaml
 # ~/.mihomo-cli/overwrite.yaml
-
-# 强制覆盖 dns 配置
-dns!:
-  enable: true
-  enhanced-mode: fake-ip
-  nameserver:
-    - 223.5.5.5
-
-# 将规则放到订阅规则之前，避免被已有 MATCH 提前匹配
-+rules:
-  - 'DOMAIN-SUFFIX,example.com,DIRECT'
-```
-
-```yaml
-# ~/.mihomo-cli/overwrite.dns.yaml
 # dns! 强制覆盖整个对象（不与订阅的 dns 深度合并）
 dns!:
   enable: true
@@ -695,6 +670,8 @@ mihomo-cli stop          # 止住 launchd 的反复重试
 
 ### 进程无法停止
 
+`mihomo-cli stop` 无效时的最后手段（会杀掉本机所有 mihomo 进程——包括你自己另起的实例，如果有的话）：
+
 ```bash
 sudo pkill -9 mihomo
 ```
@@ -733,7 +710,7 @@ sudo pkill -9 mihomo
 - **URL 脱敏**：订阅 URL 中的 token、key、password 等敏感参数（含 query、userinfo 及路径型令牌）自动替换为 `***`。按整条 URL 处理、不按逗号切分——逗号在 query 中合法，切开会让 `?nodes=us,hk&token=xxx` 的 token 参数识别不出而明文输出
 - **文件权限**：配置文件使用 `0o600` 权限（仅所有者可读可写），目录使用 `0o700` 权限
 - **入站固定只监听回环**：`allow-lan` 由本工具恒定为 `false`，**订阅与覆写都改不了**（自 v4.13.0；此前订阅里写 `allow-lan: true` 即可把混合端口开到全网卡）。确需局域网设备连入的场景请在本机另起一个 mihomo 实例，不通过订阅投递
-- **入站与控制面由本工具独占**：订阅与覆写里的入站端口（`mixed-port`/`port`/`socks-port`/`redir-port`/`tproxy-port`）、独立入站服务端（`tuic-server`/`ss-config`/`vmess-config`）、通用入站声明（`listeners`/`tunnels`）、局域网暴露与入站鉴权（`allow-lan`/`bind-address`/`authentication`/`skip-auth-prefixes`/`lan-allowed-ips`/`lan-disallowed-ips`）、外部控制器全家桶（`external-controller*`、`external-doh-server`、`secret`、`external-ui*`）与控制器证书段（`tls`）一律剥除，不进运行配置。这些键要么自带监听地址、要么直接决定「监听在哪、要不要验身份」，远端订阅若能投递即可在全网卡开出无鉴权控制器或开放代理——`allow-lan: true` 让内核把端口绑到所有网卡，而 `skip-auth-prefixes: ["0.0.0.0/0"]` 会让唯一的补偿防线 `authentication` 整个失效；端口与密钥只认 `settings.json`。覆写文件里写了会有提示，订阅侧静默剥除。确需额外入站的场景请在本机另起一个 mihomo 实例，不通过订阅投递
+- **入站与控制面由本工具独占**：订阅与覆写里的入站端口（`mixed-port`/`port`/`socks-port`/`redir-port`/`tproxy-port`）、独立入站服务端（`tuic-server`/`ss-config`/`vmess-config`）、通用入站声明（`listeners`/`tunnels`）、局域网暴露与入站鉴权（`allow-lan`/`bind-address`/`authentication`/`skip-auth-prefixes`/`lan-allowed-ips`/`lan-disallowed-ips`）、外部控制器全家桶（`external-controller*`、`external-doh-server`、`secret`、`external-ui*`）与控制器证书段（`tls`）一律剥除，不进运行配置。这些键要么自带监听地址、要么直接决定「监听在哪、要不要验身份」，远端订阅若能投递即可在全网卡开出无鉴权控制器或开放代理——`allow-lan: true` 让内核把端口绑到所有网卡，而 `skip-auth-prefixes: ["0.0.0.0/0"]` 会让唯一的补偿防线 `authentication` 整个失效；端口与密钥只认 `settings.json`。覆写文件里写了会有提示，订阅侧静默剥除。确需额外入站的场景出路同上一条
 - **信号处理**：优雅处理 SIGINT/SIGTERM 信号
 - **异常捕获**：全局 uncaughtException 和 unhandledRejection 处理
 
