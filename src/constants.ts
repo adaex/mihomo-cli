@@ -110,6 +110,14 @@ export const SERVICE_BINARY_NAME = 'mihomo-cli-service';
 export const DEFAULT_MIXED_PORT = 7890;
 export const CONTROLLER_PORT = 9090;
 
+/**
+ * 端口合法性的唯一谓词：number、整数、1–65535。settings 校验、入口守卫的自代理
+ * 判定、--proxy 裸端口归一三处共用——端口范围口径变化只改这里（报错文案各调用方自管）
+ */
+export function isValidPortNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535;
+}
+
 export const TUN_CONFIG = {
   tun: {
     enable: true,
@@ -190,6 +198,15 @@ export const LOCKED_CONFIG_KEYS = [
   'lan-allowed-ips',
   'lan-disallowed-ips',
 ] as const;
+
+/**
+ * 剥除执行集：快照表 LOCKED_CONFIG_KEYS + 顶层 `tls` 段。tls 不是上游
+ * `config.Inbound` 的结构体字段（故不进快照表，D5），但它是
+ * external-controller-tls 证书/私钥的唯一来源、属控制面，剥除与告警对它一视同仁。
+ * 这是「实际不会进入运行配置的键」的唯一清单：YAML 扫描、剥除循环、脚本快照探针
+ * 与 config-inbound-snapshot.spec 全部派生自此——新增「表外但同剥除」的段只改这里
+ */
+export const EFFECTIVELY_LOCKED_KEYS: readonly string[] = [...LOCKED_CONFIG_KEYS, 'tls'];
 
 export const BASE_CONFIG: Record<string, unknown> = {
   // 注意：mixed-port、external-controller 与 allow-lan 不在此表——前两个来自

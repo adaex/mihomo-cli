@@ -1,6 +1,6 @@
 import { assertKnownFlags, assertPositionalCount, getNonFlagArg, hasFlag, parseIntArg } from '../argv.js';
 import { colors } from '../colors.js';
-import { assertKernelInstalled } from '../config.js';
+import { assertKernelInstalled, runtimeModeLabel } from '../config.js';
 import { DEFAULT_AUTO_UPDATE_TIMEOUT } from '../constants.js';
 import { CliError } from '../errors.js';
 import * as runtime from '../runtime.js';
@@ -15,7 +15,7 @@ import {
 import { getPorts } from '../settings.js';
 import * as subscription from '../subscription.js';
 import { printSystemProxyHint } from '../system-proxy.js';
-import type { PreparedConfig } from '../types.js';
+import type { PreparedConfig, RuntimeMode } from '../types.js';
 
 import { printStatus } from './status.js';
 
@@ -25,7 +25,7 @@ import { printStatus } from './status.js';
  * 静默按 Mixed 启动——正是拼错模式那条报错要防的情形。
  * 与 `sub remove -y foo` 的 getNonFlagArg 口径一致。
  */
-export function resolveStartMode(args: string[]): 'tun' | 'mixed' {
+export function resolveStartMode(args: string[]): RuntimeMode {
   const modeArg = getNonFlagArg(args, 1);
   const modeToken = modeArg?.toLowerCase();
   if (modeToken !== undefined && modeToken !== 'tun' && modeToken !== 'mixed') {
@@ -138,8 +138,7 @@ export async function cmdStart(args: string[]): Promise<void> {
 
   const configInfo = subscription.commitPreparedConfig(prepared);
 
-  const modeLabel = targetMode === 'tun' ? 'TUN' : 'Mixed';
-  console.log([colors.cyan(modeLabel), sub.name, subscription.formatProxySummary(configInfo)].join(' · '));
+  console.log([colors.cyan(runtimeModeLabel(targetMode)), sub.name, subscription.formatProxySummary(configInfo)].join(' · '));
 
   try {
     const pid = await runtime.launchOrRestart(targetMode);

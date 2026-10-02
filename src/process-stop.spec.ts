@@ -17,6 +17,8 @@ process.env.MIHOMO_CLI_DIR = tmpDir;
 const { PATHS, DIRS } = await import('./paths.js');
 const { getMihomoPids, isRunning, MAIN_INSTANCE_PATTERN } = await import('./process-probe.js');
 const { buildKernelCleanupScript, cleanupAll, stop, clearPid, reapPidWhenQuiet } = await import('./process-stop.js');
+// 服务路径的收口函数（薄封装 cleanupAll + 三档处置）；此处只锁它的返回值契约
+const { cleanupKernelsOrThrow } = await import('./legacy-cleanup.js');
 const { SUDO_TIMEOUT_MS } = await import('./sudo.js');
 
 /**
@@ -157,6 +159,21 @@ describe('cleanupAll 真实杀进程', () => {
     const result = await cleanupAll();
     assert.equal(result.killed, 0);
     assert.equal(fs.existsSync(PATHS.pidFile), false, '零进程分支也要清 pid 文件');
+    assert.equal(result.scriptError, null);
+    assert.equal(result.pidError, null);
+  });
+});
+
+/**
+ * cleanupKernelsOrThrow 的返回值契约：stop/uninstall/reset 消费它透传的 remaining
+ * 做外层残留判定，不再重新 pgrep 或重跑 cleanupAll（曾导致 reset 每轮清理两遍、
+ * warn 打印两份）。零进程 ok 档在此可免 sudo 直跑；throw/warn 判据本身是纯函数，
+ * 已在 service.spec 经 classifyResidueCleanup 锁定
+ */
+describe('cleanupKernelsOrThrow：返回 cleanupAll 结果供外层消费', () => {
+  it('零残留时返回空结果且不抛错', async () => {
+    const result = await cleanupKernelsOrThrow({ mainOutcome: '测试主体动作', retryCommand: 'mihomo-cli stop' });
+    assert.deepEqual(result.remaining, []);
     assert.equal(result.scriptError, null);
     assert.equal(result.pidError, null);
   });

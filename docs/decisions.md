@@ -32,7 +32,7 @@ start/install/restart 都依赖「命令开始时的 epoch」做并发判定。�
 
 ## D5 入站端口与整个控制面是系统锁定项，订阅与覆写不可设置
 
-远端订阅是不可信输入。锁定清单（constants.ts 的 LOCKED_CONFIG_KEYS）按「能否开监听」划分，判据是上游 `config.Inbound` 结构体字段全集 + `updateListeners()` 的逐个消费，不是按键名眼熟程度：redir/tproxy、external-controller 全家桶（-tls/-unix/-pipe/-cors/-routing-mark/-doh）、tuic-server 与 ss-config/vmess-config（三个完整入站代理服务端，自带监听与认证，不经过 genAddr，allow-lan 管不到它们）、listeners/tunnels（同判据的通用入站声明）、allow-lan/bind-address/authentication/skip-auth-prefixes/lan-*-ips（allow-lan 为真且 bind-address 为默认时 genAddr 返回全网卡地址，skip-auth-prefixes 又能把鉴权换成空实现——三行 YAML 即全网卡无鉴权开放代理）。顶层 tls 段同锁（-tls 控制器的证书来源）——物理不在表内、由 config.ts 单独剥除，效果等同（config-inbound-snapshot.spec 的 EFFECTIVELY_STRIPPED 文档化此旁路，认效果不认数组成员资格）。刻意不锁的：iptables（Linux 专用）、inbound-tfo/inbound-mptcp（传输层 socket 选项，不开监听）、tun（由启动模式整段接管）。
+远端订阅是不可信输入。锁定清单（constants.ts 的 LOCKED_CONFIG_KEYS）按「能否开监听」划分，判据是上游 `config.Inbound` 结构体字段全集 + `updateListeners()` 的逐个消费，不是按键名眼熟程度：redir/tproxy、external-controller 全家桶（-tls/-unix/-pipe/-cors/-routing-mark/-doh）、tuic-server 与 ss-config/vmess-config（三个完整入站代理服务端，自带监听与认证，不经过 genAddr，allow-lan 管不到它们）、listeners/tunnels（同判据的通用入站声明）、allow-lan/bind-address/authentication/skip-auth-prefixes/lan-*-ips（allow-lan 为真且 bind-address 为默认时 genAddr 返回全网卡地址，skip-auth-prefixes 又能把鉴权换成空实现——三行 YAML 即全网卡无鉴权开放代理）。顶层 tls 段同锁（-tls 控制器的证书来源）——它不是 `config.Inbound` 的结构体字段、不进快照表，但剥除与告警对它一视同仁：实际剥除执行集是 constants.ts 的 EFFECTIVELY_LOCKED_KEYS（快照表 + tls），YAML 告警扫描（lockedKeysReferencedBy）、剥除循环、脚本快照探针与 config-inbound-snapshot.spec 全部派生自这一份（早期四处各抄一份「表 + tls」，漏改静默）。刻意不锁的：iptables（Linux 专用）、inbound-tfo/inbound-mptcp（传输层 socket 选项，不开监听）、tun（由启动模式整段接管）。
 
 后果：锁定项的恒定值由 buildConfig 的 systemConfig 写入，不放 BASE_CONFIG（后者语义是「用户没写时的默认」，会被剥除循环架空成死配置，两表无交集有测试锁死）；剥除对订阅与覆写一视同仁，但告警只对生效的覆写文件（订阅告警只会刷屏，用户无行动手段）；清单完整性由 config-inbound-snapshot.spec 的上游结构体快照 diff 兜底，内核大版本升级时人工刷新快照。
 
@@ -46,7 +46,7 @@ YAML 1.2 是 JSON 的超集，标准 JSON 全部由 yaml.load 正常解析。曾
 
 ## D8 镜像只作用于产物下载，不作用于 GitHub API；镜像选择不持久化
 
-API 若也走镜像，`browser_download_url` 就完全由镜像说了算，而内核产物随后 chmod 755 并以 root 运行（TUN/系统级服务）——上游不提供 checksums，把来源钉死（assertTrustedAssetUrl 校验原始地址）是主要防线，不能让镜像自己指定下载地址。镜像选择不持久化：每次调用按当前环境独立决策（gh/代理是否可用），记住偏好在换环境后会用到错误的镜像。版本查询在代理可用时直接经代理（出网路径已定，先试 gh 直连再回退会把「直连被墙」的等待叠加在可用代理前面）；无代理可用才走 gh api 认证通道（免 60 次/时未认证限流）。
+API 若也走镜像，`browser_download_url` 就完全由镜像说了算，而内核产物随后 chmod 755 并以 root 运行（TUN/系统级服务）——上游不提供 checksums，把来源钉死（assertTrustedAssetUrl 校验原始地址）是主要防线，不能让镜像自己指定下载地址。镜像选择不持久化：每次调用按当前环境独立决策（gh/代理是否可用），记住偏好在换环境后会用到错误的镜像。版本查询在代理可用时直接经代理（出网路径已定，先试 gh 直连再回退会把「直连被墙」的等待叠加在可用代理前面）；无代理可用才走 gh api 认证通道（免 60 次/时未认证限流）。正推决策唯一出口是 kernel.ts 的 resolveReleaseQuery（cmdKernel 与 doctor 共用，与下载通道决策同源输入）；downloadKernel 兜底路径的 resolveFallbackQueryOptions 是从已选定 DownloadChannel 的反推，输入域不含「显式镜像」信息，故显式镜像无代理时正推答 gh 认证、反推答直连——两份答案刻意不同，由 kernel.spec 成对锁定，别合并。
 
 ## D9 启动时只清除指向本机 Mixed 端口的 env 代理
 

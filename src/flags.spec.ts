@@ -4,13 +4,12 @@ import { assertKnownFlags, extractStartOptions, parseIntArg } from './argv.js';
 import { FLAGS, matchValueFlagToken, VALUE_FLAGS } from './flags.js';
 
 describe('flags 单一登记表派生', () => {
-  it('VALUE_FLAGS 恰好包含全部带值选项的各形式', () => {
-    assert.deepEqual([...VALUE_FLAGS].sort(), ['--lines', '--proxy', '--update-timeout', '-n', '-p', '-u']);
+  it('VALUE_FLAGS 恰好包含全部带值（含可选值）选项的各形式', () => {
+    assert.deepEqual([...VALUE_FLAGS].sort(), ['--lines', '--mirror', '--proxy', '--update-timeout', '-n', '-p', '-u']);
   });
 
-  it('可选值选项 --mirror 不在 VALUE_FLAGS（只走 parseMirrorArg）', () => {
-    // 登记了反而会让 getNonFlagArg 把它的值吞掉
-    assert.ok(!VALUE_FLAGS.has('--mirror'));
+  it('可选值选项 --mirror 也在 VALUE_FLAGS：位置参数计数靠它跳值，裸写不吞后续 flag 由消费点的「下一 token 非 flag」条件兜住', () => {
+    assert.ok(VALUE_FLAGS.has('--mirror'));
   });
 });
 
@@ -40,8 +39,21 @@ describe('matchValueFlagToken：带值选项形式的唯一判定入口', () => 
     assert.equal(m.inlineValue, '200');
   });
 
-  it('布尔选项、未登记选项与 --mirror 不匹配任何形式（非 exact 形式只对带值选项合法）', () => {
-    for (const token of ['-s', '-sx', '--no-update=1', '--mirror=x', '-z5', 'foo', '-']) {
+  it('可选值选项 --mirror：exact 与 long-eq 都命中（值归一化由 parseMirrorArg 负责）', () => {
+    const exact = matchValueFlagToken('--mirror');
+    assert.ok(exact);
+    assert.equal(exact?.form, 'exact');
+    assert.equal(exact?.baseForm, '--mirror');
+    const eq = matchValueFlagToken('--mirror=cdn');
+    assert.ok(eq);
+    assert.equal(eq?.form, 'long-eq');
+    assert.equal(eq?.inlineValue, 'cdn');
+    // 长选项不接受紧贴值（与其他长选项同）
+    assert.equal(matchValueFlagToken('--mirrorcdn'), null);
+  });
+
+  it('布尔选项与未登记选项不匹配任何形式（非 exact 形式只对带值选项合法）', () => {
+    for (const token of ['-s', '-sx', '--no-update=1', '-z5', 'foo', '-']) {
       assert.equal(matchValueFlagToken(token), null, `${token} 不应命中`);
     }
   });
@@ -90,10 +102,12 @@ describe('不变量：白名单接受的带值选项形式，下游解析器必�
   const VALUE = '4321';
 
   for (const spec of FLAGS) {
-    if (!spec.takesValue) continue;
+    // 本循环锁的是 parseIntArg 消费的必填值选项；可选值选项（--mirror，仅长形式）
+    // 的消费契约在 kernel-args.spec 由 parseMirrorArg 锁定
+    if (spec.takesValue !== 'required') continue;
     const short = spec.forms.find(f => !f.startsWith('--'));
     const long = spec.forms.find(f => f.startsWith('--'));
-    // 登记表调用约定：带值选项同时具备短/长形式（parseIntArg 的 (short, long) 签名）
+    // 登记表调用约定：必填值选项同时具备短/长形式（parseIntArg 的 (short, long) 签名）
     if (!short || !long) {
       it(`${spec.forms.join(' / ')} 缺少短或长形式`, () => {
         assert.fail('带值选项应同时登记短与长形式');
@@ -126,7 +140,7 @@ describe('不变量：白名单接受的带值选项形式，下游解析器必�
 
   // 布尔 start 选项（-s / --no-update）：整 token 精确匹配，透传不丢
   for (const spec of FLAGS) {
-    if (spec.takesValue || !spec.passthroughToRestart) continue;
+    if (spec.takesValue !== false || !spec.passthroughToRestart) continue;
     for (const form of spec.forms) {
       it(`${form}：布尔 start 选项白名单接受且透传不丢`, () => {
         assert.doesNotThrow(() => assertKnownFlags([form], spec.forms, 'invariant'));

@@ -84,7 +84,7 @@ export function cmdLogs(args: string[]): void {
       num = ' 0';
     } else {
       archiveCounter++;
-      num = archiveCounter < 10 ? ` ${archiveCounter}` : `${archiveCounter}`;
+      num = String(archiveCounter).padStart(2);
     }
     const time = formatDate(log.mtime);
     const size = formatBytes(log.size);

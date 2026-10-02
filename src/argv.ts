@@ -30,11 +30,10 @@ export function assertKnownFlags(args: string[] | undefined, known: readonly str
   for (const a of args) {
     if (!a.startsWith('-')) continue;
     if (knownSet.has(a)) continue;
-    // 带值选项的非 exact 形式（`-n200` / `--lines=200`）：判定收口在 matchValueFlagToken
+    // 带值选项的非 exact 形式（`-n200` / `--lines=200`，含可选值选项的 `--mirror=x`）：
+    // 判定收口在 matchValueFlagToken
     const match = matchValueFlagToken(a);
     if (match && match.form !== 'exact' && knownSet.has(match.baseForm)) continue;
-    // `--mirror` 故意不登记（见 flags.ts），等号形式仅在其自身白名单内放行
-    if (a.startsWith('--mirror=') && knownSet.has('--mirror')) continue;
     // 白名单为空的命令（dir/stop 等不接受任何选项）不打「可用选项: 」——
     // 那会渲染成空列表，看着像是工具自己没填上。改说「该命令不接受任何选项」。
     // `-h`/`--help` 单独点一句：它俩是顶层 help 的别名、命令级并不接受，用户很自然会试
@@ -59,10 +58,9 @@ export function assertKnownFlags(args: string[] | undefined, known: readonly str
  * flag 侧早已「未知即报错」，位置参数却只认第一个的话，`start mixed garbage` 会忽略
  * garbage 继续执行，不对称。
  *
- * 带值选项的值不算位置参数；跳值只在下一个 token **不是 flag** 时进行——`--mirror` 是
- * 可选值选项，裸写后跟 `--proxy 7897` 时它没有值，无条件跳会吞掉 `--proxy` 本身、
- * 把 7897 误判成多余位置参数。kernel 的 `--mirror` 不在 VALUE_FLAGS 里，调用方需经
- * valueFlags 传入自定义口径。
+ * 带值选项的值不算位置参数；跳值只在下一个 token **不是 flag** 时进行——可选值选项
+ * （`--mirror`）裸写后跟 `--proxy 7897` 时它没有值，无条件跳会吞掉 `--proxy` 本身、
+ * 把 7897 误判成多余位置参数。某命令的带值选项口径与登记表不同时，才经 valueFlags 传入。
  */
 export function assertPositionalCount(
   args: string[] | undefined,
@@ -189,13 +187,14 @@ export function assertRestartOptionValues(args: string[] | undefined): void {
   parseIntArg(args, '-u', '--update-timeout', DEFAULT_AUTO_UPDATE_TIMEOUT);
 }
 
-/** 取第一个非 flag 位置参数（跳过带值选项的值，与 assertPositionalCount 同口径） */
+/** 取第一个非 flag 位置参数（跳过带值选项的值，与 assertPositionalCount 同口径：
+ * 可选值选项裸写、下一 token 是 flag 时不跳，免得吞掉后续选项） */
 export function getNonFlagArg(args: string[] | undefined, startIdx: number): string | null {
   if (!args) return null;
   for (let i = startIdx; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith('-')) {
-      if (VALUE_FLAGS.has(a)) i++; // 跳过该带值选项的值
+      if (VALUE_FLAGS.has(a) && i + 1 < args.length && !args[i + 1].startsWith('-')) i++;
       continue;
     }
     return a;

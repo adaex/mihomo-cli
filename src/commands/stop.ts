@@ -3,6 +3,8 @@ import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
 import { getMihomoPids } from '../process-probe.js';
 import { MANUAL_PKILL_HINT, stop } from '../process-stop.js';
+// getMihomoPids 用于停止前的无事可做判定；服务路径的停止后复核消费 stopService 返回的
+// cleanup 结果，不再重发 pgrep
 import { announceLegacyCleanupOrThrow, detectLegacySystemInstall, getServiceStatus, recordServiceStopped, stopService } from '../service.js';
 import type { StopResult } from '../types.js';
 
@@ -62,10 +64,12 @@ export async function cmdStop(args: string[]): Promise<void> {
     return;
   }
 
-  // 这条路径由 stopService → disableServiceAutoStart 递增，别在这里再记一次
-  await stopService();
+  // 这条路径由 stopService → disableServiceAutoStart 递增，别在这里再记一次。
+  // remaining 取自 cleanupAll 死亡等待后的同一份复核，不再重新 pgrep（warn/throw
+  // 已由服务层按 cleanupKernelsOrThrow 统一渲染，这里只管用户态残留的硬失败）
+  const cleanup = await stopService();
 
-  handleStopResult({ remaining: getMihomoPids() });
+  handleStopResult(cleanup);
 
   console.log(`${colors.green('已停止')}${colors.gray('（已关闭登录自启，mihomo-cli start 可重新启动）')}`);
 }

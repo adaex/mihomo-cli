@@ -6,7 +6,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { pathToFileURL } from 'node:url';
 
-import { MAIN_INSTANCE_PATTERN } from './process-probe.js';
+import { MAIN_INSTANCE_PATTERN, parsePidList } from './process-probe.js';
 
 /**
  * MAIN_INSTANCE_PATTERN 的语法回归。
@@ -31,6 +31,22 @@ describe('MAIN_INSTANCE_PATTERN', () => {
   it('两种内核路径分支都在（服务经符号链启动，tun 经真实二进制）', () => {
     assert.match(MAIN_INSTANCE_PATTERN, /mihomo-cli-service/);
     assert.match(MAIN_INSTANCE_PATTERN, /\|/);
+  });
+});
+
+describe('parsePidList（pgrep -f 与 lsof -t 的共同输出解析）', () => {
+  it('空输出返回空数组', () => {
+    assert.deepEqual(parsePidList(''), []);
+    assert.deepEqual(parsePidList('  \n\n'), []);
+  });
+
+  it('每行一个 pid，容忍前后空白与 CR', () => {
+    assert.deepEqual(parsePidList('123\n456\n'), [123, 456]);
+    assert.deepEqual(parsePidList('  123\r\n456'), [123, 456]);
+  });
+
+  it('空白行、非数字、0 与负数一律滤掉（lsof/pgrep 失败面的脏输出不能变成 NaN pid）', () => {
+    assert.deepEqual(parsePidList('123\n\nabc\n0\n-7\n456'), [123, 456]);
   });
 });
 

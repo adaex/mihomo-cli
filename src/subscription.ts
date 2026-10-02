@@ -1,5 +1,5 @@
 import { colors } from './colors.js';
-import { buildConfig, parseConfigContent, validateConfigWithKernel, writeMihomoConfig } from './config.js';
+import { buildConfig, countConfigNodes, parseConfigContent, validateConfigWithKernel, writeMihomoConfig } from './config.js';
 import { DEFAULT_AUTO_UPDATE_TIMEOUT, DEFAULT_UPDATE_INTERVAL_HOURS } from './constants.js';
 import { CliError, TimeoutError, withTimeout } from './errors.js';
 import { createHttpClient } from './http.js';
@@ -20,6 +20,7 @@ import type {
   DownloadResult,
   HttpResponse,
   PreparedConfig,
+  RuntimeMode,
   Subscription,
   SubscriptionWithCache,
   TryUpdateResult,
@@ -291,12 +292,11 @@ export async function downloadSubscription(url: string, subName = 'default', sig
     });
   }
 
-  const proxies = parsed.proxies as unknown[] | undefined;
-  const proxyGroups = parsed['proxy-groups'] as unknown[] | undefined;
+  const { proxies, proxyGroups } = countConfigNodes(parsed);
 
   return {
-    proxies: proxies ? proxies.length : 0,
-    proxyGroups: proxyGroups ? proxyGroups.length : 0,
+    proxies,
+    proxyGroups,
     userInfo: meta.userInfo,
     updateInterval: meta.updateInterval,
     webPageUrl: meta.webPageUrl,
@@ -305,7 +305,7 @@ export async function downloadSubscription(url: string, subName = 'default', sig
 }
 
 /** 构建配置并交给内核校验；不替换现有 config.yaml，不停止正在运行的内核 */
-export async function prepareConfigForStart(mode: string, subName = 'default'): Promise<PreparedConfig> {
+export async function prepareConfigForStart(mode: RuntimeMode, subName = 'default'): Promise<PreparedConfig> {
   // 条目还在、文件没了（手动删除/外部清理）→ 指引重新下载：守卫收口在
   // requireSubscriptionRawConfig（与 config/doctor 同口径，三处不出现两个方向）
   const rawContent = requireSubscriptionRawConfig(subName);
@@ -315,15 +315,9 @@ export async function prepareConfigForStart(mode: string, subName = 'default'): 
   // 透传生效的覆写清单：内核只说「哪个键坏了」，说不出「它是覆写追加进来的」
   await validateConfigWithKernel(buildResult.config, buildResult.overwriteSummaries);
 
-  const proxies = buildResult.config.proxies as unknown[] | undefined;
-  const proxyGroups = buildResult.config['proxy-groups'] as unknown[] | undefined;
-
   return {
     buildResult,
-    info: {
-      proxies: proxies ? proxies.length : 0,
-      proxyGroups: proxyGroups ? proxyGroups.length : 0,
-    },
+    info: countConfigNodes(buildResult.config),
   };
 }
 

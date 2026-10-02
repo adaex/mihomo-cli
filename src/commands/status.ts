@@ -1,9 +1,9 @@
 import { assertKnownFlags, assertPositionalCount, hasFlag } from '../argv.js';
 import { colors } from '../colors.js';
-import { deriveRuntimeMode, getConfigInfo, getKernelVersion, hasKernel, judgeScriptMatches } from '../config.js';
+import { deriveRuntimeMode, getConfigInfo, getKernelVersion, hasKernel, judgeScriptMatches, runtimeModeLabel } from '../config.js';
 import { VERSION } from '../constants.js';
 import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic } from '../format.js';
-import { listOverwriteFile } from '../overwrite.js';
+import { listOverwriteFile, shortOverwriteName } from '../overwrite.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
@@ -187,7 +187,8 @@ export async function printStatus(args: string[] = []): Promise<void> {
   // 模式取自配置文件：未运行时也展示上次构建的模式
   let modeLabel = '';
   if (info) {
-    const mode = info.tun ? 'TUN' : 'Mixed';
+    // 模式判据统一走 deriveRuntimeMode（与 JSON 输出同源），不再手写 info.tun 三元
+    const mode = runtimeModeLabel(deriveRuntimeMode(info));
     const carrier = kind === 'service' ? ' · 服务' : kind === 'tun' ? ' · 临时' : '';
     modeLabel = colors.cyan(` (${mode}${carrier})`) as string;
   }
@@ -281,22 +282,6 @@ export async function printStatus(args: string[] = []): Promise<void> {
   }
 
   console.log('');
-}
-
-/**
- * 覆写文件名去掉 `overwrite.` 前缀与扩展名，主文件（去完为空）显示「主文件」。
- *
- * **先剥扩展名再剥前缀，顺序不能换**：反过来时 `overwrite.yaml` 的前缀正则
- * `^overwrite\.?` 会把那个点一起吃掉，剩下的 `yaml` 非空、`|| '主文件'` 永不触发——
- * 主文件被显示成 `yaml`（实测），既不是文件名也不是任何有意义的标识，多文件时
- * 还与扩展文件并列成 `(yaml, dns)`，看不出谁是主文件。
- *
- * 扩展名必须同时覆盖 YAML 与 JS 脚本三扩展（.js/.mjs/.cjs）：只剥 yaml 时
- * 主脚本 `overwrite.js` 会显示成 `js`、扩展脚本 `overwrite.dns.js` 带个 `.js` 尾巴，
- * 与 YAML 侧「主文件 / 功能名」的口径不一致（脚本功能随 26.9.93 引入，此处漏改）。
- */
-export function shortOverwriteName(name: string): string {
-  return name.replace(/\.(?:ya?ml|m?js|cjs)$/, '').replace(/^overwrite\.?/, '') || '主文件';
 }
 
 /**

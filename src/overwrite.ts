@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 
 import * as yaml from 'js-yaml';
-import { BASE_CONFIG, LOCKED_CONFIG_KEYS, YAML_MAX_ALIASES } from './constants.js';
+import { BASE_CONFIG, EFFECTIVELY_LOCKED_KEYS, YAML_MAX_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
 import { USER_DATA_DIR } from './paths.js';
 import { readSettings, SAFE_NAME_RE, writeSettings } from './settings.js';
@@ -16,6 +16,7 @@ import type {
   OverwriteScriptContext,
   OverwriteTransform,
   ParsedOverrideKey,
+  RuntimeMode,
   ScriptMatch,
 } from './types.js';
 
@@ -39,6 +40,25 @@ export function parseOverrideKey(key: string): ParsedOverrideKey {
   }
 
   return { key: actualKey, forceOverwrite, arrayPrepend, arrayAppend };
+}
+
+/**
+ * 一组 YAML 覆写原始键里引用到的系统锁定键（剥除执行集见 EFFECTIVELY_LOCKED_KEYS，
+ * 含表外 tls），返回命中的**规范键名**、按首次出现去重。裸键直接命中；带操作符的键
+ * （`secret!` / `+secret` / `secret+`）先经 parseOverrideKey 归一，再判规范键。
+ * config.ts 的告警扫描唯一出口——剥除循环遍历同一执行集，新增锁定段无需再改判定
+ */
+export function lockedKeysReferencedBy(rawKeys: readonly string[]): string[] {
+  const hit = new Set<string>();
+  for (const rawKey of rawKeys) {
+    if (EFFECTIVELY_LOCKED_KEYS.includes(rawKey)) {
+      hit.add(rawKey);
+      continue;
+    }
+    const parsedKey = parseOverrideKey(rawKey).key;
+    if (parsedKey !== rawKey && EFFECTIVELY_LOCKED_KEYS.includes(parsedKey)) hit.add(parsedKey);
+  }
+  return [...hit];
 }
 
 /**
@@ -224,13 +244,31 @@ function isYamlOverwriteFilename(filename: string): boolean {
  * 探测判 ESM/CJS（本仓 Node 下界 22.22.1，探测自 22.7 起默认启用），两种写法都认。
  */
 const SCRIPT_EXTENSIONS = ['js', 'mjs', 'cjs'] as const;
+/** 脚本扩展名的正则片段，文件名判定与展示名剥扩展从同一登记表派生 */
+const SCRIPT_EXTENSION_PATTERN = `(?:${(SCRIPT_EXTENSIONS as readonly string[]).join('|')})`;
+/** shortOverwriteName 剥扩展名：YAML（ya?ml）与脚本三扩展同源派生 */
+const OVERWRITE_EXTENSION_RE = new RegExp(`\\.(?:ya?ml|${(SCRIPT_EXTENSIONS as readonly string[]).join('|')})$`);
 /** 主脚本文件名（overwrite.js / overwrite.mjs / overwrite.cjs），与 YAML 主文件同理最先加载 */
 function isPrimaryScriptFilename(filename: string): boolean {
   return (SCRIPT_EXTENSIONS as readonly string[]).some(ext => filename === `overwrite.${ext}`);
 }
 
 function isScriptOverwriteFilename(filename: string): boolean {
-  return isPrimaryScriptFilename(filename) || /^overwrite\..+\.(js|mjs|cjs)$/.test(filename);
+  return isPrimaryScriptFilename(filename) || new RegExp(`^overwrite\\..+\\.${SCRIPT_EXTENSION_PATTERN}$`).test(filename);
+}
+
+/**
+ * 覆写文件名去掉 `overwrite.` 前缀与扩展名，主文件（去完为空）显示「主文件」。
+ * 扩展名知识与 isYamlOverwriteFilename / SCRIPT_EXTENSIONS 同源——新增脚本扩展名时
+ * 展示侧自动生效（26.9.93 引入 JS 脚本时此处漏改、`.js` 残后缀的事故不再可能）。
+ *
+ * **先剥扩展名再剥前缀，顺序不能换**：反过来时 `overwrite.yaml` 的前缀正则
+ * `^overwrite\.?` 会把那个点一起吃掉，剩下的 `yaml` 非空、`|| '主文件'` 永不触发——
+ * 主文件被显示成 `yaml`（实测），既不是文件名也不是任何有意义的标识，多文件时
+ * 还与扩展文件并列成 `(yaml, dns)`，看不出谁是主文件。
+ */
+export function shortOverwriteName(name: string): string {
+  return name.replace(OVERWRITE_EXTENSION_RE, '').replace(/^overwrite\.?/, '') || '主文件';
 }
 
 /** 覆写文件 = YAML 声明式覆写 + JS 脚本两类；reset overwrites 等消费点据此枚举删除 */
@@ -252,11 +290,9 @@ function isOverwriteFilenameTypo(filename: string): boolean {
   // 大小写变体（如 Overwrite.YAML）在大小写不敏感的 APFS 上与合法名同名，
   // 但 readdirSync 返回的是存储大小写、按原样匹配不上，同样静默不加载
   return (
-    lower === 'overwrite.yml' ||
-    lower === 'overwrite.yaml' ||
-    /^overwrite\..+\.ya?ml$/.test(lower) ||
-    lower === 'overwrite.ts' ||
-    /^overwrite\..+\.ts$/.test(lower)
+    // overwrite.yml 是 typo 特有的近失（主文件只认 .yaml）；其余 YAML 形态直接复用
+    // 合法判定，扩展名知识不留第二份
+    lower === 'overwrite.yml' || isYamlOverwriteFilename(lower) || lower === 'overwrite.ts' || /^overwrite\..+\.ts$/.test(lower)
   );
 }
 
@@ -460,6 +496,19 @@ function nameMatchesPattern(name: string, pattern: string): boolean {
 }
 
 /**
+ * 订阅 URL 的 hostname：match 的 url-domain 判定（失败 fail-closed）与脚本 ctx 的
+ * subscription.host（失败给空串由脚本自判）共用。trim 是两处必须一致的隐式契约
+ */
+function hostFromSubUrl(subUrl: string | undefined): string | null {
+  if (!subUrl) return null;
+  try {
+    return new URL(subUrl.trim()).hostname;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 判断单个覆写文件在给定作用域下是否应用。
  * - 无 match → 默认全局应用（JS 脚本无 match 机制，作用域判断写在脚本里）。
  * - 有 match → 所列条件全部满足（AND）；条件值数组内为 OR。
@@ -476,13 +525,8 @@ function matchesScope(match: OverwriteMatch | undefined, scope?: OverwriteScope)
 
   if (match['url-domain']) {
     const domains = match['url-domain'];
-    if (!scope?.subUrl) return false;
-    let host: string;
-    try {
-      host = new URL(scope.subUrl.trim()).hostname;
-    } catch {
-      return false; // 非法 URL：fail closed，该文件不应用
-    }
+    const host = hostFromSubUrl(scope?.subUrl);
+    if (host === null) return false; // 缺值或非法 URL：fail closed，该文件不应用
     if (!domains.some(d => hostMatchesDomain(host, d))) return false;
   }
 
@@ -755,13 +799,11 @@ export function loadOverwriteFile(): OverwriteFileEntry[] {
   return ok;
 }
 
-/** 脚本锁定键探针集：LOCKED_CONFIG_KEYS + 顶层 tls 段（YAML 侧告警同样含 tls） */
-const SCRIPT_LOCKED_PROBES: readonly string[] = [...LOCKED_CONFIG_KEYS, 'tls'];
-
-/** 脚本执行前的锁定键浅快照：只记存在性与值，与 YAML 侧的键级检测同粒度 */
+/** 脚本执行前的锁定键浅快照：只记存在性与值，与 YAML 侧的键级检测同粒度。
+ * 探针集就是剥除执行集 EFFECTIVELY_LOCKED_KEYS（含表外 tls），不再单抄一份 */
 function snapshotLockedKeys(config: Record<string, unknown>): Record<string, unknown> {
   const snap: Record<string, unknown> = {};
-  for (const k of SCRIPT_LOCKED_PROBES) {
+  for (const k of EFFECTIVELY_LOCKED_KEYS) {
     if (k in config) snap[k] = config[k];
   }
   return snap;
@@ -769,7 +811,7 @@ function snapshotLockedKeys(config: Record<string, unknown>): Record<string, unk
 
 /** 检出脚本新设置或改值的锁定键；嵌套内部的改动检不出（浅层对比，与 YAML 侧同粒度） */
 function diffLockedKeys(before: Record<string, unknown>, after: Record<string, unknown>): string[] {
-  return SCRIPT_LOCKED_PROBES.filter(k => {
+  return EFFECTIVELY_LOCKED_KEYS.filter(k => {
     const had = k in before;
     const has = k in after;
     return had !== has ? has : had && before[k] !== after[k];
@@ -778,7 +820,7 @@ function diffLockedKeys(before: Record<string, unknown>, after: Record<string, u
 
 /** applyOverwrite 的执行参数：构造脚本 ctx 所需（YAML 合并不用） */
 interface ApplyOverwriteOptions {
-  mode: 'mixed' | 'tun';
+  mode: RuntimeMode;
   scope?: OverwriteScope;
 }
 
@@ -811,12 +853,8 @@ export function applyOverwrite(
   const scriptLockedHits: ScriptLockedHit[] = [];
   const scriptMatches: ScriptMatch[] = [];
 
-  let host = '';
-  try {
-    if (opts.scope?.subUrl) host = new URL(opts.scope.subUrl.trim()).hostname;
-  } catch {
-    host = ''; // 非法 URL：脚本侧自己判（host 为空串）
-  }
+  // 非法 URL 给空串：脚本侧自己判（与 matchesScope 的 fail-closed 姿态不同，各自保留）
+  const host = hostFromSubUrl(opts.scope?.subUrl) ?? '';
   const subscription = { name: opts.scope?.subName ?? '', url: opts.scope?.subUrl ?? '', host };
 
   for (const file of files) {

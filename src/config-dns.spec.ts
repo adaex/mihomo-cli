@@ -116,7 +116,7 @@ describe('TUN 模式锁定 dns.enable', () => {
  * 并被 main().catch 当成程序 bug 打印堆栈。
  */
 describe('dns 形态校验（TUN 与 mixed 两条路径）', () => {
-  for (const mode of ['tun', 'mixed']) {
+  for (const mode of ['tun', 'mixed'] as const) {
     it(`${mode}: dns 为标量抛 CliError 而非裸 TypeError`, () => {
       assert.throws(
         () => buildConfig(withDns('dns: true\n'), mode),

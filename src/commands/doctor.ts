@@ -7,7 +7,7 @@ import { deriveRuntimeMode, getConfigInfo, getKernelVersion, hasKernel, probeKer
 import { DEFAULT_MIXED_PORT, VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
 import { formatDate, formatRelativeTime } from '../format.js';
-import { checkUpdate, hasGh } from '../kernel.js';
+import { checkUpdate, hasGh, resolveReleaseQuery } from '../kernel.js';
 import { KERNEL_SELF_BACKUP_DIR, KERNEL_SELF_UPDATE_DIR, PATHS, USER_DATA_DIR } from '../paths.js';
 import { lsofListenPids, probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
@@ -81,12 +81,23 @@ async function collectChecks(): Promise<Check[]> {
   // 非法值由下方「端口配置」检查项单独报出
   const kernelProxyPort = earlyState.running ? getMixedPortOrNull() : null;
   const kernelProbe = hasKernel() ? probeKernelVersion() : null;
+  // 版本查询出网与 mihomo-cli kernel 同口径（代理在跑直接经代理、无代理才 gh 认证），
+  // 决策走 kernel.resolveReleaseQuery 唯一出口——doctor 无 --mirror/--proxy，按无覆盖传入。
+  // gh 只在无代理时探测（同 kernel.ghProbeNeeded 的省探测守卫：代理在跑时查询必不经 gh）
+  const releaseQuery = resolveReleaseQuery({
+    mirror: null,
+    isOverride: false,
+    ghAvailable: kernelProxyPort === null && hasGh(),
+    proxyRunning: earlyState.running,
+    proxyPort: kernelProxyPort,
+    proxyOverride: null,
+  });
   const kernelVersionPromise: Promise<KernelUpdateInfo | null> = kernelProbe
     ? withAbortableTimeout(
         signal =>
           checkUpdate({
-            proxy: kernelProxyPort !== null ? `http://127.0.0.1:${kernelProxyPort}` : null,
-            useGh: kernelProxyPort === null && hasGh(),
+            proxy: releaseQuery.proxy,
+            useGh: releaseQuery.useGh,
             signal,
             currentVersion: getKernelVersion(kernelProbe),
           }),
@@ -202,6 +213,12 @@ async function collectChecks(): Promise<Check[]> {
   // 兜底用默认端口继续查——配置非法已单独报出，端口检查项用默认值不产生误导
   const state = earlyState;
   const info = getConfigInfo();
+  // 连通性探测（经代理 curl gstatic，不通时固定等满 2s）与下方配置原生校验（mihomo -t，
+  // 可达数百 ms、超时 30s）互不依赖，需要的 state/info 此刻已齐——先发起、到连通性段
+  // 再 await，让两段网络/子进程等待重叠，代理不通时少等约 2s。push 顺序不变，展示顺序不变。
+  // probeProxyConnectivity 全 try/catch 永不 reject（与上方 npm promise 的防御同构），
+  // 提前发起无 unhandled rejection 风险；其内部还有 3s 结果缓存，不会重复发请求
+  const connectivityPromise = state.running && info?.mixedPort ? probeProxyConnectivity(info.mixedPort) : null;
   let mixedPortDefault = DEFAULT_MIXED_PORT;
   try {
     const ports = getPorts();
@@ -253,8 +270,9 @@ async function collectChecks(): Promise<Check[]> {
   }
 
   // === 连通性 ===
-  if (state.running && info?.mixedPort) {
-    const probe = await probeProxyConnectivity(info.mixedPort);
+  // 探测在端口段之前已发起（见 connectivityPromise），此处收口
+  if (connectivityPromise) {
+    const probe = await connectivityPromise;
     if (probe.ok) {
       push('代理连通', 'ok', `HTTP ${probe.statusCode}（${probe.durationMs}ms）`);
     } else {

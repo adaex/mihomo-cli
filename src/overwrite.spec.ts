@@ -12,7 +12,16 @@ import type { OverwriteFileEntry, OverwriteMatch } from './types.js';
 // errors.ts 零依赖、不受数据目录影响，保持静态导入
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-overwrite-'));
 process.env.MIHOMO_CLI_DIR = tmpDir;
-const { applyOverwrite, listOverwriteFile, loadOverwriteFile, normalizeMatch, parseOverrideKey, selectActiveOverwriteFiles } = await import('./overwrite.js');
+const {
+  applyOverwrite,
+  listOverwriteFile,
+  loadOverwriteFile,
+  lockedKeysReferencedBy,
+  normalizeMatch,
+  parseOverrideKey,
+  selectActiveOverwriteFiles,
+  shortOverwriteName,
+} = await import('./overwrite.js');
 after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
 /**
@@ -1254,5 +1263,47 @@ describe('JS 覆写脚本', () => {
       cleanup('overwrite.ts');
       cleanup('overwrite.x.ts');
     }
+  });
+});
+
+/**
+ * 覆写短名的展示口径（实现现住 overwrite.ts，扩展名知识与文件名判定同源）：
+ * 主文件（YAML 与 JS 脚本三扩展）显示「主文件」，扩展文件显示功能段。
+ * 用例必须锁全所有受支持文件名形态——漏一种扩展，该形态就会带着扩展名尾巴显示
+ */
+describe('shortOverwriteName', () => {
+  const cases: Array<[string, string]> = [
+    // YAML 主文件与扩展文件
+    ['overwrite.yaml', '主文件'],
+    ['overwrite.dns.yaml', 'dns'],
+    ['overwrite.dns.yml', 'dns'],
+    // JS 主脚本三扩展都是主文件
+    ['overwrite.js', '主文件'],
+    ['overwrite.mjs', '主文件'],
+    ['overwrite.cjs', '主文件'],
+    // JS 扩展脚本显示功能段，不带扩展名尾巴
+    ['overwrite.custom.js', 'custom'],
+    ['overwrite.globals.mjs', 'globals'],
+    ['overwrite.x.cjs', 'x'],
+  ];
+  for (const [filename, expected] of cases) {
+    it(`${filename} → ${expected}`, () => {
+      assert.equal(shortOverwriteName(filename), expected);
+    });
+  }
+});
+
+describe('lockedKeysReferencedBy', () => {
+  it('裸键与表外 tls 都按规范键命中、去重保序', () => {
+    assert.deepEqual(lockedKeysReferencedBy(['mixed-port', 'tls', 'dns']), ['mixed-port', 'tls']);
+  });
+  it('操作符形态（! / +key / key+）解析为规范键后命中', () => {
+    assert.deepEqual(lockedKeysReferencedBy(['secret!', '+authentication', 'allow-lan+', 'rules']), ['secret', 'authentication', 'allow-lan']);
+  });
+  it('操作符修饰的非锁定键与普通键一样不命中', () => {
+    assert.deepEqual(lockedKeysReferencedBy(['rules!', '+proxies']), []);
+  });
+  it('同一规范键的裸写与操作符形态去重为一份', () => {
+    assert.deepEqual(lockedKeysReferencedBy(['tls', 'tls!']), ['tls']);
   });
 });

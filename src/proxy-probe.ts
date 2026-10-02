@@ -1,6 +1,7 @@
 import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import { parsePidList } from './process-probe.js';
 import type { ProxyProbeResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -14,10 +15,7 @@ export function lsofListenPids(port: number): number[] | null {
   try {
     const r = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', timeout: 5000 });
     if (r.status !== 0) return null;
-    return r.stdout
-      .split('\n')
-      .map(line => Number.parseInt(line.trim(), 10))
-      .filter(pid => Number.isInteger(pid) && pid > 0);
+    return parsePidList(r.stdout);
   } catch {
     return null;
   }

@@ -26,9 +26,9 @@ function printOverwriteList(): void {
     console.log(`${colors.cyan('覆写文件')} (${countText}):`);
     console.log('');
     info.files.forEach((f, i) => {
-      // 1 基编号与 sub 列表同口径（logs 的 0=当前是特有语义，不在此列）
+      // 1 基编号两位对齐，与 sub 列表、logs 归档同口径（logs 的 0=当前是特有语义，不在此列）
       const seq = i + 1;
-      const num = seq < 10 ? ` ${seq}` : `${seq}`;
+      const num = String(seq).padStart(2);
       const mark = f.enabled ? '' : ` ${colors.yellow('[已禁用]')}`;
       console.log(`  ${num}. ${f.name}${mark}`);
       if (f.scope) {
@@ -44,7 +44,7 @@ function printOverwriteList(): void {
       console.log(colors.red(`加载失败 (${info.broken.length} 个，未参与合并；start/doctor 会报错):`));
       info.broken.forEach((b, i) => {
         const seq = info.files.length + i + 1;
-        const num = seq < 10 ? ` ${seq}` : `${seq}`;
+        const num = String(seq).padStart(2);
         console.log(`  ${num}. ${colors.red(b.name)} ${colors.red('[加载失败]')}`);
         console.log(colors.red(`    ${b.message}`));
         // hint 是可执行的修复/迁移指引（改 JS 脚本、match 示例、加引号等），

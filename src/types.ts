@@ -129,7 +129,7 @@ export interface OverwriteScriptContext {
    */
   subscription: { name: string; url: string; host: string };
   /** 本次构建的运行模式 */
-  mode: 'mixed' | 'tun';
+  mode: RuntimeMode;
   /** 发一条告警进 warnings 通道（`start` / `config` / `doctor` 的输出可见；`status` 判定脚本命中时会执行它，但不显示 warn 的内容） */
   warn: (message: string) => void;
 }
@@ -155,8 +155,6 @@ export interface OverwriteFileInfo {
   scope?: string;
   /** 该文件自身是否启用（文件内 `enabled` 键）；与 OverwriteListResult.enabled 的全局开关是两层 */
   enabled: boolean;
-  /** 加载失败原因；存在时该文件既未参与合并、也不能按 enabled/match 归类 */
-  error?: string;
   /**
    * match 是否命中调用方给的作用域；**仅在 listOverwriteFile 传了 scope 时存在**。
    * undefined = 未判定（`ow` 列表不绑定某条订阅，判不了），不等于「没命中」。
@@ -164,6 +162,9 @@ export interface OverwriteFileInfo {
    */
   matched?: boolean;
 }
+
+/** 运行模式：Mixed 由 launchd 服务托管，TUN 是按需 sudo 的临时进程 */
+export type RuntimeMode = 'mixed' | 'tun';
 
 // === Process ===
 
@@ -182,7 +183,7 @@ export interface ProcessInfo {
 export interface StartResult {
   success: boolean;
   pid: number;
-  mode?: 'mixed' | 'tun';
+  mode?: RuntimeMode;
 }
 
 export interface StopResult {
@@ -390,7 +391,7 @@ export interface StatusJson {
   running: boolean;
   /** 运行中且探测过连通性时有值；未运行或无端口信息为 null */
   connectivity: { ok: boolean; statusCode: number | null; error: string | null; durationMs: number } | null;
-  mode: 'mixed' | 'tun' | null;
+  mode: RuntimeMode | null;
   carrier: 'service' | 'tun' | null;
   pid: number | null;
   kernel: string | null;

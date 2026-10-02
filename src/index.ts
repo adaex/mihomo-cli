@@ -5,7 +5,7 @@ import { stderrColors } from './colors.js';
 import { printCommandHelp, printShortHelp } from './commands/help.js';
 import { allCommandTokens, findCommand } from './commands/registry.js';
 import { printStatus } from './commands/status.js';
-import { DEFAULT_MIXED_PORT, MIN_NODE_VERSION } from './constants.js';
+import { DEFAULT_MIXED_PORT, isValidPortNumber, MIN_NODE_VERSION } from './constants.js';
 import { CliError, errorMessage } from './errors.js';
 import { isSilentSigint } from './lifecycle.js';
 import { cleanupStaleTmpFiles, ensureDirs, PATHS } from './paths.js';
@@ -51,7 +51,8 @@ function readSelfMixedPortEarly(): number {
   try {
     const raw = JSON.parse(fs.readFileSync(PATHS.settingsFile, 'utf8')) as { ports?: { mixed?: unknown } } | null;
     const mixed = raw?.ports?.mixed;
-    if (typeof mixed === 'number' && Number.isInteger(mixed) && mixed >= 1 && mixed <= 65535) return mixed;
+    // 端口谓词与 settings 校验、--proxy 归一同源（isValidPortNumber）
+    if (isValidPortNumber(mixed)) return mixed;
   } catch {
     // 文件不存在/损坏/非对象：用默认端口，不影响守卫之前不抛错的约束
   }

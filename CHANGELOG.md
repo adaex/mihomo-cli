@@ -1,5 +1,16 @@
 # Changelog
 
+## [26.10.102]
+
+### 变更（第十九轮全量质量清理：/simplify 四角度）
+
+- **锁定键剥除收口为单一执行集**：「实际被剥除的锁定键 = LOCKED_CONFIG_KEYS + tls」此前在常量表、脚本探针、config.ts 的手写三段扫描加独立 `delete tls`、快照测试里各抄一份（tls 是 external-controller-tls 证书来源、属控制面但不进上游 Inbound 快照表）。现统一为 constants.ts 的 `EFFECTIVELY_LOCKED_KEYS`：YAML 告警扫描经新纯函数 `lockedKeysReferencedBy`（操作符形态与表外 tls 同判），剥除循环、脚本快照探针、快照测试全部派生自这一份，新增锁定段只改一处
+- **残留清理结果成为机制的一部分**：`cleanupKernelsOrThrow`/`stopService`/`uninstallService` 改为返回 cleanupAll 的 `CleanupResult`，stop/uninstall/reset 消费同一份复核结果，不再在清理之后重发 pgrep；reset 服务活跃路径删掉第二次 cleanupAll（旧实现多一次 pgrep 与 5s 死亡等待、root 脚本失败时可能再要一次密码，并把同一条 warn 打印成「进程目前已不在」与「可能仍有残留进程」两份互相矛盾的说法），warn 渲染统一为 `warnResidueCleanup` 一个出口
+- **`--mirror` 收编进选项登记表**：flags 的 `takesValue` 扩为 `false | 'required' | 'optional'`，可选值选项的词法（exact/等号/裸写边界）随登记表走；argv 白名单的 `--mirror=` 特判、kernel 命令的局部 valueFlags 表、parseMirrorArg 的手写计数与等值判定三处旁路删除，parseMirrorArg 只保留镜像值归一化（别名/https/direct）
+- **版本查询出网决策收口**：cmdKernel 与 doctor 各自手拼的「代理在跑经代理、无代理走 gh、direct 全绕」决策合并为 kernel.ts 的 `resolveReleaseQuery`（与下载通道决策同源输入）；下载兜底路径的反推函数保留，两处对「显式镜像无代理」的不同答案（gh 认证 vs 直连）由成对用例锁定为刻意分歧
+- **运行模式规整在入口**：新增 `RuntimeMode` 类型（下沉 types.ts），buildConfig/judgeScriptMatches/prepareConfigForStart 形参收紧，两处 `mode === 'tun' ? 'tun' : 'mixed'` 归一删除；start/status 的 `TUN`/`Mixed` 标签统一走 `runtimeModeLabel`
+- **复用与简化**：doctor 的代理连通性探测改为与 `mihomo -t` 配置校验并行发起（代理不通时体检少等约 2s，展示顺序不变）；节点计数三处合一（`countConfigNodes`）、pgrep/lsof 的 pid 输出解析合一（`parsePidList`）、端口合法性判据三处合一（`isValidPortNumber`）、scheme 前缀正则四份合一；shortOverwriteName 移回 overwrite.ts（扩展名知识与文件名判定同源派生，JS 扩展名再加不会漏展示侧）；序号两位对齐改 `padStart(2)`；订阅 URL hostname 解析两处合一；另清理死字段 `OverwriteFileInfo.error`、不可达守卫、恒等分支、不可达默认参数、游离 JSDoc 与服务健康结果的四处重复字面量。行为不变（942 测试全绿）
+
 ## [26.10.101]
 
 ### 功能（JS 覆写脚本命中约定）

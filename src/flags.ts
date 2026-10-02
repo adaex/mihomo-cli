@@ -11,14 +11,19 @@
  *
  * 只登记**带值**选项与 **start 的选项**：
  * - 布尔选项（`-f`/`-y` 等）以 `-` 开头，`getNonFlagArg` 本就跳过，无需登记
- * - `--mirror` 是可选值选项，只走 `parseMirrorArg`，故意不登记（见下方注释）
+ * - `'optional'` 的可选值选项（`--mirror`）同样登记：消费值时以下一 token 不是
+ *   flag 为界，裸写（含末尾裸写、后跟其他选项）即「无值」
  */
 
 export interface FlagSpec {
   /** 该选项的所有出现形式（如 `-s` 与 `--no-update`） */
   forms: readonly string[];
-  /** 是否带值（空格分隔，如 `-n 200`）；`--opt=value` 等号形式无需在此声明 */
-  takesValue: boolean;
+  /**
+   * 取值方式：`'required'` = 值必填（空格分隔，如 `-n 200`）；
+   * `'optional'` = 值可选（裸写合法，仅下一 token 非 flag 时消费它）；
+   * `false` = 布尔选项。`--opt=value` 等号形式对前两者都成立，无需额外声明
+   */
+  takesValue: false | 'required' | 'optional';
   /** start 的选项：配置变更触发重启（`sub use` / `ow on|off`）时是否透传给重启 */
   passthroughToRestart?: boolean;
 }
@@ -27,19 +32,22 @@ export interface FlagSpec {
 export const FLAGS: readonly FlagSpec[] = [
   // === start 的选项（重启透传） ===
   { forms: ['-s', '--no-update'], takesValue: false, passthroughToRestart: true },
-  { forms: ['-u', '--update-timeout'], takesValue: true, passthroughToRestart: true },
+  { forms: ['-u', '--update-timeout'], takesValue: 'required', passthroughToRestart: true },
   // === logs 的选项 ===
-  { forms: ['-n', '--lines'], takesValue: true },
+  { forms: ['-n', '--lines'], takesValue: 'required' },
   // === kernel 的选项 ===
-  { forms: ['-p', '--proxy'], takesValue: true },
-  // 注意：`--mirror`（kernel）是可选值选项——`--mirror`、`--mirror=url`、`--mirror url`
-  // 三种形式都合法，只走 parseMirrorArg。故意不在此登记：登记了 getNonFlagArg 反而会
-  // 把它的值吞掉。它的解析与校验由 parseMirrorArg 自己负责。
-  // `--proxy` 与之不同：值必填（裸 `--proxy` 无意义），是标准带值选项，走登记表。
+  { forms: ['-p', '--proxy'], takesValue: 'required' },
+  // `--mirror`（kernel）是可选值选项：裸 `--mirror` = 默认镜像域，`--mirror direct`
+  // 与 `--mirror=url` 同样合法。词法（三种形式/跳值边界）随登记表走，与 --proxy
+  // 同一套白名单与位置参数口径；值的归一化（别名/https/direct）仍由 parseMirrorArg 负责
+  { forms: ['--mirror'], takesValue: 'optional' },
 ];
 
-/** 带值选项集合：`getNonFlagArg` 借此跳过选项的值，不把它误当位置参数 */
-export const VALUE_FLAGS: ReadonlySet<string> = new Set(FLAGS.filter(f => f.takesValue).flatMap(f => f.forms));
+/**
+ * 带值选项集合（含可选值）：`getNonFlagArg` / `assertPositionalCount` 借此跳过选项
+ * 的值。可选值选项只在下一 token 非 flag 时跳值（消费点各自判），裸写不吞后续选项
+ */
+export const VALUE_FLAGS: ReadonlySet<string> = new Set(FLAGS.filter(f => f.takesValue !== false).flatMap(f => f.forms));
 
 /** start 的选项：配置变更触发重启时透传（`extractStartOptions` 用） */
 export const START_RESTART_FLAGS: readonly FlagSpec[] = FLAGS.filter(f => f.passthroughToRestart);
@@ -71,10 +79,9 @@ export interface ValueFlagTokenMatch {
  *
  * 布尔选项（takesValue: false）与未登记选项不匹配任何非 exact 形式——
  * attached / 等号形式只对带值选项合法，`-s x` / `--no-update=1` 一律按未知选项报错。
- * `--mirror` 不在登记表内，同样不匹配（由 parseMirrorArg 自管）。
  */
 export function matchValueFlagToken(token: string): ValueFlagTokenMatch | null {
-  const byForm = (form: string): FlagSpec | undefined => FLAGS.find(f => f.takesValue && f.forms.includes(form));
+  const byForm = (form: string): FlagSpec | undefined => FLAGS.find(f => f.takesValue !== false && f.forms.includes(form));
 
   const exact = byForm(token);
   if (exact) return { spec: exact, baseForm: token, form: 'exact', inlineValue: null };

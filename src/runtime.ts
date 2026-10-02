@@ -15,7 +15,7 @@ import {
   stopEpochBaseline,
   waitServiceHealthy,
 } from './service.js';
-import type { ProcessInfo, ServiceStatus } from './types.js';
+import type { ProcessInfo, RuntimeMode, ServiceStatus } from './types.js';
 
 /**
  * 运行时门面：收敛「launchd 服务(Mixed) vs 临时进程(TUN)」双轨的差异。
@@ -27,7 +27,9 @@ import type { ProcessInfo, ServiceStatus } from './types.js';
  * 依赖方向：runtime → config/service/process（单向，三者均不反向依赖 runtime，无循环）。
  */
 
-export type RuntimeMode = 'mixed' | 'tun';
+// RuntimeMode 定义在 types.ts（叶子模块），此处 re-export 保持「runtime 导出运行模式」的
+// 既有口径：config/overwrite 等下层模块不能反向依赖本模块
+export type { RuntimeMode };
 
 /**
  * 当前应使用的运行模式（未运行时的默认）。装了服务恒为 Mixed（服务只跑 Mixed）；

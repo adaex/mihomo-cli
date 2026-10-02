@@ -90,19 +90,31 @@ export function classifyResidueCleanup(result: Pick<CleanupResult, 'remaining' |
 }
 
 /**
+ * warn 档的统一渲染：服务路径（cleanupKernelsOrThrow）与 reset 的无服务分支共用——
+ * 同一份 cleanupAll 结果只允许有一种说法（此前 reset 自组的「可能仍有残留进程」与
+ * 这里的「进程目前已不在」互相矛盾）。throw 档的 CliError 也由同一个 builder 产出
+ */
+export function warnResidueCleanup(result: Pick<CleanupResult, 'remaining' | 'scriptError' | 'pidError'>, ctx: RootResidueCleanupContext): void {
+  const err = buildRootResidueCleanupError(result, ctx);
+  console.warn(colors.yellow(`警告: ${err.message}`));
+  for (const line of err.hint) console.warn(colors.gray(line));
+}
+
+/**
  * 服务路径的残留内核收口。唯一实现是 process-stop 的 cleanupAll
  * （用户态逐 pid 复核 / root 一次 sudo 脚本 + 死亡等待），抛错/警告判据见
  * classifyResidueCleanup。pid 文件免提权清理、失败只警告，非 TTY 的
- * `mihomo-cli stop` 不会被一个无害残留挡成 exit 1
+ * `mihomo-cli stop` 不会被一个无害残留挡成 exit 1。
+ *
+ * 返回 cleanupAll 的原始结果：stop/uninstall/reset 各自的外层残留判定（抛
+ * 「部分进程未终止」/「重置中止」）消费同一份 remaining，不再重新 pgrep 或再跑一遍清理
  */
-export async function cleanupKernelsOrThrow(ctx: RootResidueCleanupContext): Promise<void> {
+export async function cleanupKernelsOrThrow(ctx: RootResidueCleanupContext): Promise<CleanupResult> {
   const result = await cleanupAll();
   const verdict = classifyResidueCleanup(result);
-  if (verdict === 'ok') return;
-  const err = buildRootResidueCleanupError(result, ctx);
-  if (verdict === 'throw') throw err;
-  console.warn(colors.yellow(`警告: ${err.message}`));
-  for (const line of err.hint) console.warn(colors.gray(line));
+  if (verdict === 'throw') throw buildRootResidueCleanupError(result, ctx);
+  if (verdict === 'warn') warnResidueCleanup(result, ctx);
+  return result;
 }
 
 /**

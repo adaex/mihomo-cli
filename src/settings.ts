@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { CONTROLLER_PORT, DEFAULT_MIXED_PORT } from './constants.js';
+import { CONTROLLER_PORT, DEFAULT_MIXED_PORT, isValidPortNumber } from './constants.js';
 import { CliError } from './errors.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './paths.js';
 import type { Settings, Subscription, SubscriptionCache, SubscriptionCacheEntry, SubscriptionUrgency, SubscriptionWithCache } from './types.js';
@@ -31,6 +31,11 @@ function backupCorruptSettings(reason: string): Settings {
   return {};
 }
 
+/** 「JSON 合法但不是对象」的损坏原因短语（readSettings 与订阅缓存两处同口径） */
+function nonObjectReason(parsed: unknown): string {
+  return `内容不是对象（当前是${Array.isArray(parsed) ? '数组' : parsed === null ? 'null' : typeof parsed}）`;
+}
+
 /** 每次读取磁盘；同一操作需要一致视图时由调用方显式传递这份快照（D10） */
 export function readSettings(): Settings {
   if (!fs.existsSync(PATHS.settingsFile)) return {};
@@ -41,7 +46,7 @@ export function readSettings(): Settings {
     // 「文件不可用」：下一次 updateSettings 会把文件整个覆盖成默认内容，用户的原件会
     // 无声无息地没了，故同样走备份+告警（doctor 的设置文件检查能识别这种形态，
     // 但读路径自己不能装作没看见）
-    return backupCorruptSettings(`内容不是对象（当前是${Array.isArray(parsed) ? '数组' : parsed === null ? 'null' : typeof parsed}）`);
+    return backupCorruptSettings(nonObjectReason(parsed));
   } catch (e) {
     // existsSync 与 readFileSync 之间文件被并发删除（如另一终端 reset settings）：
     // 这是「文件没了」的正常形态不是损坏，回退默认即可，误报「格式损坏」会把
@@ -93,10 +98,11 @@ export function updateSettings(mutate: (current: Settings) => Partial<Settings>,
   });
 }
 
-/** 校验单个端口覆盖值：1-65535 的整数。返回 undefined 表示「未配置，用默认」。 */
+/** 校验单个端口覆盖值：1-65535 的整数（谓词见 constants.isValidPortNumber）。
+ * 返回 undefined 表示「未配置，用默认」。 */
 function validatePort(value: unknown, key: string): number | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 65535) {
+  if (!isValidPortNumber(value)) {
     throw new CliError(`settings.json 的 ${key} 需为 1-65535 的整数，当前是 ${JSON.stringify(value)}`, {
       label: '配置错误',
       hint: ['示例:', '  "ports": { "mixed": 17890, "controller": 19090 }', '两个键均可选；删掉 ports 则回到默认端口 7890/9090'],
@@ -177,7 +183,7 @@ export function readSubscriptionCache(): SubscriptionCache {
       // （备份+告警，与 readSettings 对齐）：下一次写缓存会把文件整个覆盖，用户的原件
       // 无声无息地没了
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        return backupCorruptSubscriptionCache(`内容不是对象（当前是${Array.isArray(parsed) ? '数组' : parsed === null ? 'null' : typeof parsed}）`);
+        return backupCorruptSubscriptionCache(nonObjectReason(parsed));
       }
       // 拷进无原型对象：JSON.parse 的结果仍是普通对象，直接返回会让后续
       // cache['__proto__'] = ... 重新踩回设置原型的坑

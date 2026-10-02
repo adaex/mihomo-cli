@@ -25,7 +25,7 @@ import { allocateArchivePath, cleanupOldLogs, rotateAndCleanupLogs } from './log
 import { atomicWriteFileSync, ensureDirs, PATHS, withFileLock } from './paths.js';
 import { getMihomoPids } from './process-probe.js';
 import { bumpStopEpoch, readStopEpoch, shouldAbortStartOnDisable, stopEpochBaseline } from './stop-epoch.js';
-import type { ServiceStatus } from './types.js';
+import type { CleanupResult, ServiceStatus } from './types.js';
 import { sleep } from './utils.js';
 
 export { concludeHotReload } from './hot-reload.js';
@@ -46,8 +46,10 @@ export {
   buildLegacyCleanupScript,
   buildRootResidueCleanupError,
   classifyResidueCleanup,
+  cleanupKernelsOrThrow,
   cleanupLegacyInstallOrThrow,
   detectLegacySystemInstall,
+  warnResidueCleanup,
 } from './legacy-cleanup.js';
 export { captureStopEpochBaseline, readStopEpoch, recordServiceStopped, shouldAbortStartOnDisable, stopEpochBaseline } from './stop-epoch.js';
 
@@ -108,6 +110,14 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
   // 瞬时失败（超时/112/125）按「本轮未知」跳过，不升级为「启动失败」的假结论。
   // last 可空：整个观察窗查询全部失败时为 null，由 healthViaProcessProbe 兜底
   let last: ServiceStatus | null = null;
+  // 四个不健康返回点的字段集合同一份（死因取观察窗最后一次快照），新增死因字段只改这里
+  const unhealthy = (state: ServiceStatus, crashed: boolean, pid: number | null = null): ServiceHealth => ({
+    healthy: false,
+    crashed,
+    pid,
+    exitCode: state.lastExitCode,
+    terminatingSignal: state.lastTerminatingSignal,
+  });
   do {
     await sleep(SERVICE_HEALTH_INTERVAL_MS);
     try {
@@ -117,11 +127,11 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
     }
 
     if (isCrashed(last)) {
-      return { healthy: false, crashed: true, pid: null, exitCode: last.lastExitCode, terminatingSignal: last.lastTerminatingSignal };
+      return unhealthy(last, true);
     }
     if (!last.loaded) {
       // 已卸载（被外部 bootout，或 plist 装不进来），继续等无意义
-      return { healthy: false, crashed: false, pid: null, exitCode: last.lastExitCode, terminatingSignal: last.lastTerminatingSignal };
+      return unhealthy(last, false);
     }
   } while (Date.now() < deadline);
 
@@ -143,7 +153,7 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
     graceQueried = true;
 
     if (isCrashed(last)) {
-      return { healthy: false, crashed: true, pid: null, exitCode: last.lastExitCode, terminatingSignal: last.lastTerminatingSignal };
+      return unhealthy(last, true);
     }
     if (!last.loaded) break;
     if (last.running) return { healthy: true, crashed: false, pid: last.pid, exitCode: null, terminatingSignal: null };
@@ -153,7 +163,7 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
   // 可能已 running 而观察不到——与第一阶段全失败同族，同一兜底判据
   if (!graceQueried) return healthViaProcessProbe();
 
-  return { healthy: false, crashed: false, pid: last.pid, exitCode: last.lastExitCode, terminatingSignal: last.lastTerminatingSignal };
+  return unhealthy(last, false, last.pid);
 }
 
 /**
@@ -497,14 +507,15 @@ async function bootoutAndDisableInLock(): Promise<void> {
  * 即便 plist 不存在也照常执行：用户手动删掉 plist 后任务仍可能处 bootstrapped 状态，
  * KeepAlive 会继续拉起内核，此时只有 bootout 能救。
  */
-export async function stopService(): Promise<void> {
+export async function stopService(): Promise<CleanupResult> {
   assertServiceLabelSafe();
 
   await bootoutAndDisableInLock();
 
   // bootout 通常已终止托管内核；tun 起的 root 内核与手动残留在此收口。
-  // 重跑 stop 即可重试清理：此时服务已停，cmdStop 走「游离内核」路径再次提权
-  await cleanupKernelsOrThrow({ mainOutcome: '服务已停止，登录自启已关闭', retryCommand: 'mihomo-cli stop' });
+  // 重跑 stop 即可重试清理：此时服务已停，cmdStop 走「游离内核」路径再次提权。
+  // 结果透传给命令层做外层残留判定，不再重新 pgrep（注释契约见 cleanupKernelsOrThrow）
+  return cleanupKernelsOrThrow({ mainOutcome: '服务已停止，登录自启已关闭', retryCommand: 'mihomo-cli stop' });
 }
 
 /**
@@ -517,7 +528,7 @@ export async function stopService(): Promise<void> {
  * （见 `shouldAbortStartOnDisable`），残留位属「命令开始前就存在」，照常被 enable 覆盖，
  * 不影响任何正常路径。
  */
-export async function uninstallService(): Promise<void> {
+export async function uninstallService(): Promise<CleanupResult> {
   assertServiceLabelSafe();
 
   // 锁内停止序列与 stopService 同一份（bootoutAndDisableInLock），预算注释见该函数
@@ -537,14 +548,17 @@ export async function uninstallService(): Promise<void> {
 
   // 重试入口是 stop 而非 uninstall：卸载完成后重跑 uninstall 会因「未安装且未装载」
   // 幂等返回，不会重试残留清理；stop 的游离内核路径（cleanupAll）才会再次提权
-  await cleanupKernelsOrThrow({ mainOutcome: '服务已卸载', retryCommand: 'mihomo-cli stop' });
+  const cleanup = await cleanupKernelsOrThrow({ mainOutcome: '服务已卸载', retryCommand: 'mihomo-cli stop' });
 
-  // 符号链是本工具装的，卸载时一并清掉（内核本体保留，那是 kernel 命令的资产）
+  // 符号链是本工具装的，卸载时一并清掉（内核本体保留，那是 kernel 命令的资产）；
+  // 放在清理结果拿到之后：结果要透传给命令层，符号链删除本身不改变残留判定
   try {
     fs.rmSync(PATHS.serviceBinary, { force: true });
   } catch {
     /* ignore：不存在或已被 reset kernel 带走 */
   }
+
+  return cleanup;
 }
 
 /**

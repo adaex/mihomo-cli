@@ -128,16 +128,21 @@ export async function cmdUninstall(args: string[]): Promise<void> {
     console.log('将执行 launchctl bootout 卸载残留任务');
   }
 
+  // 服务卸载路径消费 uninstallService 内 cleanupAll 的复核结果，不再重发 pgrep；
+  // legacy 清理（其内部另有 bootout + reap）或两条路径都没走时，终态需在此统一观察
+  let remaining: number[] | null = null;
   if (status.installed || status.loaded) {
-    await uninstallService();
+    const cleanup = await uninstallService();
     console.log(colors.green('已卸载服务'));
+    remaining = cleanup.remaining;
   }
 
   if (legacy) {
     await announceLegacyCleanupOrThrow('卸载时一并清理');
+    remaining = null;
   }
 
-  const remaining = getMihomoPids();
+  if (remaining === null) remaining = getMihomoPids();
   if (remaining.length > 0) {
     console.log('');
     console.log(colors.yellow(`仍有内核进程残留 (PID ${remaining.join(', ')})`));

@@ -1,5 +1,5 @@
 import { assertKnownFlags } from './argv.js';
-import { AVAILABLE_MIRRORS, MIRROR_ALIASES, MIRROR_BARE } from './constants.js';
+import { AVAILABLE_MIRRORS, isValidPortNumber, MIRROR_ALIASES, MIRROR_BARE } from './constants.js';
 import { CliError } from './errors.js';
 import { matchValueFlagToken } from './flags.js';
 import { suggestSimilar } from './suggest.js';
@@ -9,6 +9,9 @@ import type { MirrorArg, ProxyArg } from './types.js';
  * kernel 命令的选项解析：`--mirror`（可选值）与 `--proxy`（带值）。
  * 镜像的语义边界（只作用产物下载、不作用 GitHub API、选择不持久化）见 docs/decisions.md D8。
  */
+
+/** URL scheme 前缀（`https://` / `socks5h://` 等）：scheme 词法单点维护，test/replace 共用 */
+const SCHEME_PREFIX_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//;
 
 /** kernel 命令的选项白名单：两个解析器（mirror/proxy）共用的唯一清单 */
 const KERNEL_FLAG_WHITELIST: readonly string[] = ['--mirror', '--proxy', '-p'];
@@ -32,7 +35,7 @@ function normalizeMirrorUrl(val: string): string | null {
   // 放行会被当裸主机名补 https，经 punycode 转换后展示成一串认不出的主机名，
   // 下载注定失败；按「拼错的别名」报错并给 did-you-mean（口径同命令层纠错）。
   // 纯数字（把 --mirror 当 --proxy 用、只给了个端口）单独点一句正确用法
-  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(val) && !val.includes('.') && !val.includes(':')) {
+  if (!SCHEME_PREFIX_RE.test(val) && !val.includes('.') && !val.includes(':')) {
     const suggestions = suggestSimilar(val, [...Object.keys(MIRROR_ALIASES), 'direct']);
     throw new CliError(`未知的镜像别名: "${val}"`, {
       label: '参数错误',
@@ -46,7 +49,7 @@ function normalizeMirrorUrl(val: string): string | null {
   }
 
   // 无 scheme 的裸主机名补 https；有 scheme 的必须是 https
-  const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(val) ? val : `https://${val}`;
+  const withScheme = SCHEME_PREFIX_RE.test(val) ? val : `https://${val}`;
 
   let parsed: URL;
   try {
@@ -85,36 +88,38 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
   // 两个解析器先后各跑一次同白名单的 assertKnownFlags（幂等），先跑的负责拦未知选项
   assertKnownFlags(args.slice(1), KERNEL_FLAG_WHITELIST, 'kernel [--mirror [镜像]] [--proxy <端口|地址>]');
 
-  // 重复的 --mirror 报错，不静默以第一个为准
-  const mirrorCount = args.filter(a => a === '--mirror' || a.startsWith('--mirror=')).length;
-  if (mirrorCount > 1) {
+  // 两种形式（exact `--mirror url` 与等号 `--mirror=url`）的词法识别走登记表
+  // matchValueFlagToken，与 parseProxyArg 同构；本函数只保留 mirror 自己的值语义
+  // （裸写 = 默认镜像域、空值报错、direct = 强制直连、别名/URL 归一）
+  const hits: { value: string | null }[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const match = matchValueFlagToken(args[i]);
+    if (!match?.spec.forms.includes('--mirror')) continue;
+    hits.push({ value: match.form === 'exact' ? (args[i + 1] ?? null) : match.inlineValue });
+  }
+  if (hits.length === 0) {
+    return { mirror: null, isOverride: false };
+  }
+  if (hits.length > 1) {
     throw new CliError('--mirror 只能指定一次', {
       label: '参数错误',
       hint: ['用法: mihomo-cli kernel [--mirror [镜像]]', `可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`, '不使用镜像: mihomo-cli kernel --mirror direct'],
     });
   }
 
-  // 同时支持 `--mirror url` 与 `--mirror=url` 两种形式
-  const mirrorEq = args.find(a => a.startsWith('--mirror='));
-  const mirrorIdx = args.indexOf('--mirror');
-  if (mirrorIdx >= 0 || mirrorEq) {
-    const inline = mirrorEq?.slice('--mirror='.length);
-    if (inline === '' || (mirrorIdx >= 0 && args[mirrorIdx + 1] === '')) {
-      throw new CliError('--mirror 的值不能为空（单独的 --mirror 表示使用默认镜像域）', {
-        label: '参数错误',
-        hint: ['用法: mihomo-cli kernel [--mirror [镜像]]', `可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`, '不使用镜像: mihomo-cli kernel --mirror direct'],
-      });
-    }
-    const nextArg = inline ?? args[mirrorIdx + 1];
-    if (!nextArg || nextArg.startsWith('-')) {
-      return { mirror: MIRROR_BARE, isOverride: true };
-    }
-    // `--mirror direct`：normalize 返回 null，按强制直连处理
-    const normalized = normalizeMirrorUrl(nextArg);
-    return { mirror: normalized, isOverride: true };
+  const value = hits[0].value;
+  if (value === '') {
+    throw new CliError('--mirror 的值不能为空（单独的 --mirror 表示使用默认镜像域）', {
+      label: '参数错误',
+      hint: ['用法: mihomo-cli kernel [--mirror [镜像]]', `可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`, '不使用镜像: mihomo-cli kernel --mirror direct'],
+    });
   }
-
-  return { mirror: null, isOverride: false };
+  // null（末尾裸写）或下一 token 是 flag（`--mirror --proxy x`）：无值 = 默认镜像域
+  if (value === null || value.startsWith('-')) {
+    return { mirror: MIRROR_BARE, isOverride: true };
+  }
+  // `--mirror direct`：normalize 返回 null，按强制直连处理
+  return { mirror: normalizeMirrorUrl(value), isOverride: true };
 }
 
 /** 代理地址允许的协议（curl -x 口径）；与镜像的 https-only 不同，代理只做传输层，不限制明文 */
@@ -133,12 +138,12 @@ const PROXY_SCHEMES = new Set(['http:', 'https:', 'socks5:', 'socks5h:']);
 function normalizeProxyUrl(val: string): string {
   if (/^\d+$/.test(val)) {
     const port = Number(val);
-    if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    if (!isValidPortNumber(port)) {
       throw new CliError(`代理端口无效: "${val}"`, { label: '参数错误', hint: ['端口范围 1-65535，例如: --proxy 7897'] });
     }
     return `http://127.0.0.1:${port}`;
   }
-  const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(val) ? val : `http://${val}`;
+  const withScheme = SCHEME_PREFIX_RE.test(val) ? val : `http://${val}`;
   let parsed: URL;
   try {
     parsed = new URL(withScheme);
@@ -157,7 +162,7 @@ function normalizeProxyUrl(val: string): string {
   // authority = scheme 后到首个 /?# 之前的整段（含 userinfo 与端口）。
   // 显式默认端口（:80/:443）保留原样；无端口的代理地址对本地代理工具几乎必是笔误，
   // 要求显式端口，避免「以为配了代理、实际连到默认端口」的静默错路
-  const authority = withScheme.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '').split(/[/?#]/)[0];
+  const authority = withScheme.replace(SCHEME_PREFIX_RE, '').split(/[/?#]/)[0];
   if (!/:\d+$/.test(authority)) {
     throw new CliError(`代理地址需要端口: "${val}"`, { label: '参数错误', hint: ['例如: --proxy 127.0.0.1:7897'] });
   }

@@ -19,6 +19,7 @@ import {
   pickLatestRelease,
   resolveDownloadChannels,
   resolveFallbackQueryOptions,
+  resolveReleaseQuery,
   translateReleaseApiCurlError,
 } from './kernel.js';
 import type { GitHubAsset, GitHubRelease } from './types.js';
@@ -211,6 +212,67 @@ describe('resolveFallbackQueryOptions（兜底版本查询与下载通道对齐�
     // 回归：旧判据 useGh = apiProxy === null 使 direct（与无代理 mirror）的兜底查询
     // 先试 gh api——gh 未装白吃 ENOENT、gh 已装则绕过「不经 gh」的通道语义
     assert.deepEqual(resolveFallbackQueryOptions({ kind: 'direct' }), { proxy: null, useGh: false });
+  });
+});
+
+describe('resolveReleaseQuery（版本查询出网的正推唯一出口，cmdKernel/doctor 共用）', () => {
+  const base = { mirror: null, isOverride: false, ghAvailable: false, proxyRunning: false, proxyPort: null, proxyOverride: null };
+
+  it('全无条件：直连、不经 gh', () => {
+    assert.deepEqual(resolveReleaseQuery(base), { proxy: null, useGh: false });
+  });
+
+  it('无代理、有 gh：gh 认证查询', () => {
+    assert.deepEqual(resolveReleaseQuery({ ...base, ghAvailable: true }), { proxy: null, useGh: true });
+  });
+
+  it('本机代理在跑：直接经代理，即使 gh 可用也不试 gh', () => {
+    assert.deepEqual(resolveReleaseQuery({ ...base, ghAvailable: true, proxyRunning: true, proxyPort: 7890 }), {
+      proxy: 'http://127.0.0.1:7890',
+      useGh: false,
+    });
+  });
+
+  it('代理在跑但端口读损坏（proxyPort=null）：降级为 gh 通道（与 doctor 的损坏降级一致）', () => {
+    assert.deepEqual(resolveReleaseQuery({ ...base, ghAvailable: true, proxyRunning: true, proxyPort: null }), {
+      proxy: null,
+      useGh: true,
+    });
+  });
+
+  it('显式 --proxy：经该代理，gh 不介入', () => {
+    assert.deepEqual(resolveReleaseQuery({ ...base, ghAvailable: true, proxyOverride: 'socks5://127.0.0.1:7897' }), {
+      proxy: 'socks5://127.0.0.1:7897',
+      useGh: false,
+    });
+  });
+
+  it('--mirror direct：API 也直连绕过，gh 不介入', () => {
+    assert.deepEqual(resolveReleaseQuery({ ...base, mirror: null, isOverride: true, ghAvailable: true, proxyRunning: true, proxyPort: 7890 }), {
+      proxy: null,
+      useGh: false,
+    });
+  });
+
+  it('显式镜像（非 direct）+ 本机代理在跑：API 仍经本机代理（镜像只管下载 URL）', () => {
+    assert.deepEqual(
+      resolveReleaseQuery({ ...base, mirror: 'https://cdn.gh-proxy.org/', isOverride: true, ghAvailable: true, proxyRunning: true, proxyPort: 7890 }),
+      { proxy: 'http://127.0.0.1:7890', useGh: false },
+    );
+  });
+
+  it('显式镜像（非 direct）+ 显式 --proxy：经该代理', () => {
+    assert.deepEqual(resolveReleaseQuery({ ...base, mirror: 'https://cdn.gh-proxy.org/', isOverride: true, proxyOverride: 'http://127.0.0.1:7897' }), {
+      proxy: 'http://127.0.0.1:7897',
+      useGh: false,
+    });
+  });
+
+  it('分歧锁定：显式镜像无代理时正推走 gh 认证，反推（mirror 通道）答直连——两者输入域不同，别「修」成一致', () => {
+    const forward = resolveReleaseQuery({ ...base, mirror: 'https://cdn.gh-proxy.org/', isOverride: true, ghAvailable: true });
+    assert.deepEqual(forward, { proxy: null, useGh: true });
+    const backward = resolveFallbackQueryOptions({ kind: 'mirror', mirror: 'https://cdn.gh-proxy.org/' });
+    assert.deepEqual(backward, { proxy: null, useGh: false });
   });
 });
 

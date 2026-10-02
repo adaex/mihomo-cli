@@ -133,7 +133,15 @@ export function getMihomoPids(): number[] {
     });
   }
 
-  const output = (result.stdout || '').trim();
+  return parsePidList(result.stdout);
+}
+
+/**
+ * 解析「每行一个 pid」的命令输出（pgrep -f 与 lsof -t 同形态）：空白行/非数字/
+ * 非正整数一律滤掉。两个探测出口共用这一份解析口径
+ */
+export function parsePidList(stdout: string): number[] {
+  const output = stdout.trim();
   if (!output) return [];
   return output
     .split('\n')

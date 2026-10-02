@@ -5,19 +5,18 @@ import { CliError } from '../errors.js';
 import { isOverwriteFilename, listTypoOverwriteFiles } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
-import { cleanupAll, describePidCleanupFailure, MANUAL_PKILL_HINT } from '../process-stop.js';
+import { cleanupAll, MANUAL_PKILL_HINT } from '../process-stop.js';
 import {
-  classifyResidueCleanup,
   cleanupLegacyInstallOrThrow,
   detectLegacySystemInstall,
   getServiceStatus,
   recordServiceStopped,
   stopService,
   uninstallService,
+  warnResidueCleanup,
 } from '../service.js';
 import { updateSettings } from '../settings.js';
-import { describeSudoFailure } from '../sudo.js';
-import type { ResetTarget, Settings } from '../types.js';
+import type { CleanupResult, ResetTarget, Settings } from '../types.js';
 import { confirmOrThrow } from './shared.js';
 
 /** 目标表只描述数据；服务操作与设置更新由 cmdReset 分阶段处理 */
@@ -137,33 +136,29 @@ export async function cmdReset(args: string[]): Promise<void> {
   const current = getServiceStatus();
   serviceActive = current.installed || current.loaded;
 
+  // 服务路径的 cleanupAll 已在 stopService/uninstallService 内跑过（warn/throw 也已在
+  // 那一层统一渲染），结果直接透传——不再跑第二次：两次之间没有任何状态变化，第二遍只
+  // 多一次 pgrep 与死亡等待，root 脚本失败时还可能再要一次密码，并把同一 warn 打印成
+  // 两份互相矛盾的文案。无服务分支才需要在这里自己清理一次
+  let cleanup: CleanupResult | null = null;
   if (serviceActive) {
-    if (serviceTargeted) await uninstallService();
-    else if (needsStop) await stopService();
+    if (serviceTargeted) cleanup = await uninstallService();
+    else if (needsStop) cleanup = await stopService();
+  } else if (needsStop) {
+    cleanup = await cleanupAll();
   }
-  if (needsStop) {
-    const cleanup = await cleanupAll();
+  if (needsStop && cleanup !== null) {
     if (cleanup.remaining.length > 0) {
       throw new CliError(cleanup.remaining.join(', '), {
         label: '进程未能停止，重置中止',
         hint: [MANUAL_PKILL_HINT],
       });
     }
-    // remaining 复核已空、但清理有收尾错误（判据与 stop/服务路径同源 classifyResidueCleanup
-    // 的 'warn' 档）：重置继续走，但静默会让用户以为全部清干净了。scriptError 优先——
-    // 它可能意味着仍有进程残留，pidError 只是随后的文件小错（与服务路径归因同优先级）
-    if (classifyResidueCleanup(cleanup) === 'warn') {
-      const reason = cleanup.scriptError
-        ? `root 残留清理未完成（${describeSudoFailure(cleanup.scriptError)}），可能仍有残留进程`
-        : cleanup.pidError
-          ? describePidCleanupFailure(cleanup.pidError)
-          : null;
-      // warn 档（remaining 空）下两个字段必有一个非空，reason 不会是 null；
-      // 留守卫是防 classify 判据将来改动后打出空「警告: 」，而非指望类型断言兜底
-      if (reason) {
-        console.warn(colors.yellow(`警告: ${reason}`));
-        console.warn(colors.gray('重试清理: mihomo-cli stop'));
-      }
+    // remaining 已空但有收尾错误（classifyResidueCleanup 的 warn 档）：服务分支已由
+    // 服务层打印，无服务分支在此补同一出口的渲染——scriptError 优先于 pidError 的归因
+    // 已在 buildRootResidueCleanupError 内，这里不再自组第二份文案
+    if (!serviceActive && (cleanup.scriptError !== null || cleanup.pidError !== null)) {
+      warnResidueCleanup(cleanup, { mainOutcome: '重置继续执行', retryCommand: 'mihomo-cli stop' });
     }
     // 与 cmdStop 的提前返回同族：serviceActive 为假时上面的 stopService/uninstallService
     // 一个都没跑，没有 disable 可执行，但这里即将删掉 runtime/config.yaml 或 kernel/——

@@ -2,20 +2,12 @@ import { assertPositionalCount } from '../argv.js';
 import { colors } from '../colors.js';
 import { AVAILABLE_MIRRORS } from '../constants.js';
 import { CliError } from '../errors.js';
-import { VALUE_FLAGS } from '../flags.js';
 import type { DownloadChannel } from '../kernel.js';
 import * as kernel from '../kernel.js';
 import { parseMirrorArg, parseProxyArg } from '../kernel-args.js';
 import { getRunningState, startCommandForCurrentMode } from '../runtime.js';
 import { getMixedPortOrNull } from '../settings.js';
 import { withSpinner } from '../spinner.js';
-
-/**
- * kernel 的位置参数口径：`--mirror` 的值（如 `--mirror cdn` 的 cdn）不算位置参数。
- * `--mirror` 是可选值选项、故意不在 VALUE_FLAGS 里（见 flags.ts 注释），故这里单独补；
- * `--proxy` 是标准带值选项，已随登记表进 VALUE_FLAGS。
- */
-const KERNEL_VALUE_FLAGS: ReadonlySet<string> = new Set([...VALUE_FLAGS, '--mirror']);
 
 /** 通道的人类可读标签（失败汇总用）；措辞与 printChannelLine 头部行一致 */
 export function channelLabel(channel: DownloadChannel, isExplicitProxy: boolean): string {
@@ -95,7 +87,7 @@ export async function cmdKernel(args: string[]): Promise<void> {
   const proxyInfo = parseProxyArg(args);
   // 不接受位置参数：`kernel garbage` 此前被静默忽略；校验放在两个 flag 解析之后
   // （flag 侧的错误优先报出）、checkUpdate 之前（不碰网络）
-  assertPositionalCount(args, 0, 1, 'mihomo-cli kernel [--mirror [镜像]] [--proxy <端口|地址>]', KERNEL_VALUE_FLAGS);
+  assertPositionalCount(args, 0, 1, 'mihomo-cli kernel [--mirror [镜像]] [--proxy <端口|地址>]');
 
   // --mirror direct 的语义是「绕过一切代理直连」，与 --proxy 正交冲突，同时给出必是误解
   if (proxyInfo.proxy && mirrorInfo.isOverride && !mirrorInfo.mirror) {
@@ -120,24 +112,20 @@ export async function cmdKernel(args: string[]): Promise<void> {
   // gh 探测只在做决策的形态下花这一次子进程（判据见 ghProbeNeeded）；
   // 不需要时传 false——resolveDownloadChannels 对显式覆盖形态本就不看这个输入
   const ghAvailable = kernel.ghProbeNeeded({ forceDirect, proxyOverride: proxyInfo.proxy }) && kernel.hasGh();
-  const channels = kernel.resolveDownloadChannels({
+  const channelInput = {
     mirror: mirrorInfo.mirror,
     isOverride: mirrorInfo.isOverride,
     ghAvailable,
     proxyRunning,
     proxyPort,
     proxyOverride: proxyInfo.proxy,
-  });
+  };
+  const channels = kernel.resolveDownloadChannels(channelInput);
   printChannelLine(channels[0], proxyInfo.proxy !== null);
 
-  // 版本查询（GitHub API）的出网方式：代理可用（显式 --proxy 或本机在跑）时**直接经代理**
-  // ——代理在跑说明出网路径已定，先试 gh 直连再回退会把「直连被墙」的等待白白叠加在
-  // 可用的代理前面（spinner 也会说「经代理」而实际在等 gh）。gh 认证只在无代理可用时
-  // 介入——那正是未认证直连撞 403 限流的场景（配额 5000 次/时 vs 60）。
-  // --mirror direct 连 gh 一起绕过（「强制直连」含 API）。镜像仍绝不碰 API——
-  // 内核二进制在 TUN 下以 root 运行，下载地址必须由 GitHub 官方 API 给出
-  const apiProxy = proxyInfo.proxy ?? (proxyRunning && !forceDirect && proxyPort !== null ? `http://127.0.0.1:${proxyPort}` : null);
-  const useGh = apiProxy === null && !forceDirect && ghAvailable;
+  // 版本查询（GitHub API）的出网方式与下载通道同源决策（kernel.resolveReleaseQuery，
+  // D8）：代理可用直接经代理，无代理才 gh 认证，direct 连 API 一起绕过，镜像绝不碰 API
+  const { proxy: apiProxy, useGh } = kernel.resolveReleaseQuery(channelInput);
 
   let info: Awaited<ReturnType<typeof kernel.checkUpdate>>;
   try {

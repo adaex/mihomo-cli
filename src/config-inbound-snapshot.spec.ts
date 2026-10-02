@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { BASE_CONFIG, LOCKED_CONFIG_KEYS } from './constants.js';
+import { BASE_CONFIG, EFFECTIVELY_LOCKED_KEYS, LOCKED_CONFIG_KEYS } from './constants.js';
 
 /**
  * 锁定清单的**完整性**测试（与 config.spec.ts 的行为测试分开：那边测「锁了的键确实被剥」，
@@ -78,11 +78,11 @@ const UPSTREAM_INBOUND_FIELDS: readonly string[] = [
 ];
 
 /**
- * 实际不会进入运行配置的键。`tls` 不在 `LOCKED_CONFIG_KEYS` 数组里——它由 config.ts
- * 在剥除循环之后单独 `delete`，效果等同。测试认的是**效果**而非数组成员资格，
- * 否则这条旁路会让测试恒红。
+ * 实际不会进入运行配置的键，直接引用生产侧唯一的剥除执行集 EFFECTIVELY_LOCKED_KEYS
+ * （快照表 + 表外 tls；config.ts 的剥除循环、overwrite.ts 的脚本探针都派生自它）。
+ * 本测试的独立核对在上方上游字段快照，不再手抄一份执行集——手抄版曾与生产代码各活各的
  */
-const EFFECTIVELY_STRIPPED = new Set<string>([...LOCKED_CONFIG_KEYS, 'tls']);
+const EFFECTIVELY_STRIPPED = new Set<string>(EFFECTIVELY_LOCKED_KEYS);
 
 /**
  * 刻意不锁的键 → 理由。空理由不算数（见下方断言）：这张表的意义就是逼出一句

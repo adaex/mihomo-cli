@@ -61,6 +61,13 @@ export function assertTrustedAssetUrl(rawUrl: string): void {
 // === 下载通道 ===
 
 /**
+ * 本机回环 HTTP 地址（Mixed 代理出网点）：下载通道与版本查询的 URL 单点拼接，
+ * host 恒定 127.0.0.1、无归一逻辑，其他语义的拼接（控制器 base URL、curl -x 参数）
+ * 不在此列
+ */
+const loopbackHttpUrl = (port: number): string => `http://127.0.0.1:${port}`;
+
+/**
  * 内核下载通道：
  * - proxy：curl 经代理（本机混合端口或显式 --proxy），有 --fail-with-body 与低速超时，失败语义最明确
  * - gh：GitHub CLI，信任锚是 gh 本身 + 精确资产名；经代理时实测吞吐方差大（1.6～210s），
@@ -116,7 +123,7 @@ export function resolveDownloadChannels(input: ChannelResolutionInput): Download
   if (input.proxyOverride) return [{ kind: 'proxy', proxy: input.proxyOverride }];
 
   if (input.proxyRunning && input.proxyPort !== null) {
-    const proxyUrl = `http://127.0.0.1:${input.proxyPort}`;
+    const proxyUrl = loopbackHttpUrl(input.proxyPort);
     const channels: DownloadChannel[] = [{ kind: 'proxy', proxy: proxyUrl }];
     // gh 候选带同一个本机代理：入口 clearProxyEnv 会清掉自指 env，不带地址 gh 就直连了
     if (input.ghAvailable) channels.push({ kind: 'gh', proxy: proxyUrl });
@@ -124,6 +131,26 @@ export function resolveDownloadChannels(input: ChannelResolutionInput): Download
   }
   if (input.ghAvailable) return [{ kind: 'gh' }];
   return [{ kind: 'direct' }];
+}
+
+/**
+ * 版本查询（GitHub API）出网方式的**正推唯一出口**：cmdKernel 与 doctor 共用，
+ * 与 resolveDownloadChannels 同源输入、同一份 D8 策略——
+ * - 显式 --proxy 或本机代理在跑（且非 --mirror direct）：直接经代理。代理可用说明
+ *   出网路径已定，先试 gh 直连再回退只会把「直连被墙」的等待叠在可用代理前面
+ * - 无代理可用且非 direct：gh 认证（配额 5000/时 vs 未认证 60/时），失败由
+ *   getLatestRelease 静默回退直连
+ * - --mirror direct：连 API 一起直连绕过（「强制直连」含 API）
+ * - 显式镜像（非 direct）不改变出网决策：代理在跑仍经代理、无代理仍走 gh——镜像
+ *   绝不作用于 API，但本机代理与 gh 与镜像无关，照常参与
+ * 注意：resolveFallbackQueryOptions 是从 DownloadChannel 的**反推**，输入域不同
+ * （channel 不带「显式镜像」这一信息），两处 mirror 无代理的答案刻意不同，见该函数注释
+ */
+export function resolveReleaseQuery(input: ChannelResolutionInput): { proxy: string | null; useGh: boolean } {
+  // forceDirect 仅指 --mirror direct；显式镜像（有 mirror 值）不在此列
+  const forceDirect = input.isOverride && !input.mirror;
+  const proxy = input.proxyOverride ?? (!forceDirect && input.proxyRunning && input.proxyPort !== null ? loopbackHttpUrl(input.proxyPort) : null);
+  return { proxy, useGh: proxy === null && !forceDirect && input.ghAvailable };
 }
 
 /**
@@ -143,10 +170,8 @@ export function hasGh(): boolean {
 }
 
 function getArch(): string {
-  const arch = process.arch;
-  if (arch === 'arm64') return 'arm64';
-  if (arch === 'x64') return 'amd64';
-  return arch;
+  // 只有 x64 需要换名（amd64），其余架构原样
+  return process.arch === 'x64' ? 'amd64' : process.arch;
 }
 
 export function findMatchingAsset(assets: GitHubAsset[], platform: string, arch: string): GitHubAsset | null {
@@ -330,7 +355,7 @@ async function getLatestReleaseViaGh(repo: string, signal?: AbortSignal): Promis
  * 失败静默回退到代理/直连。代理路径经 curl 转发（fetch 不支持 HTTP 代理的 CONNECT），
  * 本地代理只是传输层，TLS 端到端，响应仍来自 GitHub。
  */
-async function getLatestRelease(repo: string, opts: ReleaseQueryOptions = { proxy: null, useGh: false }): Promise<GitHubRelease> {
+async function getLatestRelease(repo: string, opts: ReleaseQueryOptions): Promise<GitHubRelease> {
   const url = `https://api.github.com/repos/${repo}/releases`;
 
   if (opts.useGh) {
@@ -501,6 +526,12 @@ export function buildGhDownloadEnv(proxy: string | null): NodeJS.ProcessEnv {
  *   候选 → curl -x 该代理（gh api 无命令行代理选项）
  * - proxy / mirror+proxy → curl -x 该代理
  * - direct 与无代理 mirror → 直连 fetch——这两条通道的语义是「不经 gh」，查询也绝不经 gh
+ *
+ * 这是从 DownloadChannel 的**反推**，与正推出口 resolveReleaseQuery 的输入域不同：
+ * channel 不带「显式 --mirror」这一信息（显式镜像的单候选是 mirror 通道），故 mirror
+ * 无代理在此答 useGh:false（直连），而正推对同一形态答 useGh:true（gh 认证）。
+ * 两条路径不会被同一用户输入同时命中（cmdKernel 总带 releaseInfo），分歧是刻意的，
+ * 由 kernel.spec 锁定——别把其中一个「修」成另一个
  */
 export function resolveFallbackQueryOptions(channel: DownloadChannel): ReleaseQueryOptions {
   if (channel.kind === 'gh') {
@@ -670,12 +701,11 @@ export async function downloadKernel(
 
     // 版本对账：自检通过不代表版本对——归档可能含旧版本二进制（镜像返回错误资产等）。
     // 与 latest.tag_name 比对，不一致即失败，避免「报已更新但二进制没变」。
-    if (probe.version && latest.tag_name) {
-      const binaryVersion = probe.version.replace(/^v/, '');
-      const expectedVersion = latest.tag_name.replace(/^v/, '');
-      if (binaryVersion !== expectedVersion) {
-        throw new Error(`内核版本不匹配（期望 ${expectedVersion}，实际 ${binaryVersion}），旧内核未受影响`);
-      }
+    // 走到这里 probe.version 必非空（上方自检守卫已拦 null），latest.tag_name 是必填字段
+    const binaryVersion = probe.version.replace(/^v/, '');
+    const expectedVersion = latest.tag_name.replace(/^v/, '');
+    if (binaryVersion !== expectedVersion) {
+      throw new Error(`内核版本不匹配（期望 ${expectedVersion}，实际 ${binaryVersion}），旧内核未受影响`);
     }
 
     // 原子替换：同文件系统内 rename 是原子的，旧内核要么完全是旧版、要么完全是新版

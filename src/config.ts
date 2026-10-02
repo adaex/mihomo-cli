@@ -4,13 +4,13 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import * as yaml from 'js-yaml';
-import { BASE_CONFIG, LOCKED_CONFIG_KEYS, TUN_CONFIG, YAML_MAX_ALIASES } from './constants.js';
+import { BASE_CONFIG, EFFECTIVELY_LOCKED_KEYS, TUN_CONFIG, YAML_MAX_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
-import { applyOverwrite, describeOverwriteScope, loadOverwriteFile, parseOverrideKey, selectActiveOverwriteFiles } from './overwrite.js';
+import { applyOverwrite, describeOverwriteScope, loadOverwriteFile, lockedKeysReferencedBy, selectActiveOverwriteFiles } from './overwrite.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
 import { getPorts, readSettings } from './settings.js';
 import { sanitizeTerminal } from './text.js';
-import type { BuildConfigResult, ConfigInfo, OverwriteFileEntry, OverwriteScope, ScriptMatch } from './types.js';
+import type { BuildConfigResult, ConfigInfo, OverwriteFileEntry, OverwriteScope, RuntimeMode, ScriptMatch } from './types.js';
 
 /**
  * 安全 YAML 解析选项:限制别名展开次数,防御远程订阅/覆写里的 YAML 别名炸弹(alias bomb)DoS。
@@ -140,7 +140,7 @@ export function assertConfigShape(config: Record<string, unknown>): void {
   }
 }
 
-export function buildConfig(subRawContent: string, mode: string, scope?: OverwriteScope): BuildConfigResult {
+export function buildConfig(subRawContent: string, mode: RuntimeMode, scope?: OverwriteScope): BuildConfigResult {
   const subscriptionConfig = parseConfigContent(subRawContent, '订阅内容');
 
   const settings = readSettings();
@@ -153,7 +153,7 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
     scriptLockedHits,
     scriptMatches,
   } = applyOverwrite(subscriptionConfig, overwriteFiles, {
-    mode: mode === 'tun' ? 'tun' : 'mixed',
+    mode,
     scope,
   });
   const overwriteSummaries = overwriteFiles.map(describeOverwriteScope);
@@ -181,29 +181,18 @@ export function buildConfig(subRawContent: string, mode: string, scope?: Overwri
   // 系统锁定项：入站端口与整个控制面只能来自 settings 与系统约束，订阅/覆写（远端不可信
   // 内容）显式设置时一律剥除；告警只对**生效的覆写文件**——机场订阅几乎必带 mixed-port/port
   // 等端口段，系统约束接管订阅入站是核心设计、用户没有行动手段，逐条告警只会刷屏；亲手写
-  // 覆写文件/脚本的高级用户才会以为这些键生效，提示才有意义。同时识别操作符形式（+secret /
-  // tls! 解析后的规范键）。清单与判据见 LOCKED_CONFIG_KEYS / D5。脚本文件无 config
+  // 覆写文件/脚本的高级用户才会以为这些键生效，提示才有意义。扫描（含操作符形式与表外
+  // tls）与剥除共用同一执行集 EFFECTIVELY_LOCKED_KEYS，判据见 D5。脚本文件无 config
   // 键，它的锁定键命中在 applyOverwrite 里经前后快照检出（脚本LockedHits）
   for (const file of overwriteFiles) {
-    const hit = new Set<string>();
-    for (const rawKey of Object.keys(file.config ?? {})) {
-      if ((LOCKED_CONFIG_KEYS as readonly string[]).includes(rawKey)) hit.add(rawKey);
-      const parsedKey = parseOverrideKey(rawKey).key;
-      if (parsedKey !== rawKey && ((LOCKED_CONFIG_KEYS as readonly string[]).includes(parsedKey) || parsedKey === 'tls')) {
-        hit.add(parsedKey);
-      }
-      if (rawKey === 'tls') hit.add('tls');
-    }
-    if (hit.size > 0) {
-      lockedWarnings.push(renderLockedWarning(`覆写文件 ${file.name} 中的`, [...hit]));
+    const hit = lockedKeysReferencedBy(Object.keys(file.config ?? {}));
+    if (hit.length > 0) {
+      lockedWarnings.push(renderLockedWarning(`覆写文件 ${file.name} 中的`, hit));
     }
   }
-  for (const key of LOCKED_CONFIG_KEYS) {
+  for (const key of EFFECTIVELY_LOCKED_KEYS) {
     delete withOverwrites[key];
   }
-  // 顶层 tls 段是 external-controller-tls 的证书/私钥来源（上游 parseTLS 只喂控制器），
-  // 与控制器家族同属控制面、订阅与覆写都剥除（告警仅对覆写，见上）
-  delete withOverwrites.tls;
 
   const ports = getPorts(settings);
   systemConfig['external-controller'] = `127.0.0.1:${ports.controller}`;
@@ -292,7 +281,7 @@ function renderLockedWarning(source: string, keys: string[]): string {
  */
 export function judgeScriptMatches(
   subRawContent: string,
-  mode: string,
+  mode: RuntimeMode,
   scope: OverwriteScope | undefined,
   entries: OverwriteFileEntry[],
 ): { matches: ScriptMatch[]; error?: string } {
@@ -302,7 +291,7 @@ export function judgeScriptMatches(
     // 全局开关与 selectActiveOverwriteFiles 闸门与 buildConfig 同款（脚本恒过 match 筛）
     const active = settings.overwrite_enabled !== false ? selectActiveOverwriteFiles(entries, scope) : [];
     const { scriptMatches } = applyOverwrite(subscriptionConfig, active, {
-      mode: mode === 'tun' ? 'tun' : 'mixed',
+      mode,
       scope,
     });
     return { matches: scriptMatches };
@@ -316,8 +305,23 @@ export function judgeScriptMatches(
  * config / status / doctor 三处共用；runtime.ts 的 getRuntimeMode 是另一套——
  * 它带「服务安装优先 Mixed」的前置条件，不在此收敛。
  */
-export function deriveRuntimeMode(info: ConfigInfo | null): 'tun' | 'mixed' {
+export function deriveRuntimeMode(info: ConfigInfo | null): RuntimeMode {
   return info?.tun ? 'tun' : 'mixed';
+}
+
+/** 运行模式的展示标签（start 行与 status 文本共用，JSON 仍走 deriveRuntimeMode 的原值） */
+export function runtimeModeLabel(mode: RuntimeMode): string {
+  return mode === 'tun' ? 'TUN' : 'Mixed';
+}
+
+/** 统计一份配置里的节点与节点组数量：订阅下载、启动准备与配置信息三处的同一取值口径 */
+export function countConfigNodes(config: Record<string, unknown>): { proxies: number; proxyGroups: number } {
+  const proxies = config.proxies as unknown[] | undefined;
+  const proxyGroups = config['proxy-groups'] as unknown[] | undefined;
+  return {
+    proxies: proxies ? proxies.length : 0,
+    proxyGroups: proxyGroups ? proxyGroups.length : 0,
+  };
 }
 
 export function writeMihomoConfig(configObj: Record<string, unknown>): void {
@@ -418,13 +422,10 @@ export function getConfigInfo(): ConfigInfo | null {
     const cfg = loadYamlSafe(content) as Record<string, unknown> | null;
     if (!cfg) return null;
 
-    const proxies = cfg.proxies as unknown[] | undefined;
-    const proxyGroups = cfg['proxy-groups'] as unknown[] | undefined;
     const tun = cfg.tun as Record<string, unknown> | undefined;
 
     return {
-      proxies: proxies ? proxies.length : 0,
-      proxyGroups: proxyGroups ? proxyGroups.length : 0,
+      ...countConfigNodes(cfg),
       mixedPort: (cfg['mixed-port'] as number) || null,
       tun: tun ? !!tun.enable : false,
     };

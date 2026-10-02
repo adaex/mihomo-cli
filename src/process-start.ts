@@ -28,8 +28,9 @@ const TUN_MODE_POST_WAIT_MS = 500;
  *
  * 命令行为 `<mihomoBinary> -d <data> -f <configFile>`——与服务的 plist 同构（后者
  * ProgramArguments[0] 是符号链），两者都被 MAIN_INSTANCE_PATTERN 的二选一分支覆盖。
+ *
+ * 导出仅为测试观察窗契约：脚本本体的执行形态见 process-start.spec（真实 sudo 不进自动化）
  */
-/** 导出仅为测试观察窗契约：脚本本体的执行形态见 process-start.spec（真实 sudo 不进自动化） */
 export function buildTunLaunchScript(): string {
   const binary = shellQuote(PATHS.mihomoBinary);
   const configFile = shellQuote(PATHS.configFile);

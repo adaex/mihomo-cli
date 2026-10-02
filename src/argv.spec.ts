@@ -3,7 +3,6 @@ import { describe, it } from 'node:test';
 
 import { assertKnownFlags, assertPositionalCount, parseIntArg } from './argv.js';
 import { CliError } from './errors.js';
-import { VALUE_FLAGS } from './flags.js';
 
 describe('parseIntArg 范围与格式校验', () => {
   // attached / 等号形式的判定走 FLAGS 登记表（matchValueFlagToken），
@@ -183,15 +182,13 @@ describe('assertPositionalCount：多余位置参数报错、合法形态不误�
     assert.throws(() => assertPositionalCount(['sub', 'remove', '-y', 'foo', 'bar'], 1, 2, 'mihomo-cli sub remove'), CliError);
   });
 
-  it('可选值选项裸写后跟 flag 时不吞 flag（--mirror --proxy 组合的 exact 形式不再误报）', () => {
-    // kernel 的 KERNEL_VALUE_FLAGS = VALUE_FLAGS + --mirror。四种等价组合写法里
-    // `--mirror --proxy 7897` / `--mirror -p 7897` 此前被「--mirror 必带值」的跳值
-    // 逻辑吞掉 --proxy 本身、把 7897 误判为多余位置参数；等号/紧贴形式却通过
-    const kernelValueFlags = new Set([...VALUE_FLAGS, '--mirror']);
-    assert.doesNotThrow(() => assertPositionalCount(['kernel', '--mirror', '--proxy', '7897'], 0, 1, 'mihomo-cli kernel', kernelValueFlags));
-    assert.doesNotThrow(() => assertPositionalCount(['kernel', '--mirror', '-p', '7897'], 0, 1, 'mihomo-cli kernel', kernelValueFlags));
-    // 有值时照常跳（既有行为不回归）
-    assert.doesNotThrow(() => assertPositionalCount(['kernel', '--mirror', 'cdn', '--proxy', '7897'], 0, 1, 'mihomo-cli kernel', kernelValueFlags));
+  it('可选值选项裸写后跟 flag 时不吞 flag（--mirror --proxy 组合的 exact 形式）', () => {
+    // `--mirror --proxy 7897` / `--mirror -p 7897`：跳值只在下一 token 非 flag 时发生，
+    // 不会吞掉 --proxy 本身、把 7897 误判为多余位置参数
+    assert.doesNotThrow(() => assertPositionalCount(['kernel', '--mirror', '--proxy', '7897'], 0, 1, 'mihomo-cli kernel'));
+    assert.doesNotThrow(() => assertPositionalCount(['kernel', '--mirror', '-p', '7897'], 0, 1, 'mihomo-cli kernel'));
+    // 有值时照常跳
+    assert.doesNotThrow(() => assertPositionalCount(['kernel', '--mirror', 'cdn', '--proxy', '7897'], 0, 1, 'mihomo-cli kernel'));
   });
 
   it('等号长选项与紧贴短选项不产生位置参数', () => {
@@ -209,16 +206,14 @@ describe('assertPositionalCount：多余位置参数报错、合法形态不误�
     assert.doesNotThrow(() => assertPositionalCount([], 0, 1, 'mihomo-cli status'));
   });
 
-  it('自定义 valueFlags：kernel 的 --mirror 值不算位置参数', () => {
-    // --mirror 是可选值选项、不在 VALUE_FLAGS（见 flags.ts），kernel 需自带口径
-    const kernelFlags = new Set([...VALUE_FLAGS, '--mirror']);
-    assert.doesNotThrow(() => assertPositionalCount(['kernel', '--mirror', 'cdn'], 0, 1, 'mihomo-cli kernel', kernelFlags));
-    assert.doesNotThrow(() => assertPositionalCount(['kernel', '--mirror=cdn'], 0, 1, 'mihomo-cli kernel', kernelFlags));
-    assert.doesNotThrow(() => assertPositionalCount(['kernel', '--mirror'], 0, 1, 'mihomo-cli kernel', kernelFlags));
-    // 默认口径下 cdn 会被算成位置参数——这正是 kernel 必须传自定义表的原因（锁住口径差异）
-    assert.throws(() => assertPositionalCount(['kernel', '--mirror', 'cdn'], 0, 1, 'mihomo-cli kernel'), CliError);
-    assert.throws(() => assertPositionalCount(['kernel', '--mirror', 'cdn', 'garbage'], 0, 1, 'mihomo-cli kernel', kernelFlags), CliError);
-    assert.throws(() => assertPositionalCount(['kernel', 'garbage'], 0, 1, 'mihomo-cli kernel', kernelFlags), CliError);
+  it('可选值选项 --mirror 已随登记表进默认 VALUE_FLAGS：kernel 无需自带口径', () => {
+    // 三种形式的值都不算位置参数（跳值条件「下一 token 非 flag」在 assertPositionalCount 内）
+    assert.doesNotThrow(() => assertPositionalCount(['kernel', '--mirror', 'cdn'], 0, 1, 'mihomo-cli kernel'));
+    assert.doesNotThrow(() => assertPositionalCount(['kernel', '--mirror=cdn'], 0, 1, 'mihomo-cli kernel'));
+    assert.doesNotThrow(() => assertPositionalCount(['kernel', '--mirror'], 0, 1, 'mihomo-cli kernel'));
+    // 真正的多余位置参数仍报错（--mirror 的值只占一个位置）
+    assert.throws(() => assertPositionalCount(['kernel', '--mirror', 'cdn', 'garbage'], 0, 1, 'mihomo-cli kernel'), CliError);
+    assert.throws(() => assertPositionalCount(['kernel', 'garbage'], 0, 1, 'mihomo-cli kernel'), CliError);
   });
 });
 
