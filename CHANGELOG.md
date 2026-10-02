@@ -17,7 +17,7 @@
 - **`sub remove` 对未命中报错**：并发删除下不再对没删的东西报「已删除」（removeSubscription 返回 `{found, switchedTo}`）
 - **doctor 的坏订阅名不击穿体检**：手改 settings 的非法订阅名包成 fail 检查项继续跑完
 - **hasGh 探测加 3s 超时**（防 wrapper 挂死入口）；**pickLatestRelease 补滤 `-rc` 后缀**（上游未勾 prerelease 位时版本对账必炸）；**mirror 遇非 github.com 资产地址点破「镜像未起作用」**（上游迁移资产 host 后不再静默退化直连）
-- **空串子命令显式报错**：`sub ""` / `ow ""` / `dir ""` 不再静默落列表；空命令 token 的纠错建议不再全命中（纯噪音）
+- **空串子命令与空串编号显式报错**：`sub ""` / `ow ""` / `dir ""` / `logs ""` 不再静默落列表；空命令 token 的纠错建议不再全命中（纯噪音）
 - **ow 用法行补 `[-s] [-u ms]`**（与 onUnknown 报错、sub use 三处两个说法）；**prepublishOnly 补全 typecheck+test+check**（红色测试不再能随发布出门）
 
 ### 测试
