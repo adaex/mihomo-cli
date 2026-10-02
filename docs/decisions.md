@@ -20,7 +20,7 @@ v3.0–v4.0 用 root LaunchDaemon（system 域），每次启停都要输密码�
 
 ## D3 并发控制用同步文件锁 + 锁内调用预算，不用异步锁
 
-withFileLock 要求临界区同步（持锁期间 await 等于按住锁等到强夺，等于没锁），而服务操作里有真实的异步等待（waitUntilUnloaded 最多 5s、订阅更新约 10s、kickstart 实测可超 5s）。决策：慢速阶段全部留在锁外，只有 launchctl 写操作（enable/bootstrap/bootout/disable + 幂等复读）进锁，且锁内调用次数 × 单次超时必须低于锁强夺阈值（10s）——故统一 3s（stop 侧三次 9s，start 侧失败分支三次 9s）。「把某次调用挪出锁」不是自由的：stop 侧的复核在递增前、递增在锁内、bootout 与 disable 同锁，start 侧的 enable 先于 bootstrap、幂等复读在锁内，都有不可拆的理由（见 service.ts 各函数头）。
+withFileLock 要求临界区同步（持锁期间 await 等于按住锁等到强夺，等于没锁），而服务操作里有真实的异步等待（waitUntilUnloaded 最多 5s、订阅更新约 10s、kickstart 实测可超 5s）。决策：慢速阶段全部留在锁外，只有 launchctl 写操作（enable/bootstrap/bootout/disable + 幂等复读）进锁，且锁内调用次数 × 单次超时必须低于锁强夺阈值（10s）——故统一 3s（stop 侧三次 9s，start 侧失败分支三次 9s）。「把某次调用挪出锁」不是自由的：stop 侧的复核在递增前、递增在锁内、bootout 与 disable 同锁，start 侧的 enable 先于 bootstrap、幂等复读在锁内，都有不可拆的理由（见 service.ts 各函数头；预算常量注释在拆分后随迁 launchctl.ts 的 SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS）。
 
 后果：kickstart（60s 超时）刻意留锁外，其并发窗口由健康确认失败后复读 epoch 兜住；预算关系由 service-concurrency.spec 的常量断言锁死，新增锁内 launchctl 调用前先改测试。曾评估过异步锁/信号量方案，未采纳：临界区内容必须保持同步可推理，当前预算模型已被测试锁定，换锁机制等于重写整条防线。
 
@@ -28,17 +28,17 @@ withFileLock 要求临界区同步（持锁期间 await 等于按住锁等到强
 
 start/install/restart 都依赖「命令开始时的 epoch」做并发判定。危害窗口是「产生 wasRunning 的那次状态读取」到锁内判定之间：stop 在自己的锁内先递增、之后才 waitUntilUnloaded，存在「已递增而 launchctl print 仍报 running」的区间，函数内现取的基线必然已含对方的递增，并发隐形。故基线必须取在命令第一步——如今是 `main()` 在分发前调 `captureStopEpochBaseline()` 存入 service 模块状态，此后锁内判定、热重载后复读、健康确认后复读都读同一份 `stopEpochBaseline()`，不再跨层透传参数（透传时代的教训：可选默认值让新调用方静默退化，5+ 消费点每次都要记得传）。未捕获时（测试直接调 service 函数）退化为当前值，即不判并发。
 
-两个位置语义要记牢：① restartToApply（sub use / ow on|off 触发的重启）带着**原命令**的基线重入 start 链路，订阅下载期间的并发 stop 会被检出并取消重启——这是防线语义（终态与用户最后一条命令一致），基线若挪进 cmdStart 重入时刻即漏检，结构不变量由 service-concurrency.spec 的「并发基线是命令入口的进程状态」用例锁定；② TUN 分支的 bump 发生在基线捕获之后、而 TUN 不消费基线（两分支互斥），若将来 TUN 之后还要走 Mixed 启动会自我取消。
+两个位置语义要记牢：① restartToApply（sub use / ow on|off 触发的重启）带着**原命令**的基线重入 start 链路，订阅下载期间的并发 stop 会被检出并取消重启——这是防线语义（终态与用户最后一条命令一致），基线若挪进 cmdStart 重入时刻即漏检，结构不变量由 service-concurrency.spec 的「并发基线是命令入口的进程状态」用例锁定；② TUN 分支 bump 之后**重捕获基线**（把「本命令造成的世界状态」设为新基线——自己的递增不算并发），启动前经 assertTunStartNotRaced 消费重捕获后的基线：sudo 密码窗内的并发 stop 会被检出并取消（终态与用户最后一条命令一致），TUN 之后若再走 Mixed 启动也用的是重捕获后的基线、不会自我取消。
 
 ## D5 入站端口与整个控制面是系统锁定项，订阅与覆写不可设置
 
-远端订阅是不可信输入。锁定清单（config.ts 的 LOCKED_CONFIG_KEYS）按「能否开监听」划分，判据是上游 `config.Inbound` 结构体字段全集 + `updateListeners()` 的逐个消费，不是按键名眼熟程度：redir/tproxy、external-controller 全家桶（-tls/-unix/-pipe/-cors/-routing-mark/-doh）、tuic-server 与 ss-config/vmess-config（三个完整入站代理服务端，自带监听与认证，不经过 genAddr，allow-lan 管不到它们）、listeners/tunnels（同判据的通用入站声明）、allow-lan/bind-address/authentication/skip-auth-prefixes/lan-*-ips（allow-lan 为真且 bind-address 为默认时 genAddr 返回全网卡地址，skip-auth-prefixes 又能把鉴权换成空实现——三行 YAML 即全网卡无鉴权开放代理）。顶层 tls 段同锁（-tls 控制器的证书来源）。刻意不锁的：iptables（Linux 专用）、inbound-tfo/inbound-mptcp（传输层 socket 选项，不开监听）、tun（由启动模式整段接管）。
+远端订阅是不可信输入。锁定清单（constants.ts 的 LOCKED_CONFIG_KEYS）按「能否开监听」划分，判据是上游 `config.Inbound` 结构体字段全集 + `updateListeners()` 的逐个消费，不是按键名眼熟程度：redir/tproxy、external-controller 全家桶（-tls/-unix/-pipe/-cors/-routing-mark/-doh）、tuic-server 与 ss-config/vmess-config（三个完整入站代理服务端，自带监听与认证，不经过 genAddr，allow-lan 管不到它们）、listeners/tunnels（同判据的通用入站声明）、allow-lan/bind-address/authentication/skip-auth-prefixes/lan-*-ips（allow-lan 为真且 bind-address 为默认时 genAddr 返回全网卡地址，skip-auth-prefixes 又能把鉴权换成空实现——三行 YAML 即全网卡无鉴权开放代理）。顶层 tls 段同锁（-tls 控制器的证书来源）——物理不在表内、由 config.ts 单独剥除，效果等同（config-inbound-snapshot.spec 的 EFFECTIVELY_STRIPPED 文档化此旁路，认效果不认数组成员资格）。刻意不锁的：iptables（Linux 专用）、inbound-tfo/inbound-mptcp（传输层 socket 选项，不开监听）、tun（由启动模式整段接管）。
 
 后果：锁定项的恒定值由 buildConfig 的 systemConfig 写入，不放 BASE_CONFIG（后者语义是「用户没写时的默认」，会被剥除循环架空成死配置，两表无交集有测试锁死）；剥除对订阅与覆写一视同仁，但告警只对生效的覆写文件（订阅告警只会刷屏，用户无行动手段）；清单完整性由 config-inbound-snapshot.spec 的上游结构体快照 diff 兜底，内核大版本升级时人工刷新快照。
 
 ## D6 配置解析只走 YAML 解析器，不设独立 JSON 分支
 
-YAML 1.2 是 JSON 的超集，标准 JSON 全部由 yaml.load 正常解析。曾有的 JSON.parse 回退唯一能走到的情况是重复键 JSON（YAML 明确报错，JSON.parse 静默取最后一个值）——那条回退把「坏数据」变成「静默接受」，方向正好错了：订阅出现重复键意味着上游生成有问题，取哪个值都是猜，必须报错。所有解析不可信来源的 yaml.load 统一带 maxAliases=200（防别名炸弹），统一入口 loadYamlSafe。
+YAML 1.2 是 JSON 的超集，标准 JSON 全部由 yaml.load 正常解析。曾有的 JSON.parse 回退唯一能走到的情况是重复键 JSON（YAML 明确报错，JSON.parse 静默取最后一个值）——那条回退把「坏数据」变成「静默接受」，方向正好错了：订阅出现重复键意味着上游生成有问题，取哪个值都是猜，必须报错。所有解析不可信来源的 yaml.load 统一带 maxAliases=200（防别名炸弹）——config.ts 的 loadYamlSafe 与 overwrite.ts 的内联调用共用 constants.ts 的同一 YAML_MAX_ALIASES 常量防漂移（内联是避免与 config 循环依赖的刻意形态）。
 
 ## D7 覆写加载有双路径：合并路径硬失败，诊断路径旁路
 
