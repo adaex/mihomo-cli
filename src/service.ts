@@ -28,7 +28,7 @@ import { bumpStopEpoch, readStopEpoch, shouldAbortStartOnDisable, stopEpochBasel
 import type { ServiceStatus } from './types.js';
 import { sleep } from './utils.js';
 
-export { concludeHotReload, HOT_RELOAD_TIMEOUT_MS, tryHotReload } from './hot-reload.js';
+export { concludeHotReload } from './hot-reload.js';
 // 拆分 re-export：launchctl 解析 / 停止计数 / 遗留清理 / 热重载四节移出本文件后，既有
 // 消费方（commands、runtime、spec）仍统一从 './service.js' 取——导出清单是跨模块契约，
 // 拆分不该迫使全仓改 import。新代码内部引用走各自模块。
