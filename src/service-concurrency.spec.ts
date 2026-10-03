@@ -20,9 +20,9 @@ import { SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS } from './service.js';
  * launchd 一点不被碰。
  *
  * 隔离三层：MIHOMO_CLI_DIR 指临时数据目录（锁、epoch、settings 都在里面）；
- * MIHOMO_CLI_DAEMON_LABEL 用一次性 label；热重载场景另把 HOME 指向临时目录
- * （userAgentPlist 随 homedir 走，在数据目录之外，只有改 HOME 才能不碰真实
- * ~/Library/LaunchAgents）。真实用到的系统工具只有
+ * MIHOMO_CLI_DAEMON_LABEL 用一次性 label；HOME 统一指临时目录（userAgentPlist
+ * 随 homedir 走，在数据目录之外，只有改 HOME 才能不碰真实 ~/Library/LaunchAgents，
+ * 场景 env 由 scenarioEnv 统一拼装）。真实用到的系统工具只有
  * lsof（找桩 controller 的监听 pid）与 pgrep（隔离目录下匹配不到任何进程）。
  */
 
@@ -41,6 +41,25 @@ function cleanupFixture(fixture: { dataDir: string; fakeHome: string; fakeBin: s
   for (const dir of [fixture.dataDir, fixture.fakeHome, fixture.fakeBin]) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * 场景子进程的标准 env：三层隔离（DIR/label/HOME）+ 桩 PATH 前置 + 跨平台放行，
+ * extra 放场景变量（PID_FILE、FAKE_STATE 等）。HOME 统一指向桩目录——userAgentPlist
+ * 随 homedir 走，不改 HOME 就会碰真实 ~/Library/LaunchAgents（此前个别场景漏设，
+ * 属隔离缺口而非刻意差异）
+ */
+function scenarioEnv(fixture: { dataDir: string; fakeHome: string; fakeBin: string; label: string }, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    MIHOMO_CLI_DIR: fixture.dataDir,
+    MIHOMO_CLI_DAEMON_LABEL: fixture.label,
+    HOME: fixture.fakeHome,
+    PATH: `${fixture.fakeBin}:${process.env.PATH}`,
+    MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1',
+    NO_COLOR: '1',
+    ...extra,
+  };
 }
 
 /** 写桩 launchctl（PATH 前置后，子进程里所有 spawnSync('launchctl') 都落到这里） */
@@ -218,17 +237,10 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
     const fixture = makeFixture('mihomo-hotreload');
     const script = writeScript(fixture.fakeBin, 'hot-reload.mts', hotReloadScript());
     writeFakeLaunchctl(fixture.fakeBin, FAKE_LAUNCHCTL_HOT_RELOAD);
-    const env = {
-      ...process.env,
-      MIHOMO_CLI_DIR: fixture.dataDir,
-      MIHOMO_CLI_DAEMON_LABEL: fixture.label,
-      HOME: fixture.fakeHome,
-      PATH: `${fixture.fakeBin}:${process.env.PATH}`,
+    const env = scenarioEnv(fixture, {
       PID_FILE: path.join(fixture.fakeBin, 'server.pid'),
       BUMP: bump ? '1' : '0',
-      MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1',
-      NO_COLOR: '1',
-    };
+    });
     try {
       const run = spawnScript(script, env);
       const result = await run.done;
@@ -316,16 +328,7 @@ try {
     const fixture = makeFixture('mihomo-hotfail');
     const script = writeScript(fixture.fakeBin, 'hot-fail.mts', fallbackScript());
     writeFakeLaunchctl(fixture.fakeBin, FAKE_LAUNCHCTL_QUERY_FAILS.replaceAll('$FAKE_BIN', fixture.fakeBin));
-    const env = {
-      ...process.env,
-      MIHOMO_CLI_DIR: fixture.dataDir,
-      MIHOMO_CLI_DAEMON_LABEL: fixture.label,
-      HOME: fixture.fakeHome,
-      PATH: `${fixture.fakeBin}:${process.env.PATH}`,
-      PID_FILE: path.join(fixture.fakeBin, 'server.pid'),
-      MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1',
-      NO_COLOR: '1',
-    };
+    const env = scenarioEnv(fixture, { PID_FILE: path.join(fixture.fakeBin, 'server.pid') });
     try {
       const run = spawnScript(script, env);
       const result = await run.done;
@@ -366,14 +369,7 @@ esac
     const fixture = makeFixture('mihomo-stopbudget');
     const script = writeScript(fixture.fakeBin, 'stop.mts', stopScript());
     writeFakeLaunchctl(fixture.fakeBin, fakeLaunchctlForStop(fixture.label, delaySeconds));
-    const env = {
-      ...process.env,
-      MIHOMO_CLI_DIR: fixture.dataDir,
-      MIHOMO_CLI_DAEMON_LABEL: fixture.label,
-      PATH: `${fixture.fakeBin}:${process.env.PATH}`,
-      MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1',
-      NO_COLOR: '1',
-    };
+    const env = scenarioEnv(fixture);
     try {
       const run = spawnScript(script, env);
       const lockLine = await run.firstLine;
@@ -526,16 +522,7 @@ describe('TUN 方向的并发防线（cmdStart bump 与 startTun 复核的消费
     const fixture = makeFixture('mihomo-tun');
     const file = writeScript(fixture.fakeBin, 'tun-scenario.mts', script);
     writeFakeLaunchctl(fixture.fakeBin, FAKE_LAUNCHCTL_TUN);
-    const env = {
-      ...process.env,
-      MIHOMO_CLI_DIR: fixture.dataDir,
-      MIHOMO_CLI_DAEMON_LABEL: fixture.label,
-      HOME: fixture.fakeHome,
-      PATH: `${fixture.fakeBin}:${process.env.PATH}`,
-      PRINT_MODE: printMode,
-      MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1',
-      NO_COLOR: '1',
-    };
+    const env = scenarioEnv(fixture, { PRINT_MODE: printMode });
     try {
       const result = await spawnScript(file, env).done;
       return result;
@@ -694,17 +681,7 @@ describe('并发同向 start：bootstrap 撞已装载按幂等成功（exit 5 �
     const fixture = makeFixture('mihomo-bootstrap-race');
     const script = writeScript(fixture.fakeBin, 'start-service.mts', startServiceProbeScript());
     writeFakeLaunchctl(fixture.fakeBin, FAKE_LAUNCHCTL_BOOTSTRAP);
-    const env = {
-      ...process.env,
-      MIHOMO_CLI_DIR: fixture.dataDir,
-      MIHOMO_CLI_DAEMON_LABEL: fixture.label,
-      HOME: fixture.fakeHome,
-      PATH: `${fixture.fakeBin}:${process.env.PATH}`,
-      FAKE_STATE: path.join(fixture.fakeBin, 'loaded.state'),
-      FAKE_MODE: mode,
-      MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1',
-      NO_COLOR: '1',
-    };
+    const env = scenarioEnv(fixture, { FAKE_STATE: path.join(fixture.fakeBin, 'loaded.state'), FAKE_MODE: mode });
     try {
       const runs = Array.from({ length: children }, () => spawnScript(script, env));
       return await Promise.all(runs.map(r => r.done));
@@ -738,18 +715,11 @@ describe('并发同向 start：bootstrap 撞已装载按幂等成功（exit 5 �
     const fixture = makeFixture('mihomo-startbudget');
     const script = writeScript(fixture.fakeBin, 'start-service-slow.mts', startServiceProbeScript());
     writeFakeLaunchctl(fixture.fakeBin, FAKE_LAUNCHCTL_BOOTSTRAP);
-    const env = {
-      ...process.env,
-      MIHOMO_CLI_DIR: fixture.dataDir,
-      MIHOMO_CLI_DAEMON_LABEL: fixture.label,
-      HOME: fixture.fakeHome,
-      PATH: `${fixture.fakeBin}:${process.env.PATH}`,
+    const env = scenarioEnv(fixture, {
       FAKE_STATE: path.join(fixture.fakeBin, 'loaded.state'),
       FAKE_MODE: 'slow',
       FAKE_DELAY: String(delaySeconds),
-      MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1',
-      NO_COLOR: '1',
-    };
+    });
     try {
       const run = spawnScript(script, env);
       const lockLine = await run.firstLine;
@@ -823,17 +793,7 @@ console.log('RESULT:started=' + r.started);
     const fixture = makeFixture('mihomo-baseline-order');
     const script = writeScript(fixture.fakeBin, 'baseline-order.mts', restartAfterSlowPhaseScript());
     writeFakeLaunchctl(fixture.fakeBin, FAKE_LAUNCHCTL_BOOTSTRAP);
-    const env = {
-      ...process.env,
-      MIHOMO_CLI_DIR: fixture.dataDir,
-      MIHOMO_CLI_DAEMON_LABEL: fixture.label,
-      HOME: fixture.fakeHome,
-      PATH: `${fixture.fakeBin}:${process.env.PATH}`,
-      FAKE_STATE: path.join(fixture.fakeBin, 'loaded.state'),
-      FAKE_MODE: 'race',
-      MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1',
-      NO_COLOR: '1',
-    };
+    const env = scenarioEnv(fixture, { FAKE_STATE: path.join(fixture.fakeBin, 'loaded.state'), FAKE_MODE: 'race' });
     try {
       const result = await spawnScript(script, env).done;
       assert.equal(result.status, 0, `应正常退出，stdout: ${result.stdout}\nstderr: ${result.stderr}`);

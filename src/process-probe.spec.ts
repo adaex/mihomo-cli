@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import { pathToFileURL } from 'node:url';
 
 import { MAIN_INSTANCE_PATTERN, parsePidList } from './process-probe.js';
+import { moduleUrl, runModule } from './test-support/cli.js';
 
 /**
  * MAIN_INSTANCE_PATTERN 的语法回归。
@@ -55,8 +55,8 @@ describe('isMihomoProcess（kill 前复核的判据）', () => {
   it('内核命令行启动的进程判 true，无关进程（如 node 自身）判 false', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-isprobe-'));
     try {
-      const probeUrl = pathToFileURL(path.resolve('src/process-probe.ts')).href;
-      const pathsUrl = pathToFileURL(path.resolve('src/paths.ts')).href;
+      const probeUrl = moduleUrl('src/process-probe.ts');
+      const pathsUrl = moduleUrl('src/paths.ts');
       // 假内核：可执行 sleep 脚本，spawn 后命令行含 kernel/mihomo 与 -f <configFile>
       const fakeKernel = path.join(dir, 'kernel', 'mihomo');
       fs.mkdirSync(path.dirname(fakeKernel), { recursive: true });
@@ -81,10 +81,7 @@ describe('isMihomoProcess（kill 前复核的判据）', () => {
           const gone = m.probeProcess(999999);
           process.stdout.write('GONEDEAD:' + (!gone.alive && gone.uid === null && gone.rss === null && gone.command === '') + '\\n');
         `;
-        const r = spawnSync(process.execPath, ['--import', 'tsx', '-e', code], {
-          encoding: 'utf8',
-          env: { ...process.env, MIHOMO_CLI_DIR: dir },
-        });
+        const r = runModule(code, dir);
         assert.equal(r.status, 0, r.stderr || r.stdout);
         assert.match(r.stdout, /SELF:false/, 'node 自身命令行不含内核路径，应判 false');
         assert.match(r.stdout, /KERNEL:true/, `假内核进程应判 true: ${r.stdout}`);

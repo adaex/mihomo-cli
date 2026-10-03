@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import { pathToFileURL } from 'node:url';
 
 import { subscriptionUrgency } from './settings.js';
+import { moduleUrl, runModule } from './test-support/cli.js';
 
 describe('subscriptionUrgency', () => {
   const now = Date.now();
@@ -41,8 +41,8 @@ describe('subscriptionUrgency', () => {
 describe('损坏文件的备份只保留第一份原件', () => {
   // readSettings/readSubscriptionCache 在模块加载时即经 PATHS 固定数据目录，
   // 故在子进程里用隔离 MIHOMO_CLI_DIR 跑真实模块
-  const settingsModuleUrl = pathToFileURL(path.resolve('src/settings.ts')).href;
-  const pathsModuleUrl = pathToFileURL(path.resolve('src/paths.ts')).href;
+  const settingsModuleUrl = moduleUrl('src/settings.ts');
+  const pathsModuleUrl = moduleUrl('src/paths.ts');
 
   function readBackupAfterTwoCorruptions(kind: 'settings' | 'cache'): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-bak-'));
@@ -59,10 +59,7 @@ describe('损坏文件的备份只保留第一份原件', () => {
       ${JSON.stringify(kind)} === 'settings' ? m.readSettings() : m.readSubscriptionCache();
       process.stdout.write(fs.readFileSync(file + '.bak', 'utf8'));
     `;
-    const r = spawnSync(process.execPath, ['--import', 'tsx', '-e', code], {
-      encoding: 'utf8',
-      env: { ...process.env, MIHOMO_CLI_DIR: dir },
-    });
+    const r = runModule(code, dir);
     fs.rmSync(dir, { recursive: true, force: true });
     assert.equal(r.status, 0, r.stderr || r.stdout);
     return r.stdout;
@@ -93,10 +90,7 @@ describe('损坏文件的备份只保留第一份原件', () => {
         m.readSubscriptionCache();
         process.stdout.write(fs.existsSync(file + '.bak') ? fs.readFileSync(file + '.bak', 'utf8') : 'NO-BAK');
       `;
-      const r = spawnSync(process.execPath, ['--import', 'tsx', '-e', code], {
-        encoding: 'utf8',
-        env: { ...process.env, MIHOMO_CLI_DIR: dir },
-      });
+      const r = runModule(code, dir);
       fs.rmSync(dir, { recursive: true, force: true });
       assert.equal(r.status, 0, r.stderr || r.stdout);
       assert.equal(r.stdout, bad, `非对象 JSON 应先备份原件再回退空缓存（输入 ${bad}）`);
@@ -313,10 +307,7 @@ describe('设置读取与更新不依赖进程缓存', () => {
         writeSettings({ overwrite_enabled: false });
         assert.deepEqual(readSettings(), { active_subscription: 'after', ports: { mixed: 17890 }, overwrite_enabled: false });
       `;
-      const result = spawnSync(process.execPath, ['--import', 'tsx', '-e', script], {
-        encoding: 'utf8',
-        env: { ...process.env, MIHOMO_CLI_DIR: tmpDir },
-      });
+      const result = runModule(script, tmpDir);
       assert.equal(result.status, 0, result.stderr);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -332,8 +323,8 @@ describe('设置读取与更新不依赖进程缓存', () => {
  * 「文件不可用」，处置必须一致。
  */
 describe('settings.json 为非对象时同样备份并告警', () => {
-  const settingsModuleUrl = pathToFileURL(path.resolve('src/settings.ts')).href;
-  const pathsModuleUrl = pathToFileURL(path.resolve('src/paths.ts')).href;
+  const settingsModuleUrl = moduleUrl('src/settings.ts');
+  const pathsModuleUrl = moduleUrl('src/paths.ts');
 
   function readNonObject(content: string): { warned: string; backup: string | null; result: string } {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-nonobj-'));
@@ -351,10 +342,7 @@ describe('settings.json 为非对象时同样备份并告警', () => {
         backup: fs.existsSync(bak) ? fs.readFileSync(bak, 'utf8') : null,
       }));
     `;
-    const r = spawnSync(process.execPath, ['--import', 'tsx', '-e', code], {
-      encoding: 'utf8',
-      env: { ...process.env, MIHOMO_CLI_DIR: dir },
-    });
+    const r = runModule(code, dir);
     fs.rmSync(dir, { recursive: true, force: true });
     assert.equal(r.status, 0, r.stderr || r.stdout);
     const parsed = JSON.parse(r.stdout) as { result: string; backup: string | null };
@@ -385,8 +373,8 @@ describe('settings.json 为非对象时同样备份并告警', () => {
 });
 
 describe('removeSubscription：数据最终状态（子进程真实模块）', () => {
-  const settingsModuleUrl = pathToFileURL(path.resolve('src/settings.ts')).href;
-  const pathsModuleUrl = pathToFileURL(path.resolve('src/paths.ts')).href;
+  const settingsModuleUrl = moduleUrl('src/settings.ts');
+  const pathsModuleUrl = moduleUrl('src/paths.ts');
 
   it('remove 后订阅条目删除、原始配置文件删除、活跃订阅切换到剩余条目', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-remove-'));
@@ -414,10 +402,7 @@ describe('removeSubscription：数据最终状态（子进程真实模块）', (
         process.stdout.write('ACTIVE:' + String(settings.active_subscription) + '\\n');
         process.stdout.write('RAW_EXISTS:' + String(fs.existsSync(rawA)) + '\\n');
       `;
-      const r = spawnSync(process.execPath, ['--import', 'tsx', '-e', code], {
-        encoding: 'utf8',
-        env: { ...process.env, MIHOMO_CLI_DIR: dir },
-      });
+      const r = runModule(code, dir);
       assert.equal(r.status, 0, r.stderr || r.stdout);
       assert.match(r.stdout, /SWITCHED:\{"found":true,"switchedTo":"b"\}/);
       assert.match(r.stdout, /NAMES:b/);
@@ -451,10 +436,7 @@ describe('removeSubscription：数据最终状态（子进程真实模块）', (
         process.stdout.write('RESULT:' + JSON.stringify(result) + '\\n');
         process.stdout.write('NAMES:' + settings.subscriptions.map(s => s.name).join(',') + '\\n');
       `;
-      const r = spawnSync(process.execPath, ['--import', 'tsx', '-e', code], {
-        encoding: 'utf8',
-        env: { ...process.env, MIHOMO_CLI_DIR: dir },
-      });
+      const r = runModule(code, dir);
       assert.equal(r.status, 0, r.stderr || r.stdout);
       assert.match(r.stdout, /RESULT:\{"found":false[^}]*\}/);
       assert.match(r.stdout, /NAMES:a/);

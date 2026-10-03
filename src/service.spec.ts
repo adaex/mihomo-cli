@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,6 +21,7 @@ import {
   waitUntilUnloaded,
 } from './service.js';
 import { SudoAuthError } from './sudo.js';
+import { moduleUrl, readEpochIn, runModule } from './test-support/cli.js';
 import type { ServiceStatus } from './types.js';
 
 /**
@@ -431,25 +431,8 @@ describe('concludeHotReload：热重载成功后复读计数再下结论', () =>
  * 文件层通了，配合上面的判据用例，整条链路的正确性就锁住了。
  */
 describe('停止计数的读取（并发判定的物理基础）', () => {
-  /**
-   * 在隔离数据目录里跑一段用真实 readStopEpoch 的脚本，返回其 stdout。
-   * 用子进程是因为 `PATHS` 在模块加载时就固化了 `MIHOMO_CLI_DIR`，同进程内改环境变量无效。
-   */
-  const readEpochIn = (dir: string): number => {
-    const servicePath = path.resolve('src/service.ts');
-    const r = spawnSync(
-      process.execPath,
-      ['--import', 'tsx', '-e', `import { readStopEpoch } from ${JSON.stringify(servicePath)}; process.stdout.write(String(readStopEpoch()));`],
-      {
-        encoding: 'utf8',
-        env: { ...process.env, MIHOMO_CLI_DIR: dir, MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1' },
-        timeout: 30_000,
-      },
-    );
-    assert.equal(r.status, 0, `读取子进程应正常退出: ${r.stderr}`);
-    return Number.parseInt(r.stdout.trim(), 10);
-  };
-
+  // readEpochIn 用子进程跑真实 readStopEpoch（PATHS 在模块加载时固化 MIHOMO_CLI_DIR），
+  // 共享自 test-support/cli.ts——那一份的注释即本组用例的形态说明
   it('文件不存在时读作 0（首次运行的正常形态，不能抛错挡住 start）', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-epoch-'));
     try {
@@ -733,6 +716,42 @@ describe('buildLegacyCleanupScript：sudo 脚本退出码协议', () => {
  * 用进程探测兜底，避免假阴性。
  * 桩 launchctl 由控制文件驱动：fail = print 一律 112，其余输出 running fixture。
  */
+/**
+ * 桩 launchctl 场景的公共骨架：mkdtemp 数据目录 + 桩 bin、PATH 前置、子进程跑
+ * 真实模块（service.ts 系列函数经 MIHOMO_CLI_DIR 隔离），失败抛断言、成功带出 stdout。
+ * 目录前缀保留调用方语义——泄漏 tmpdir 时可定位来源场景。prepare 在 spawn 前布置
+ * 数据目录（写档位文件等），返回值并入子进程 env（如桩要读的 MODE_FILE）。
+ */
+function runWithStubLaunchctl(options: {
+  prefix: string;
+  stub: string;
+  script: string;
+  label?: string;
+  timeoutMs?: number;
+  prepare?: (dataDir: string) => NodeJS.ProcessEnv | void;
+}): { stdout: string } {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), `${options.prefix}-`));
+  const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), `${options.prefix}-bin-`));
+  fs.writeFileSync(path.join(fakeBin, 'launchctl'), options.stub);
+  fs.chmodSync(path.join(fakeBin, 'launchctl'), 0o755);
+  try {
+    const prepareEnv = options.prepare?.(dataDir);
+    const r = runModule(options.script, dataDir, {
+      env: {
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        ...(options.label !== undefined ? { MIHOMO_CLI_DAEMON_LABEL: options.label } : {}),
+        ...prepareEnv,
+      },
+      timeout: options.timeoutMs,
+    });
+    assert.equal(r.status, 0, r.stderr);
+    return { stdout: r.stdout };
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(fakeBin, { recursive: true, force: true });
+  }
+}
+
 describe('waitServiceHealthy：轮询期间 launchctl 查询失败的容错', () => {
   /**
    * 子进程 + MIHOMO_CLI_DIR 隔离：healthViaProcessProbe 的 pgrep pattern 锚定
@@ -744,14 +763,10 @@ describe('waitServiceHealthy：轮询期间 launchctl 查询失败的容错', ()
   function runHealthScenario(scenario: { initialMode: 'fail' | 'notrunning' | 'ok'; switchTo?: { mode: string; afterMs: number }; fakeKernel?: boolean }): {
     stdout: string;
   } {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-health-'));
-    const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-health-bin-'));
-    const modeFile = path.join(dataDir, 'mode');
-    const servicePath = path.resolve('src/service.ts');
-    const pathsPath = path.resolve('src/paths.ts');
+    // 桩按 $MODE_FILE 读当前档位：mode 路径随数据目录生成，经 env 传给桩与子脚本
     const stubLaunchctl = `#!/bin/bash
 if [ "$1" = "print" ]; then
-  mode="$(cat "${modeFile}" 2>/dev/null)"
+  mode="$(cat "$MODE_FILE" 2>/dev/null)"
   if [ "$mode" = "fail" ]; then
     exit 112
   fi
@@ -767,9 +782,6 @@ FIXTURE
   fi
   exit 0
 `;
-    fs.writeFileSync(path.join(fakeBin, 'launchctl'), stubLaunchctl);
-    fs.chmodSync(path.join(fakeBin, 'launchctl'), 0o755);
-    fs.writeFileSync(modeFile, scenario.initialMode);
     const fakeKernelSetup = scenario.fakeKernel
       ? [
           "const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)', PATHS.mihomoBinary, '-f', PATHS.configFile], { detached: true, stdio: 'ignore' });",
@@ -782,18 +794,17 @@ FIXTURE
           '}',
         ].join('\n')
       : '';
-    const switchSetup = scenario.switchTo
-      ? `setTimeout(() => fs.writeFileSync(${JSON.stringify(modeFile)}, ${JSON.stringify(scenario.switchTo.mode)}), ${scenario.switchTo.afterMs});`
-      : '';
     const script = [
       "import { spawn, spawnSync } from 'node:child_process';",
       "import fs from 'node:fs';",
-      `const { PATHS } = await import(${JSON.stringify(pathsPath)});`,
-      `const { waitServiceHealthy } = await import(${JSON.stringify(servicePath)});`,
+      `const { PATHS } = await import(${JSON.stringify(moduleUrl('src/paths.ts'))});`,
+      `const { waitServiceHealthy } = await import(${JSON.stringify(moduleUrl('src/service.ts'))});`,
       "console.log('ISOLATION:' + (PATHS.mihomoBinary.startsWith(process.env.MIHOMO_CLI_DIR) ? 'ok' : PATHS.mihomoBinary));",
       'let kernelPid = null;',
       fakeKernelSetup,
-      switchSetup,
+      scenario.switchTo
+        ? `setTimeout(() => fs.writeFileSync(process.env.MODE_FILE, ${JSON.stringify(scenario.switchTo.mode)}), ${scenario.switchTo.afterMs});`
+        : '',
       'try {',
       '  const health = await waitServiceHealthy();',
       "  console.log('HEALTH:' + JSON.stringify({ healthy: health.healthy, crashed: health.crashed, pid: health.pid, kernelPid }));",
@@ -803,18 +814,17 @@ FIXTURE
       "  if (kernelPid) try { process.kill(kernelPid, 'SIGKILL'); } catch {}",
       '}',
     ].join('\n');
-    try {
-      const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
-        encoding: 'utf8',
-        timeout: 60_000,
-        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, PATH: `${fakeBin}:${process.env.PATH}` },
-      });
-      assert.equal(r.status, 0, r.stderr);
-      return { stdout: r.stdout };
-    } finally {
-      fs.rmSync(dataDir, { recursive: true, force: true });
-      fs.rmSync(fakeBin, { recursive: true, force: true });
-    }
+    return runWithStubLaunchctl({
+      prefix: 'mihomo-cli-health',
+      stub: stubLaunchctl,
+      script,
+      timeoutMs: 60_000,
+      prepare: dataDir => {
+        const modeFile = path.join(dataDir, 'mode');
+        fs.writeFileSync(modeFile, scenario.initialMode);
+        return { MODE_FILE: modeFile };
+      },
+    });
   }
 
   const isolationOk = (stdout: string) => {
@@ -898,10 +908,7 @@ describe('disableServiceAutoStart：位未生效复核（TUN 防线第一层的�
    * print-disabled 报空表——命令成功 ≠ 位生效，此时必须抛错而非报「已关闭自启」。
    */
   function runDisableCase(printDisabledBody: (label: string) => string): { stdout: string } {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-disable-'));
-    const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-disable-bin-'));
-    const label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
-    const servicePath = path.resolve('src/service.ts');
+    const label = `com.mihomo-cli.test.disable-${Math.random().toString(36).slice(2)}`;
     const stub = `#!/bin/bash
 case "$1" in
   disable) exit 0 ;;
@@ -913,11 +920,9 @@ FIXTURE
   *) exit 0 ;;
 esac
 `;
-    fs.writeFileSync(path.join(fakeBin, 'launchctl'), stub);
-    fs.chmodSync(path.join(fakeBin, 'launchctl'), 0o755);
     const script = [
       "import fs from 'node:fs';",
-      `const { disableServiceAutoStart } = await import(${JSON.stringify(servicePath)});`,
+      `const { disableServiceAutoStart } = await import(${JSON.stringify(moduleUrl('src/service.ts'))});`,
       'try {',
       '  disableServiceAutoStart(1000);',
       "  console.log('RESULT:NO-THROW');",
@@ -926,18 +931,7 @@ esac
       '}',
       "console.log('EPOCH_EXISTS:' + fs.existsSync(process.env.MIHOMO_CLI_DIR + '/service-stop-epoch'));",
     ].join('\n');
-    try {
-      const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
-        encoding: 'utf8',
-        timeout: 30_000,
-        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: label, PATH: `${fakeBin}:${process.env.PATH}` },
-      });
-      assert.equal(r.status, 0, r.stderr);
-      return { stdout: r.stdout };
-    } finally {
-      fs.rmSync(dataDir, { recursive: true, force: true });
-      fs.rmSync(fakeBin, { recursive: true, force: true });
-    }
+    return runWithStubLaunchctl({ prefix: 'mihomo-cli-disable', stub, script, label, timeoutMs: 30_000 });
   }
 
   it('disable 退出 0 但 print-disabled 报空表：抛「位未生效」，且不递增停止计数', () => {
@@ -968,9 +962,8 @@ describe('服务入口的 label 校验（assertServiceLabelSafe）', () => {
    */
   it('restart 对非法 label 报 CliError，不静默作用于默认 label 的服务', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-label-guard-'));
-    const servicePath = path.resolve('src/service.ts');
     const script = [
-      `const { restartService } = await import(${JSON.stringify(servicePath)});`,
+      `const { restartService } = await import(${JSON.stringify(moduleUrl('src/service.ts'))});`,
       'try {',
       '  await restartService();',
       "  console.log('RESULT:NO-THROW');",
@@ -979,11 +972,7 @@ describe('服务入口的 label 校验（assertServiceLabelSafe）', () => {
       '}',
     ].join('\n');
     try {
-      const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
-        encoding: 'utf8',
-        timeout: 30_000,
-        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: '../evil' },
-      });
+      const r = runModule(script, dataDir, { env: { MIHOMO_CLI_DAEMON_LABEL: '../evil' }, timeout: 30_000 });
       assert.equal(r.status, 0, r.stderr);
       const line = r.stdout.split('\n').find(l => l.startsWith('RESULT:'));
       assert.ok(line && !line.includes('NO-THROW'), `非法 label 必须在入口报错: ${line}`);
@@ -1002,14 +991,10 @@ describe('getServiceStatus：探测失败 ≠ 未装载（print 只认 113）', 
    * 子进程 + PATH 桩 launchctl；此前所有桩恒退 0/113，112/125 形态零覆盖。
    */
   function runStatusCase(exitCode: number): { stdout: string } {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-status-probe-'));
-    const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-status-probe-bin-'));
-    const label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
-    const servicePath = path.resolve('src/service.ts');
-    fs.writeFileSync(path.join(fakeBin, 'launchctl'), `#!/bin/bash\nif [ "$1" = "print" ]; then exit ${exitCode}; fi\nexit 0\n`);
-    fs.chmodSync(path.join(fakeBin, 'launchctl'), 0o755);
+    const label = `com.mihomo-cli.test.status-${Math.random().toString(36).slice(2)}`;
+    const stub = `#!/bin/bash\nif [ "$1" = "print" ]; then exit ${exitCode}; fi\nexit 0\n`;
     const script = [
-      `const { getServiceStatus } = await import(${JSON.stringify(servicePath)});`,
+      `const { getServiceStatus } = await import(${JSON.stringify(moduleUrl('src/service.ts'))});`,
       'try {',
       '  const s = getServiceStatus();',
       "  console.log('STATUS:' + JSON.stringify({ loaded: s.loaded, running: s.running }));",
@@ -1017,18 +1002,7 @@ describe('getServiceStatus：探测失败 ≠ 未装载（print 只认 113）', 
       "  console.log('THREW:' + e.message.split('\\n')[0]);",
       '}',
     ].join('\n');
-    try {
-      const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
-        encoding: 'utf8',
-        timeout: 30_000,
-        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: label, PATH: `${fakeBin}:${process.env.PATH}` },
-      });
-      assert.equal(r.status, 0, r.stderr);
-      return { stdout: r.stdout };
-    } finally {
-      fs.rmSync(dataDir, { recursive: true, force: true });
-      fs.rmSync(fakeBin, { recursive: true, force: true });
-    }
+    return runWithStubLaunchctl({ prefix: 'mihomo-cli-status-probe', stub, script, label, timeoutMs: 30_000 });
   }
 
   it('print 退 125/112：抛错而非答「未装载」（谎答会让 stop 静默跳过）', () => {

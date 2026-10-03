@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
-import { type SpawnSyncReturns, spawn, spawnSync } from 'node:child_process';
+import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { shouldAbortStartOnDisable } from '../service.js';
-import { makeFixture, readEpochIn, runCli } from '../test-support/cli.js';
+import { makeFixture, moduleUrl, readEpochIn, runCli, runModule } from '../test-support/cli.js';
+import { isDead, killLeftovers, pollUntil, spawnFakeKernel, writeFakeKernelFiles } from '../test-support/fake-kernel.js';
 
 /**
  * `cmdStop` 的两条提前返回路径是否留下「停止过」的记录。
@@ -70,40 +71,24 @@ describe('stop 的提前返回路径记录停止计数', () => {
     withFixture((dataDir, run) => {
       // 桩内核：命令行必须含隔离目录下的 kernel/mihomo 与 runtime/config.yaml，
       // 才能被生产 pattern 匹配到（见 process-probe 的 MAIN_INSTANCE_PATTERN）
-      const kernelDir = path.join(dataDir, 'kernel');
-      const runtimeDir = path.join(dataDir, 'runtime');
-      fs.mkdirSync(kernelDir, { recursive: true });
-      fs.mkdirSync(runtimeDir, { recursive: true });
-      const binary = path.join(kernelDir, 'mihomo');
-      fs.writeFileSync(binary, '#!/bin/bash\nsleep 300\n', { mode: 0o755 });
-      const configFile = path.join(runtimeDir, 'config.yaml');
-      fs.writeFileSync(configFile, 'mixed-port: 7890\n');
+      const binary = path.join(dataDir, 'kernel', 'mihomo');
+      const configFile = path.join(dataDir, 'runtime', 'config.yaml');
+      writeFakeKernelFiles({ binaries: [binary], configFile });
 
       // 隔离前提：pattern 必须指向 tmpdir，绝不能命中用户真实数据目录下的内核
-      const pattern = spawnSync(
-        process.execPath,
-        [
-          '--import',
-          'tsx',
-          '-e',
-          `import { MAIN_INSTANCE_PATTERN } from ${JSON.stringify(path.resolve('src/process-probe.ts'))}; process.stdout.write(MAIN_INSTANCE_PATTERN);`,
-        ],
-        { encoding: 'utf8', env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1' }, timeout: 30_000 },
+      const pattern = runModule(
+        `import { MAIN_INSTANCE_PATTERN } from ${JSON.stringify(moduleUrl('src/process-probe.ts'))}; process.stdout.write(MAIN_INSTANCE_PATTERN);`,
+        dataDir,
+        { env: { MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1' }, timeout: 30_000 },
       );
       assert.equal(pattern.status, 0, pattern.stderr);
       assert.ok(pattern.stdout.includes(dataDir), 'pattern 必须绑定隔离目录');
       assert.ok(!pattern.stdout.includes(path.join(os.homedir(), '.mihomo-cli')), 'pattern 绝不能命中真实数据目录');
 
-      const child = spawn(binary, ['-d', path.join(dataDir, 'data'), '-f', configFile], { detached: true, stdio: 'ignore' });
-      child.unref();
-      const pid = child.pid as number;
+      const pid = spawnFakeKernel({ binary, dataDir: path.join(dataDir, 'data'), configFile });
       try {
         // 等它真的出现在 pgrep 里（spawn 返回不代表 exec 完成）
-        const deadline = Date.now() + 3000;
-        while (Date.now() < deadline) {
-          if (spawnSync('pgrep', ['-f', pattern.stdout], { encoding: 'utf8' }).stdout.trim()) break;
-          spawnSync('sleep', ['0.05']);
-        }
+        pollUntil(() => spawnSync('pgrep', ['-f', pattern.stdout], { encoding: 'utf8' }).stdout.trim() !== '');
 
         const before = readEpochIn(dataDir);
         const result = run(['stop']);
@@ -111,12 +96,11 @@ describe('stop 的提前返回路径记录停止计数', () => {
         assert.match(result.stdout, /已停止/);
 
         // 判活以 ps 状态列为准：kill(pid,0) 对僵尸进程同样返回成功（v4.2.3 的教训）
-        const stat = (spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).stdout || '').trim();
-        assert.ok(stat === '' || stat.startsWith('Z'), `桩内核应已终止，实际 stat=${stat}`);
+        assert.ok(isDead(pid), '桩内核应已终止（僵尸也算死，kill -0 会骗人）');
 
         assert.ok(shouldAbortStartOnDisable(before, readEpochIn(dataDir)), '杀掉游离内核也是一次确定的停止，必须可被并发判据检出');
       } finally {
-        spawnSync('pkill', ['-9', '-f', pattern.stdout], { timeout: 5000 });
+        killLeftovers(pattern.stdout);
       }
     }));
 

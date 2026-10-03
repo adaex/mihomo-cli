@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
+
+import { runModule } from './test-support/cli.js';
 
 /**
  * TUN 启动脚本本体的观察窗契约。脚本全部锁在真实 sudo 之后，此前零覆盖——
@@ -37,11 +38,7 @@ describe('buildTunLaunchScript：观察窗判定（12×0.1s，窗内死亡即失
       "const pidContent = fs.existsSync(dir + '/runtime/pid') ? fs.readFileSync(dir + '/runtime/pid', 'utf8').trim() : '';",
       "console.log('PID:' + pidContent);",
     ].join('\n');
-    const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
-      encoding: 'utf8',
-      timeout: 60_000,
-      env: { ...process.env, MIHOMO_CLI_DIR: dataDir },
-    });
+    const r = runModule(script, dataDir, { timeout: 60_000 });
     assert.equal(r.status, 0, r.stderr);
     const code = Number((r.stdout.match(/CODE:(-?\d+)/) ?? [])[1]);
     const pid = (r.stdout.match(/PID:(\d+)/) ?? [])[1];

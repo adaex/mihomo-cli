@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { describe, it } from 'node:test';
+
+import { setupGuardFixture } from '../test-support/guard.js';
 
 /**
  * root 守卫的端到端回归（v4.2.2）。
@@ -18,30 +17,15 @@ import { fileURLToPath } from 'node:url';
  * 建出一套用户永远看不到的数据目录。
  */
 
-const SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
-const ENTRY = path.join(SRC_DIR, '..', 'index.ts');
-
-let tmpDir: string;
-
-beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-rootguard-'));
-});
-
-afterEach(() => {
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
+const guard = setupGuardFixture('mihomo-rootguard');
 
 /** 以 uid=0 跑 CLI：预加载脚本覆盖 process.getuid，避免测试真的需要 sudo */
-function runAsRoot(args: string[], envOverride?: NodeJS.ProcessEnv): { status: number | null; output: string } {
-  const preload = path.join(tmpDir, 'as-root.mjs');
-  fs.writeFileSync(preload, 'process.getuid = () => 0;\n');
-
-  const r = spawnSync(process.execPath, ['--import', 'tsx', '--import', preload, ENTRY, ...args], {
-    encoding: 'utf8',
-    env: envOverride ?? { ...process.env, MIHOMO_CLI_DIR: path.join(tmpDir, 'data'), HOME: tmpDir },
-    timeout: 30_000,
+function runAsRoot(args: string[], envOverride?: NodeJS.ProcessEnv) {
+  return guard.run(args, {
+    preload: { name: 'as-root.mjs', body: 'process.getuid = () => 0;\n' },
+    // HOME 钉在临时目录：root 下 HOME 可能被 sudo 换掉，默认数据目录要落在看得见、收得走的地方
+    env: envOverride ?? { ...process.env, MIHOMO_CLI_DIR: path.join(guard.tmpDir, 'data'), HOME: guard.tmpDir },
   });
-  return { status: r.status, output: `${r.stdout || ''}${r.stderr || ''}` };
 }
 
 describe('root 守卫：sudo 下拒绝执行', () => {
@@ -65,7 +49,7 @@ describe('root 守卫：sudo 下拒绝执行', () => {
     // 建出一套用户永远看不到的目录。不设 MIHOMO_CLI_DIR，以临时 HOME 直接复现该场景；
     // 别名（-h/-v/--help/--version）与大小写变体经 findCommand 解析后同样落在豁免名单内
     for (const cmd of ['help', 'version', '-h', '-v', '--help', '--version', 'HELP']) {
-      const home = fs.mkdtempSync(path.join(tmpDir, 'home-'));
+      const home = fs.mkdtempSync(path.join(guard.tmpDir, 'home-'));
       const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
       delete env.MIHOMO_CLI_DIR;
       const { status } = runAsRoot([cmd], env);
@@ -76,23 +60,22 @@ describe('root 守卫：sudo 下拒绝执行', () => {
 
   it('守卫先于 ensureDirs：被拒时不留下数据目录', () => {
     runAsRoot(['status']);
-    assert.equal(fs.existsSync(path.join(tmpDir, 'data')), false, 'root 下 HOME 可能是 /var/root，守卫晚于 ensureDirs 会在那里建出用户看不到的数据目录');
+    assert.equal(fs.existsSync(path.join(guard.tmpDir, 'data')), false, 'root 下 HOME 可能是 /var/root，守卫晚于 ensureDirs 会在那里建出用户看不到的数据目录');
   });
 
   it('非豁免命令照常创建数据目录（豁免只覆盖 help/version）', () => {
-    // 不伪造 root、真平台：status 这类普通命令必须仍经 ensureDirs 建出数据目录，
-    // 否则「豁免跳过 ensureDirs」就会误伤所有命令。label 一并隔离——status 会查服务状态
-    const r = spawnSync(process.execPath, ['--import', 'tsx', ENTRY, 'status', '--no-probe'], {
-      encoding: 'utf8',
+    // 不伪造 root、真平台（不挂 preload）：status 这类普通命令必须仍经 ensureDirs 建出数据目录，
+    // 否则「豁免跳过 ensureDirs」就会误伤所有命令。手拼三件套仍走 guard.run：数据目录必须落在
+    // 与守卫用例同一个 tmpDir 里才能被 afterEach 收走；label 一并隔离——status 会查服务状态
+    const r = guard.run(['status', '--no-probe'], {
       env: {
         ...process.env,
-        MIHOMO_CLI_DIR: path.join(tmpDir, 'data'),
-        MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(tmpDir)}`,
+        MIHOMO_CLI_DIR: path.join(guard.tmpDir, 'data'),
+        MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(guard.tmpDir)}`,
         NO_COLOR: '1',
       },
-      timeout: 30_000,
     });
-    assert.equal(r.status, 0, `${r.stdout || ''}${r.stderr || ''}`);
-    assert.ok(fs.existsSync(path.join(tmpDir, 'data', 'runtime')), '非豁免命令仍应创建数据目录');
+    assert.equal(r.status, 0, r.output);
+    assert.ok(fs.existsSync(path.join(guard.tmpDir, 'data', 'runtime')), '非豁免命令仍应创建数据目录');
   });
 });

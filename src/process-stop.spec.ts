@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
+
+import { type FakeKernelLayout, isDead, killLeftovers, spawnFakeKernel, waitForPids, writeFakeKernelFiles } from './test-support/fake-kernel.js';
 
 // paths.ts 在 import 期求值 MIHOMO_CLI_DIR，故必须先设环境变量再动态 import。
 //
@@ -21,60 +22,19 @@ const { buildKernelCleanupScript, cleanupAll, stop, clearPid, reapPidWhenQuiet }
 const { cleanupKernelsOrThrow } = await import('./legacy-cleanup.js');
 const { SUDO_TIMEOUT_MS } = await import('./sudo.js');
 
-/**
- * 桩「内核」：一个长睡的 bash 脚本，放在隔离目录的 kernel/mihomo 位置。
- * 用真实二进制名与真实 config 路径拼命令行，让 pgrep 能按生产 pattern 匹配到。
- */
-function spawnFakeKernel(binary: string = PATHS.mihomoBinary): number {
-  const child = spawn(binary, ['-d', DIRS.data, '-f', PATHS.configFile], {
-    detached: true,
-    stdio: 'ignore',
-  });
-  child.unref();
-  return child.pid as number;
-}
-
-/** 等桩进程真的出现在 pgrep 里（spawn 返回不代表 exec 完成） */
-function waitForPids(count: number, timeoutMs = 3000): number[] {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const pids = getMihomoPids();
-    if (pids.length >= count) return pids;
-    spawnSync('sleep', ['0.05']);
-  }
-  return getMihomoPids();
-}
-
-/** 进程是否真的死了。**不能用 `process.kill(pid, 0)`**：它对僵尸进程（已死但父进程
- * 尚未收割，detached 桩进程的常态）同样返回成功——这正是 v4.2.3 给 TUN 启动判活修过的
- * 同一个坑（见 process-start.ts）。判据以 ps 状态列为准：Z 开头或查不到都算死。 */
-function isDead(pid: number): boolean {
-  const r = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' });
-  const stat = (r.stdout || '').trim();
-  return stat === '' || stat.startsWith('Z');
-}
-
-/** 兜底清理：任何一条用例漏杀都不该把桩进程留在开发机上 */
-function killLeftovers(): void {
-  spawnSync('pkill', ['-9', '-f', MAIN_INSTANCE_PATTERN], { timeout: 5000 });
-}
+/** 桩内核布局：fake-kernel.ts 不静态 import paths（env 固化顺序），由这里传入 */
+const fakeKernel: FakeKernelLayout = { binary: PATHS.mihomoBinary, dataDir: DIRS.data, configFile: PATHS.configFile };
 
 before(() => {
-  fs.mkdirSync(DIRS.kernel, { recursive: true });
-  fs.mkdirSync(DIRS.runtime, { recursive: true });
-  fs.mkdirSync(DIRS.data, { recursive: true });
-  // 真实二进制与服务符号链两种命令行形态都要能测（pattern 是二选一分支）
-  fs.writeFileSync(PATHS.mihomoBinary, '#!/bin/bash\nsleep 300\n', { mode: 0o755 });
-  fs.writeFileSync(PATHS.serviceBinary, '#!/bin/bash\nsleep 300\n', { mode: 0o755 });
-  fs.writeFileSync(PATHS.configFile, 'mixed-port: 7890\n');
+  writeFakeKernelFiles({ binaries: [PATHS.mihomoBinary, PATHS.serviceBinary], configFile: PATHS.configFile, dirs: [DIRS.data] });
 });
 
 beforeEach(() => {
-  killLeftovers();
+  killLeftovers(MAIN_INSTANCE_PATTERN);
 });
 
 after(() => {
-  killLeftovers();
+  killLeftovers(MAIN_INSTANCE_PATTERN);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -100,8 +60,8 @@ describe('测试隔离前提', () => {
  */
 describe('cleanupAll 真实杀进程', () => {
   it('杀掉单个桩进程并如实计数', async () => {
-    const pid = spawnFakeKernel();
-    waitForPids(1);
+    const pid = spawnFakeKernel(fakeKernel);
+    waitForPids(1, getMihomoPids);
 
     const result = await cleanupAll();
 
@@ -115,8 +75,8 @@ describe('cleanupAll 真实杀进程', () => {
   });
 
   it('走批量 pkill 分支（>3 个）时同样全部杀掉', async () => {
-    for (let i = 0; i < 4; i++) spawnFakeKernel();
-    const before = waitForPids(4);
+    for (let i = 0; i < 4; i++) spawnFakeKernel(fakeKernel);
+    const before = waitForPids(4, getMihomoPids);
     assert.equal(before.length, 4, `应有 4 个桩进程，实际 ${before.length}`);
 
     const result = await cleanupAll();
@@ -127,8 +87,8 @@ describe('cleanupAll 真实杀进程', () => {
   });
 
   it('符号链形态的命令行也被匹配到并杀掉（服务路径的进程形态）', async () => {
-    spawnFakeKernel(PATHS.serviceBinary);
-    waitForPids(1);
+    spawnFakeKernel(fakeKernel, PATHS.serviceBinary);
+    waitForPids(1, getMihomoPids);
 
     const result = await cleanupAll();
 
@@ -143,8 +103,8 @@ describe('cleanupAll 真实杀进程', () => {
   });
 
   it('清掉 pid 文件（有进程路径的末尾收口；残留会让后续 start 撞上死胡同）', async () => {
-    spawnFakeKernel();
-    waitForPids(1);
+    spawnFakeKernel(fakeKernel);
+    waitForPids(1, getMihomoPids);
     fs.writeFileSync(PATHS.pidFile, '99999');
     const result = await cleanupAll();
     assert.equal(fs.existsSync(PATHS.pidFile), false);
@@ -212,8 +172,8 @@ describe('reapPidWhenQuiet：零进程才删 pid，活进程保留', () => {
   });
 
   it('有匹配的活内核时保留 pid（status 真相源），不报错误', async () => {
-    const pid = spawnFakeKernel();
-    waitForPids(1);
+    const pid = spawnFakeKernel(fakeKernel);
+    waitForPids(1, getMihomoPids);
     fs.writeFileSync(PATHS.pidFile, String(pid));
     assert.equal(await reapPidWhenQuiet(), null, '活进程保留不是错误');
     assert.equal(fs.existsSync(PATHS.pidFile), true, '活进程的 pid 必须保留，删掉会让 status 对活内核误报未运行');
@@ -246,8 +206,8 @@ describe('buildKernelCleanupScript：root 残留清理脚本协议', () => {
 
 describe('stop 真实停止', () => {
   it('有进程时杀干净并清理 runtime', async () => {
-    spawnFakeKernel();
-    waitForPids(1);
+    spawnFakeKernel(fakeKernel);
+    waitForPids(1, getMihomoPids);
     fs.writeFileSync(PATHS.pidFile, '1');
 
     const result = await stop();
@@ -266,8 +226,7 @@ describe('stop 真实停止', () => {
 
   // stop 会 rmrf runtime/，后续用例依赖 configFile 存在
   after(() => {
-    fs.mkdirSync(DIRS.runtime, { recursive: true });
-    fs.writeFileSync(PATHS.configFile, 'mixed-port: 7890\n');
+    writeFakeKernelFiles({ binaries: [], configFile: PATHS.configFile });
   });
 });
 
@@ -283,8 +242,8 @@ describe('isRunning 的 PID 复用防线', () => {
   });
 
   it('pid 文件指向真实桩内核时判为运行中', async () => {
-    const pid = spawnFakeKernel();
-    waitForPids(1);
+    const pid = spawnFakeKernel(fakeKernel);
+    waitForPids(1, getMihomoPids);
     fs.writeFileSync(PATHS.pidFile, String(pid));
 
     assert.equal(isRunning(), true);

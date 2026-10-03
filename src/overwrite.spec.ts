@@ -24,6 +24,13 @@ const {
 } = await import('./overwrite.js');
 after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
+/** 在受控数据目录里摆覆写文件（enabled 开关 / summarizeMatch / JS 脚本三组用例共用） */
+const write = (name: string, content: string) => fs.writeFileSync(path.join(tmpDir, name), content);
+/** 用例收尾只删自己摆的文件，数据目录本身由 after() 统一收 */
+const cleanup = (...names: string[]) => {
+  for (const n of names) fs.rmSync(path.join(tmpDir, n), { force: true });
+};
+
 /**
  * 经真实合并入口跑单个覆写片段：多文件合并的唯一生产入口是 applyOverwrite
  * （mergeConfigLevel 是私有实现）。
@@ -680,11 +687,6 @@ describe('loadOverwriteFile：近失文件名提示', () => {
 });
 
 describe('覆写文件 enabled 开关', () => {
-  const write = (name: string, content: string) => fs.writeFileSync(path.join(tmpDir, name), content);
-  const cleanup = (...names: string[]) => {
-    for (const n of names) fs.rmSync(path.join(tmpDir, n), { force: true });
-  };
-
   it('enabled: false 的文件不参与合并，但仍被加载', () => {
     write('overwrite.off.yaml', 'enabled: false\nlog-level: debug\n');
     try {
@@ -787,71 +789,79 @@ describe('覆写文件 enabled 开关', () => {
     }
   });
 
-  it('元数据键带操作符报错，不得绕过剥离落进配置', () => {
-    // 剥离发生在解构、早于操作符解析：enabled!: false 既不停用文件，
-    // 又会被规范成键 enabled 写进最终配置——正是本功能要消灭的静默失效。
-    // <enabled> / ~enabled 走合并层的「已移除操作符」报错（下一用例），不在本列表
-    for (const key of ['enabled!', 'match!', '+enabled', 'match+']) {
-      write('overwrite.op.yaml', `${key}: false\nlog-level: debug\n`);
-      try {
-        assert.throws(
-          () => loadOverwriteFile(),
-          (e: unknown) => {
-            assert.ok(e instanceof CliError, `${key} 应抛 CliError`);
-            assert.equal((e as CliError).label, '覆写配置错误');
-            assert.match((e as Error).message, /不支持操作符/);
-            return true;
-          },
-          `${key} 应被拒绝`,
-        );
-      } finally {
-        cleanup('overwrite.op.yaml');
-      }
+  it('元数据键的操作符、已移除操作符与大小写/空白近失形态显式报错，不静默落进配置', () => {
+    // 三族失效方向不同、断言面不同，键集合与断言逐族列在表里；文件名与引号形态
+    // 按原用例保留（近失族键含首尾空白，YAML 里必须加引号写入）
+    interface MetaKeyFamily {
+      keys: string[];
+      fileName: string;
+      /** 键加引号写入（近失族原用例即如此） */
+      quoted: boolean;
+      messageRe: RegExp;
+      /** 断言 CliError.label（已移除操作符族原本不查 label） */
+      label?: string;
+      /** 诊断路径把文件标成 broken 的附加断言（已移除操作符族） */
+      broken?: string;
+      instanceofNote: string;
+      rejectNote: string;
     }
-  });
-
-  it('<enabled> / ~enabled 在加载阶段即报「已移除的操作符」（诊断与合并路径同结论）', () => {
-    // 尖括号转义与 ~ 已删：文件级操作符校验提前到加载阶段后，这两种元数据键变体
-    // 不再是「加载时静默、合并时才报」——ow/status 的诊断旁路同样把文件标成加载失败，
-    // 不会列成生效文件
-    for (const key of ['<enabled>', '~enabled']) {
-      write('overwrite.op.yaml', `${key}: false\nlog-level: debug\n`);
-      try {
-        assert.throws(
-          () => loadOverwriteFile(),
-          (e: unknown) => {
-            assert.ok(e instanceof CliError, `${key} 加载时应抛 CliError`);
-            assert.match((e as Error).message, /已移除/);
-            return true;
-          },
-          `${key} 应在加载阶段被拒绝`,
-        );
-        assert.ok(listOverwriteFile().broken.some(b => b.name === 'overwrite.op.yaml'));
-      } finally {
-        cleanup('overwrite.op.yaml');
-      }
-    }
-  });
-
-  it('元数据键的大小写/空白近失报错，不静默当普通配置键', () => {
-    // YAML 键大小写敏感：`Enabled: false` 既不停用文件（剥离用精确键名），
-    // 又会原样写进运行配置，而内核对未知顶层键不报错——用户零反馈。
-    // 与操作符形态是同一种静默失效，只是走大小写这条路
-    for (const key of ['Enabled', 'ENABLED', 'Match', 'MATCH', 'enabled ', ' enabled']) {
-      write('overwrite.cap.yaml', `"${key}": false\nlog-level: debug\n`);
-      try {
-        assert.throws(
-          () => loadOverwriteFile(),
-          (e: unknown) => {
-            assert.ok(e instanceof CliError, `${key} 应抛 CliError`);
-            assert.equal((e as CliError).label, '覆写配置错误');
-            assert.match((e as Error).message, /疑似想写元数据键/);
-            return true;
-          },
-          `"${key}" 应被拒绝`,
-        );
-      } finally {
-        cleanup('overwrite.cap.yaml');
+    const families: MetaKeyFamily[] = [
+      {
+        // 剥离发生在解构、早于操作符解析：enabled!: false 既不停用文件，
+        // 又会被规范成键 enabled 写进最终配置——正是本功能要消灭的静默失效。
+        // <enabled> / ~enabled 走「已移除操作符」族（下一项），不在本列表
+        keys: ['enabled!', 'match!', '+enabled', 'match+'],
+        fileName: 'overwrite.op.yaml',
+        quoted: false,
+        messageRe: /不支持操作符/,
+        label: '覆写配置错误',
+        instanceofNote: ' 应抛 CliError',
+        rejectNote: ' 应被拒绝',
+      },
+      {
+        // 尖括号转义与 ~ 已删：文件级操作符校验提前到加载阶段后，这两种元数据键变体
+        // 不再是「加载时静默、合并时才报」——ow/status 的诊断旁路同样把文件标成加载失败，
+        // 不会列成生效文件
+        keys: ['<enabled>', '~enabled'],
+        fileName: 'overwrite.op.yaml',
+        quoted: false,
+        messageRe: /已移除/,
+        broken: 'overwrite.op.yaml',
+        instanceofNote: ' 加载时应抛 CliError',
+        rejectNote: ' 应在加载阶段被拒绝',
+      },
+      {
+        // YAML 键大小写敏感：`Enabled: false` 既不停用文件（剥离用精确键名），
+        // 又会原样写进运行配置，而内核对未知顶层键不报错——用户零反馈。
+        // 与操作符形态是同一种静默失效，只是走大小写这条路
+        keys: ['Enabled', 'ENABLED', 'Match', 'MATCH', 'enabled ', ' enabled'],
+        fileName: 'overwrite.cap.yaml',
+        quoted: true,
+        messageRe: /疑似想写元数据键/,
+        label: '覆写配置错误',
+        instanceofNote: ' 应抛 CliError',
+        rejectNote: ' 应被拒绝',
+      },
+    ];
+    for (const family of families) {
+      for (const key of family.keys) {
+        const asWritten = family.quoted ? `"${key}"` : key;
+        write(family.fileName, `${asWritten}: false\nlog-level: debug\n`);
+        try {
+          assert.throws(
+            () => loadOverwriteFile(),
+            (e: unknown) => {
+              assert.ok(e instanceof CliError, `${key}${family.instanceofNote}`);
+              if (family.label !== undefined) assert.equal((e as CliError).label, family.label);
+              assert.match((e as Error).message, family.messageRe);
+              return true;
+            },
+            `${asWritten}${family.rejectNote}`,
+          );
+          if (family.broken !== undefined) assert.ok(listOverwriteFile().broken.some(b => b.name === family.broken));
+        } finally {
+          cleanup(family.fileName);
+        }
       }
     }
   });
@@ -915,9 +925,6 @@ describe('覆写文件 enabled 开关', () => {
 });
 
 describe('summarizeMatch 作用域摘要（经 listOverwriteFile）', () => {
-  const write = (name: string, content: string) => fs.writeFileSync(path.join(tmpDir, name), content);
-  const cleanup = (name: string) => fs.rmSync(path.join(tmpDir, name), { force: true });
-
   it('name 与多条件的摘要形态', () => {
     write('overwrite.a.yaml', 'match:\n  name: edu*\nlog-level: debug\n');
     try {
@@ -1008,8 +1015,6 @@ describe('覆写扩展文件加载顺序', () => {
 });
 
 describe('JS 覆写脚本', () => {
-  const write = (name: string, content: string) => fs.writeFileSync(path.join(tmpDir, name), content);
-  const cleanup = (name: string) => fs.rmSync(path.join(tmpDir, name), { force: true });
   // 每个用例用独立文件名：require 模块缓存按路径键控，CLI 短进程内文件不会变、
   // 生产无此问题，但测试会改写同一路径的内容，复用名字会命中缓存的旧模块
 

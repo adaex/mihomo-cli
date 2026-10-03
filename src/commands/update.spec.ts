@@ -12,6 +12,36 @@ after(() => {
   recordClearedProxyEnv(null);
 });
 
+/**
+ * 桩 npm 的 PATH 污染样板（getLatestNpmVersion 相关用例原各自互抄）：mkdtemp + binDir +
+ * 写桩脚本 + chmod + PATH 前置，fn 结束后恢复 PATH、删临时目录。
+ * 桩脚本内容各用例不同，经 makeBody 传入（探针用例的日志路径要引用临时目录）；
+ * makeBody 返回 null 表示不写脚本——「PATH 只指向空目录、spawn npm 必然 ENOENT」的形态，
+ * 配合 replacePath 整个替换 PATH 而非前置。
+ */
+async function withStubNpm<T>(
+  makeBody: (binDir: string, tmpDir: string) => string | null,
+  fn: (binDir: string, tmpDir: string) => Promise<T>,
+  options: { replacePath?: boolean } = {},
+): Promise<T> {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-upd-'));
+  const binDir = path.join(tmpDir, 'bin');
+  fs.mkdirSync(binDir);
+  const body = makeBody(binDir, tmpDir);
+  if (body !== null) {
+    fs.writeFileSync(path.join(binDir, 'npm'), `#!/bin/bash\n${body}`);
+    fs.chmodSync(path.join(binDir, 'npm'), 0o755);
+  }
+  const originalPath = process.env.PATH;
+  process.env.PATH = options.replacePath ? binDir : `${binDir}:${originalPath}`;
+  try {
+    return await fn(binDir, tmpDir);
+  } finally {
+    process.env.PATH = originalPath;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 describe('resolveUpdateAction：update 的版本决策', () => {
   it('当前领先 registry（预发/源码安装）：ahead，必须拦住（npm install 会静默降级）', () => {
     assert.equal(resolveUpdateAction('26.10.99', '26.10.97'), 'ahead');
@@ -35,56 +65,34 @@ describe('resolveUpdateAction：update 的版本决策', () => {
 });
 
 describe('getLatestNpmVersion：npm view 查询与失败降级', () => {
-  function writeStubNpm(binDir: string, body: string): void {
-    const script = `#!/bin/bash\n${body}`;
-    fs.writeFileSync(path.join(binDir, 'npm'), script);
-    fs.chmodSync(path.join(binDir, 'npm'), 0o755);
-  }
-
   it('npm view 输出版本号：取最后一行 trim 后的值', async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-upd-'));
-    const binDir = path.join(tmpDir, 'bin');
-    fs.mkdirSync(binDir);
     // npm view 输出可能带多余行（如 notice），协议是取最后一行
-    writeStubNpm(binDir, 'echo "npm notice ignore me" >&2\necho "26.10.98"\n');
-    const originalPath = process.env.PATH;
-    process.env.PATH = `${binDir}:${originalPath}`;
-    try {
-      assert.equal(await getLatestNpmVersion(5000), '26.10.98');
-    } finally {
-      process.env.PATH = originalPath;
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    await withStubNpm(
+      () => 'echo "npm notice ignore me" >&2\necho "26.10.98"\n',
+      async () => {
+        assert.equal(await getLatestNpmVersion(5000), '26.10.98');
+      },
+    );
   });
 
   it('npm view 失败（exit 1）：返回 null，调用方降级为直接安装', async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-upd-'));
-    const binDir = path.join(tmpDir, 'bin');
-    fs.mkdirSync(binDir);
-    writeStubNpm(binDir, 'echo "npm ERR registry down" >&2\nexit 1\n');
-    const originalPath = process.env.PATH;
-    process.env.PATH = `${binDir}:${originalPath}`;
-    try {
-      assert.equal(await getLatestNpmVersion(5000), null);
-    } finally {
-      process.env.PATH = originalPath;
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    await withStubNpm(
+      () => 'echo "npm ERR registry down" >&2\nexit 1\n',
+      async () => {
+        assert.equal(await getLatestNpmVersion(5000), null);
+      },
+    );
   });
 
   it('npm 缺失（ENOENT）：catch 归一返回 null，不抛出', async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-upd-'));
-    const binDir = path.join(tmpDir, 'bin');
-    fs.mkdirSync(binDir);
-    // PATH 只指向空目录：spawn npm 必然 ENOENT
-    const originalPath = process.env.PATH;
-    process.env.PATH = binDir;
-    try {
-      assert.equal(await getLatestNpmVersion(5000), null);
-    } finally {
-      process.env.PATH = originalPath;
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    // PATH 只指向空目录（不写桩脚本、整个替换 PATH）：spawn npm 必然 ENOENT
+    await withStubNpm(
+      () => null,
+      async () => {
+        assert.equal(await getLatestNpmVersion(5000), null);
+      },
+      { replacePath: true },
+    );
   });
 });
 
@@ -136,12 +144,6 @@ describe('isProxyPortListening（本机代理端口 TCP 探活）', () => {
 });
 
 describe('getLatestNpmVersion：入口清掉的自指代理 env 按端口存活 per-spawn 注回', () => {
-  function writeStubNpm(binDir: string, body: string): void {
-    const script = `#!/bin/bash\n${body}`;
-    fs.writeFileSync(path.join(binDir, 'npm'), script);
-    fs.chmodSync(path.join(binDir, 'npm'), 0o755);
-  }
-
   /** 起一个只记录不响应的本地 TCP 监听器充当「在跑的本机代理」 */
   function listenLocal(): Promise<{ server: net.Server; port: number }> {
     return new Promise((resolve, reject) => {
@@ -151,70 +153,63 @@ describe('getLatestNpmVersion：入口清掉的自指代理 env 按端口存活 
     });
   }
 
+  /** 探针桩脚本：把实际收到的 https_proxy 写进日志，再按协议吐版本号 */
+  const probeScript = (probeLog: string) => `echo "\${https_proxy:-NONE}" >"${probeLog}"\necho "26.10.98"\n`;
+
   it('代理端口在监听：npm 子进程收到用户原本的 https_proxy', async () => {
     const { server, port } = await listenLocal();
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-upd-'));
-    const binDir = path.join(tmpDir, 'bin');
-    fs.mkdirSync(binDir);
-    const probeLog = path.join(tmpDir, 'probe.log');
-    // 桩 npm 把实际收到的 https_proxy 写日志，再按协议吐版本号
-    writeStubNpm(binDir, `echo "\${https_proxy:-NONE}" >"${probeLog}"\necho "26.10.98"\n`);
-    const originalPath = process.env.PATH;
-    process.env.PATH = `${binDir}:${originalPath}`;
-    recordClearedProxyEnv({ https_proxy: `http://127.0.0.1:${port}` });
     try {
-      assert.equal(await getLatestNpmVersion(5000), '26.10.98');
-      assert.equal(fs.readFileSync(probeLog, 'utf8').trim(), `http://127.0.0.1:${port}`);
+      await withStubNpm(
+        (_binDir, tmpDir) => probeScript(path.join(tmpDir, 'probe.log')),
+        async (_binDir, tmpDir) => {
+          recordClearedProxyEnv({ https_proxy: `http://127.0.0.1:${port}` });
+          try {
+            assert.equal(await getLatestNpmVersion(5000), '26.10.98');
+            assert.equal(fs.readFileSync(path.join(tmpDir, 'probe.log'), 'utf8').trim(), `http://127.0.0.1:${port}`);
+          } finally {
+            recordClearedProxyEnv(null);
+          }
+        },
+      );
     } finally {
-      recordClearedProxyEnv(null);
-      process.env.PATH = originalPath;
       server.close();
-      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
   it('代理端口不监听（env 残留/内核已停）：不注回，npm 收不到代理 env', async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-upd-'));
-    const binDir = path.join(tmpDir, 'bin');
-    fs.mkdirSync(binDir);
-    const probeLog = path.join(tmpDir, 'probe.log');
-    writeStubNpm(binDir, `echo "\${https_proxy:-NONE}" >"${probeLog}"\necho "26.10.98"\n`);
-    const originalPath = process.env.PATH;
-    process.env.PATH = `${binDir}:${originalPath}`;
-    // 端口 1 连接即拒；同时确保当前 process.env 里没有逃逸的同名键
-    const saved = process.env.https_proxy;
-    delete process.env.https_proxy;
-    recordClearedProxyEnv({ https_proxy: 'http://127.0.0.1:1' });
-    try {
-      assert.equal(await getLatestNpmVersion(5000), '26.10.98');
-      assert.equal(fs.readFileSync(probeLog, 'utf8').trim(), 'NONE');
-    } finally {
-      recordClearedProxyEnv(null);
-      if (saved !== undefined) process.env.https_proxy = saved;
-      process.env.PATH = originalPath;
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    await withStubNpm(
+      (_binDir, tmpDir) => probeScript(path.join(tmpDir, 'probe.log')),
+      async (_binDir, tmpDir) => {
+        // 端口 1 连接即拒；同时确保当前 process.env 里没有逃逸的同名键
+        const saved = process.env.https_proxy;
+        delete process.env.https_proxy;
+        recordClearedProxyEnv({ https_proxy: 'http://127.0.0.1:1' });
+        try {
+          assert.equal(await getLatestNpmVersion(5000), '26.10.98');
+          assert.equal(fs.readFileSync(path.join(tmpDir, 'probe.log'), 'utf8').trim(), 'NONE');
+        } finally {
+          recordClearedProxyEnv(null);
+          if (saved !== undefined) process.env.https_proxy = saved;
+        }
+      },
+    );
   });
 
   it('入口没清过任何自指 env：npm env 与进程环境一致（不凭空注入）', async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-upd-'));
-    const binDir = path.join(tmpDir, 'bin');
-    fs.mkdirSync(binDir);
-    const probeLog = path.join(tmpDir, 'probe.log');
-    writeStubNpm(binDir, `echo "\${https_proxy:-NONE}" >"${probeLog}"\necho "26.10.98"\n`);
-    const originalPath = process.env.PATH;
-    process.env.PATH = `${binDir}:${originalPath}`;
-    const saved = process.env.https_proxy;
-    delete process.env.https_proxy;
-    recordClearedProxyEnv(null);
-    try {
-      assert.equal(await getLatestNpmVersion(5000), '26.10.98');
-      assert.equal(fs.readFileSync(probeLog, 'utf8').trim(), 'NONE');
-    } finally {
-      if (saved !== undefined) process.env.https_proxy = saved;
-      process.env.PATH = originalPath;
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    await withStubNpm(
+      (_binDir, tmpDir) => probeScript(path.join(tmpDir, 'probe.log')),
+      async (_binDir, tmpDir) => {
+        const saved = process.env.https_proxy;
+        delete process.env.https_proxy;
+        recordClearedProxyEnv(null);
+        try {
+          assert.equal(await getLatestNpmVersion(5000), '26.10.98');
+          assert.equal(fs.readFileSync(path.join(tmpDir, 'probe.log'), 'utf8').trim(), 'NONE');
+        } finally {
+          if (saved !== undefined) process.env.https_proxy = saved;
+        }
+      },
+    );
   });
 });
 

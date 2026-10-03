@@ -2,7 +2,7 @@ import { type SpawnSyncOptions, type SpawnSyncReturns, spawnSync } from 'node:ch
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /**
  * 端到端跑真实 CLI 的测试夹具，所有 commands/*.spec.ts 共用这一份。
@@ -86,4 +86,30 @@ export function readEpochIn(dataDir: string): number {
   );
   if (r.status !== 0) throw new Error(`读取 epoch 子进程失败: ${r.stderr}`);
   return Number.parseInt(r.stdout.trim(), 10);
+}
+
+/** 源码模块的 file URL，供 runModule 的 code 里 `await import(...)` 拼进模板字符串 */
+export function moduleUrl(rel: string): string {
+  return pathToFileURL(path.resolve(rel)).href;
+}
+
+export interface RunModuleOptions {
+  /** 额外 env，在 MIHOMO_CLI_DIR 之上展开（如 MIHOMO_CLI_ALLOW_ANY_PLATFORM、PATH 桩） */
+  env?: NodeJS.ProcessEnv;
+  timeout?: number;
+}
+
+/**
+ * 在隔离子进程里跑一段「import 真实源码模块」的脚本：PATHS 等在模块加载期就固化
+ * MIHOMO_CLI_DIR 的模块（settings/paths/service…）必须这样测，同进程内改环境变量无效。
+ * 与 runCli 的三件套不同：不经 CLI 入口，label/NO_COLOR 无意义，env 只继承 + 覆盖
+ * MIHOMO_CLI_DIR。失败不代为断言——调用方对子进程失败的预期各异（有的断 status、
+ * 有的要读 stdout），统一抛错会拦掉「子进程里预期失败」的用例。
+ */
+export function runModule(code: string, dataDir: string, options: RunModuleOptions = {}): SpawnSyncReturns<string> {
+  return spawnSync(process.execPath, ['--import', 'tsx', '-e', code], {
+    encoding: 'utf8',
+    timeout: options.timeout ?? DEFAULT_TIMEOUT_MS,
+    env: { ...process.env, MIHOMO_CLI_DIR: dataDir, ...options.env },
+  }) as SpawnSyncReturns<string>;
 }

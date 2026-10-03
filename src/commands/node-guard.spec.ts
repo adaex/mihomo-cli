@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { describe, it } from 'node:test';
 
 import { MIN_NODE_VERSION } from '../constants.js';
+import { setupGuardFixture } from '../test-support/guard.js';
 
 /**
  * Node 版本守卫的端到端回归。
@@ -19,36 +17,23 @@ import { MIN_NODE_VERSION } from '../constants.js';
  * 与 root-guard.spec 同一手法。
  */
 
-const SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
-const ENTRY = path.join(SRC_DIR, '..', 'index.ts');
-
-let tmpDir: string;
-
-beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-nodeguard-'));
-});
-
-afterEach(() => {
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
+const guard = setupGuardFixture('mihomo-nodeguard');
 
 /** 以伪造的 Node 版本跑 CLI。label 一并隔离——status 会查服务状态 */
-function runAsNodeVersion(version: string, args: string[]): { status: number | null; output: string } {
-  const preload = path.join(tmpDir, 'fake-node-version.mjs');
-  // versions 是只读属性，需 defineProperty 覆盖
-  fs.writeFileSync(preload, `Object.defineProperty(process.versions, 'node', { value: ${JSON.stringify(version)}, configurable: true });\n`);
-
-  const r = spawnSync(process.execPath, ['--import', 'tsx', '--import', preload, ENTRY, ...args], {
-    encoding: 'utf8',
+function runAsNodeVersion(version: string, args: string[]) {
+  return guard.run(args, {
+    preload: {
+      name: 'fake-node-version.mjs',
+      // versions 是只读属性，需 defineProperty 覆盖
+      body: `Object.defineProperty(process.versions, 'node', { value: ${JSON.stringify(version)}, configurable: true });\n`,
+    },
     env: {
       ...process.env,
-      MIHOMO_CLI_DIR: path.join(tmpDir, 'data'),
-      MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(tmpDir)}`,
+      MIHOMO_CLI_DIR: path.join(guard.tmpDir, 'data'),
+      MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(guard.tmpDir)}`,
       NO_COLOR: '1',
     },
-    timeout: 30_000,
   });
-  return { status: r.status, output: `${r.stdout || ''}${r.stderr || ''}` };
 }
 
 describe('Node 版本守卫', () => {
@@ -74,12 +59,12 @@ describe('Node 版本守卫', () => {
     }
     // 豁免连副作用一起免：旧 Node 上跑 version 不该顺手建出数据目录
     //（守卫放行 ≠ 可以 ensureDirs，那与 root/非 macOS 下的是同一族缺陷）
-    assert.equal(fs.existsSync(path.join(tmpDir, 'data')), false, '豁免命令不得创建数据目录');
+    assert.equal(fs.existsSync(path.join(guard.tmpDir, 'data')), false, '豁免命令不得创建数据目录');
   });
 
   it('守卫先于 ensureDirs：被拒时不留下数据目录', () => {
     runAsNodeVersion('20.0.0', ['status']);
-    assert.equal(fs.existsSync(path.join(tmpDir, 'data')), false, '守卫晚于 ensureDirs 会在旧 Node 上先建出一套数据目录再报错');
+    assert.equal(fs.existsSync(path.join(guard.tmpDir, 'data')), false, '守卫晚于 ensureDirs 会在旧 Node 上先建出一套数据目录再报错');
   });
 
   it('满足下限时放行（不误伤当前支持的版本）', () => {

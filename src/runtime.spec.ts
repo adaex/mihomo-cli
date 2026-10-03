@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import type { RunningState } from './runtime.js';
+import { type FakeKernelLayout, killLeftovers, pollUntil, spawnFakeKernel, writeFakeKernelFiles } from './test-support/fake-kernel.js';
 
 // paths.ts / constants.ts 在 import 期求值 MIHOMO_CLI_DIR 与 MIHOMO_CLI_DAEMON_LABEL，
 // 故必须先设环境变量再动态 import（同 process-stop.spec.ts）。
@@ -46,42 +46,16 @@ describe('restartModeFor：重启模式取决于实际在跑的东西', () => {
   });
 });
 
-/** 桩「内核」：隔离目录 kernel/mihomo 位置的长睡脚本，命令行带真实 binary/config 路径 */
-function spawnFakeKernel(): number {
-  const child = spawn(PATHS.mihomoBinary, ['-d', DIRS.data, '-f', PATHS.configFile], {
-    detached: true,
-    stdio: 'ignore',
-  });
-  child.unref();
-  return child.pid as number;
-}
-
-/** 等 pid 文件指向的桩进程完成 exec、命令行能被 ps 读到（spawn 返回不代表已 exec） */
-function waitUntilRunning(timeoutMs = 3000): boolean {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (isRunning()) return true;
-    spawnSync('sleep', ['0.05']);
-  }
-  return isRunning();
-}
-
-/** 兜底清理：任何一条用例漏杀都不该把桩进程留在开发机上 */
-function killLeftovers(): void {
-  spawnSync('pkill', ['-9', '-f', MAIN_INSTANCE_PATTERN], { timeout: 5000 });
-}
+/** 桩内核布局：fake-kernel.ts 不静态 import paths（env 固化顺序），由这里传入 */
+const fakeKernel: FakeKernelLayout = { binary: PATHS.mihomoBinary, dataDir: DIRS.data, configFile: PATHS.configFile };
 
 before(() => {
-  fs.mkdirSync(DIRS.kernel, { recursive: true });
-  fs.mkdirSync(DIRS.runtime, { recursive: true });
-  fs.mkdirSync(DIRS.data, { recursive: true });
-  fs.writeFileSync(PATHS.mihomoBinary, '#!/bin/bash\nsleep 300\n', { mode: 0o755 });
   // 配置刻意不含 tun 字段：让 getRuntimeMode 的答案是 mixed——TUN 在跑时仍必须答 tun
-  fs.writeFileSync(PATHS.configFile, 'mixed-port: 7890\n');
+  writeFakeKernelFiles({ binaries: [PATHS.mihomoBinary], configFile: PATHS.configFile, dirs: [DIRS.data] });
 });
 
 after(() => {
-  killLeftovers();
+  killLeftovers(MAIN_INSTANCE_PATTERN);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -99,13 +73,16 @@ describe('restartModeOnChange：真实探测下的模式决策', () => {
   });
 
   it('TUN 在跑且配置无 tun 字段（getRuntimeMode 会答 mixed）→ 仍按 tun 重启', () => {
-    const pid = spawnFakeKernel();
+    const pid = spawnFakeKernel(fakeKernel);
     fs.writeFileSync(PATHS.pidFile, String(pid));
-    assert.ok(waitUntilRunning(), '桩内核应已运行');
+    assert.ok(
+      pollUntil(() => isRunning()),
+      '桩内核应已运行',
+    );
 
     assert.equal(restartModeOnChange(), 'tun');
 
-    killLeftovers();
+    killLeftovers(MAIN_INSTANCE_PATTERN);
     fs.rmSync(PATHS.pidFile, { force: true });
   });
 });

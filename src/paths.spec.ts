@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { DIRS, PATHS, USER_DATA_DIR, withFileLock } from './paths.js';
+import { runModule } from './test-support/cli.js';
 
 let tmpDir: string;
 /** 锁文件路径。withFileLock 收的就是锁本身（不再是被保护的数据文件 + 内部拼 .lock） */
@@ -474,11 +475,7 @@ const mode = p => (fs.statSync(p).mode & 0o777).toString(8);
 console.log('PLIST_MODE:' + mode(${JSON.stringify(path.join(dataDir, 'plist-like'))}));
 console.log('SECRET_MODE:' + mode(${JSON.stringify(path.join(dataDir, 'secret-like'))}));
 `;
-      const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code], {
-        encoding: 'utf8',
-        timeout: 30_000,
-        env: { ...process.env, MIHOMO_CLI_DIR: dataDir },
-      });
+      const r = runModule(code, dataDir, { timeout: 30_000 });
       assert.equal(r.status, 0, r.stderr);
       assert.match(r.stdout, /PLIST_MODE:644/, 'umask 077 下 0644 不得被掩蔽成 0600');
       assert.match(r.stdout, /SECRET_MODE:600/);

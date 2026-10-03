@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,6 +21,7 @@ import {
   resolveReleaseQuery,
   translateReleaseApiCurlError,
 } from './kernel.js';
+import { runModule } from './test-support/cli.js';
 import type { GitHubAsset, GitHubRelease } from './types.js';
 
 /** GitHub API 的 assets 按名称排序返回——fixture 顺序即 find() 的命中顺序，勿重排 */
@@ -604,17 +604,14 @@ exit 0
 `,
       );
       fs.chmodSync(path.join(fakeBin, 'gzip'), 0o755);
-      const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
-        encoding: 'utf8',
-        timeout: 30_000,
+      const r = runModule(script, dataDir, {
         env: {
-          ...process.env,
-          MIHOMO_CLI_DIR: dataDir,
           PATH: `${fakeBin}:${process.env.PATH}`,
           MIHOMO_TEST_CURL_BODY: opts.curlBody,
           MIHOMO_TEST_BINARY_CONTENT: opts.binaryContent,
           MIHOMO_TEST_CURL_MARKER: path.join(dataDir, 'curl-called'),
         },
+        timeout: 30_000,
       });
       assert.equal(r.status, 0, r.stderr);
       return { stdout: r.stdout, stderr: r.stderr, curlCalled: fs.existsSync(path.join(dataDir, 'curl-called')) };

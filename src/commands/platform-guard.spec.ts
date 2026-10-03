@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { describe, it } from 'node:test';
+
+import { setupGuardFixture } from '../test-support/guard.js';
 
 /**
  * 平台守卫的端到端回归（与 root-guard / node-guard 同一手法：子进程跑真实入口 + 预加载伪造环境）。
@@ -17,33 +16,19 @@ import { fileURLToPath } from 'node:url';
  * process.platform 是 getter，直接赋值静默失败（实测仍为 darwin），必须 defineProperty。
  */
 
-const SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
-const ENTRY = path.join(SRC_DIR, '..', 'index.ts');
-
-let tmpDir: string;
-
-beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-platformguard-'));
-});
-
-afterEach(() => {
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
+const guard = setupGuardFixture('mihomo-platformguard');
 
 /** 以伪造的非 macOS 平台跑 CLI。逃生阀 MIHOMO_CLI_ALLOW_ANY_PLATFORM 一律清掉，否则守卫整体失效 */
-function runOnPlatform(platform: string, args: string[], envOverride?: NodeJS.ProcessEnv): { status: number | null; output: string } {
-  const preload = path.join(tmpDir, `as-${platform}.mjs`);
-  fs.writeFileSync(preload, `Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)}, configurable: true });\n`);
-
-  const env = envOverride ?? { ...process.env, MIHOMO_CLI_DIR: path.join(tmpDir, 'data'), HOME: tmpDir };
+function runOnPlatform(platform: string, args: string[], envOverride?: NodeJS.ProcessEnv) {
+  const env = envOverride ?? { ...process.env, MIHOMO_CLI_DIR: path.join(guard.tmpDir, 'data'), HOME: guard.tmpDir };
   delete env.MIHOMO_CLI_ALLOW_ANY_PLATFORM;
-
-  const r = spawnSync(process.execPath, ['--import', 'tsx', '--import', preload, ENTRY, ...args], {
-    encoding: 'utf8',
+  return guard.run(args, {
+    preload: {
+      name: `as-${platform}.mjs`,
+      body: `Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)}, configurable: true });\n`,
+    },
     env,
-    timeout: 30_000,
   });
-  return { status: r.status, output: `${r.stdout || ''}${r.stderr || ''}` };
 }
 
 describe('平台守卫：非 macOS 下拒绝执行', () => {
@@ -59,7 +44,7 @@ describe('平台守卫：非 macOS 下拒绝执行', () => {
     // 不设 MIHOMO_CLI_DIR，以临时 HOME 直接验证豁免语义免掉的是副作用面：
     // 守卫放行 ≠ 可以顺手 ensureDirs，那会在非 macOS 的用户家目录留下数据目录
     for (const cmd of ['help', 'version', '-h', '-v']) {
-      const home = fs.mkdtempSync(path.join(tmpDir, 'home-'));
+      const home = fs.mkdtempSync(path.join(guard.tmpDir, 'home-'));
       const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
       delete env.MIHOMO_CLI_DIR;
       const { status } = runOnPlatform('linux', [cmd], env);
