@@ -1,5 +1,14 @@
 # Changelog
 
+## [26.10.105] - 2026-10-03
+
+### 变更（质量清理：测试基建单点化与白名单派生收单）
+
+- **测试基建单点化**：假内核轮询步进改用进程内 `Atomics.wait`（此前每个 50ms tick 都额外 fork 一个 `/bin/sleep` 子进程）；两份同构的轮询循环合一（`waitForPids` 委托 `pollUntil`）；「写桩 + chmod」三份副本（npm 桩、launchctl 桩）收进 test-support 新原语 `writeStubExecutable`
+- **start / ow / sub use 的选项白名单派生式收单**：三处各自复制的 `START_RESTART_FLAGS.flatMap(f => f.forms)` 改为 flags.ts 导出的 `START_RESTART_FLAG_FORMS`，与 `VALUE_FLAGS` 同范式，单表派生不再有表达式级拷贝
+- 补齐上轮样板收敛的两处漏网（subscription.spec 的子进程 spawnSync 形态），清理死参数、零消费选项与纯文案字段；process-start.spec 的存活桩改 `exec` 单进程形态，收尾 pid-kill 即杀净、不再依赖孤儿 sleep 自然过期。对用户无行为变化（946 用例全绿）
+
+
 ## [26.10.104] - 2026-10-03
 
 ### 变更（全仓冗余收敛：单表派生化与跨文档收口）
@@ -243,95 +252,3 @@
 - 删除 `withFileLock` 的 deadline 分支：过线后重新核对的还是循环顶部微秒前算过的同一个锁龄谓词，该分支永不产生行为差异；锁的心智模型回到「强夺唯一依据是锁龄」
 - 健康轮询（每 100ms 一次、最坏 31 轮）不再白跑 `print-disabled`：健康判定从不读 disabled 字段，`getServiceStatus` 新增 `withDisabled` 选项，轮询关闭该查询以减少阻塞事件循环的 spawnSync；循环外从未被消费的首次快照一并删除
 - 删除测试专用的第二合并入口 `deepMergeWithOverrides`，相关用例改走生产唯一入口 `applyOverwrite`
-
-## [26.9.94] - 2026-09-30
-
-### 破坏性变更（覆写执行顺序）
-
-- **JS 覆写脚本改为在全部 YAML 覆写之前执行**：旧顺序下脚本整体重建数组（如重组 `proxy-groups`）会把 YAML 前插的组抹到末尾、声明式微调失效；新管线是脚本（只看到订阅配置）→ YAML 声明式合并 → 剥系统锁定项，YAML 的 `+key` 前插永远落在脚本产出之后。依赖「脚本读到 YAML 注入项」的覆写需把那段逻辑并入脚本；段内排序规则不变，`mihomo ow` 列表编号同步翻转，系统锁定项边界不受影响（论证见 decisions.md D13）。
-
-## [26.9.93] - 2026-09-30
-
-### 破坏性变更（覆写 DSL 裁边）
-
-- **移除覆写操作符 `~key` / `~?key`（按 name 合并数组元素）与 `<key>` 尖括号转义**：`~` 是唯一「一句话说不清」的操作符（按 name 合并 + 「未命中追加/跳过」两态语义），历史上贡献过残缺分组事故；转义与配套的嵌套形似告警则服务不存在的键名形态。保留 `key!`（替换）、`+key`（前插）、`key+`（追加）三个纯数据操作符。**写这些旧形态现在直接报错并指向迁移路径，不会被静默当字面键名**。带条件的变换（按 name 找元素、改部分字段、找不到时跳过等）改用下面的 JS 脚本。
-- **`match` 的 `subscription` 同义键收掉**：只认 `name`（语义不变），写 `subscription` 报错指明改名。订阅名通配收窄为两种形态：尾部 `*`（前缀，`edu*`）与头部 `*`（后缀，`*edu`），其余（`?`、多 `*`、中间 `*`、单独 `*`）报错——通用 glob 匹配器已删（曾实测把 CLI 挂死 70 秒），复杂匹配写 JS 脚本。
-
-### 新增
-
-- **JS 覆写脚本**（主脚本 `overwrite.{js,mjs,cjs}`、扩展脚本 `overwrite.*.{js,mjs,cjs}`）：默认导出一个函数，就地修改订阅 + YAML 覆写合并后的配置，返回值忽略。`ctx` 提供 `subscription`（name/url/预解析 host）、`mode`（mixed/tun）与 `warn(message)`（提示进 status/doctor/config 的 warnings 通道）。约定：必须同步（返回 Promise 报错）、全信任不沙箱（同 `.zshrc`）、系统锁定项（端口/控制面/allow-lan 等）照样剥除并告警、`ow off` 全局开关同样管脚本、坏脚本与坏 YAML 文件同款姿态（诊断面「加载失败」可见、start/doctor 硬失败）。加载顺序：YAML 全部在前、脚本在后。
-- 迁移示例：原 `~?proxy-groups: [{name: Developer, default-selected: TW}]` 改为脚本 `(config['proxy-groups'] || []).find(g => g.name === 'Developer')` 后改字段、找不到 `ctx.warn` 跳过；原 `~proxies` 追加节点改 `'proxies+':`（数组追加）。README「覆写配置」章节已按新机制重写并附完整示例。
-
-### 移除
-
-- 删除 npm preuninstall 钩子设施（`scripts/preuninstall.mjs`、`lifecycle-script.spec.ts`、package.json 的钩子与 files 条目）：npm 11.19.0 实测三个卸载场景均不执行 uninstall 生命周期脚本，机制自始无效，与 v4.13.0 删补全子系统同一判据（设施规模与真实使用面不匹配）；README 卸载段早已不依赖该提醒。
-
-### 内部
-
-- CODE_REVIEW.md 从「历轮审查流水 + 现行边界」重组为纯现行边界文档（实测结论 / 未覆盖与待复核 / 已评估未采纳 / 自动化测试边界 / 平台实测备忘 / 流程教训六节）。367 行压到 121 行，流水里散落的现行结论（判定不修三项、原子写 fsync 的文件系统边界、文件锁 inode 缺口、订阅侧 `__proto__` 刻意不拦、remove 时序修复无自动化回归、pkill 自匹配对照实验、doctor 性能口径与网络取值不硬断言、顶层未知键无内核兜底、JSON stdout 契约、计时/负载/locale/spawnSync 死锁测试方法论）已并入对应节，历轮验证过程看 git 历史与当轮 CHANGELOG；release.md 的文档分工表与同步检查项、CLAUDE.md 的 Biome warn 级提醒同步更新。
-- 结构整理一批（无用户可见行为变化）：`utils.ts` 按领域拆分为 argv/format/suggest/text/kernel-args 模块；重大决策论证从 CLAUDE.md 分层到 `docs/decisions.md`（D1–D11）；源码注释瘦身（历史叙事归 CHANGELOG/decisions，注释只留判据与契约）；并发停止基线统一由 main() 命令入口捕获为进程状态（D2/D4，取代参数透传）；内核版本探测移除进程内缓存。
-
-## [26.9.92] - 2026-09-30
-
-### 修复
-
-- 两个终端同时 `mihomo start` 时，后到者不再报「启动服务失败（退出码 5）」——bootstrap 撞上先到者刚完成的任务时 launchctl 报 exit 5，与「disabled 标签」的报错完全同形（用户被指向错误的排查方向，服务实际健康在跑）；现在收到 exit 5 会复读服务装载状态，已装载按幂等成功处理，真失败（未装载）维持报错
-- `mihomo sub remove` 删除正在运行实例所使用的订阅时给出重启提示：此前 active 静默切到下一条订阅，运行中的内核仍服务已删除订阅的旧配置，用户看到「已自动切换到 X」会误以为代理已在用 X（add/update 早有同款提示，唯独 remove 漏了）
-- 覆写扩展文件的加载顺序不再随系统语言（locale）漂移：同一组文件在中文/英文机器上可能合并出不同的运行配置，全程静默；改为固定的码点序，并补了锁定用例
-- `https_proxy=http://0.0.0.0:7890`（及 `0:`、`[::]:` 等未指定地址族写法）现在能被识别为「指向本机自己的 Mixed 端口」并在启动/下载前清除——macOS 上这类地址实际路由到回环监听器，漏识别时重启内核后下载仍经已死的代理出网（与此前修的裸 localhost 同族漏网）
-- 订阅内容携带顶层 `__proto__` 键时 `mihomo config` 不再崩溃：此前脱敏副本的原型被静默换掉、键丢失，展示时抛裸异常按程序 bug 渲染
-- `mihomo ui` 在 ports 配置写坏（如两端口相同）时照常打开并打印降级文案，不再整个命令硬失败（status 对同一场景早有降级，UI 此前漏了）
-- `mihomo start tun` 检测到另一终端已启动 Mixed 服务时，不再先把在跑服务的日志搬去归档才拒绝——旧顺序下拒绝后 `logs 0` 会看不到服务的新日志（日志继续写进归档文件）
-- `mihomo reset <目标> --full` 同时给出时改为报错，不再静默忽略目标、扩成全量重置（本意多半是「彻底删这个目标」，被放大到删设置/内核/服务远超预期）
-- `mihomo reset config` 报「未知目标」——`config` 不再是 settings 的别名；它与 `mihomo config` 命令的运行配置直觉对撞，照原语义执行会删超预期的订阅列表/端口/密钥
-- `mihomo kernel --mirror=`（等号空值）与 `--mirror ""` 报错，不再静默按默认裸域处理（与 `--proxy=` 姿态对齐；裸 `--mirror` 语义不变）
-- 显式指定镜像的用户在版本查询失败时拿到可执行指引（检查代理 / gh 认证），不再只剩裸「更新失败」——提示压制条件本意是「别再建议镜像」，此前把真正的出路也一起吞了
-- 订阅更新时缓存写入失败（如 cache.json 被手改成目录）现在回滚刚写入的订阅文件并给出带标签的报错——此前报「更新失败」但新配置已落盘，回执与终态矛盾，且错误是无指引的裸系统报错
-- `install` 的 plist 暂存文件挪出运行时目录：安装期间另一终端 stop/reset 删除该目录会让安装以裸文件错误失败
-- 订阅缓存读取补齐 ENOENT 分支：并发删除间隙不再误报「格式损坏」（与 settings 的同族修复对齐）
-- 原子写遗留 `*.tmp` 的清扫挪到守卫与豁免判定之后、目录覆盖扩到根目录/subscriptions/runtime 三处（清扫是删除动作，不在被拒或豁免的命令上执行）
-
-### 调整
-
-- service.lock 内的 launchctl 调用统一单次超时 3s：并发 start 撞车的幂等处理给锁内新增了一次调用，最坏持锁时长按立项纪律压回强夺阈值（10s）以内——launchctl 响应慢于 3s 时快速失败并报错，不再持锁等待
-
-## [26.9.91] - 2026-09-30
-
-### 修复
-
-- `start tun` 补上对并发 `start` 的防线（此前只有 mixed 侧防「stop 被 start 覆盖」，反方向裸奔）：TUN 分支确认服务停着后立即递增停止计数——慢速阶段（订阅更新 + sudo 密码窗口最长 60s）里另一终端 `start` 会在锁内检出变化而放弃启动；`startTun` 执行含 pkill 的 sudo 脚本前再复核一次服务装载状态，检出即中止，否则脚本会杀掉刚起的服务内核、KeepAlive 拉回后与 root TUN 内核互抢端口。
-- 覆写文件写了 `match:` 但条件块缩进笔误（解析成空值）时不再静默全局生效，改为报错并给出正确写法——此前该文件会应用到**所有**订阅，笔误的垃圾键还进最终配置。
-- `https_proxy=localhost:7890`（无协议、localhost 形态）现在能被识别为「指向本机自己的 Mixed 端口」并在启动/下载前清除：curl 与 gh 都认这个形态的代理 env，漏识别时重启内核后下载仍经已死的代理出网，正是这段清除逻辑唯一要防的死锁。
-- 订阅缓存 cache.json 变成「合法 JSON 但不是对象」（如数组/数字）时先备份 `.bak` 再回退空缓存——与 settings.json 的既有处理对齐，此前下一次写缓存会把原件无声覆盖。
-- sudo 脚本改写在数据根目录而非 runtime/：runtime 会被 stop/reset 整体删除，密码窗口内脚本被连带删掉的话，用户输完密码后 sudo 执行不存在的文件，错误被误诊成「密码错误」。
-- 清理 root 属主 pid 文件的 sudo 分支超时对齐统一的 60s 并检查结果：此前自抄 10s，密码输得慢的用户提示被杀、删除从未执行且无人知晓。
-
-### 内部
-
-- 删除无消费者的 `StopResult.warning` 字段与探测 curl 恒不可达的 `--connect-timeout` 参数；CLAUDE.md 修正版本查询优先级描述（代理可用直接经代理）并补登 `system-proxy.ts` 模块行。
-
-### 修复（第二轮复审）
-
-- 覆写里出现 `__proto__` 键（无论嵌套层还是 `~key` 元素补丁）改为可读报错：此前它会静默把合并结果的原型换掉，写配置时抛带堆栈的裸异常、按程序 bug 渲染，用户无从定位源头。
-- `sub remove` 删原始配置文件挪到设置写盘成功之后（仍在同一锁内）：此前先删文件后写设置，磁盘满/权限失败时留下「条目还在、文件已没」的不一致。
-- 原子写补 fsync（临时文件 + rename 后父目录）：OS 崩溃/掉电时 settings.json 截断为空的窗口收窄到 fsync 返回之后（macOS 上普通 fsync 只刷页缓存，严格落盘需 F_FULLFSYNC，为已知边界）；崩溃遗留的 `*.tmp` 临时文件由每次命令执行时按龄清扫（数据根目录、订阅与运行时目录三处）。
-- `doctor` 的内核版本查询超时改为真正中止子进程（AbortSignal 透传 gh/curl/直连三路）：此前只弃掉等待，报告打完后进程还要等满子进程自身超时（最长约两分钟）才退出，CI 里体检结论已打印却拿不到退出码。
-- 覆写 `match` 的 `url-domain` 值含 `*`/`?` 时报错：它只做字面后缀比对，通配恒不命中，此前文件静默对任何订阅都不生效且零提示。
-- `mihomo kernel` 在 settings.ports 损坏时降级走 gh/直连（与 doctor/status 同姿态），不再在做任何下载前就中止。
-- `start tun` 的日志轮转挪到内核/配置存在性校验之后：秒失败错误不再先把日志 rename 成归档、留下运行中内核往归档文件写的错位。
-- 逐 pid 清理内核进程在发信号前复核命令行（`isMihomoProcess`）：pid 被复用时不再可能误杀无关进程，与批量 pkill 分支的安全性对齐。
-- `logs 0 -f -o` 报互斥错误：`-o` 打开系统查看器后 `-f` 无处生效，静默忽略会让用户以为在跟随刷新。
-- `sub add <url> ""` 报「订阅名不能为空」：不再静默把空串命名成 default（与其他命令对空串位置参数的处理对齐）。
-- settings.json 在并发 `reset` 间隙被删除时不再误报「格式损坏」。
-
-### 内部（第二轮）
-
-- `YAML_MAX_ALIASES` 收成共享常量（config/overwrite 两处解析共用）；`needsAutoUpdate` 与 `isSubscriptionStale` 对异常时间戳**刻意相反**的口径加用例锁死，防止重构合并去重时悄悄统一。
-
-## [26.9.90] - 2026-09-29
-
-版本号序号修正，无代码变化：26.9.37 的序号误取了当月发布计数，自本版起序号为**全局历史发布计数**（本版是第 90 个发布）。年.月 仍取发布当日日历，序号永不重置。26.9.37 已标记 deprecated，装到该版本执行 `mihomo update` 会直接升到本版。
-
----
-
-更早的发布记录（1.x–4.x，含误序的 26.9.37）已归档至 [docs/changelog/CHANGELOG-archive.md](docs/changelog/CHANGELOG-archive.md)，内容原样保留。
