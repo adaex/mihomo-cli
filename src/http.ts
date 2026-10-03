@@ -64,18 +64,16 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
         // 防 https→http 降级必须逐跳校验——fetch 默认静默跟随协议降级，只查最终地址
         // 挡不住「先降 http 再跳回 https」的中间明文 hop（订阅 URL 的 token 常被服务器
         // 保留在重定向查询串里，恰在要防的攻击形态下明文外泄）。本客户端只发 GET、
-        // 只带 UA 头，逐跳重发没有方法/头语义要补。内核下载走 curl --proto '=https' 有同等防线
-        // 逐跳请求形态只有一处真源（首跳与重发同源），加头/改选项不必同步两处
-        const manualFetch = (requestUrl: string) =>
-          fetch(requestUrl, {
+        // 只带 UA 头，逐跳重发没有方法/头语义要补；请求形态收在下方循环内单点。
+        // 内核下载走 curl --proto '=https' 有同等防线
+        let currentUrl = url;
+        let response: Response;
+        for (let hop = 0; ; hop++) {
+          response = await fetch(currentUrl, {
             signal,
             redirect: 'manual',
             headers: { 'User-Agent': `mihomo-cli/${VERSION}` },
           });
-        let currentUrl = url;
-        let response: Response;
-        for (let hop = 0; ; hop++) {
-          response = await manualFetch(currentUrl);
           if (!REDIRECT_STATUSES.has(response.status)) break;
           if (hop >= MAX_REDIRECTS) {
             throw new Error(`重定向次数超过 ${MAX_REDIRECTS}，已中止: ${maskUrl(url)}`);

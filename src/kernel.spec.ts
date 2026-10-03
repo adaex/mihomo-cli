@@ -22,6 +22,7 @@ import {
   translateReleaseApiCurlError,
 } from './kernel.js';
 import { runModule } from './test-support/cli.js';
+import { readStubCurlEnv, runWithEnvRecordingStubCurl, STUB_CURL_ENV_MARKER_ENV, stubCurlEnvRecordLines } from './test-support/stub-curl-env.js';
 import type { GitHubAsset, GitHubRelease } from './types.js';
 
 /** GitHub API 的 assets 按名称排序返回——fixture 顺序即 find() 的命中顺序，勿重排 */
@@ -438,42 +439,20 @@ describe('buildReleaseApiCurlArgs（代理路径的 release API 查询）', () =
 describe('checkUpdate 代理路径（curl spawn env 出口端到端）', () => {
   it("shell 注入 no_proxy='*' 时桩 curl 实见空串（例外表绕过 -x 的回归闸）", () => {
     // 反向验证锚点：getLatestRelease 的 curl spawn 若去掉 buildCurlSpawnEnv 接线，本用例转红
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-release-env-'));
-    const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-release-env-bin-'));
     const script = [
       `const { checkUpdate } = await import(${JSON.stringify(path.resolve('src/kernel.ts'))});`,
       "const r = await checkUpdate({ proxy: 'http://127.0.0.1:7890', useGh: false, currentVersion: 'v0.0.1' });",
       "console.log('LATEST:' + r.latest);",
     ].join('\n');
-    try {
-      fs.writeFileSync(
-        path.join(fakeBin, 'curl'),
-        `#!/bin/bash
-printf '%s' "\${no_proxy-__UNSET__}" > "$MIHOMO_TEST_CURL_ENV_MARKER.no_proxy"
-printf '%s' "\${NO_PROXY-__UNSET__}" > "$MIHOMO_TEST_CURL_ENV_MARKER.NO_PROXY"
-# 伪造 -w '\\n%{http_code}' 的输出形态：响应体 + 末行状态码
-printf '[{"tag_name":"v1.0.0","assets":[]}]\\n200'
-exit 0
-`,
-      );
-      fs.chmodSync(path.join(fakeBin, 'curl'), 0o755);
-      const r = runModule(script, dataDir, {
-        env: {
-          PATH: `${fakeBin}:${process.env.PATH}`,
-          MIHOMO_TEST_CURL_ENV_MARKER: path.join(dataDir, 'curl-env'),
-          no_proxy: '*',
-          NO_PROXY: '*',
-        },
-        timeout: 30_000,
-      });
-      assert.equal(r.status, 0, r.stderr);
-      assert.match(r.stdout, /LATEST:v1\.0\.0/);
-      assert.equal(fs.readFileSync(path.join(dataDir, 'curl-env.no_proxy'), 'utf8'), '');
-      assert.equal(fs.readFileSync(path.join(dataDir, 'curl-env.NO_PROXY'), 'utf8'), '');
-    } finally {
-      fs.rmSync(dataDir, { recursive: true, force: true });
-      fs.rmSync(fakeBin, { recursive: true, force: true });
-    }
+    const r = runWithEnvRecordingStubCurl({
+      driverScript: script,
+      // 伪造 -w '\\n%{http_code}' 的输出形态：响应体 + 末行状态码
+      curlPrintfFormat: '[{"tag_name":"v1.0.0","assets":[]}]\\n200',
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /LATEST:v1\.0\.0/);
+    assert.equal(r.env.noProxy, '');
+    assert.equal(r.env.noProxyUpper, '');
   });
 });
 
@@ -638,8 +617,7 @@ describe('downloadKernel：下载后完整性闸门（子进程 + PATH 桩 curl/
         path.join(fakeBin, 'curl'),
         `#!/bin/bash
 printf '' > "$MIHOMO_TEST_CURL_MARKER"
-printf '%s' "\${no_proxy-__UNSET__}" > "$MIHOMO_TEST_CURL_ENV_MARKER.no_proxy"
-printf '%s' "\${NO_PROXY-__UNSET__}" > "$MIHOMO_TEST_CURL_ENV_MARKER.NO_PROXY"
+${stubCurlEnvRecordLines}
 out=""; prev=""
 for a in "$@"; do
   if [ "$prev" = "-o" ]; then out="$a"; fi
@@ -665,23 +643,18 @@ exit 0
           MIHOMO_TEST_CURL_BODY: opts.curlBody,
           MIHOMO_TEST_BINARY_CONTENT: opts.binaryContent,
           MIHOMO_TEST_CURL_MARKER: path.join(dataDir, 'curl-called'),
-          MIHOMO_TEST_CURL_ENV_MARKER: path.join(dataDir, 'curl-env'),
+          [STUB_CURL_ENV_MARKER_ENV]: path.join(dataDir, 'curl-env'),
           // 模拟用户 shell export 过的例外表：curl spawn 不经统一出口置空就会绕过 -x
           ...(opts.injectNoProxyStar ? { no_proxy: '*', NO_PROXY: '*' } : {}),
         },
         timeout: 30_000,
       });
       assert.equal(r.status, 0, r.stderr);
-      // 白名单用例里桩 curl 不会被调用（marker 不存在），按 __UNSET__ 哨兵返回
-      const envMarker = (suffix: string) => {
-        const f = path.join(dataDir, `curl-env.${suffix}`);
-        return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '__UNSET__';
-      };
       return {
         stdout: r.stdout,
         stderr: r.stderr,
         curlCalled: fs.existsSync(path.join(dataDir, 'curl-called')),
-        curlEnv: { noProxy: envMarker('no_proxy'), noProxyUpper: envMarker('NO_PROXY') },
+        curlEnv: readStubCurlEnv(dataDir),
       };
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });

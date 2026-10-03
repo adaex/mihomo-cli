@@ -23,12 +23,9 @@ function printRestartHintIfRunning(variant: 'update' | 'removed-active' | 'remov
   if (!state.running) return;
   const hintCommand = runtime.startCommandForCurrentMode(state);
   // 删除类的两个分支共用前缀；后缀按「有没有可切换的新订阅」分档
+  const removedSuffix = variant === 'removed-last' ? `（订阅已全部删除），重新添加订阅后执行 ${hintCommand}` : `，执行 ${hintCommand} 切换到新订阅`;
   const message =
-    variant === 'update'
-      ? `提示: 运行中的实例仍使用旧配置，执行 ${hintCommand} 使更新生效`
-      : `提示: 运行中的实例仍在使用已删除订阅的配置${
-          variant === 'removed-active' ? `，执行 ${hintCommand} 切换到新订阅` : `（订阅已全部删除），重新添加订阅后执行 ${hintCommand}`
-        }`;
+    variant === 'update' ? `提示: 运行中的实例仍使用旧配置，执行 ${hintCommand} 使更新生效` : `提示: 运行中的实例仍在使用已删除订阅的配置${removedSuffix}`;
   console.log(colors.yellow(message));
   console.log('');
 }
