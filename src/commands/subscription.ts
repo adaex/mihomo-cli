@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 
 import { assertKnownFlags, assertPositionalCount, assertRestartOptionValues, getNonFlagArg, hasFlag } from '../argv.js';
 import { colors } from '../colors.js';
-import { CliError } from '../errors.js';
+import { CliError, relabelCliError } from '../errors.js';
 import { START_RESTART_FLAG_FORMS as USE_FLAGS } from '../flags.js';
 import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic } from '../format.js';
 import * as runtime from '../runtime.js';
@@ -16,16 +16,18 @@ import { confirmOrThrow, confirmPrompt, dispatchSubcommand, restartToApply, type
  * 提示的命令须与 restartToApply 选出的重启模式一致：TUN 在跑时裸 start 默认 Mixed，
  * 用户照提示执行会把全局路由静默切走——与「配置变更按原模式重启」是同一判据的两面。
  * variant：变更形态。remove 删除当前订阅时运行中的内核还在服务**已删除订阅**的配置、
- * 当前订阅已静默切走，用户看到「已自动切换到 X」会误以为代理已在用 X——必须提示，
- * 复用这里同一重启命令判据，不另写一份 */
-function printRestartHintIfRunning(variant: 'update' | 'removed-active' = 'update'): void {
+ * 当前订阅已静默切走，用户看到「已自动切换到 X」会误以为代理已在用 X——必须提示；
+ * 删的是最后一个订阅时没有「新订阅」可切，指引改为先重新添加。复用同一重启命令判据 */
+function printRestartHintIfRunning(variant: 'update' | 'removed-active' | 'removed-last' = 'update'): void {
   const state = runtime.getRunningState();
   if (state.running) {
     const hintCommand = runtime.startCommandForCurrentMode(state);
     const message =
       variant === 'removed-active'
         ? `提示: 运行中的实例仍在使用已删除订阅的配置，执行 ${hintCommand} 切换到新订阅`
-        : `提示: 运行中的实例仍使用旧配置，执行 ${hintCommand} 使更新生效`;
+        : variant === 'removed-last'
+          ? `提示: 运行中的实例仍在使用已删除订阅的配置（订阅已全部删除），重新添加订阅后执行 ${hintCommand}`
+          : `提示: 运行中的实例仍使用旧配置，执行 ${hintCommand} 使更新生效`;
     console.log(colors.yellow(message));
     console.log('');
   }
@@ -149,8 +151,8 @@ async function subAdd(args: string[]): Promise<void> {
   } catch (e) {
     // 下载失败回滚：不留"已入库但无配置"的半成品订阅（否则 start 会直接报错）
     removeSubscription(name);
-    // 保留原 CliError 的 hint（如订阅无效时服务端返回的原因），仅换标签
-    if (e instanceof CliError) throw new CliError(e.message, { label: '添加失败', hint: e.hint });
+    // 保留原 CliError 的 hint 与退出码（如订阅无效时服务端返回的原因），仅换标签
+    if (e instanceof CliError) throw relabelCliError(e, { label: '添加失败' });
     throw new CliError((e as Error).message, { label: '添加失败' });
   }
   console.log('');
@@ -295,6 +297,10 @@ async function subRemove(args: string[]): Promise<void> {
     }
   }
 
+  // 删的是不是当前订阅要在删除前看：removeSubscription 的 switchedTo 只在有剩余订阅
+  // 可切换时非空，删最后一个活跃订阅时它是 null——按它判会把「运行中的内核仍在服务
+  // 已删除订阅旧配置」的提示整个吞掉
+  const wasActive = subscription.getActiveSubscription()?.name === target.name;
   const { found, switchedTo } = removeSubscription(target.name);
   // 并发删除下 found=false：什么都没删还报「已删除」违反「成功要有独立结果依据」
   if (!found) {
@@ -303,8 +309,11 @@ async function subRemove(args: string[]): Promise<void> {
   console.log(`已删除订阅 "${target.name}"`);
   if (switchedTo) {
     console.log(`已自动切换到 "${switchedTo}"`);
-    // 删的是当前订阅：运行中的内核仍在服务已删除订阅的旧配置（add/update 同款缺口）
-    printRestartHintIfRunning('removed-active');
+  }
+  if (wasActive) {
+    // 删的是当前订阅：运行中的内核仍在服务已删除订阅的旧配置（add/update 同款缺口）。
+    // switchedTo 为空即删的是最后一个订阅——没有可切换的目标，指引改为先重新添加
+    printRestartHintIfRunning(switchedTo ? 'removed-active' : 'removed-last');
   }
 
   console.log('');

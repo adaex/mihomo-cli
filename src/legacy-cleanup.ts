@@ -129,11 +129,13 @@ export async function cleanupKernelsOrThrow(ctx: RootResidueCleanupContext): Pro
 export function buildLegacyCleanupScript(): string {
   return [
     '#!/bin/bash',
-    // bootout 退出码分级：113=未装载（daemon 已不在，正常），其余是真实失败，
-    // 不能 || true 吞掉后照样 rm plist 报「已清理」
+    // bootout 退出码分级：113=未装载（daemon 已不在，正常）；3 同为「未装载」的实测
+    // 形态（service.ts 的 bootoutService 两个码都收下，这里漏收 3 会在 daemon 已
+    // 不存在时硬失败、阻断整个清理）。其余是真实失败，不能 || true 吞掉后照样 rm
+    // plist 报「已清理」
     `bootout_code=0`,
     `launchctl bootout ${shellQuote(`system/${SERVICE_LABEL}`)} 2>/dev/null || bootout_code=$?`,
-    `if [ $bootout_code -ne 0 ] && [ $bootout_code -ne 113 ]; then`,
+    `if [ $bootout_code -ne 0 ] && [ $bootout_code -ne 3 ] && [ $bootout_code -ne 113 ]; then`,
     `  echo "launchctl bootout 失败（退出码 $bootout_code）" >&2`,
     `  exit 3`,
     `fi`,

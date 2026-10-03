@@ -34,6 +34,16 @@ export class CliError extends Error {
 }
 
 /**
+ * 再包装既有 CliError（追加 hint / 换 label）的唯一出口：exitCode 随原错误透传。
+ * 手写 `new CliError(e.message, { label, hint })` 会把 exitCode 静默重置成 1——
+ * 带非默认退出码的错误（update 透传 npm 退出码）流经再包装就丢失，脚本消费方
+ * 把失败归类错。所有再包装点一律走这里，丢字段在结构上不可能发生。
+ */
+export function relabelCliError(e: CliError, options: { label?: string; hint?: string[] }): CliError {
+  return new CliError(e.message, { label: options.label ?? e.label, hint: options.hint ?? e.hint, exitCode: e.exitCode });
+}
+
+/**
  * 任意抛出物的消息文本：Error 取 message，其余（`throw 'str'` / 42 / undefined）
  * 按 String() 兜底。uncaughtException / unhandledRejection / main().catch 共用同一
  * 口径，非 Error 抛出也要渲染出可用信息而不是「…: undefined」。

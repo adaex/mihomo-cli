@@ -147,9 +147,9 @@ export function getPorts(settings: Settings = readSettings()): { mixed: number; 
  * 之前被坏设置挡住；非法值本身由 doctor 的「端口配置」检查项单独报出。
  * 两个端口的失败面绑定（同一次校验），不设两个各自 try/catch 的出口
  */
-export function getPortsOrNull(): { mixed: number; controller: number } | null {
+export function getPortsOrNull(settings: Settings = readSettings()): { mixed: number; controller: number } | null {
   try {
-    return getPorts();
+    return getPorts(settings);
   } catch {
     return null;
   }
@@ -400,7 +400,17 @@ export function removeSubscriptionRawConfig(subName: string): void {
 export function readSubscriptionRawConfig(subName: string): string | null {
   const filePath = getSubscriptionRawConfigPath(subName);
   if (!fs.existsSync(filePath)) return null;
-  return fs.readFileSync(filePath, 'utf8');
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch (e) {
+    // existsSync 与 readFileSync 之间被并发删除（另一终端 sub remove 的 postCommit /
+    // reset subs 整目录删除）：与 readSettings/readSubscriptionCache 对 ENOENT 的
+    // 处置同款，「文件没了」是正常形态，回退 null 走「没有本地配置」指引，
+    // 不让裸 ENOENT 意外错误击穿命令；EISDIR（同名目录）同理归「不可用」
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'EISDIR') return null;
+    throw e;
+  }
 }
 
 /**

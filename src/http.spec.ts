@@ -105,14 +105,16 @@ describe('createHttpClient：4xx 诊断与降级守卫行为', () => {
     assert.deepEqual(response.data, { ok: true });
   });
 
-  // 本地无证书无法端到端构造 https→http 重定向，用桩 fetch 固定守卫分支的输入
-  it('https→http 降级守卫的错误消息脱敏（token 常被服务器保留在重定向查询串里）', async () => {
+  // 本地无证书无法端到端构造 https→http 重定向，用桩 fetch 固定守卫分支的输入。
+  // 桩成 302 跳 http：逐跳守卫在**第一段明文 hop** 即拒绝——「先降 http 再跳回 https」
+  // 的链条（最终地址是 https、只查最终 URL 的旧守卫放行）同样在这里被拦下
+  it('https→http 降级守卫逐跳拦截且错误消息脱敏（token 常被服务器保留在重定向查询串里）', async () => {
     const originalFetch = globalThis.fetch;
     const fakeResponse = {
-      url: 'http://mirror.example.com/dl?token=SECRETTOKEN1234567890',
-      ok: true,
-      status: 200,
-      headers: new Headers(),
+      url: 'https://airport.example.com/sub?token=SECRETTOKEN1234567890',
+      ok: false,
+      status: 302,
+      headers: new Headers({ location: 'http://mirror.example.com/dl?token=SECRETTOKEN1234567890' }),
     };
     globalThis.fetch = (async () => fakeResponse) as unknown as typeof fetch;
     try {
@@ -120,11 +122,31 @@ describe('createHttpClient：4xx 诊断与降级守卫行为', () => {
       await assert.rejects(client.get('https://airport.example.com/sub?token=SECRETTOKEN1234567890'), e => {
         const message = (e as Error).message;
         assert.match(message, /非 https/);
-        // 错误消息若原样带最终 URL，恰在本守卫要防的攻击形态（降级重定向）下泄漏 token
+        // 错误消息若原样带降级地址，恰在本守卫要防的攻击形态（降级重定向）下泄漏 token
         assert.doesNotMatch(message, /SECRETTOKEN1234567890/);
         assert.match(message, /token=\*\*\*/);
         return true;
       });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('重定向环在超过上限时中止，不会顶满超时预算干等', async () => {
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    // 每一跳都回到同一段 https 地址（合法且不降级），永不终止
+    globalThis.fetch = (async () => {
+      calls++;
+      return { url: 'https://loop.example.com/hop', ok: false, status: 302, headers: new Headers({ location: 'https://loop.example.com/hop' }) };
+    }) as unknown as typeof fetch;
+    try {
+      const client = createHttpClient({ timeout: 60_000 });
+      await assert.rejects(client.get('https://loop.example.com/start'), e => {
+        assert.match((e as Error).message, /重定向次数超过 20/);
+        return true;
+      });
+      assert.ok(calls <= 21, `跟随次数应被上限截断（实际 fetch 调用 ${calls} 次）`);
     } finally {
       globalThis.fetch = originalFetch;
     }

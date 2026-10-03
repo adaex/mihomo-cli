@@ -5,6 +5,9 @@ import type { HttpClient, HttpClientOptions, HttpResponse } from './types.js';
 
 /** HTTP 响应体大小上限（50MB）：订阅/内核产物远小于此，超限视为异常（劫持/故障）并中止，防 OOM。 */
 const MAX_RESPONSE_BYTES = 50 * 1024 * 1024;
+
+/** 手动跟随重定向的上限（浏览器同值）：不设上限的环/长链会顶满 timeout 前的整段预算 */
+const MAX_REDIRECTS = 20;
 /**
  * 错误响应体只读取用于诊断的前缀（64KB）。错误体不参与业务解析，
  * 必须限量读入——!ok 分支若直接 await response.json() 会完全绕过大小上限，
@@ -54,16 +57,36 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
       const timer = setTimeout(() => controller.abort(), timeout);
       const signal = config?.signal ? AbortSignal.any([controller.signal, config.signal]) : controller.signal;
       try {
-        const response = await fetch(url, {
+        // 手动逐跳跟随重定向（Node fetch 的 manual 模式可见 Location 头）：
+        // 防 https→http 降级必须逐跳校验——fetch 默认静默跟随协议降级，只查最终地址
+        // 挡不住「先降 http 再跳回 https」的中间明文 hop（订阅 URL 的 token 常被服务器
+        // 保留在重定向查询串里，恰在要防的攻击形态下明文外泄）。本客户端只发 GET、
+        // 只带 UA 头，逐跳重发没有方法/头语义要补。内核下载走 curl --proto '=https' 有同等防线
+        let currentUrl = url;
+        let response = await fetch(currentUrl, {
           signal,
+          redirect: 'manual',
           headers: { 'User-Agent': `mihomo-cli/${VERSION}` },
         });
-        // 防 https→http 降级重定向：fetch 默认静默跟随协议降级，
-        // 订阅配置等敏感内容明文传输可被 MITM 替换。内核下载走 curl --proto =https 有同等防线。
-        if (isHttpsUrl(url) && !isHttpsUrl(response.url)) {
-          // response.url 是重定向后的最终地址：订阅 URL 的 token 常被服务器保留在
-          // 重定向查询串里——恰在本守卫要防的攻击形态下泄漏，错误消息必须脱敏
-          throw new Error(`请求被重定向到非 https 地址（${maskUrl(response.url)}），已拒绝`);
+        for (let hop = 0; [301, 302, 303, 307, 308].includes(response.status); hop++) {
+          if (hop >= MAX_REDIRECTS) {
+            throw new Error(`重定向次数超过 ${MAX_REDIRECTS}，已中止: ${maskUrl(url)}`);
+          }
+          const location = response.headers.get('location');
+          // 无 Location 的 3xx：fetch 自动跟随同样到此为止，按最终响应处理
+          if (!location) break;
+          const nextUrl = new URL(location, currentUrl).toString();
+          if (isHttpsUrl(url) && !isHttpsUrl(nextUrl)) {
+            // 错误消息必须脱敏：降级地址的查询串里常带着订阅 token
+            throw new Error(`请求被重定向到非 https 地址（${maskUrl(nextUrl)}），已拒绝`);
+          }
+          await response.body?.cancel().catch(() => undefined);
+          currentUrl = nextUrl;
+          response = await fetch(currentUrl, {
+            signal,
+            redirect: 'manual',
+            headers: { 'User-Agent': `mihomo-cli/${VERSION}` },
+          });
         }
         if (!response.ok) {
           let text = '';

@@ -92,7 +92,11 @@ async function collectChecks(): Promise<Check[]> {
     proxyPort: kernelProxyPort,
     proxyOverride: null,
   });
-  const kernelVersionPromise: Promise<KernelUpdateInfo | null> = kernelProbe
+  // 失败原因要带进跳过项（catch 保留 Error 而非折叠成 null）：checkUpdate 的失败不只有
+  // 网络一类——「全部是预发行版」「响应不是合法 JSON」「未找到 curl」都曾真实发生，
+  // 一律渲染成「GitHub 不可达」会把数据形态/缺依赖问题误导成网络问题，体检恰恰是
+  // 干诊断的。超时（withAbortableTimeout 的 abort，name 为 AbortError）仍按不可达说
+  const kernelVersionPromise: Promise<KernelUpdateInfo | Error | null> = kernelProbe
     ? withAbortableTimeout(
         signal =>
           checkUpdate({
@@ -102,7 +106,7 @@ async function collectChecks(): Promise<Check[]> {
             currentVersion: getKernelVersion(kernelProbe),
           }),
         4_000,
-      ).catch(() => null)
+      ).catch((e: unknown) => (e instanceof Error ? e : null))
     : Promise.resolve(null);
 
   // === 内核 ===
@@ -284,8 +288,12 @@ async function collectChecks(): Promise<Check[]> {
   // 与 CLI 版本同结构：查询在函数开头发起、此处收口。未装内核时「内核」项已 fail，
   // 不再重复列版本；GitHub 不可达/超时 skip（内核更新不是本机体检能解决的问题）
   const kernelInfo = await kernelVersionPromise;
-  if (hasKernel() && kernelInfo === null) {
-    push('内核版本', 'skip', 'GitHub 不可达，跳过检查');
+  if (hasKernel() && (kernelInfo === null || kernelInfo instanceof Error)) {
+    const reason = kernelInfo instanceof Error && kernelInfo.name !== 'AbortError' ? `（${kernelInfo.message.split('\n')[0]}）` : '';
+    push('内核版本', 'skip', `GitHub 不可达，跳过检查${reason}`);
+  } else if (kernelInfo instanceof Error) {
+    // 理论不可达（查询仅在装了内核时发起）：保守起见不把 Error 漏进 needsUpdate 分支
+    push('内核版本', 'skip', `跳过检查（${kernelInfo.message.split('\n')[0]}）`);
   } else if (kernelInfo?.needsUpdate) {
     push('内核版本', 'warn', `当前 ${kernelInfo.current}，最新 ${kernelInfo.latest}`, 'mihomo-cli kernel');
   } else if (kernelInfo) {

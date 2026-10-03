@@ -142,15 +142,22 @@ export async function printStatus(args: string[] = []): Promise<void> {
   // 脚本没有 match 声明，静态判不了命中；有活跃订阅且目录里有脚本时，用订阅缓存
   // 正文跑一遍判定（judgeScriptMatches：复用上面同一次读目录的 entries、坏文件
   // 不抛——D7 判定旁路；无脚本时跳过，不为空判定白跑一次订阅解析）。无缓存/
-  // 解析失败按「未判定」处理（matched 留 undefined，与无订阅时的语义一致）
+  // 解析失败按「未判定」处理（matched 留 undefined，与无订阅时的语义一致）。
+  // 手改 settings.json 写入非法订阅名时 readSubscriptionRawConfig 的路径防御会抛
+  // CliError——富化是展示附加信息，不能让它击穿整个 status（doctor 同款姿态，
+  // 坏状态留给专门的检查项去报），按「未判定」跳过
   if (activeSub && overwriteEnabled && overwriteFiles.some(f => f.kind === 'script')) {
-    const rawContent = readSubscriptionRawConfig(activeSub.name);
-    if (rawContent) {
-      const { matches } = judgeScriptMatches(rawContent, deriveRuntimeMode(info), { subName: activeSub.name, subUrl: activeSub.url }, overwriteEntries);
-      const matchedByName = new Map(matches.map(m => [m.file, m.matched]));
-      for (const f of overwriteFiles) {
-        if (f.kind === 'script' && matchedByName.has(f.name)) f.matched = matchedByName.get(f.name);
+    try {
+      const rawContent = readSubscriptionRawConfig(activeSub.name);
+      if (rawContent) {
+        const { matches } = judgeScriptMatches(rawContent, deriveRuntimeMode(info), { subName: activeSub.name, subUrl: activeSub.url }, overwriteEntries);
+        const matchedByName = new Map(matches.map(m => [m.file, m.matched]));
+        for (const f of overwriteFiles) {
+          if (f.kind === 'script' && matchedByName.has(f.name)) f.matched = matchedByName.get(f.name);
+        }
       }
+    } catch {
+      /* 富化失败按未判定处理，不拦 status */
     }
   }
   const cached = activeSub ? getSubscriptionsWithCache().find(s => s.name === activeSub.name) : undefined;

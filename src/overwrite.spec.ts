@@ -97,6 +97,15 @@ describe('互斥操作符与空键：合并层显式报错，不静默按分支�
     );
   });
 
+  for (const key of ['++rules', 'rules++']) {
+    it(`"${key}" 残留 + → 报操作符位置矛盾，不静默当字面键 ${parseOverrideKey(key).key}`, () => {
+      assert.throws(
+        () => mergeOnce({ rules: ['A'], dns: {} }, { [key]: ['x'] }),
+        e => e instanceof CliError && /操作符位置矛盾/.test(e.message),
+      );
+    });
+  }
+
   it('合法的单一操作符不被误伤', () => {
     assert.doesNotThrow(() => mergeOnce({ rules: [] }, { '+rules': ['x'] }));
     assert.doesNotThrow(() => mergeOnce({ rules: [] }, { 'rules+': ['x'] }));
@@ -529,6 +538,10 @@ describe('文件级操作符校验：诊断路径与合并路径看到同一份�
 
   it('rules!+（操作符位置矛盾）加载失败，不静默按字面键 rules! 放行', () => {
     assertBrokenOnBothPaths('overwrite.rules.yaml', 'rules!+:\n  - x\n', /操作符位置矛盾/);
+  });
+
+  it('++secret（残留 +）加载即报错，不静默落成字面键绕过锁定键告警', () => {
+    assertBrokenOnBothPaths('overwrite.secret.yaml', '++secret: x\n', /操作符位置矛盾/);
   });
 
   it('log-level+（系统默认值是标量）加载失败并给改写指引（不静默产出数组）', () => {

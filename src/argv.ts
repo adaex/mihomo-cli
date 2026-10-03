@@ -36,9 +36,11 @@ export function assertKnownFlags(args: string[] | undefined, known: readonly str
     if (match && match.form !== 'exact' && knownSet.has(match.baseForm)) continue;
     // 白名单为空的命令（dir/stop 等不接受任何选项）不打「可用选项: 」——
     // 那会渲染成空列表，看着像是工具自己没填上。改说「该命令不接受任何选项」。
-    // `-h`/`--help` 单独点一句：它俩是顶层 help 的别名、命令级并不接受，用户很自然会试
+    // `-h`/`--help` 单独点一句：它只在紧跟命令名的位置生效（index.ts 的命令级帮助
+    // 拦截），出现在别处（`start -s -h`、`sub use -h`）才走到这里——只说「顶层可用」
+    // 会把存在命令级帮助这件事说没了，用户被引去翻综合帮助
     const isHelpFlag = a === '-h' || a === '--help';
-    const helpNote = isHelpFlag ? ['', `${a} 只在顶层可用，命令用法见: mihomo-cli help`] : [];
+    const helpNote = isHelpFlag ? ['', `${a} 要紧跟命令名才显示该命令的帮助（例: mihomo-cli start ${a}）；综合帮助: mihomo-cli help`] : [];
     // 单横线 + 多字符（`-name`、`-my-sub`）走到这里不是任何本命令选项形态：用户极可能
     // 是在填名称位置写了 `-` 开头（订阅名/文件名 argv 一律当选项拦）。判据取「本命令
     // 不带任何带值选项」——有带值选项时 `-n200`/`-u30000` 这类 attached 误用更可能是

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { assertKnownFlags, assertPositionalCount } from '../argv.js';
 import { colors } from '../colors.js';
 import { assertKernelInstalled } from '../config.js';
-import { CliError } from '../errors.js';
+import { CliError, relabelCliError } from '../errors.js';
 import { PATHS } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
 import { MANUAL_PKILL_HINT } from '../process-stop.js';
@@ -90,8 +90,7 @@ export async function cmdInstall(args: string[]): Promise<void> {
         printRestoreSkipped();
         return;
       }
-      throw new CliError(e.message, {
-        label: e.label,
+      throw relabelCliError(e, {
         hint: [...e.hint, '', '服务已安装成功，仅恢复运行失败；修正配置后可执行 mihomo-cli start 重试。'],
       });
     }

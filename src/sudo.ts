@@ -83,8 +83,11 @@ export function runSudoScript(scriptBody: string, opts: SudoScriptOptions): void
   // 迁到了根目录），而脚本写入到 sudo 执行之间隔着密码窗口（最长 SUDO_TIMEOUT_MS），
   // 期间并发的 stop/reset 会连脚本一起删掉——用户输完密码后 sudo 执行一个不存在的
   // 文件，错误被误诊成「密码错误」或「启动失败 127」，指向完全错的排查方向。
-  // 根目录属主是用户自己，固定文件名 + 用后即删，残留会被同动作的下一次覆盖
-  const scriptPath = path.join(USER_DATA_DIR, opts.file);
+  // 根目录属主是用户自己；文件名带 pid——两个终端并发跑同一动作（双 `mh tun`）时，
+  // 固定名会让 B 的覆写 + A 的 finally unlink 把 B 的 sudo 指向不存在的路径，密码
+  // 正确却报「已取消或密码错误」。`.tmp` 后缀让崩溃残留（写后未及 unlink）落进
+  // cleanupStaleTmpFiles 的按龄清扫，不用等下一次同动作覆盖
+  const scriptPath = path.join(USER_DATA_DIR, `${opts.file}.${process.pid}.tmp`);
   fs.writeFileSync(scriptPath, scriptBody, { mode: 0o700 });
   // writeFileSync 的 mode 只在**创建新文件**时生效：前次崩溃残留的同名文件会保留
   // 其原有权限位（实测重写 0666 文件后仍是 0666），而本文件下一步就交给 sudo 执行。

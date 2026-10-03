@@ -301,8 +301,21 @@ export async function downloadSubscription(url: string, subName = 'default', sig
 /** 构建配置并交给内核校验；不替换现有 config.yaml，不停止正在运行的内核 */
 export async function prepareConfigForStart(mode: RuntimeMode, subName = 'default'): Promise<PreparedConfig> {
   // 条目还在、文件没了（手动删除/外部清理）→ 指引重新下载：守卫收口在
-  // requireSubscriptionRawConfig（与 config/doctor 同口径，三处不出现两个方向）
-  const rawContent = requireSubscriptionRawConfig(subName);
+  // requireSubscriptionRawConfig（与 config/doctor 同口径，三处不出现两个方向）。
+  // 例外：subName 来自命令入口的快照，本函数之前的自动更新窗口（约 10s）里条目
+  // 可能已被并发删除——照「有条目但没有本地配置文件」报错会指引一条必败的修复
+  // 路径（sub update <已不存在的名字>），复读现值分档成「已被移除」
+  let rawContent: string;
+  try {
+    rawContent = requireSubscriptionRawConfig(subName);
+  } catch (e) {
+    if (e instanceof CliError && !getSubscriptions().some(s => s.name === subName)) {
+      throw new CliError(`订阅 "${subName}" 已在启动过程中被移除（可能另一终端执行了 sub remove/reset）`, {
+        hint: ['查看当前列表: mihomo-cli sub', '确认后重试: mihomo-cli start'],
+      });
+    }
+    throw e;
+  }
 
   const subUrl = getSubscriptions().find(s => s.name === subName)?.url;
   const buildResult = buildConfig(rawContent, mode, { subName, subUrl });

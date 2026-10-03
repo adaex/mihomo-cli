@@ -1,8 +1,8 @@
 import { assertKnownFlags, assertPositionalCount, getNonFlagArg, hasFlag, parseIntArg } from '../argv.js';
 import { colors } from '../colors.js';
 import { assertKernelInstalled, runtimeModeLabel } from '../config.js';
-import { DEFAULT_AUTO_UPDATE_TIMEOUT } from '../constants.js';
-import { CliError } from '../errors.js';
+import { DEFAULT_AUTO_UPDATE_TIMEOUT, DEFAULT_MIXED_PORT } from '../constants.js';
+import { CliError, relabelCliError } from '../errors.js';
 import { START_RESTART_FLAG_FORMS as START_FLAGS } from '../flags.js';
 import * as runtime from '../runtime.js';
 import {
@@ -14,7 +14,7 @@ import {
   recordServiceStopped,
   tunBlockedByRunningService,
 } from '../service.js';
-import { getPorts } from '../settings.js';
+import { getPortsOrNull } from '../settings.js';
 import * as subscription from '../subscription.js';
 import { printSystemProxyHint } from '../system-proxy.js';
 import type { PreparedConfig, RuntimeMode } from '../types.js';
@@ -122,39 +122,48 @@ export async function cmdStart(args: string[]): Promise<void> {
     });
   }
 
-  const sub = subscription.requireActiveSubscription();
+  // 自启位被 TUN 分支关掉后，此后任何一步失败都要在错误里带上恢复指引——只报
+  // 「没有订阅/配置错误」会让用户以为一切照旧，下次开机才发现代理没回来
+  // （与下方启动失败分支同一条理由，覆盖面是关自启之后的全部慢速阶段）
+  const tunAutoStartHint = (): string[] =>
+    targetMode === 'tun' && disabledAutoStartForTun ? ['', '服务自启已被关闭（启动 TUN 前关闭以避免自启失败循环）。', '恢复 Mixed 模式: mihomo-cli start'] : [];
 
-  if (!skipUpdate) {
-    await subscription.autoUpdateStaleSubscription({ timeout: updateTimeout });
-  }
-
-  // 先构建校验、后落盘启动：坏覆写/不合法订阅在这里就抛错，此时运行中的内核还没被动过，
-  // 用户维持在可用状态。反过来（先动手后构建）失败就是「已停机 + 无 config.yaml」的半死态。
-  let prepared: PreparedConfig;
   try {
-    prepared = await subscription.prepareConfigForStart(targetMode, sub.name);
+    const sub = subscription.requireActiveSubscription();
+
+    if (!skipUpdate) {
+      await subscription.autoUpdateStaleSubscription({ timeout: updateTimeout });
+    }
+
+    // 先构建校验、后落盘启动：坏覆写/不合法订阅在这里就抛错，此时运行中的内核还没被动过，
+    // 用户维持在可用状态。反过来（先动手后构建）失败就是「已停机 + 无 config.yaml」的半死态。
+    let prepared: PreparedConfig;
+    try {
+      prepared = await subscription.prepareConfigForStart(targetMode, sub.name);
+    } catch (e) {
+      if (e instanceof CliError) throw e;
+      throw new CliError((e as Error).message, { label: '配置错误' });
+    }
+
+    const configInfo = subscription.commitPreparedConfig(prepared);
+
+    console.log([colors.cyan(runtimeModeLabel(targetMode)), sub.name, subscription.formatProxySummary(configInfo)].join(' · '));
   } catch (e) {
-    if (e instanceof CliError) throw e;
-    throw new CliError((e as Error).message, { label: '配置错误' });
+    // 追加是唯一动作：非 CliError（程序缺陷）原样上抛，错误语义与既有出口一致
+    if (e instanceof CliError && tunAutoStartHint().length > 0) {
+      throw relabelCliError(e, { hint: [...e.hint, ...tunAutoStartHint()] });
+    }
+    throw e;
   }
-
-  const configInfo = subscription.commitPreparedConfig(prepared);
-
-  console.log([colors.cyan(runtimeModeLabel(targetMode)), sub.name, subscription.formatProxySummary(configInfo)].join(' · '));
 
   try {
     const pid = await runtime.launchOrRestart(targetMode);
     console.log(`${colors.green('已启动')}${pid ? ` (PID ${pid})` : ''}`);
   } catch (e) {
     const lines = (e as Error).message.split('\n');
-    const extraHint: string[] = [];
-    // sudo 取消/内核没起来时，自启位已经关掉了——只报启动失败会让用户以为一切照旧，
-    // 下次开机才发现代理没回来
-    if (targetMode === 'tun' && disabledAutoStartForTun) {
-      extraHint.push('', '服务自启已被关闭（启动 TUN 前关闭以避免自启失败循环）。', '恢复 Mixed 模式: mihomo-cli start');
-    }
+    const extraHint = tunAutoStartHint();
     if (e instanceof CliError) {
-      throw new CliError(e.message, { label: e.label, hint: [...e.hint, ...extraHint] });
+      throw relabelCliError(e, { hint: [...e.hint, ...extraHint] });
     }
     throw new CliError(lines[0], { label: '启动失败', hint: [...lines.slice(1), ...extraHint] });
   }
@@ -170,9 +179,12 @@ export async function cmdStart(args: string[]): Promise<void> {
   // Mixed 模式需手动配置系统代理：进程活着 ≠ 流量走代理，这是 Mixed 最大的日常摩擦。
   // TUN 模式由虚拟网卡接管全局流量，无需此步。start 是低频命令（重启/首次），提示不烦。
   // 提示按实际系统代理状态分档（已指向/指向别处/检测不可用），见 system-proxy.ts；
-  // 端口取实际配置（settings.ports 可覆盖默认 7890）——提示错了端口用户会直接连不上
+  // 端口取实际配置（settings.ports 可覆盖默认 7890）——提示错了端口用户会直接连不上。
+  // 用 getPortsOrNull：这是「已启动」之后的附加提示（同上方 printStatus 的容错），
+  // 启动多秒窗口内 settings.ports 被改坏时不能把成功命令翻成 exit 1；坏值由
+  // doctor 的端口配置检查项专门报
   if (targetMode === 'mixed') {
-    printSystemProxyHint(getPorts().mixed);
+    printSystemProxyHint(getPortsOrNull()?.mixed ?? DEFAULT_MIXED_PORT);
   } else {
     // TUN 是 root 临时进程：关终端、退出 shell 都不会停它，「怎么收掉」必须随成功一起告知
     console.log(colors.gray('TUN 为临时进程，关闭终端不会停止；停止: mihomo-cli stop（之后 mihomo-cli start 恢复 Mixed）'));

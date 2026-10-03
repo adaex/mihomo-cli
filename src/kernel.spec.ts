@@ -366,9 +366,16 @@ describe('buildKernelCurlArgs', () => {
     assert.equal(args[i + 1], 'socks5://127.0.0.1:7897');
   });
 
-  it('非 proxy 通道不含 -x', () => {
+  it('非 proxy 通道不含 -x，且显式 --noproxy *（direct 不静默继承 shell 的 env 代理）', () => {
     const args = buildKernelCurlArgs({ ...common, proxy: null });
     assert.ok(!args.includes('-x'));
+    const i = args.indexOf('--noproxy');
+    assert.equal(args[i + 1], '*');
+  });
+
+  it('proxy 通道不设 --noproxy（-x 与 --noproxy 并存时 noproxy 优先级更高，会废掉代理）', () => {
+    const args = buildKernelCurlArgs({ ...common, proxy: 'socks5://127.0.0.1:7897' });
+    assert.ok(!args.includes('--noproxy'));
   });
 
   it('-o 指向输出路径，末位为下载 URL', () => {

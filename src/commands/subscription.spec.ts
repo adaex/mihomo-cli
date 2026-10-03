@@ -291,10 +291,28 @@ describe('sub remove 删除当前订阅的运行中提示', () => {
         assert.match(removed.stdout, /已自动切换到 "beta"/);
         assert.match(removed.stdout, /仍在使用已删除订阅的配置，执行 mihomo-cli start tun 切换到新订阅/);
 
-        // 删非当前订阅（此时 active=beta）：配置来源没变，不提示
+        // 删最后一个订阅（此时 active=beta）：运行中同样在服务已删除订阅的配置，
+        // 但没有可切换的新订阅——提示改为「先重新添加」，不能吞掉整个提示
         const removed2 = run(['sub', 'remove', 'beta', '-y']);
         assert.equal(removed2.status, 0, removed2.stderr);
-        assert.ok(!removed2.stdout.includes('仍在使用已删除订阅'), '非当前订阅的删除不影响运行中的配置来源，不该提示');
+        assert.match(removed2.stdout, /仍在使用已删除订阅的配置（订阅已全部删除），重新添加订阅后执行 mihomo-cli start tun/);
+      } finally {
+        fake.kill();
+      }
+    }));
+
+  it('运行中删非当前订阅：配置来源没变，不提示', () =>
+    withFixture((dataDir, run) => {
+      fs.mkdirSync(path.join(dataDir, 'kernel'), { recursive: true });
+      fs.mkdirSync(path.join(dataDir, 'runtime'), { recursive: true });
+      fs.writeFileSync(path.join(dataDir, 'kernel', 'mihomo'), '');
+      const fake = spawn('bash', ['-c', `exec -a '${path.join(dataDir, 'kernel', 'mihomo')}' sleep 300`]);
+      try {
+        fs.writeFileSync(path.join(dataDir, 'runtime', 'pid'), String(fake.pid));
+        // active 是 alpha，删 beta：运行中的配置来源不受影响
+        const removed = run(['sub', 'remove', 'beta', '-y']);
+        assert.equal(removed.status, 0, removed.stderr);
+        assert.ok(!removed.stdout.includes('仍在使用已删除订阅'), '非当前订阅的删除不影响运行中的配置来源，不该提示');
       } finally {
         fake.kill();
       }

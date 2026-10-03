@@ -96,6 +96,15 @@ function assertValidParsedKey(rawKey: string, parsed: ParsedOverrideKey): void {
       hint: ['整体覆盖的 ! 只能写在键名末尾、且不能与其他操作符同用（key!）。', '想向数组追加请只用 key+。'],
     });
   }
+  // 残留 `+` 同族：parseOverrideKey 只剥一个前导/一个后缀 +，`++rules`（键变 +rules）、
+  // `rules++`（键变 rules+）这类笔误会静默落成字面顶层键——内核对未知键宽容，覆写
+  // 静默不生效；且 lockedKeysReferencedBy 归一后对不上规范键，`++secret` 还绕过锁定键告警
+  if (parsed.key.includes('+')) {
+    throw new CliError(`覆写键 "${rawKey}" 的操作符位置矛盾`, {
+      label: '覆写配置错误',
+      hint: ['数组前插/追加各只有一个 +（+key 或 key+），键名里不能含 +。'],
+    });
+  }
   const ops: string[] = [];
   if (parsed.forceOverwrite) ops.push('!（整体覆盖）');
   if (parsed.arrayPrepend) ops.push('+前缀（数组前插）');

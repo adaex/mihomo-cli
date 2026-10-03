@@ -467,6 +467,13 @@ export function buildKernelCurlArgs(args: { url: string; proxy: string | null; m
   ];
   if (args.proxy) {
     argv.push('-x', args.proxy);
+  } else {
+    // 无显式代理的通道（direct / 无 proxy 的 mirror）必须显式禁用 env 代理：curl 默认
+    // 读 https_proxy 等环境变量，通道决策（resolveDownloadChannels）却从不把 env 代理
+    // 当输入——版本查询走 Node fetch（undici 不认 env 代理、真直连）而产物走 curl 经
+    // env 代理出网，同一命令两条出网路径分叉；`--mirror direct` 的「强制直连」名存实亡，
+    // env 代理故障时报错还把原因误导成直连被墙/节点带宽
+    argv.push('--noproxy', '*');
   }
   argv.push('-o', args.outputPath, args.url);
   return argv;

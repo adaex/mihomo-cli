@@ -7,7 +7,7 @@ import * as yaml from 'js-yaml';
 import { BASE_CONFIG, EFFECTIVELY_LOCKED_KEYS, TUN_CONFIG, YAML_MAX_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
 import { applyOverwrite, describeOverwriteScope, loadOverwriteFile, lockedKeysReferencedBy, selectActiveOverwriteFiles } from './overwrite.js';
-import { atomicWriteFileSync, DIRS, ensureDirs, PATHS } from './paths.js';
+import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, USER_DATA_DIR } from './paths.js';
 import { getPorts, readSettings } from './settings.js';
 import { sanitizeTerminal } from './text.js';
 import type { BuildConfigResult, ConfigInfo, OverwriteFileEntry, OverwriteScope, RuntimeMode, ScriptMatch } from './types.js';
@@ -375,7 +375,11 @@ export function buildKernelRejectHint(detail: string, overwriteSummaries: string
 export async function validateConfigWithKernel(config: Record<string, unknown>, overwriteSummaries: string[]): Promise<void> {
   assertKernelInstalled();
   ensureDirs();
-  const stageDir = fs.mkdtempSync(path.join(DIRS.runtime, 'check-'));
+  // stage 建在数据根而非 runtime/：`mihomo -t` 校验最长 30s，此窗口并发的 stop
+  // （游离内核路径 rmrf runtime/）或含 runtime 目标的 reset 会连 stage 一起删掉，
+  // 内核读不到配置文件按「拒绝加载」报错，把排查方向指向毫无问题的订阅/覆写。
+  // 与锁、service.plist.stage 同族（会被 rmrf 的目录不放有生命周期的文件）
+  const stageDir = fs.mkdtempSync(path.join(USER_DATA_DIR, 'check-'));
   const stageFile = path.join(stageDir, 'config.yaml');
   try {
     fs.writeFileSync(stageFile, dumpYaml(config), { mode: 0o600 });
