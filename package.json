@@ -1,6 +1,6 @@
 {
   "name": "mihomo-cli",
-  "version": "26.10.101",
+  "version": "26.10.102",
   "type": "module",
   "description": "A terminal-based mihomo (Clash.Meta) client for macOS",
   "bin": {
