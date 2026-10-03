@@ -802,8 +802,6 @@ describe('覆写文件 enabled 开关', () => {
       label?: string;
       /** 诊断路径把文件标成 broken 的附加断言（已移除操作符族） */
       broken?: string;
-      instanceofNote: string;
-      rejectNote: string;
     }
     const families: MetaKeyFamily[] = [
       {
@@ -815,8 +813,6 @@ describe('覆写文件 enabled 开关', () => {
         quoted: false,
         messageRe: /不支持操作符/,
         label: '覆写配置错误',
-        instanceofNote: ' 应抛 CliError',
-        rejectNote: ' 应被拒绝',
       },
       {
         // 尖括号转义与 ~ 已删：文件级操作符校验提前到加载阶段后，这两种元数据键变体
@@ -827,8 +823,6 @@ describe('覆写文件 enabled 开关', () => {
         quoted: false,
         messageRe: /已移除/,
         broken: 'overwrite.op.yaml',
-        instanceofNote: ' 加载时应抛 CliError',
-        rejectNote: ' 应在加载阶段被拒绝',
       },
       {
         // YAML 键大小写敏感：`Enabled: false` 既不停用文件（剥离用精确键名），
@@ -839,8 +833,6 @@ describe('覆写文件 enabled 开关', () => {
         quoted: true,
         messageRe: /疑似想写元数据键/,
         label: '覆写配置错误',
-        instanceofNote: ' 应抛 CliError',
-        rejectNote: ' 应被拒绝',
       },
     ];
     for (const family of families) {
@@ -851,12 +843,12 @@ describe('覆写文件 enabled 开关', () => {
           assert.throws(
             () => loadOverwriteFile(),
             (e: unknown) => {
-              assert.ok(e instanceof CliError, `${key}${family.instanceofNote}`);
+              assert.ok(e instanceof CliError, `${key} 应抛 CliError`);
               if (family.label !== undefined) assert.equal((e as CliError).label, family.label);
               assert.match((e as Error).message, family.messageRe);
               return true;
             },
-            `${asWritten}${family.rejectNote}`,
+            `${asWritten} 应被拒绝`,
           );
           if (family.broken !== undefined) assert.ok(listOverwriteFile().broken.some(b => b.name === family.broken));
         } finally {

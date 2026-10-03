@@ -32,7 +32,6 @@ export interface GuardRunOptions {
   preload?: GuardPreload;
   /** 完整替换的子进程 env（缺省继承当前 process.env，不叠加） */
   env?: NodeJS.ProcessEnv;
-  timeout?: number;
 }
 
 export interface GuardRunResult {
@@ -47,7 +46,7 @@ export interface GuardHarness {
   run: (args: string[], options?: GuardRunOptions) => GuardRunResult;
 }
 
-/** 守卫子进程默认超时：原三个 spec 统一 30s（tsx 冷启动 + 真实 CLI） */
+/** 守卫子进程超时：原三个 spec 统一 30s（tsx 冷启动 + 真实 CLI） */
 const DEFAULT_GUARD_TIMEOUT_MS = 30_000;
 
 /** 建一套 guard 夹具并挂 beforeEach/afterEach（在 spec 顶层调用一次） */
@@ -74,8 +73,8 @@ export function setupGuardFixture(prefix: string): GuardHarness {
       }
       const spawnOptions: SpawnSyncOptions = {
         encoding: 'utf8',
-        timeout: options.timeout ?? DEFAULT_GUARD_TIMEOUT_MS,
-        env: options.env ?? { ...process.env },
+        timeout: DEFAULT_GUARD_TIMEOUT_MS,
+        env: options.env,
       };
       // encoding 固定 utf8，stdio 结果必为 string；收窄理由同 cli.ts 的 runCli
       const r = spawnSync(process.execPath, [...imports, ENTRY, ...args], spawnOptions) as SpawnSyncReturns<string>;

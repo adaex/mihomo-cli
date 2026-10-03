@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { assertKnownFlags, assertPositionalCount, assertRestartOptionValues } from '../argv.js';
 import { colors } from '../colors.js';
-import { START_RESTART_FLAGS } from '../flags.js';
+import { START_RESTART_FLAG_FORMS as OW_ON_OFF_FLAGS } from '../flags.js';
 import { isOverwriteEnabled, listOverwriteFile, setOverwriteEnabled } from '../overwrite.js';
 import { dispatchSubcommand, restartToApply, type SubCommand, unknownSubcommandError } from './shared.js';
 
@@ -89,9 +89,6 @@ const SUBCOMMANDS: SubCommand[] = [
   { name: 'on', aliases: ['enable'], handler: args => setOverwrite(true, args) },
   { name: 'off', aliases: ['disable'], handler: args => setOverwrite(false, args) },
 ];
-
-/** ow on|off 放行的选项 = 重启透传集合（restartToApply → extractStartOptions 只认这些），从 flags.ts 单表派生，不手写第二份清单 */
-const OW_ON_OFF_FLAGS: readonly string[] = START_RESTART_FLAGS.flatMap(f => f.forms);
 
 export async function cmdOverwrite(args: string[]): Promise<void> {
   assertKnownFlags(args, OW_ON_OFF_FLAGS, 'ow [on|off]');

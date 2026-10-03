@@ -1,11 +1,8 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { isSubscriptionStale, isValidHttpUrl, needsAutoUpdate, parseUserInfo, printUpdateResult, tryUpdateOne } from './subscription.js';
+import { makeFixture, moduleUrl, runModule } from './test-support/cli.js';
 
 describe('parseUserInfo：只收有限非负数，其余按缺失处理', () => {
   it('正常头全字段解析', () => {
@@ -173,8 +170,8 @@ describe('downloadSubscription：缓存写失败的回滚与错误包装', () =>
     // 成目录 → EISDIR）时旧实现留着刚写的新 yaml 报「更新失败」——回执与终态矛盾，
     // 下次 start 实际会用这次失败的配置；且错误是裸 Node errno 无标签无指引。
     // 子进程隔离数据目录：父进程静态 import 的模块已绑定默认 MIHOMO_CLI_DIR
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-dl-rollback-'));
-    const subscriptionPath = path.resolve('src/subscription.ts');
+    const fixture = makeFixture('mihomo-dl-rollback-');
+    const subscriptionUrl = moduleUrl('src/subscription.ts');
     const script = [
       "import http from 'node:http';",
       "import fs from 'node:fs';",
@@ -186,7 +183,7 @@ describe('downloadSubscription：缓存写失败的回滚与错误包装', () =>
       'const port = server.address().port;',
       'const dir = process.env.MIHOMO_CLI_DIR;',
       "fs.mkdirSync(dir + '/subscriptions/cache.json', { recursive: true });",
-      `const { downloadSubscription } = await import(${JSON.stringify(subscriptionPath)});`,
+      `const { downloadSubscription } = await import(${JSON.stringify(subscriptionUrl)});`,
       'try {',
       "  await downloadSubscription(`http://127.0.0.1:${port}/sub`, 'probe');",
       "  console.log('RESULT:NO-THROW');",
@@ -196,11 +193,7 @@ describe('downloadSubscription：缓存写失败的回滚与错误包装', () =>
       "console.log('YAML_EXISTS:' + fs.existsSync(dir + '/subscriptions/probe.yaml'));",
     ].join('\n');
     try {
-      const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
-        encoding: 'utf8',
-        timeout: 30_000,
-        env: { ...process.env, MIHOMO_CLI_DIR: dataDir },
-      });
+      const r = runModule(script, fixture.dataDir, { timeout: 30_000 });
       assert.equal(r.status, 0, r.stderr);
       const resultLine = r.stdout.split('\n').find(l => l.startsWith('RESULT:'));
       assert.ok(resultLine, `应有 RESULT 行，stdout: ${r.stdout}`);
@@ -209,7 +202,7 @@ describe('downloadSubscription：缓存写失败的回滚与错误包装', () =>
       assert.match(resultLine, /订阅缓存写入失败/);
       assert.match(r.stdout, /YAML_EXISTS:false/, '刚写的订阅文件必须随失败回滚');
     } finally {
-      fs.rmSync(dataDir, { recursive: true, force: true });
+      fixture.cleanup();
     }
   });
 });
@@ -222,8 +215,8 @@ describe('assertLooksLikeSubscription：写盘闸门（防错误 JSON 覆盖好�
    * 但拒收闸门本身此前零覆盖——重构成回归时无护栏。
    */
   function runDownloadCase(serverBody: string, preExisting: string | null): { stdout: string } {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-dl-gate-'));
-    const subscriptionPath = path.resolve('src/subscription.ts');
+    const fixture = makeFixture('mihomo-dl-gate-');
+    const subscriptionUrl = moduleUrl('src/subscription.ts');
     const script = [
       "import http from 'node:http';",
       "import fs from 'node:fs';",
@@ -236,7 +229,7 @@ describe('assertLooksLikeSubscription：写盘闸门（防错误 JSON 覆盖好�
       'const dir = process.env.MIHOMO_CLI_DIR;',
       "fs.mkdirSync(dir + '/subscriptions', { recursive: true });",
       preExisting ? `fs.writeFileSync(dir + '/subscriptions/probe.yaml', ${JSON.stringify(JSON.stringify(preExisting))});` : '',
-      `const { downloadSubscription } = await import(${JSON.stringify(subscriptionPath)});`,
+      `const { downloadSubscription } = await import(${JSON.stringify(subscriptionUrl)});`,
       'try {',
       "  await downloadSubscription(`http://127.0.0.1:${port}/sub`, 'probe');",
       "  console.log('RESULT:NO-THROW');",
@@ -247,15 +240,11 @@ describe('assertLooksLikeSubscription：写盘闸门（防错误 JSON 覆盖好�
       "console.log('YAML_NOW:' + JSON.stringify(fs.existsSync(yamlPath) ? fs.readFileSync(yamlPath, 'utf8') : '<absent>'));",
     ].join('\n');
     try {
-      const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
-        encoding: 'utf8',
-        timeout: 30_000,
-        env: { ...process.env, MIHOMO_CLI_DIR: dataDir },
-      });
+      const r = runModule(script, fixture.dataDir, { timeout: 30_000 });
       assert.equal(r.status, 0, r.stderr);
       return { stdout: r.stdout };
     } finally {
-      fs.rmSync(dataDir, { recursive: true, force: true });
+      fixture.cleanup();
     }
   }
 

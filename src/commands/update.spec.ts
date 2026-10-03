@@ -6,6 +6,7 @@ import path from 'node:path';
 import { after, describe, it } from 'node:test';
 import { recordClearedProxyEnv } from '../system-proxy.js';
 import { makeFixture, runCli } from '../test-support/cli.js';
+import { writeStubExecutable } from '../test-support/stub-bin.js';
 import { getLatestNpmVersion, isProxyPortListening, resolveUpdateAction, restoreProxyEnvForNpm } from './update.js';
 
 after(() => {
@@ -14,28 +15,25 @@ after(() => {
 
 /**
  * 桩 npm 的 PATH 污染样板（getLatestNpmVersion 相关用例原各自互抄）：mkdtemp + binDir +
- * 写桩脚本 + chmod + PATH 前置，fn 结束后恢复 PATH、删临时目录。
+ * 写桩脚本 + PATH 前置，fn 结束后恢复 PATH、删临时目录。
  * 桩脚本内容各用例不同，经 makeBody 传入（探针用例的日志路径要引用临时目录）；
  * makeBody 返回 null 表示不写脚本——「PATH 只指向空目录、spawn npm 必然 ENOENT」的形态，
  * 配合 replacePath 整个替换 PATH 而非前置。
  */
 async function withStubNpm<T>(
-  makeBody: (binDir: string, tmpDir: string) => string | null,
-  fn: (binDir: string, tmpDir: string) => Promise<T>,
+  makeBody: (tmpDir: string) => string | null,
+  fn: (tmpDir: string) => Promise<T>,
   options: { replacePath?: boolean } = {},
 ): Promise<T> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-cli-upd-'));
   const binDir = path.join(tmpDir, 'bin');
   fs.mkdirSync(binDir);
-  const body = makeBody(binDir, tmpDir);
-  if (body !== null) {
-    fs.writeFileSync(path.join(binDir, 'npm'), `#!/bin/bash\n${body}`);
-    fs.chmodSync(path.join(binDir, 'npm'), 0o755);
-  }
+  const body = makeBody(tmpDir);
+  if (body !== null) writeStubExecutable(path.join(binDir, 'npm'), body);
   const originalPath = process.env.PATH;
   process.env.PATH = options.replacePath ? binDir : `${binDir}:${originalPath}`;
   try {
-    return await fn(binDir, tmpDir);
+    return await fn(tmpDir);
   } finally {
     process.env.PATH = originalPath;
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -160,8 +158,8 @@ describe('getLatestNpmVersion：入口清掉的自指代理 env 按端口存活 
     const { server, port } = await listenLocal();
     try {
       await withStubNpm(
-        (_binDir, tmpDir) => probeScript(path.join(tmpDir, 'probe.log')),
-        async (_binDir, tmpDir) => {
+        tmpDir => probeScript(path.join(tmpDir, 'probe.log')),
+        async tmpDir => {
           recordClearedProxyEnv({ https_proxy: `http://127.0.0.1:${port}` });
           try {
             assert.equal(await getLatestNpmVersion(5000), '26.10.98');
@@ -178,8 +176,8 @@ describe('getLatestNpmVersion：入口清掉的自指代理 env 按端口存活 
 
   it('代理端口不监听（env 残留/内核已停）：不注回，npm 收不到代理 env', async () => {
     await withStubNpm(
-      (_binDir, tmpDir) => probeScript(path.join(tmpDir, 'probe.log')),
-      async (_binDir, tmpDir) => {
+      tmpDir => probeScript(path.join(tmpDir, 'probe.log')),
+      async tmpDir => {
         // 端口 1 连接即拒；同时确保当前 process.env 里没有逃逸的同名键
         const saved = process.env.https_proxy;
         delete process.env.https_proxy;
@@ -197,8 +195,8 @@ describe('getLatestNpmVersion：入口清掉的自指代理 env 按端口存活 
 
   it('入口没清过任何自指 env：npm env 与进程环境一致（不凭空注入）', async () => {
     await withStubNpm(
-      (_binDir, tmpDir) => probeScript(path.join(tmpDir, 'probe.log')),
-      async (_binDir, tmpDir) => {
+      tmpDir => probeScript(path.join(tmpDir, 'probe.log')),
+      async tmpDir => {
         const saved = process.env.https_proxy;
         delete process.env.https_proxy;
         recordClearedProxyEnv(null);

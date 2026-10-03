@@ -60,7 +60,10 @@ describe('buildTunLaunchScript：观察窗判定（12×0.1s，窗内死亡即失
   });
 
   it('桩内核存活过观察窗（sleep 30）→ 退 0 且 pid 文件是真实 pid', () => {
-    const { code, stdout } = runTunScript('sleep 30');
+    // exec 让 sleep 替换 sh wrapper 本人（pid 不变、观察窗判定不受影响）：wrapper 形态的
+    // 子进程命令行不含 pattern，下方 pid-kill 杀不到它（fake-kernel 已按进程组补杀修过
+    // 同款漏），单进程形态下收尾 pid-kill 即杀净
+    const { code, stdout } = runTunScript('exec sleep 30');
     assert.equal(code, 0);
     assert.match(stdout, /PID_FILE_EXISTS:true/);
     const pid = Number((stdout.match(/PID:(\d+)/) ?? [])[1]);

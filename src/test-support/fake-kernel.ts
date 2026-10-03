@@ -67,6 +67,14 @@ export function spawnFakeKernel(layout: FakeKernelLayout, binary: string = layou
 }
 
 /**
+ * 同步睡 ms 毫秒。Node 主线程允许带超时的 Atomics.wait，进程内零开销；
+ * fork 一个 `/bin/sleep` 子进程来计时，每个轮询 tick 都白付一次进程创建
+ */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
  * 轮询等待谓词为真（50ms 步进，超时后再验一次并返回该次结果）。spawn 返回不代表
  * exec 完成：桩进程的命令行要等 ps/pgrep 能读到才算「在跑」。
  */
@@ -74,7 +82,7 @@ export function pollUntil(predicate: () => boolean, timeoutMs = 3000): boolean {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) return true;
-    spawnSync('sleep', ['0.05']);
+    sleepSync(50);
   }
   return predicate();
 }
@@ -82,15 +90,15 @@ export function pollUntil(predicate: () => boolean, timeoutMs = 3000): boolean {
 /**
  * 等桩进程真的出现在 pgrep 里、数量达到 count，返回满足条件时的 pid 列表。
  * listPids 传 getMihomoPids——与文件头约束同理，process-probe 由调用方动态 import 注入。
+ * 委托 pollUntil、在谓词里闭包捕获达标快照：成功路径不多付一次 pgrep。
  */
-export function waitForPids(count: number, listPids: () => number[], timeoutMs = 3000): number[] {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const pids = listPids();
-    if (pids.length >= count) return pids;
-    spawnSync('sleep', ['0.05']);
-  }
-  return listPids();
+export function waitForPids(count: number, listPids: () => number[]): number[] {
+  let pids: number[] = [];
+  pollUntil(() => {
+    pids = listPids();
+    return pids.length >= count;
+  });
+  return pids;
 }
 
 /**

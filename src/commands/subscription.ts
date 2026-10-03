@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { assertKnownFlags, assertPositionalCount, assertRestartOptionValues, getNonFlagArg, hasFlag } from '../argv.js';
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
-import { START_RESTART_FLAGS } from '../flags.js';
+import { START_RESTART_FLAG_FORMS as USE_FLAGS } from '../flags.js';
 import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic } from '../format.js';
 import * as runtime from '../runtime.js';
 import { addSubscription, getSubscriptions, getSubscriptionsWithCache, removeSubscription, setDefaultSubscription } from '../settings.js';
@@ -310,9 +310,6 @@ async function subRemove(args: string[]): Promise<void> {
   console.log('');
   printSubscriptionList();
 }
-
-/** use 放行的选项 = 重启透传集合（restartToApply → extractStartOptions 只认这些），从 flags.ts 单表派生，不手写第二份清单 */
-const USE_FLAGS: readonly string[] = START_RESTART_FLAGS.flatMap(f => f.forms);
 
 /** remove 只消费 -y/--yes：模糊匹配删除时跳过确认 */
 const REMOVE_FLAGS: readonly string[] = ['-y', '--yes'];

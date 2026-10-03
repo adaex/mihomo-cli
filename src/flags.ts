@@ -52,6 +52,10 @@ export const VALUE_FLAGS: ReadonlySet<string> = new Set(FLAGS.filter(f => f.take
 /** start 的选项：配置变更触发重启时透传（`extractStartOptions` 用） */
 export const START_RESTART_FLAGS: readonly FlagSpec[] = FLAGS.filter(f => f.passthroughToRestart);
 
+/** 上述选项的全部出现形式：start / sub use / ow on|off 的 `assertKnownFlags` 白名单三处共用，
+ * 与重启透传集合同源（配置变更触发的重启走 restartToApply → extractStartOptions，只认这些选项） */
+export const START_RESTART_FLAG_FORMS: readonly string[] = START_RESTART_FLAGS.flatMap(f => f.forms);
+
 /** 带值选项在 argv 中出现的三种形式 */
 export type ValueFlagForm = 'exact' | 'attached-short' | 'long-eq';
 

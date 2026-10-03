@@ -6,6 +6,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { makeFixture, runCli } from '../test-support/cli.js';
+import { pollUntil } from '../test-support/fake-kernel.js';
 
 /**
  * cmdUninstall 的幂等判据与残留形态。此前是仅有的零覆盖命令 handler——判据
@@ -62,6 +63,8 @@ describe('cmdUninstall：幂等判据与残留形态', () => {
       fs.chmodSync(path.join(binDir, 'launchctl'), 0o755);
       let kernelPid: number | null = null;
       if (opts.fakeKernel) {
+        // node 单进程桩：argv 里带 mihomo 路径让 pgrep pattern 可匹配。不走 fake-kernel.ts
+        // 的盘上脚本桩（那套假定桩是 bash 长睡脚本）；node 桩无子进程，收尾 pid-kill 即杀净
         // 异步 spawn（spawnSync 会阻塞等子进程退出，detached 形同虚设）
         const child = spawn(
           process.execPath,
@@ -71,11 +74,7 @@ describe('cmdUninstall：幂等判据与残留形态', () => {
         child.unref();
         kernelPid = child.pid ?? null;
         // 等 pgrep 能看到它
-        for (let i = 0; i < 50; i++) {
-          const probe = spawnSync('pgrep', ['-f', String(kernelPid)], { encoding: 'utf8' });
-          if (probe.status === 0) break;
-          spawnSync(process.execPath, ['-e', 'setTimeout(() => {}, 50)']);
-        }
+        pollUntil(() => spawnSync('pgrep', ['-f', String(kernelPid)], { encoding: 'utf8' }).status === 0);
       }
       const r = runCli(['uninstall'], fixture, { timeout: 30_000, env: { PATH: `${binDir}:${process.env.PATH}` } });
       if (kernelPid) {

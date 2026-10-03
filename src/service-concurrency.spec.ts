@@ -7,6 +7,7 @@ import { describe, it } from 'node:test';
 
 import { LOCK_STALE_MS } from './paths.js';
 import { SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS } from './service.js';
+import { writeStubExecutable } from './test-support/stub-bin.js';
 
 /**
  * 服务层两条并发防线的消费点验证。
@@ -64,10 +65,7 @@ function scenarioEnv(fixture: { dataDir: string; fakeHome: string; fakeBin: stri
 
 /** 写桩 launchctl（PATH 前置后，子进程里所有 spawnSync('launchctl') 都落到这里） */
 function writeFakeLaunchctl(fakeBin: string, body: string): string {
-  const file = path.join(fakeBin, 'launchctl');
-  fs.writeFileSync(file, `#!/bin/bash\n${body}`);
-  fs.chmodSync(file, 0o755);
-  return file;
+  return writeStubExecutable(path.join(fakeBin, 'launchctl'), body);
 }
 
 interface ScriptRun {

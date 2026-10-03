@@ -74,16 +74,8 @@ export function runCli(args: string[], fixture: CliFixture, options: RunCliOptio
  * stop.spec 与 reset.spec 的 epoch 断言共用。
  */
 export function readEpochIn(dataDir: string): number {
-  const servicePath = path.resolve('src/service.ts');
-  const r = spawnSync(
-    process.execPath,
-    ['--import', 'tsx', '-e', `import { readStopEpoch } from ${JSON.stringify(servicePath)}; process.stdout.write(String(readStopEpoch()));`],
-    {
-      encoding: 'utf8',
-      env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1' },
-      timeout: DEFAULT_TIMEOUT_MS,
-    },
-  );
+  const code = `const { readStopEpoch } = await import(${JSON.stringify(moduleUrl('src/service.ts'))}); process.stdout.write(String(readStopEpoch()));`;
+  const r = runModule(code, dataDir, { env: { MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1' } });
   if (r.status !== 0) throw new Error(`读取 epoch 子进程失败: ${r.stderr}`);
   return Number.parseInt(r.stdout.trim(), 10);
 }

@@ -3,7 +3,7 @@ import { colors } from '../colors.js';
 import { assertKernelInstalled, runtimeModeLabel } from '../config.js';
 import { DEFAULT_AUTO_UPDATE_TIMEOUT } from '../constants.js';
 import { CliError } from '../errors.js';
-import { START_RESTART_FLAGS } from '../flags.js';
+import { START_RESTART_FLAG_FORMS as START_FLAGS } from '../flags.js';
 import * as runtime from '../runtime.js';
 import {
   announceLegacyCleanupOrThrow,
@@ -35,9 +35,6 @@ export function resolveStartMode(args: string[]): RuntimeMode {
   }
   return modeToken === 'tun' ? 'tun' : 'mixed';
 }
-
-/** start 放行的选项 = 登记表里 start 的全部选项（与重启透传集合同源），从 flags.ts 单表派生，不手写第二份清单 */
-const START_FLAGS: readonly string[] = START_RESTART_FLAGS.flatMap(f => f.forms);
 
 export async function cmdStart(args: string[]): Promise<void> {
   assertKnownFlags(args, START_FLAGS, 'start [tun|mixed]');

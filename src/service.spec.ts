@@ -22,6 +22,7 @@ import {
 } from './service.js';
 import { SudoAuthError } from './sudo.js';
 import { moduleUrl, readEpochIn, runModule } from './test-support/cli.js';
+import { writeStubExecutable } from './test-support/stub-bin.js';
 import type { ServiceStatus } from './types.js';
 
 /**
@@ -732,8 +733,7 @@ function runWithStubLaunchctl(options: {
 }): { stdout: string } {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), `${options.prefix}-`));
   const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), `${options.prefix}-bin-`));
-  fs.writeFileSync(path.join(fakeBin, 'launchctl'), options.stub);
-  fs.chmodSync(path.join(fakeBin, 'launchctl'), 0o755);
+  writeStubExecutable(path.join(fakeBin, 'launchctl'), options.stub);
   try {
     const prepareEnv = options.prepare?.(dataDir);
     const r = runModule(options.script, dataDir, {
@@ -764,8 +764,7 @@ describe('waitServiceHealthy：轮询期间 launchctl 查询失败的容错', ()
     stdout: string;
   } {
     // 桩按 $MODE_FILE 读当前档位：mode 路径随数据目录生成，经 env 传给桩与子脚本
-    const stubLaunchctl = `#!/bin/bash
-if [ "$1" = "print" ]; then
+    const stubLaunchctl = `if [ "$1" = "print" ]; then
   mode="$(cat "$MODE_FILE" 2>/dev/null)"
   if [ "$mode" = "fail" ]; then
     exit 112
