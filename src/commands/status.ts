@@ -18,13 +18,18 @@ function connectivityHint(urgency: SubscriptionUrgency): string {
   return '节点可能失效，可在 Web UI 中切换节点 (mihomo-cli ui)';
 }
 
-/** 流量行的着色：用尽红、>=90% 黄 */
-function trafficColor(line: string, urgency: SubscriptionUrgency, total: number | undefined, upload: number | undefined, download: number | undefined): string {
+/** 流量行的着色：用尽红、>=90% 黄。纯判定导出供单测（展示侧无色环境下分支不可观测） */
+export function trafficColor(
+  line: string,
+  urgency: SubscriptionUrgency,
+  total: number | undefined,
+  upload: number | undefined,
+  download: number | undefined,
+): string {
   if (urgency === 'traffic-exhausted') return colors.red(line);
-  if (total && total > 0) {
-    const used = (upload || 0) + (download || 0);
-    if (used / total >= 0.9) return colors.yellow(line);
-  }
+  // 手改缓存可能写入字符串：裸相加会字符串拼接（formatTraffic 同款防护），先 Number 化
+  const used = Number(upload || 0) + Number(download || 0);
+  if (Number.isFinite(used) && total && total > 0 && used / total >= 0.9) return colors.yellow(line);
   return line;
 }
 

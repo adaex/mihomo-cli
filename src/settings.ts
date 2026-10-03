@@ -247,8 +247,12 @@ export function subscriptionUrgency(
   nowMs: number = Date.now(),
 ): SubscriptionUrgency {
   if (entry.expire !== undefined && entry.expire > 0 && entry.expire * 1000 < nowMs) return 'expired';
-  const used = (entry.upload || 0) + (entry.download || 0);
-  if (entry.total !== undefined && entry.total > 0 && used >= entry.total) return 'traffic-exhausted';
+  // 手改缓存可能写入字符串/标量（download: "oops"）：直接相加会做字符串拼接
+  // （"1" + "2" = "12"），used>=total 被误判成流量用尽。与 formatTraffic 同口径
+  // 先 Number 化，非有限值不参与判定
+  const used = Number(entry.upload || 0) + Number(entry.download || 0);
+  const total = Number(entry.total);
+  if (entry.total !== undefined && Number.isFinite(total) && total > 0 && Number.isFinite(used) && used >= total) return 'traffic-exhausted';
   if (entry.expire !== undefined && entry.expire > 0 && entry.expire * 1000 - nowMs < 7 * 86_400_000) return 'expiring';
   return null;
 }

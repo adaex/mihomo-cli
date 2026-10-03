@@ -55,8 +55,12 @@ export function readLogTail(): string[] {
     const length = size - start;
     const buf = Buffer.alloc(length);
     fd = fs.openSync(PATHS.logFile, 'r');
-    fs.readSync(fd, buf, 0, length, start);
+    // 必须用实际读到的字节数切片：stat 与 read 之间日志可能被并发截断/轮转重建成
+    // 更小的文件（copy-truncate、双终端 start），此时 read 返回 0 或短读，直接解码
+    // 整块零填充 buffer 会把 NUL 字节打进错误提示的日志尾部
+    const bytesRead = fs.readSync(fd, buf, 0, length, start);
     return buf
+      .subarray(0, bytesRead)
       .toString('utf8')
       .split('\n')
       .map(l => l.trimEnd())

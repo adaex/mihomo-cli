@@ -215,7 +215,7 @@ async function collectChecks(): Promise<Check[]> {
   // 可达数百 ms、超时 30s）互不依赖，需要的 state/info 此刻已齐——先发起、到连通性段
   // 再 await，让两段网络/子进程等待重叠，代理不通时少等约 2s。push 顺序不变，展示顺序不变。
   // probeProxyConnectivity 全 try/catch 永不 reject（与上方 npm promise 的防御同构），
-  // 提前发起无 unhandled rejection 风险；其内部还有 3s 结果缓存，不会重复发请求
+  // 提前发起无 unhandled rejection 风险；体检内只在此处 await 一次，不会重复发请求
   const connectivityPromise = earlyState.running && info?.mixedPort ? probeProxyConnectivity(info.mixedPort) : null;
   let mixedPortDefault = DEFAULT_MIXED_PORT;
   try {

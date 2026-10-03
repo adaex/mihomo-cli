@@ -11,7 +11,7 @@ import { after, beforeEach, describe, it } from 'node:test';
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-logfiles-'));
 process.env.MIHOMO_CLI_DIR = tmpDir;
 
-const { allocateArchivePath, isArchiveLogFilename } = await import('./log-files.js');
+const { allocateArchivePath, isArchiveLogFilename, readLogTail } = await import('./log-files.js');
 const { CliError } = await import('./errors.js');
 const { DIRS, PATHS } = await import('./paths.js');
 const { formatLocalTimestamp } = await import('./format.js');
@@ -202,5 +202,34 @@ describe('allocateArchivePath：原子占名', () => {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
     }
     assert.fail('连续 6 次都跨秒边界（时间窗口异常），未能验证序号耗尽');
+  });
+});
+
+describe('readLogTail：stat 与 read 之间被并发截断时按实际字节数解码', () => {
+  // 回归：readSync 返回 0/短读时旧代码解码整块零填充 buffer，NUL 字节穿过
+  // filter(l => l.length > 0) 成为一行，混进「内核启动失败」的日志尾部。
+  // stat 与 read 的竞态窗口无法稳定真实复现，桩 readSync 精确钉住 bytesRead 契约。
+
+  it('read 返回 0（文件已被截短/轮转重建）：返回空数组，不产生 NUL 行', t => {
+    fs.writeFileSync(PATHS.logFile, 'a\nb\nc\n');
+    const stub = t.mock.method(fs, 'readSync', () => 0);
+    t.after(() => {
+      stub.mock.restore();
+      fs.rmSync(PATHS.logFile, { force: true });
+    });
+    assert.deepEqual(readLogTail(), []);
+  });
+
+  it('短读：只解码实际读到的字节，零填充尾部不进结果', t => {
+    fs.writeFileSync(PATHS.logFile, 'x'.repeat(100));
+    const stub = t.mock.method(fs, 'readSync', ((_fd: number, buf: Buffer) => {
+      buf.write('hello', 0, 'utf8');
+      return 5;
+    }) as typeof fs.readSync);
+    t.after(() => {
+      stub.mock.restore();
+      fs.rmSync(PATHS.logFile, { force: true });
+    });
+    assert.deepEqual(readLogTail(), ['hello']);
   });
 });

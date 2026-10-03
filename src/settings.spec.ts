@@ -27,6 +27,15 @@ describe('subscriptionUrgency', () => {
     assert.equal(subscriptionUrgency({}, now), null);
     assert.equal(subscriptionUrgency({ expire: Math.floor(now / 1000) + 365 * 86_400 }, now), null);
   });
+
+  it('手改缓存写入字符串时不误判流量用尽（Number 化，非有限值不参与）', () => {
+    // 回归：裸相加遇到字符串会拼接成 "1234"，"1234" >= 200 被误报 traffic-exhausted
+    const dirty = (e: Record<string, unknown>) => e as unknown as Parameters<typeof subscriptionUrgency>[0];
+    assert.equal(subscriptionUrgency(dirty({ total: 200, upload: '12', download: '34' }), now), null);
+    assert.equal(subscriptionUrgency(dirty({ total: 100, upload: 'oops', download: 1 }), now), null);
+    // 数字字符串仍按数值判：12 >= 10 必须照常报用尽，硬化不是把字符串一概忽略
+    assert.equal(subscriptionUrgency(dirty({ total: 10, upload: '6', download: '6' }), now), 'traffic-exhausted');
+  });
 });
 
 describe('损坏文件的备份只保留第一份原件', () => {
