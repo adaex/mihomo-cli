@@ -288,12 +288,16 @@ async function collectChecks(): Promise<Check[]> {
   // 与 CLI 版本同结构：查询在函数开头发起、此处收口。未装内核时「内核」项已 fail，
   // 不再重复列版本；GitHub 不可达/超时 skip（内核更新不是本机体检能解决的问题）
   const kernelInfo = await kernelVersionPromise;
+  // 失败原因只取首行（多行错误的其余行有各自的渲染归属），两个 skip 分支共用
+  const errorReason = kernelInfo instanceof Error ? `（${kernelInfo.message.split('\n')[0]}）` : '';
   if (hasKernel() && (kernelInfo === null || kernelInfo instanceof Error)) {
-    const reason = kernelInfo instanceof Error && kernelInfo.name !== 'AbortError' ? `（${kernelInfo.message.split('\n')[0]}）` : '';
+    // 超时（AbortError）按不可达说、不带原因——它就是「不可达」的一种
+    const reason = kernelInfo instanceof Error && kernelInfo.name !== 'AbortError' ? errorReason : '';
     push('内核版本', 'skip', `GitHub 不可达，跳过检查${reason}`);
   } else if (kernelInfo instanceof Error) {
-    // 理论不可达（查询仅在装了内核时发起）：保守起见不把 Error 漏进 needsUpdate 分支
-    push('内核版本', 'skip', `跳过检查（${kernelInfo.message.split('\n')[0]}）`);
+    // 查询发起时内核还在、收口时 hasKernel() 已转假（两者隔着多个 await，
+    // 并发 reset 删内核即如此）：不把 Error 漏进 needsUpdate 分支
+    push('内核版本', 'skip', `跳过检查${errorReason}`);
   } else if (kernelInfo?.needsUpdate) {
     push('内核版本', 'warn', `当前 ${kernelInfo.current}，最新 ${kernelInfo.latest}`, 'mihomo-cli kernel');
   } else if (kernelInfo) {

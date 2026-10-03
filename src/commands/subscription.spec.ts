@@ -7,6 +7,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { ENTRY, makeFixture, runCli } from '../test-support/cli.js';
+import { killFakeKernel, spawnFakeKernel, writeFakeKernelFiles } from '../test-support/fake-kernel.js';
 
 /**
  * sub 的选项白名单按子命令校验（此前分发前对全组放行同一份白名单）：
@@ -270,20 +271,24 @@ describe('sub update 批量结果', () => {
 });
 
 describe('sub remove 删除当前订阅的运行中提示', () => {
+  /** 伪造 TUN 在跑：桩内核命令行含隔离目录下的内核路径（isProbedMihomo 的判据），
+   *  pid 写入 runtime/pid；返回 pid 供用例整组收尾（killFakeKernel） */
+  function startRunningTun(dataDir: string): number {
+    const binary = path.join(dataDir, 'kernel', 'mihomo');
+    const configFile = path.join(dataDir, 'runtime', 'config.yaml');
+    writeFakeKernelFiles({ binaries: [binary], configFile });
+    const pid = spawnFakeKernel({ binary, dataDir: path.join(dataDir, 'data'), configFile });
+    fs.writeFileSync(path.join(dataDir, 'runtime', 'pid'), String(pid));
+    return pid;
+  }
+
   // 回归：remove 是 add/update/remove 中唯一改变「运行中配置来源」却不给提示的操作——
   // 删当前订阅时 active 静默切到 subs[0]，运行中的内核仍服务已删除订阅的旧配置，
   // 用户看到「已自动切换到 X」会误以为代理已在用 X
-  it('运行中删除当前订阅：提示按原模式重启；删非当前订阅不提示', () =>
+  it('运行中删除当前订阅：提示按原模式重启', () =>
     withFixture((dataDir, run) => {
-      // 伪造 TUN 运行：exec -a 让 ps 命令行含内核路径（isMihomoProcess 的判据），
-      // pid 写入 runtime/pid；bash -c 的 exec 替换进程本身，fake.pid 即目标进程
-      fs.mkdirSync(path.join(dataDir, 'kernel'), { recursive: true });
-      fs.mkdirSync(path.join(dataDir, 'runtime'), { recursive: true });
-      fs.writeFileSync(path.join(dataDir, 'kernel', 'mihomo'), '');
-      const fake = spawn('bash', ['-c', `exec -a '${path.join(dataDir, 'kernel', 'mihomo')}' sleep 300`]);
+      const pid = startRunningTun(dataDir);
       try {
-        fs.writeFileSync(path.join(dataDir, 'runtime', 'pid'), String(fake.pid));
-
         // 删当前订阅 alpha → 自动切到 beta → 运行中必须给「仍在用已删除订阅配置」提示，
         // 命令与 restartToApply 同判据：TUN 在跑提示 start tun（裸 start 会切回 Mixed）
         const removed = run(['sub', 'remove', 'alpha', '-y']);
@@ -297,24 +302,20 @@ describe('sub remove 删除当前订阅的运行中提示', () => {
         assert.equal(removed2.status, 0, removed2.stderr);
         assert.match(removed2.stdout, /仍在使用已删除订阅的配置（订阅已全部删除），重新添加订阅后执行 mihomo-cli start tun/);
       } finally {
-        fake.kill();
+        killFakeKernel(pid);
       }
     }));
 
   it('运行中删非当前订阅：配置来源没变，不提示', () =>
     withFixture((dataDir, run) => {
-      fs.mkdirSync(path.join(dataDir, 'kernel'), { recursive: true });
-      fs.mkdirSync(path.join(dataDir, 'runtime'), { recursive: true });
-      fs.writeFileSync(path.join(dataDir, 'kernel', 'mihomo'), '');
-      const fake = spawn('bash', ['-c', `exec -a '${path.join(dataDir, 'kernel', 'mihomo')}' sleep 300`]);
+      const pid = startRunningTun(dataDir);
       try {
-        fs.writeFileSync(path.join(dataDir, 'runtime', 'pid'), String(fake.pid));
         // active 是 alpha，删 beta：运行中的配置来源不受影响
         const removed = run(['sub', 'remove', 'beta', '-y']);
         assert.equal(removed.status, 0, removed.stderr);
         assert.ok(!removed.stdout.includes('仍在使用已删除订阅'), '非当前订阅的删除不影响运行中的配置来源，不该提示');
       } finally {
-        fake.kill();
+        killFakeKernel(pid);
       }
     }));
 

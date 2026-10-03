@@ -5,7 +5,7 @@ import { CliError } from '../errors.js';
 import { isOverwriteFilename, listTypoOverwriteFiles } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
-import { cleanupAll, MANUAL_PKILL_HINT } from '../process-stop.js';
+import { cleanupAll, MANUAL_PKILL_HINT, printResidueWarning } from '../process-stop.js';
 import {
   cleanupLegacyInstallOrThrow,
   detectLegacySystemInstall,
@@ -175,11 +175,10 @@ export async function cmdReset(args: string[]): Promise<void> {
   // 纯 `reset service`（needsStop=false）此前把 uninstallService 透传的 remaining 整个
   // 丢弃：同一份残留态在 cmdStop 抛「部分进程未终止」、cmdUninstall 黄字列 PID，唯独
   // 这里无声通过——「已重置: 服务」成了谎报。卸载已完成，「重置中止」同样不成立，
-  // 与 cmdUninstall 同款黄字列出（classifyResidueCleanup 的 throw 档已在那层拦过，
-  // 走到这里的只剩用户态残留）
+  // 与 cmdUninstall 共用 printResidueWarning（classifyResidueCleanup 的 throw 档已在
+  // 那层拦过，走到这里的只剩用户态残留）
   if (!needsStop && serviceTargeted && cleanup !== null && cleanup.remaining.length > 0) {
-    console.log(colors.yellow(`仍有内核进程残留 (PID ${cleanup.remaining.join(', ')})`));
-    console.log(MANUAL_PKILL_HINT);
+    printResidueWarning(cleanup.remaining);
   }
 
   const deleted = new Set<string>();

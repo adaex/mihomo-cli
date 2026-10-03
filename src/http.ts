@@ -8,6 +8,9 @@ const MAX_RESPONSE_BYTES = 50 * 1024 * 1024;
 
 /** 手动跟随重定向的上限（浏览器同值）：不设上限的环/长链会顶满 timeout 前的整段预算 */
 const MAX_REDIRECTS = 20;
+
+/** fetch manual 模式下需要自行跟随的重定向状态码 */
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 /**
  * 错误响应体只读取用于诊断的前缀（64KB）。错误体不参与业务解析，
  * 必须限量读入——!ok 分支若直接 await response.json() 会完全绕过大小上限，
@@ -62,13 +65,18 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
         // 挡不住「先降 http 再跳回 https」的中间明文 hop（订阅 URL 的 token 常被服务器
         // 保留在重定向查询串里，恰在要防的攻击形态下明文外泄）。本客户端只发 GET、
         // 只带 UA 头，逐跳重发没有方法/头语义要补。内核下载走 curl --proto '=https' 有同等防线
+        // 逐跳请求形态只有一处真源（首跳与重发同源），加头/改选项不必同步两处
+        const manualFetch = (requestUrl: string) =>
+          fetch(requestUrl, {
+            signal,
+            redirect: 'manual',
+            headers: { 'User-Agent': `mihomo-cli/${VERSION}` },
+          });
         let currentUrl = url;
-        let response = await fetch(currentUrl, {
-          signal,
-          redirect: 'manual',
-          headers: { 'User-Agent': `mihomo-cli/${VERSION}` },
-        });
-        for (let hop = 0; [301, 302, 303, 307, 308].includes(response.status); hop++) {
+        let response: Response;
+        for (let hop = 0; ; hop++) {
+          response = await manualFetch(currentUrl);
+          if (!REDIRECT_STATUSES.has(response.status)) break;
           if (hop >= MAX_REDIRECTS) {
             throw new Error(`重定向次数超过 ${MAX_REDIRECTS}，已中止: ${maskUrl(url)}`);
           }
@@ -82,11 +90,6 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
           }
           await response.body?.cancel().catch(() => undefined);
           currentUrl = nextUrl;
-          response = await fetch(currentUrl, {
-            signal,
-            redirect: 'manual',
-            headers: { 'User-Agent': `mihomo-cli/${VERSION}` },
-          });
         }
         if (!response.ok) {
           let text = '';

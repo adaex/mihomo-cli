@@ -5,7 +5,7 @@ import { assertKernelInstalled } from '../config.js';
 import { CliError, relabelCliError } from '../errors.js';
 import { PATHS } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
-import { MANUAL_PKILL_HINT } from '../process-stop.js';
+import { printResidueWarning } from '../process-stop.js';
 import * as runtime from '../runtime.js';
 import {
   announceLegacyCleanupOrThrow,
@@ -142,8 +142,7 @@ export async function cmdUninstall(args: string[]): Promise<void> {
   if (remaining === null) remaining = getMihomoPids();
   if (remaining.length > 0) {
     console.log('');
-    console.log(colors.yellow(`仍有内核进程残留 (PID ${remaining.join(', ')})`));
-    console.log(MANUAL_PKILL_HINT);
+    printResidueWarning(remaining);
   }
 
   console.log(colors.gray('重新安装: mihomo-cli install'));

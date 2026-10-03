@@ -404,7 +404,7 @@ describe('removeSubscription：数据最终状态（子进程真实模块）', (
       `;
       const r = runModule(code, dir);
       assert.equal(r.status, 0, r.stderr || r.stdout);
-      assert.match(r.stdout, /SWITCHED:\{"found":true,"switchedTo":"b"\}/);
+      assert.match(r.stdout, /SWITCHED:\{"found":true,"switchedTo":"b","wasActive":true\}/);
       assert.match(r.stdout, /NAMES:b/);
       assert.match(r.stdout, /ACTIVE:b/);
       assert.match(r.stdout, /RAW_EXISTS:false/, '原始配置文件应随 remove 删除（postCommit 副作用）');

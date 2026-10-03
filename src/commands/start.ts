@@ -124,9 +124,10 @@ export async function cmdStart(args: string[]): Promise<void> {
 
   // 自启位被 TUN 分支关掉后，此后任何一步失败都要在错误里带上恢复指引——只报
   // 「没有订阅/配置错误」会让用户以为一切照旧，下次开机才发现代理没回来
-  // （与下方启动失败分支同一条理由，覆盖面是关自启之后的全部慢速阶段）
-  const tunAutoStartHint = (): string[] =>
-    targetMode === 'tun' && disabledAutoStartForTun ? ['', '服务自启已被关闭（启动 TUN 前关闭以避免自启失败循环）。', '恢复 Mixed 模式: mihomo-cli start'] : [];
+  // （与下方启动失败分支同一条理由，覆盖面是关自启之后的全部慢速阶段）。
+  // disabledAutoStartForTun 只可能在 targetMode==='tun' 分支内置真，无需再判模式；
+  // 值此刻起不变，取一次常量供两个 catch 共用
+  const tunHint: string[] = disabledAutoStartForTun ? ['', '服务自启已被关闭（启动 TUN 前关闭以避免自启失败循环）。', '恢复 Mixed 模式: mihomo-cli start'] : [];
 
   try {
     const sub = subscription.requireActiveSubscription();
@@ -149,9 +150,10 @@ export async function cmdStart(args: string[]): Promise<void> {
 
     console.log([colors.cyan(runtimeModeLabel(targetMode)), sub.name, subscription.formatProxySummary(configInfo)].join(' · '));
   } catch (e) {
-    // 追加是唯一动作：非 CliError（程序缺陷）原样上抛，错误语义与既有出口一致
-    if (e instanceof CliError && tunAutoStartHint().length > 0) {
-      throw relabelCliError(e, { hint: [...e.hint, ...tunAutoStartHint()] });
+    // 追加是唯一动作：非 CliError（程序缺陷）原样上抛，错误语义与既有出口一致。
+    // 没有要追加的 hint 时不重包——保留原错误对象与 stack
+    if (e instanceof CliError && tunHint.length > 0) {
+      throw relabelCliError(e, { hint: [...e.hint, ...tunHint] });
     }
     throw e;
   }
@@ -161,11 +163,11 @@ export async function cmdStart(args: string[]): Promise<void> {
     console.log(`${colors.green('已启动')}${pid ? ` (PID ${pid})` : ''}`);
   } catch (e) {
     const lines = (e as Error).message.split('\n');
-    const extraHint = tunAutoStartHint();
     if (e instanceof CliError) {
-      throw relabelCliError(e, { hint: [...e.hint, ...extraHint] });
+      if (tunHint.length > 0) throw relabelCliError(e, { hint: [...e.hint, ...tunHint] });
+      throw e;
     }
-    throw new CliError(lines[0], { label: '启动失败', hint: [...lines.slice(1), ...extraHint] });
+    throw new CliError(lines[0], { label: '启动失败', hint: [...lines.slice(1), ...tunHint] });
   }
 
   // 状态展示是启动成功后的附加信息：查询撞上瞬时失败（launchctl 超时/抖动）降级为

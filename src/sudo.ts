@@ -89,9 +89,10 @@ export function runSudoScript(scriptBody: string, opts: SudoScriptOptions): void
   // cleanupStaleTmpFiles 的按龄清扫，不用等下一次同动作覆盖
   const scriptPath = path.join(USER_DATA_DIR, `${opts.file}.${process.pid}.tmp`);
   fs.writeFileSync(scriptPath, scriptBody, { mode: 0o700 });
-  // writeFileSync 的 mode 只在**创建新文件**时生效：前次崩溃残留的同名文件会保留
-  // 其原有权限位（实测重写 0666 文件后仍是 0666），而本文件下一步就交给 sudo 执行。
-  // 显式 chmod 才能保证「只有属主可写」，避免他人预置/篡改脚本内容。
+  // writeFileSync 的 mode 只在**创建新文件**时生效：按龄清扫到期前，崩溃残留若恰与
+  // 当前 pid 同名（pid 回收）会被截断重写、保留原有权限位（实测重写 0666 文件后仍是
+  // 0666），而本文件下一步就交给 sudo 执行。显式 chmod 兜底「只有属主可写」，
+  // 防残留/预置文件携带宽松权限位
   fs.chmodSync(scriptPath, 0o700);
 
   try {

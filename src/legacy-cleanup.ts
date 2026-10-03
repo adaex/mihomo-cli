@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { colors } from './colors.js';
 import { assertServiceLabelSafe, SERVICE_LABEL } from './constants.js';
 import { CliError } from './errors.js';
+import { BOOTOUT_NOT_LOADED_CODES } from './launchctl.js';
 import { DIRS, PATHS } from './paths.js';
 import { cleanupAll, describePidCleanupFailure, MANUAL_PKILL_HINT, reapPidWhenQuiet } from './process-stop.js';
 import { runSudoScript, SudoAuthError } from './sudo.js';
@@ -122,20 +123,21 @@ export async function cleanupKernelsOrThrow(ctx: RootResidueCleanupContext): Pro
  * 导出仅为测试退出码协议：脚本内部失败用 ≥2 的退出码（bootout 真实失败为 3，
  * plist rm 后复核仍存在为 4），1 留给 sudo 鉴权取消/密码错误。
  *
- * 脚本**不删 pid 文件**：bootout 返回 113（daemon 未装载）时，pid 可能属于一个无关的
- * 活 TUN，脚本内无条件 rm 会删掉活进程的 isRunning 真相源。pid 由
+ * 脚本**不删 pid 文件**：bootout 返回未装载码（3/113，daemon 已不在）时，pid 可能
+ * 属于一个无关的活 TUN，脚本内无条件 rm 会删掉活进程的 isRunning 真相源。pid 由
  * cleanupLegacyInstallOrThrow 在拆除成功、复核零进程后免提权收口（reapPidWhenQuiet）
  */
 export function buildLegacyCleanupScript(): string {
+  // 容忍码与 service.ts 的 bootoutService 共用 BOOTOUT_NOT_LOADED_CODES——bash 条件
+  // 由码表生成，新增容忍码只改 launchctl 一处。码表是模块内数字常量，插值无注入面
+  const toleratedBootoutCodes = [0, ...BOOTOUT_NOT_LOADED_CODES].map(code => `[ $bootout_code -ne ${code} ]`).join(' && ');
   return [
     '#!/bin/bash',
-    // bootout 退出码分级：113=未装载（daemon 已不在，正常）；3 同为「未装载」的实测
-    // 形态（service.ts 的 bootoutService 两个码都收下，这里漏收 3 会在 daemon 已
-    // 不存在时硬失败、阻断整个清理）。其余是真实失败，不能 || true 吞掉后照样 rm
-    // plist 报「已清理」
+    // bootout 退出码分级：0=成功，3/113=未装载（daemon 已不在，正常）；其余是真实
+    // 失败，不能 || true 吞掉后照样 rm plist 报「已清理」
     `bootout_code=0`,
     `launchctl bootout ${shellQuote(`system/${SERVICE_LABEL}`)} 2>/dev/null || bootout_code=$?`,
-    `if [ $bootout_code -ne 0 ] && [ $bootout_code -ne 3 ] && [ $bootout_code -ne 113 ]; then`,
+    `if ${toleratedBootoutCodes}; then`,
     `  echo "launchctl bootout 失败（退出码 $bootout_code）" >&2`,
     `  exit 3`,
     `fi`,

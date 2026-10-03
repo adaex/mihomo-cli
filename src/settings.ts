@@ -318,15 +318,22 @@ export function addSubscription(url: string, name = 'default'): void {
   });
 }
 
-/** removeSubscription 的结果：found=false 表示条目已不在（并发删除等），调用方不得报成功 */
+/**
+ * removeSubscription 的结果：
+ * - found=false 表示条目已不在（并发删除等），调用方不得报成功
+ * - wasActive 表示删的是不是当前活跃订阅——锁内现值判定，调用方无需删除前自己抢读
+ *   （抢读与删除之间还隔着确认/锁窗口，并发 sub use 会让两份观察不一致）
+ */
 export interface RemoveSubscriptionResult {
   found: boolean;
   switchedTo: string | null;
+  wasActive: boolean;
 }
 
 export function removeSubscription(name: string): RemoveSubscriptionResult {
   let switchedTo: string | null = null;
   let found = false;
+  let wasActive = false;
 
   updateSettings(
     settings => {
@@ -339,6 +346,7 @@ export function removeSubscription(name: string): RemoveSubscriptionResult {
       const updates: Partial<Settings> = { subscriptions: subs };
 
       if (settings.active_subscription === name) {
+        wasActive = true;
         switchedTo = subs.length > 0 ? subs[0].name : null;
         updates.active_subscription = switchedTo ?? undefined;
       }
@@ -358,11 +366,11 @@ export function removeSubscription(name: string): RemoveSubscriptionResult {
     },
   );
 
-  if (!found) return { found: false, switchedTo: null };
+  if (!found) return { found: false, switchedTo: null, wasActive: false };
 
   deleteSubscriptionCache(name);
 
-  return { found: true, switchedTo };
+  return { found: true, switchedTo, wasActive };
 }
 
 export function setDefaultSubscription(name: string): boolean {

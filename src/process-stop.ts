@@ -48,6 +48,16 @@ export function describePidCleanupFailure(err: Error): string {
 export const MANUAL_PKILL_HINT = '手动清理: sudo pkill -9 mihomo';
 
 /**
+ * 卸载/重置完成后仍残留的用户态内核进程提示（uninstall 与纯 reset service 共用
+ * 同一份渲染——措辞曾在两处各抄一份）。语境是「主操作已成功、只剩进程没杀掉」，
+ * 与 stop 的多行残留块不是同一语境，那个由 stop 自己组装
+ */
+export function printResidueWarning(remaining: readonly number[]): void {
+  console.log(colors.yellow(`仍有内核进程残留 (PID ${remaining.join(', ')})`));
+  console.log(MANUAL_PKILL_HINT);
+}
+
+/**
  * pid 文件清理失败的可见警告（进程已不在时的唯一出口）。语气由调用方决定——
  * 游离 stop 与服务路径都要让用户知道文件还在、下次会再试，不能静默
  */

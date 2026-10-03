@@ -297,11 +297,10 @@ async function subRemove(args: string[]): Promise<void> {
     }
   }
 
-  // 删的是不是当前订阅要在删除前看：removeSubscription 的 switchedTo 只在有剩余订阅
-  // 可切换时非空，删最后一个活跃订阅时它是 null——按它判会把「运行中的内核仍在服务
-  // 已删除订阅旧配置」的提示整个吞掉
-  const wasActive = subscription.getActiveSubscription()?.name === target.name;
-  const { found, switchedTo } = removeSubscription(target.name);
+  // wasActive 由 removeSubscription 在锁内按删除前的现值给出：调用方不必抢读——
+  // switchedTo 只在有剩余订阅可切换时非空，删最后一个活跃订阅时它是 null，
+  // 按它判会把「运行中的内核仍在服务已删除订阅旧配置」的提示整个吞掉
+  const { found, switchedTo, wasActive } = removeSubscription(target.name);
   // 并发删除下 found=false：什么都没删还报「已删除」违反「成功要有独立结果依据」
   if (!found) {
     throw new CliError(`订阅 "${target.name}" 不存在（可能已被并发删除）`, { hint: ['查看当前列表: mihomo-cli sub'] });

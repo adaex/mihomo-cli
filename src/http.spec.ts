@@ -74,6 +74,17 @@ describe('createHttpClient：4xx 诊断与降级守卫行为', () => {
 
   afterEach(() => Promise.all(servers.splice(0).map(s => new Promise<void>(r => s.close(() => r())))));
 
+  // 桩掉全局 fetch 跑完 fn 再还原：降级/重定向环无法用本地 https server 端到端构造
+  const withFetchStub = async (stub: typeof fetch, fn: () => Promise<void>): Promise<void> => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = stub;
+    try {
+      await fn();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  };
+
   it('4xx 抛 HTTP <status> 并带 response.data——代理 curl 路径对齐的目标形态', async () => {
     const base = await startServer((_req, res) => {
       res.writeHead(403, { 'content-type': 'application/json' });
@@ -109,15 +120,13 @@ describe('createHttpClient：4xx 诊断与降级守卫行为', () => {
   // 桩成 302 跳 http：逐跳守卫在**第一段明文 hop** 即拒绝——「先降 http 再跳回 https」
   // 的链条（最终地址是 https、只查最终 URL 的旧守卫放行）同样在这里被拦下
   it('https→http 降级守卫逐跳拦截且错误消息脱敏（token 常被服务器保留在重定向查询串里）', async () => {
-    const originalFetch = globalThis.fetch;
     const fakeResponse = {
       url: 'https://airport.example.com/sub?token=SECRETTOKEN1234567890',
       ok: false,
       status: 302,
       headers: new Headers({ location: 'http://mirror.example.com/dl?token=SECRETTOKEN1234567890' }),
     };
-    globalThis.fetch = (async () => fakeResponse) as unknown as typeof fetch;
-    try {
+    await withFetchStub((async () => fakeResponse) as unknown as typeof fetch, async () => {
       const client = createHttpClient({ timeout: 1_000 });
       await assert.rejects(client.get('https://airport.example.com/sub?token=SECRETTOKEN1234567890'), e => {
         const message = (e as Error).message;
@@ -127,29 +136,24 @@ describe('createHttpClient：4xx 诊断与降级守卫行为', () => {
         assert.match(message, /token=\*\*\*/);
         return true;
       });
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    });
   });
 
   it('重定向环在超过上限时中止，不会顶满超时预算干等', async () => {
-    const originalFetch = globalThis.fetch;
     let calls = 0;
     // 每一跳都回到同一段 https 地址（合法且不降级），永不终止
-    globalThis.fetch = (async () => {
+    const stub = (async () => {
       calls++;
       return { url: 'https://loop.example.com/hop', ok: false, status: 302, headers: new Headers({ location: 'https://loop.example.com/hop' }) };
     }) as unknown as typeof fetch;
-    try {
+    await withFetchStub(stub, async () => {
       const client = createHttpClient({ timeout: 60_000 });
       await assert.rejects(client.get('https://loop.example.com/start'), e => {
         assert.match((e as Error).message, /重定向次数超过 20/);
         return true;
       });
       assert.ok(calls <= 21, `跟随次数应被上限截断（实际 fetch 调用 ${calls} 次）`);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    });
   });
 
   it('声明 Content-Length 超上限：读 body 前预拒，不把 GB 级 body 拉进内存', async () => {

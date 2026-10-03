@@ -73,7 +73,7 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 **错误与结果**
 - 预期错误抛 `CliError` 由 main().catch 统一渲染；再包装前透传已有 CliError；模块顶层不抛 CliError
 - 报告成功要有独立结果依据（写入结果/健康/卸载/大小），不能用「命令没报错」代替
-- 探测失败 ≠ 目标不存在：launchctl 只认 113 为未装载，pgrep/pkill 只收退出码 0/1
+- 探测失败 ≠ 目标不存在：launchctl print 只认 113 为未装载，bootout 容忍 3/113（`BOOTOUT_NOT_LOADED_CODES`/`isBootoutNotLoaded` 唯一出处，TS 判定与 legacy bash 脚本生成共用），pgrep/pkill 只收退出码 0/1
 
 **数据与并发**
 - `readSettings()` 每次读盘；一致视图由调用方在命令开头取快照显式传递（D4/D10）

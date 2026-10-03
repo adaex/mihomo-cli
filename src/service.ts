@@ -10,9 +10,9 @@ import {
   bootstrapDomain,
   buildPlist,
   getServiceStatus,
+  isBootoutNotLoaded,
   isServiceDisabledInLaunchd,
   isServiceInstalled,
-  LAUNCHCTL_NOT_LOADED,
   LAUNCHCTL_TIMEOUT_MS,
   runLaunchctl,
   runLaunchctlOrThrow,
@@ -313,12 +313,12 @@ function bootstrapServiceIdempotentOrThrow(what: string): void {
 }
 
 /**
- * bootout 旧实例。容忍「未装载」（实测该情形退出码为 3，文档化的 113 同样收下）；
+ * bootout 旧实例。容忍「未装载」的判据走 launchctl.isBootoutNotLoaded 唯一出处；
  * 112/125 等域错误直接抛，不伪装成「无事发生」。
  */
 function bootoutService(timeoutMs: number = LAUNCHCTL_TIMEOUT_MS): void {
   const result = runLaunchctl(['bootout', serviceTarget()], timeoutMs);
-  if (result.status === 0 || result.status === 3 || result.status === LAUNCHCTL_NOT_LOADED) return;
+  if (result.status === 0 || isBootoutNotLoaded(result.status)) return;
   const detail = result.stderr.trim();
   throw new CliError(`卸载旧服务实例失败（launchctl bootout 退出码 ${result.status ?? '执行失败'}）`, {
     hint: [detail, `手动确认: launchctl print ${serviceTarget()}`].filter(Boolean),

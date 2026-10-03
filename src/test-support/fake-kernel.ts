@@ -67,6 +67,21 @@ export function spawnFakeKernel(layout: FakeKernelLayout, binary: string = layou
 }
 
 /**
+ * 收掉单个 spawnFakeKernel 起的桩并从记账集移除。按 -pgid 整组 SIGKILL——bash
+ * wrapper 不为简单命令另立进程组，只杀 wrapper pid 会漏出组内的 `sleep 300` 成孤儿。
+ * 与 killLeftovers 的区别：不跑 pkill、无需当前 fixture 的 MAIN_INSTANCE_PATTERN
+ * （pattern 要在隔离 env 内动态求值），用例按自己持有的 pid 精确收尾即可
+ */
+export function killFakeKernel(pid: number): void {
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    // 组内已无成员（ESRCH）：桩已退出的正常形态
+  }
+  spawnedPgids.delete(pid);
+}
+
+/**
  * 同步睡 ms 毫秒。Node 主线程允许带超时的 Atomics.wait，进程内零开销；
  * fork 一个 `/bin/sleep` 子进程来计时，每个轮询 tick 都白付一次进程创建
  */
