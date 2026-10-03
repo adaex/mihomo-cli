@@ -51,6 +51,9 @@ export function writeFakeKernelFiles(opts: { binaries: string[]; configFile: str
   fs.writeFileSync(opts.configFile, FAKE_KERNEL_CONFIG);
 }
 
+/** 本测试进程起过的桩进程组（spawnFakeKernel 记账；detached 桩自成组长，pgid == pid） */
+const spawnedPgids = new Set<number>();
+
 /** 起一个桩内核进程，返回 pid。detached + unref：桩进程独立于测试进程存活（模拟
  * 真实内核不随 CLI 退出），测试进程不跟踪其退出；stdio ignore——桩无输入输出 */
 export function spawnFakeKernel(layout: FakeKernelLayout, binary: string = layout.binary): number {
@@ -59,6 +62,7 @@ export function spawnFakeKernel(layout: FakeKernelLayout, binary: string = layou
     stdio: 'ignore',
   });
   child.unref();
+  spawnedPgids.add(child.pid as number);
   return child.pid as number;
 }
 
@@ -100,8 +104,22 @@ export function isDead(pid: number): boolean {
   return stat === '' || stat.startsWith('Z');
 }
 
-/** 兜底清理：任何一条用例漏杀都不该把桩进程留在开发机上（pattern 为 MAIN_INSTANCE_PATTERN，
- * 隔离依据见文件头注释） */
+/**
+ * 兜底清理：任何一条用例漏杀都不该把桩进程留在开发机上（pattern 为 MAIN_INSTANCE_PATTERN，
+ * 隔离依据见文件头注释）。pattern 只杀得到 bash wrapper 本人——wrapper 里 `sleep 300`
+ * 子进程的命令行不含 pattern，只靠 pkill 每次收尾都会漏出它成为 launchd 孤儿（进程组
+ * 还在：bash 不为简单命令另立进程组），故再对本进程起过的每个桩进程组 kill(-pgid)
+ * 补杀全组。pid 复用在此不可达：记账集只活在单次 spec 进程的数秒生命周期内，macOS
+ * 顺序分配 pid 不会在窗口内绕回。
+ */
 export function killLeftovers(pattern: string): void {
   spawnSync('pkill', ['-9', '-f', pattern], { timeout: 5000 });
+  for (const pgid of spawnedPgids) {
+    try {
+      process.kill(-pgid, 'SIGKILL');
+    } catch {
+      // 组内已无成员（ESRCH）：wrapper 已被 pkill 收走的正常形态
+    }
+  }
+  spawnedPgids.clear();
 }
