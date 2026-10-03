@@ -37,7 +37,7 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 
 - Biome 管格式与 import 排序；worktree 里显式 `npx biome check src/` 并确认实际检查了文件，不接受 `Checked 0 files`；`npm run check` 只在 error 级失败，warn 级不拦——别只看退出码
 - 测试用 node:test + tsx，命名 `*.spec.ts`；验证行为与数据最终状态，不用实现清单断言代替
-- 端到端跑真实 CLI 的夹具统一用 `src/test-support/cli.ts`（makeFixture/runCli/readEpochIn/ENTRY，自带临时 MIHOMO_CLI_DIR + 一次性 label + NO_COLOR 三件套），不在各 spec 重抄 spawn 与 env；guard 类需要 preload/刻意不设 DIR 的特殊形态除外
+- 端到端夹具统一收在 `src/test-support/`，不在各 spec 重抄 spawn 与 env：cli.ts（makeFixture/runCli/readEpochIn/ENTRY，模块级子进程 runModule/moduleUrl，CLI 夹具自带临时 MIHOMO_CLI_DIR + 一次性 label + NO_COLOR 三件套）、fake-kernel.ts（假内核落盘/起进程/等出现/判死/收尾，禁静态 import 模块加载期固化 DIR 的模块）、guard.ts（守卫类 preload spawn 骨架，env 整体替换以表达「刻意不设 DIR」形态）
 - 验收命令不接管道收尾（`npm test | tail` 的退出码是 tail 的）：红会被吞成 0，要截断输出就重定向到文件再看
 - 修完必做反向验证（还原修复、确认用例转红），规则见 decisions.md D11；预测落空处是认知与实现的偏差点，补不变量用例挡在结构层
 - 真实 sudo/TUN 与永久污染 launchd disabled 表的用例不自动执行，理由见 CODE_REVIEW
@@ -97,7 +97,7 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 
 **内核下载**
 - 镜像只作用产物下载、选择不持久化；版本查询代理可用时直接经代理（D8）
-- 守卫前清 env 代理只清指向本机 Mixed 端口的自指形态（D9）；两个 per-spawn 并存例外都「全程不重启内核」：① gh 回退候选由通道决策带 proxy（构造式注入，与用户 env 无关）；② update/doctor 的 npm 忠实恢复用户原 env（清除时登记、spawn 前 TCP 探活，活才注回；.npmrc 优先于 env，只恢复用户原配置）——均不写回 process.env
+- 守卫前清 env 代理只清指向本机 Mixed 端口的自指形态（D9）；gh 回退与 npm 恢复两个 per-spawn 并存例外的判据与构造见 D9（共同前提「全程不重启内核」，均不写回 process.env）
 - 下载候选为列表、逐个尝试首个成功即用；显式 --mirror/--proxy 只有一个候选（显式意图不自动换道）
 
 ## Git 与流程

@@ -449,21 +449,25 @@ YAML 操作符只保留最简单的三种，其余一律写脚本自由处理。
 
 ```js
 // ~/.mihomo-cli/overwrite.custom.js
+// 作用域写在代码里（JS 脚本没有 match 机制）：本例只对 edu 系订阅、
+// 且订阅主机在 glados-config.com 域下时生效，两个判据都中才继续
 export default function (config, ctx) {
-  // 作用域判据不中：提前退出（= 未命中，status 会把它列进「不适用」）
-  if (!ctx.subscription.name.startsWith('edu')) return;
+  const { name, host } = ctx.subscription;
+  if (!name.startsWith('edu')) return; // 作用域判据不中：提前退出（= 未命中，status 会把它列进「不适用」）
+  if (host !== 'glados-config.com' && !host.endsWith('.glados-config.com')) return;
   // 把订阅下发的 Developer 分组默认选中改为 TW Fixed IP；
-  // 该分组不存在时跳过并提示（不用为它改 match 作用域）
-  const groups = config['proxy-groups'] || [];
-  const developer = groups.find(g => g && g.name === 'Developer');
+  // 该分组不存在时提示并跳过（不追加残缺分组，也不必为它改作用域）
+  const developer = (config['proxy-groups'] || []).find(g => g && g.name === 'Developer');
   if (developer) {
     developer['default-selected'] = 'TW Fixed IP';
   } else {
     ctx.warn('当前订阅无 Developer 分组，跳过 default-selected 注入');
   }
-  return true; // 命中当前订阅
+  return true; // 命中当前订阅（status 据此区分生效与不适用）
 }
 ```
+
+> 注：`default-selected` 由 mihomo 内核决定默认选中项，优先级低于 `store-selected` 缓存的历史选择。若之前手动选过、且开启了 `store-selected`，需 `mihomo-cli reset data` 清缓存后才能看到默认值接管。
 
 `ctx` 提供的上下文：
 
@@ -556,26 +560,7 @@ dns!:
   - 'DOMAIN-SUFFIX,example.com,DIRECT'
 ```
 
-```js
-// ~/.mihomo-cli/overwrite.glados.js
-// 只对该机场 edu 系列的订阅生效：把订阅下发的 Developer 分组默认选中改为 TW Fixed IP。
-// 作用域与「分组不存在则跳过」都写在代码里——JS 脚本没有 match 机制
-export default function (config, ctx) {
-  const { name, host } = ctx.subscription;
-  if (!name.startsWith('edu')) return;                       // 同机场的 mini1 不命中
-  if (host !== 'glados-config.com' && !host.endsWith('.glados-config.com')) return;
-  const developer = (config['proxy-groups'] || []).find(g => g && g.name === 'Developer');
-  if (developer) {
-    developer['default-selected'] = 'TW Fixed IP';
-  } else {
-    // 精简套餐没有该分组：提示并跳过，不追加残缺分组
-    ctx.warn('当前订阅无 Developer 分组，跳过 default-selected 注入');
-  }
-  return true; // 命中当前订阅（status 据此区分生效与不适用）
-}
-```
-
-> 注：`default-selected` 由 mihomo 内核决定默认选中项，优先级低于 `store-selected` 缓存的历史选择。若之前手动选过、且开启了 `store-selected`，需 `mihomo-cli reset data` 清缓存后才能看到默认值接管。
+JS 脚本的完整示例（按订阅名与主机限定作用域）见前文「JS 覆写脚本」一节，此处不重复。
 
 ### 同时使用多个机场
 
@@ -715,7 +700,7 @@ sudo pkill -9 mihomo
 - **URL 脱敏**：订阅 URL 中的 token、key、password 等敏感参数（含 query、userinfo 及路径型令牌）自动替换为 `***`。按整条 URL 处理、不按逗号切分——逗号在 query 中合法，切开会让 `?nodes=us,hk&token=xxx` 的 token 参数识别不出而明文输出
 - **文件权限**：配置文件使用 `0o600` 权限（仅所有者可读可写），目录使用 `0o700` 权限
 - **入站固定只监听回环**：`allow-lan` 由本工具恒定为 `false`，**订阅与覆写都改不了**（自 v4.13.0；此前订阅里写 `allow-lan: true` 即可把混合端口开到全网卡）。确需局域网设备连入的场景请在本机另起一个 mihomo 实例，不通过订阅投递
-- **入站与控制面由本工具独占**：订阅与覆写里的入站端口（`mixed-port`/`port`/`socks-port`/`redir-port`/`tproxy-port`）、独立入站服务端（`tuic-server`/`ss-config`/`vmess-config`）、通用入站声明（`listeners`/`tunnels`）、局域网暴露与入站鉴权（`allow-lan`/`bind-address`/`authentication`/`skip-auth-prefixes`/`lan-allowed-ips`/`lan-disallowed-ips`）、外部控制器全家桶（`external-controller*`、`external-doh-server`、`secret`、`external-ui*`）与控制器证书段（`tls`）一律剥除，不进运行配置。这些键要么自带监听地址、要么直接决定「监听在哪、要不要验身份」，远端订阅若能投递即可在全网卡开出无鉴权控制器或开放代理——`allow-lan: true` 让内核把端口绑到所有网卡，而 `skip-auth-prefixes: ["0.0.0.0/0"]` 会让唯一的补偿防线 `authentication` 整个失效；端口与密钥只认 `settings.json`。覆写文件里写了会有提示，订阅侧静默剥除。确需额外入站的场景出路同上一条
+- **入站与控制面由本工具独占**：订阅与覆写里凡是自带监听地址、或直接决定「监听在哪、要不要验身份」的键——入站端口（`mixed-port` 等）、独立入站服务端（`tuic-server`、`ss-config` 等）、通用入站声明（`listeners`/`tunnels`）、局域网暴露与入站鉴权（`allow-lan`、`authentication` 等）、外部控制器全家桶（`external-controller*`、`secret` 等）与控制器证书段（`tls`）——一律剥除，不进运行配置。远端订阅若能投递这些键，即可在全网卡开出无鉴权控制器或开放代理——`allow-lan: true` 让内核把端口绑到所有网卡，而 `skip-auth-prefixes: ["0.0.0.0/0"]` 会让唯一的补偿防线 `authentication` 整个失效；端口与密钥只认 `settings.json`。完整清单的唯一真相是代码里的锁定键注册表（`src/constants.ts` 的 `LOCKED_CONFIG_KEYS`，由上游结构体快照测试兜底），本页不逐一罗列；覆写文件里写了会有提示，订阅侧静默剥除。确需额外入站的场景出路同上一条
 - **信号处理**：优雅处理 SIGINT/SIGTERM 信号
 - **异常捕获**：全局 uncaughtException 和 unhandledRejection 处理
 
