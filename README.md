@@ -511,16 +511,15 @@ export default function (config, ctx) {
 
 `match` 块**写错会直接报错**（键名拼错、值为空、空块、写已移除的 `subscription` 键），而不是静默忽略后对所有订阅生效——写了 `match` 显然是想限定作用域，悄悄放宽比报错危险得多。历史写法 `subscription` 与 `name` 同义、已收掉，写它直接报错指明改写 `name`。
 
-> `url-domain` 命中该域名下的**所有**订阅。同一机场的多条订阅（如 `edu1`、`mini1`）URL 往往同域名，用 `url-domain` 会一并生效；要在同机场内按套餐区分，用 `name: edu*`。若只是担心某条订阅没有要改的分组，在 JS 脚本里判（找不到就 `ctx.warn` 跳过），不必为此改作用域；`match` 应当按「这份覆写在语义上属于哪些订阅」来写。JS 脚本没有 match 机制——作用域判断写在脚本开头（`if (!ctx.subscription.name.startsWith('edu')) return;`），判据过了在函数末尾 `return true`，`status` 便能把命中的脚本列进「生效」、未命中的列进「不适用」。
+> `url-domain` 命中该域名下的**所有**订阅。同一机场的多条订阅（如 `edu1`、`mini1`）URL 往往同域名，用 `url-domain` 会一并生效；要在同机场内按套餐区分，用 `name: edu*`。若只是担心某条订阅没有要改的分组，在 JS 脚本里判（找不到就 `ctx.warn` 跳过），不必为此改作用域；`match` 应当按「这份覆写在语义上属于哪些订阅」来写。JS 脚本没有 match 机制——作用域判断写在脚本开头（`if (!ctx.subscription.name.startsWith('edu')) return;`），判据过了在函数末尾 `return true`，`status` 便能把命中的脚本列进「生效」、未命中的计入「不适用」。
 
 `mihomo-cli status` 会按当前活跃订阅区分「生效」与「不适用」，括号里只列本次真正参与合并的文件：
 
 ```text
 覆写: 已启用 (seal，1 个不适用，1 个已禁用)
-  glados 不适用于当前订阅 mini1（作用域 name=edu*）
 ```
 
-「不适用」指文件本身是启用的，只是 `match` 没命中当前订阅（JS 脚本则是没走到 `return true`）——切到命中的订阅（`sub use`）、改 `match` 或脚本判据才会生效，与 `enabled: false` 的「已禁用」是两回事。`mihomo-cli ow` 列表不做这个判断（它不绑定某条订阅），那里的作用域一栏只说明该文件管哪些订阅。`--json` 形态下 `overwrite.applied` 是生效清单（`ow off` 全局关闭时为空数组），`overwrite.files` 仍是「未被 `enabled: false` 停用」的全部文件；语法或元数据键写错的文件进 `overwrite.errors`（不混进 files/applied）。
+「不适用」指文件本身是启用的，只是 `match` 没命中当前订阅（JS 脚本则是没走到 `return true`）——切到命中的订阅（`sub use`）、改 `match` 或脚本判据才会生效，与 `enabled: false` 的「已禁用」是两回事。不适用与已禁用都只计数、不逐行点名：想知道是哪个文件，对照 `mihomo-cli ow` 列表的作用域一栏（它说明该文件管哪些订阅）。`--json` 形态下 `overwrite.applied` 是生效清单（`ow off` 全局关闭时为空数组），`overwrite.files` 仍是「未被 `enabled: false` 停用」的全部文件；语法或元数据键写错的文件进 `overwrite.errors`（不混进 files/applied）。
 
 **坏文件不阻断诊断、但阻断启动**：YAML 语法错误（含 `enabled: no` 这类元数据键错误）的文件在 `mihomo-cli ow` 与 `status` 中以「加载失败」红字标出，诊断命令永远可用；但该文件不参与合并，`mihomo-cli start`/`doctor` 会硬失败并给出原因——曾经语法错只警告一行就跳过、退出码 0，启动成功但覆写根本没生效。
 

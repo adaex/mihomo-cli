@@ -144,14 +144,13 @@ describe('ow 列表展示文件级开关', () => {
  * 的 scope 参数若日后被漏传，单测层面 matched 恒为 undefined、照样「通过」。
  */
 describe('status 覆写行按 match 区分是否适用当前订阅', () => {
-  it('match 不命中的文件移出主行，并说明原因与作用域', () => {
+  it('match 不命中的文件移出主行，只计数不点名（点名归 ow 列表）', () => {
     withFixture((dataDir, run) => {
       fs.writeFileSync(path.join(dataDir, 'overwrite.hit.yaml'), 'match:\n  name: edu*\nlog-level: debug\n');
       fs.writeFileSync(path.join(dataDir, 'overwrite.miss.yaml'), 'match:\n  name: mini*\nlog-level: info\n');
       const out = run(['status', '--no-probe']).stdout;
       assert.match(out, /覆写:.*已启用 \(hit，1 个不适用\)/);
-      // 文件名、当前订阅、作用域三者凑齐才看得出为什么没命中
-      assert.match(out, /miss 不适用于当前订阅 edu1（作用域 name=mini\*）/);
+      assert.ok(!out.includes('不适用于当前订阅'), '不适用常态只计数，不逐行点名刷屏');
       assert.ok(!/\(hit, miss/.test(out), '不命中的文件不得出现在生效清单里');
     });
   });
@@ -186,10 +185,10 @@ describe('status 覆写行按 match 区分是否适用当前订阅', () => {
 
   it('url-domain 作用域同样参与判定（两个条件是 AND，任一不命中即不适用）', () => {
     withFixture((dataDir, run) => {
-      // fixture 的 edu1 指向 update.glados-config.com，故域名条件命中、名字条件不命中
+      // fixture 的 edu1 指向 update.glados-config.com，域名条件不命中 → dom 全军覆没
       fs.writeFileSync(path.join(dataDir, 'overwrite.dom.yaml'), 'match:\n  url-domain: other.com\nlog-level: debug\n');
       const out = run(['status', '--no-probe']).stdout;
-      assert.match(out, /dom 不适用于当前订阅 edu1（作用域 url-domain=other\.com）/);
+      assert.match(out, /覆写:.*无生效文件，1 个不适用/);
     });
   });
 
@@ -234,7 +233,7 @@ describe('status 覆写行按 match 区分是否适用当前订阅', () => {
  * matched 恒为 true——作用域不中的脚本永远列在「生效」里，正是这组用例要拦的回归。
  */
 describe('status/config 按脚本返回值区分是否适用当前订阅', () => {
-  it('未返回 true 的脚本移出生效清单，行内不带理由（return true 是脚本作者知识，不对使用者展示）', () => {
+  it('未返回 true 的脚本移出生效清单，不适用只计数不点名', () => {
     withFixture((dataDir, run) => {
       fs.writeFileSync(
         path.join(dataDir, 'overwrite.hit.js'),
@@ -243,7 +242,7 @@ describe('status/config 按脚本返回值区分是否适用当前订阅', () =>
       fs.writeFileSync(path.join(dataDir, 'overwrite.miss.js'), 'export default function () { return; }\n');
       const out = run(['status', '--no-probe']).stdout;
       assert.match(out, /覆写:.*已启用 \(hit，1 个不适用\)/);
-      assert.match(out, /miss 不适用于当前订阅 edu1$/m);
+      assert.ok(!out.includes('不适用于当前订阅'), '不适用常态只计数，不逐行点名刷屏');
       assert.ok(!out.includes('未返回 true'), 'status 文本不得暴露脚本 API 术语');
       assert.ok(!/\(hit, miss/.test(out), '未命中的脚本不得出现在生效清单里');
     });
@@ -283,7 +282,7 @@ describe('status/config 按脚本返回值区分是否适用当前订阅', () =>
       fs.writeFileSync(path.join(dataDir, 'overwrite.bad.yaml'), 'match: [broken\n');
       fs.writeFileSync(path.join(dataDir, 'overwrite.miss.js'), 'export default function () { return; }\n');
       const out = run(['status', '--no-probe']).stdout;
-      assert.match(out, /miss 不适用于当前订阅 edu1$/m);
+      assert.match(out, /覆写:.*无生效文件，1 个不适用/);
       assert.match(out, /加载失败|解析失败/, '坏文件本身仍要红字可见');
     });
   });
@@ -325,13 +324,12 @@ describe('status 覆写行的文件显示名', () => {
     });
   });
 
-  it('.yml 扩展文件与不适用补充行同样按显示名规则', () => {
+  it('.yml 扩展文件同样按显示名规则进主行', () => {
     withFixture((dataDir, run) => {
       fs.writeFileSync(path.join(dataDir, 'overwrite.yaml'), 'match:\n  name: mini*\nlog-level: debug\n');
       fs.writeFileSync(path.join(dataDir, 'overwrite.dns.yml'), 'log-level: info\n');
       const out = run(['status', '--no-probe']).stdout;
       assert.match(out, /覆写:.*已启用 \(dns，1 个不适用\)/);
-      assert.match(out, /主文件 不适用于当前订阅 edu1（作用域 name=mini\*）/);
     });
   });
 });

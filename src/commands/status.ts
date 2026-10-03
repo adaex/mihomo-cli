@@ -285,7 +285,7 @@ export async function printStatus(args: string[] = []): Promise<void> {
     console.log(`${colors.gray('订阅: ')}未配置 ${colors.gray('(添加: mihomo-cli sub add <url>)')}`);
   }
 
-  printOverwriteLines(overwriteEnabled, overwriteFiles, overwriteBroken, activeSub);
+  printOverwriteLines(overwriteEnabled, overwriteFiles, overwriteBroken);
 
   printServiceLines(service, legacy);
 
@@ -298,23 +298,21 @@ export async function printStatus(args: string[] = []): Promise<void> {
 }
 
 /**
- * 覆写展示：主行只列**本次真正生效**的文件，未生效的分两类各折一句。
+ * 覆写展示：主行只列**本次真正生效**的文件，未生效的分两类各折一句计数。
  *
- * 分三层而不是一句「已启用 (a, b)」：文件躺在目录里、没被 enabled:false 停用、
+ * 分两类而不是一句「已启用 (a, b)」：文件躺在目录里、没被 enabled:false 停用、
  * 却因 match 不命中当前订阅而完全没参与合并——这种文件混在主行里，看起来和生效的
  * 一模一样，用户会拿它解释自己看到的行为（「我明明覆写了」），排查方向整个跑偏。
  * 两类失效原因不同、操作也不同（停用的要改文件里的 enabled，未命中的要看作用域或
  * 切订阅），故不合并成一个计数。
  *
+ * 两类都只计数、不逐行点名：不命中/停用是常态而非故障，逐行展开每次刷屏；
+ * 想知道是哪个文件、作用域是什么，`ow` 列表有完整信息（含改法提示）。
+ *
  * matched 为 undefined（无活跃订阅、没法判 match）时按「未被排除」处理：此时
  * 连订阅都没有，覆写本就无从谈起，不值得再分一类。
  */
-function printOverwriteLines(
-  enabled: boolean,
-  files: OverwriteFileInfo[],
-  broken: ReturnType<typeof listOverwriteFile>['broken'],
-  activeSub: ReturnType<typeof getActiveSubscription>,
-): void {
+function printOverwriteLines(enabled: boolean, files: OverwriteFileInfo[], broken: ReturnType<typeof listOverwriteFile>['broken']): void {
   if (!enabled) {
     console.log(`${colors.gray('覆写: ')}${colors.yellow('已禁用')}`);
     return;
@@ -334,16 +332,6 @@ function printOverwriteLines(
     console.log(`${colors.gray('覆写: ')}${colors.green('已启用')} (${active.map(f => shortOverwriteName(f.name)).join(', ')}${suffix})`);
   } else {
     console.log(`${colors.gray('覆写: ')}${colors.green('已启用')} (${files.length > 0 ? `无生效文件${suffix}` : '无文件'})`);
-  }
-
-  // 「不适用」是本次唯一可能让人意外的一类（文件是启用的，却没生效），给出文件名、
-  // 作用域与当前订阅名——三者凑齐才看得出为什么没命中。脚本不带理由：return true
-  // 约定是脚本作者的知识，不对使用者展示——改法在 `ow` 列表的脚本行提示里。停用的
-  // 不展开：那是用户自己在文件里写的 enabled: false，改法也写在 `ow` 列表的固定提示里
-  for (const f of unmatched) {
-    const reason = f.kind === 'script' ? '' : f.scope ? `作用域 ${f.scope}` : '作用域受限';
-    const suffix = reason ? `（${reason}）` : '';
-    console.log(colors.gray(`  ${shortOverwriteName(f.name)} 不适用于当前订阅${activeSub ? ` ${activeSub.name}` : ''}${suffix}`));
   }
 
   // 加载失败的文件不参与任何分类，红字给出原因、灰字给出修复指引；
