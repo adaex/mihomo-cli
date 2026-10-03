@@ -8,7 +8,7 @@ import { getKernelVersion, probeKernelVersion } from './config.js';
 import { VERSION } from './constants.js';
 import { createHttpClient, createHttpError } from './http.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
-import { escapeRegExp } from './text.js';
+import { escapeRegExp, lastCurlErrorLine } from './text.js';
 import type { GitHubAsset, GitHubRelease, KernelUpdateInfo } from './types.js';
 
 const GITHUB_REPO = 'MetaCubeX/mihomo';
@@ -293,14 +293,8 @@ export function translateReleaseApiCurlError(e: unknown): Error {
     return new Error(`版本查询失败: curl ${Math.floor((KERNEL_HTTP_TIMEOUT + 10_000) / 1000)}s 未完成，已终止${err.signal ? `（${err.signal}）` : ''}`);
   }
   // 错误行形如「curl: (7) Failed to connect to ...」，剥前缀取末行更可读（口径同 proxy-probe）
-  const stderr = (err.stderr || '').trim();
-  const lastLine = stderr
-    ? stderr
-        .split('\n')
-        .pop()
-        ?.replace(/^curl: \(\d+\)\s*/, '')
-    : undefined;
-  return new Error(`版本查询失败 (curl 退出码 ${err.code ?? '?'}${lastLine ? `: ${lastLine}` : ''})`);
+  const suffix = lastCurlErrorLine(typeof err.stderr === 'string' ? err.stderr : '');
+  return new Error(`版本查询失败 (curl 退出码 ${err.code ?? '?'}${suffix ? `: ${suffix}` : ''})`);
 }
 
 /** 版本查询的出网方式。两个调用点（kernel 命令 / doctor）按当前环境构造 */

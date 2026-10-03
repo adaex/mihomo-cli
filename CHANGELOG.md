@@ -11,6 +11,13 @@
 - **运行模式规整在入口**：新增 `RuntimeMode` 类型（下沉 types.ts），buildConfig/judgeScriptMatches/prepareConfigForStart 形参收紧，两处 `mode === 'tun' ? 'tun' : 'mixed'` 归一删除；start/status 的 `TUN`/`Mixed` 标签统一走 `runtimeModeLabel`
 - **复用与简化**：doctor 的代理连通性探测改为与 `mihomo -t` 配置校验并行发起（代理不通时体检少等约 2s，展示顺序不变）；节点计数三处合一（`countConfigNodes`）、pgrep/lsof 的 pid 输出解析合一（`parsePidList`）、端口合法性判据三处合一（`isValidPortNumber`）、scheme 前缀正则四份合一；shortOverwriteName 移回 overwrite.ts（扩展名知识与文件名判定同源派生，JS 扩展名再加不会漏展示侧）；序号两位对齐改 `padStart(2)`；订阅 URL hostname 解析两处合一；另清理死字段 `OverwriteFileInfo.error`、不可达守卫、恒等分支、不可达默认参数、游离 JSDoc 与服务健康结果的四处重复字面量。行为不变（942 测试全绿）
 
+### 变更（第二十轮全量质量清理：/simplify 第二巡，四角度）
+
+- **进程探测合面**：存活/属主/命令行/内存四个事实统一为一次 `ps -ww -o pid,uid,rss,command`（`probeProcess`），清理残留时每个 pid 最多 4 次串行 ps 降为 1 次；死亡等待在有 pid 列表时改用 `process.kill(pid,0)` 无 spawn 轮询（等待中 Ctrl+C 不再被每轮 pgrep 阻塞），终态结论仍一律以 pgrep pattern 复核为准
+- **同拍 launchctl 查询去重**：TUN 启动前复核的装载态透传给 pkill 前复核、重启分支的服务状态透传给热重载探测，各省一次 launchctl print
+- **删除零命中的进程内探测缓存与一批死字段**：连通性探测的 3s 缓存对单命令短进程没有第二个读端（跨进程不共享内存，「连敲第二次免等」不成立）；DownloadResult 的 4 个元数据字段、AutoUpdateResult、StartResult、StopResult 的恒真字段、覆写三类条目的 path、日志轮转的计数返回值均无消费者，删除
+- **单点收口**：并发判据 6 个调用点统一为零参数的 `startAbortedByConcurrentStop`；curl 错误末行、两端口安全读取、status 生效覆写谓词、TUN 阻断 hint 各收口一处；TUN 阻断按语境分两个标题（入口＝服务在跑、复核＝另一终端并发拉起）。端到端测试夹具统一进 `src/test-support/cli.ts`，13 个命令 spec 不再各抄 spawn 与隔离 env。行为不变（942 测试全绿）
+
 ## [26.10.101]
 
 ### 功能（JS 覆写脚本命中约定）

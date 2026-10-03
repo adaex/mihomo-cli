@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
+import type { SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
+
+import { makeFixture, runCli } from '../test-support/cli.js';
 
 /**
  * `ow` 列表与 `status` 的覆写展示（CLI 级）。
@@ -13,8 +15,8 @@ import { describe, it } from 'node:test';
  * 同 reset.spec：隔离 MIHOMO_CLI_DIR，并隔离 MIHOMO_CLI_DAEMON_LABEL（plist 在数据目录之外）。
  */
 function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSyncReturns<string>) => void): void {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-ow-cli-'));
-  const label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
+  const fixture = makeFixture('mihomo-ow-cli');
+  const { dataDir, label } = fixture;
   try {
     assert.ok(dataDir.startsWith(os.tmpdir()));
     assert.equal(fs.existsSync(path.join(os.homedir(), 'Library/LaunchAgents', `${label}.plist`)), false);
@@ -27,15 +29,10 @@ function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSync
       }),
     );
     fs.writeFileSync(path.join(dataDir, 'subscriptions', 'edu1.yaml'), 'proxies: []\n');
-    const run = (args: string[]) =>
-      spawnSync(process.execPath, ['--import', 'tsx', path.resolve('src/index.ts'), ...args], {
-        encoding: 'utf8',
-        timeout: 15_000,
-        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: label, NO_COLOR: '1' },
-      });
+    const run = (args: string[]) => runCli(args, fixture);
     check(dataDir, run);
   } finally {
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    fixture.cleanup();
   }
 }
 

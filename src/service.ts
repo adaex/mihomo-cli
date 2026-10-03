@@ -24,7 +24,7 @@ import { cleanupKernelsOrThrow } from './legacy-cleanup.js';
 import { allocateArchivePath, cleanupOldLogs, rotateAndCleanupLogs } from './log-files.js';
 import { atomicWriteFileSync, ensureDirs, PATHS, withFileLock } from './paths.js';
 import { getMihomoPids } from './process-probe.js';
-import { bumpStopEpoch, readStopEpoch, shouldAbortStartOnDisable, stopEpochBaseline } from './stop-epoch.js';
+import { bumpStopEpoch, readStopEpoch, startAbortedByConcurrentStop, stopEpochBaseline } from './stop-epoch.js';
 import type { CleanupResult, ServiceStatus } from './types.js';
 import { sleep } from './utils.js';
 
@@ -51,7 +51,14 @@ export {
   detectLegacySystemInstall,
   warnResidueCleanup,
 } from './legacy-cleanup.js';
-export { captureStopEpochBaseline, readStopEpoch, recordServiceStopped, shouldAbortStartOnDisable, stopEpochBaseline } from './stop-epoch.js';
+export {
+  captureStopEpochBaseline,
+  readStopEpoch,
+  recordServiceStopped,
+  shouldAbortStartOnDisable,
+  startAbortedByConcurrentStop,
+  stopEpochBaseline,
+} from './stop-epoch.js';
 
 /**
  * launchd 服务层：Mixed 模式的唯一运行方式。
@@ -210,6 +217,31 @@ export function describeAbnormalExit(status: ServiceStatus): string | null {
   return describeExitCause(status.lastExitCode, status.lastTerminatingSignal);
 }
 
+// === TUN 阻断 ===
+
+/**
+ * 「服务在跑，TUN 起不来」的修复指引，两个触发语境共用一份（散写会漂移）。
+ * 标题区分语境：入口快照（cmdStart）处服务可能是用户自己开着的；启动前/pkill 前
+ * 复核（runtime/process-start）处只可能是另一终端在慢速阶段并发拉起
+ */
+function tunBlockedHint(lastLine: string): string[] {
+  return ['两者会抢占同一组端口与配置。请先停止服务:', '  mihomo-cli stop', '', lastLine];
+}
+
+/** 入口快照：服务正在运行（可能是用户自己开着） */
+export function tunBlockedByRunningService(): CliError {
+  return new CliError('服务正在运行，无法启动 TUN', {
+    hint: tunBlockedHint('TUN 用完后 mihomo-cli start 可恢复服务'),
+  });
+}
+
+/** 启动前/pkill 前复核：服务是本命令开始后被并发拉起的 */
+export function tunBlockedByConcurrentStart(): CliError {
+  return new CliError('另一终端已启动 Mixed 服务，TUN 未启动', {
+    hint: tunBlockedHint('之后可重试 TUN: mihomo-cli start tun'),
+  });
+}
+
 // === plist ===
 
 /**
@@ -218,7 +250,7 @@ export function describeAbnormalExit(status: ServiceStatus): string | null {
  * `ln -sfn` 语义：已存在则原子替换，故可反复调用。内核更新（mh kernel 覆盖 mihomo）
  * 不影响符号链，但 `reset kernel` 会连同删除，因此 install 与 start 都要调一次。
  */
-export function ensureServiceSymlink(): void {
+function ensureServiceSymlink(): void {
   assertKernelInstalled();
   try {
     const current = fs.readlinkSync(PATHS.serviceBinary);
@@ -350,7 +382,7 @@ export async function installService(wasRunning: boolean): Promise<{ restoreSkip
       // enable+bootstrap 会把它的成果覆盖掉。判据共用 shouldAbortStartOnDisable——
       // **别在这里散写别的判据**；基线是命令入口捕获的进程基线，不在此处现取
       withFileLock(PATHS.serviceLock, () => {
-        if (shouldAbortStartOnDisable(stopEpochBaseline(), readStopEpoch())) {
+        if (startAbortedByConcurrentStop()) {
           restoreSkipped = true;
           return;
         }
@@ -437,7 +469,7 @@ export async function startService(): Promise<{ started: boolean }> {
   // 与命令入口的基线比对——变了就是期间有人 stop 过，放弃启动
   let started = true;
   withFileLock(PATHS.serviceLock, () => {
-    if (shouldAbortStartOnDisable(stopEpochBaseline(), readStopEpoch())) {
+    if (startAbortedByConcurrentStop()) {
       started = false;
       return;
     }
@@ -586,7 +618,7 @@ export async function uninstallService(): Promise<CleanupResult> {
  */
 // === 热重载与重启 ===
 
-export async function restartService(): Promise<{ hotReloaded: boolean; started: boolean }> {
+export async function restartService(prefetched?: ServiceStatus): Promise<{ hotReloaded: boolean; started: boolean }> {
   // 与 install/start/stop 同款入口校验：kickstart 与锁内 enable+bootstrap 都不经
   // startService 的断言，缺了这行非法 label 会静默作用于默认 label
   assertServiceLabelSafe();
@@ -598,7 +630,9 @@ export async function restartService(): Promise<{ hotReloaded: boolean; started:
   // 取一次让它们天然一致（热重载探测的数秒窗口内日志越过阈值的极端时序不构成语义）
   const oversized = logOversized();
 
-  if (!oversized && (await tryHotReload())) {
+  // prefetched 是调用方同一同步拍刚取的状态（launchOrRestart 决定走重启分支用的
+  // 就是它），透传给热重载探测免再发一次 launchctl print；缺省自查保留直接调用路径
+  if (!oversized && (await tryHotReload(prefetched))) {
     return concludeHotReload(stopEpochBaseline(), readStopEpoch());
   }
 
@@ -628,7 +662,7 @@ export async function restartService(): Promise<{ hotReloaded: boolean; started:
     // 终态与用户最后一条命令相反。判据共用 shouldAbortStartOnDisable——
     // **别在这里散写别的判据**
     withFileLock(PATHS.serviceLock, () => {
-      if (shouldAbortStartOnDisable(stopEpochBaseline(), readStopEpoch())) {
+      if (startAbortedByConcurrentStop()) {
         started = false;
         return;
       }

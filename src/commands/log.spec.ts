@@ -1,13 +1,9 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
 
-const SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
-const ENTRY = path.join(SRC_DIR, '..', 'index.ts');
+import { makeFixture, runCli } from '../test-support/cli.js';
 
 /**
  * logs 命令此前无专属 spec：「省略编号但给查看类选项时默认当前日志」是最容易
@@ -16,7 +12,8 @@ const ENTRY = path.join(SRC_DIR, '..', 'index.ts');
  */
 describe('logs：编号省略与归档序号映射', () => {
   function withLogs(check: (run: (args: string[]) => { status: number | null; stdout: string; stderr: string }) => void): void {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-logs-'));
+    const fixture = makeFixture('mihomo-logs');
+    const { dataDir } = fixture;
     try {
       fs.mkdirSync(path.join(dataDir, 'logs'), { recursive: true });
       fs.writeFileSync(path.join(dataDir, 'logs', 'mihomo.log'), 'current-line-1\ncurrent-line-2\ncurrent-line-3\n');
@@ -31,16 +28,12 @@ describe('logs：编号省略与归档序号映射', () => {
       fs.utimesSync(path.join(dataDir, 'logs', 'mihomo.2026-01-02_03-04-05.log'), newer, newer);
       fs.utimesSync(path.join(dataDir, 'logs', 'mihomo.2026-01-01_03-04-05.log'), older, older);
       const run = (args: string[]) => {
-        const r = spawnSync(process.execPath, ['--import', 'tsx', ENTRY, ...args], {
-          encoding: 'utf8',
-          timeout: 15_000,
-          env: { ...process.env, MIHOMO_CLI_DIR: dataDir, NO_COLOR: '1' },
-        });
+        const r = runCli(args, fixture);
         return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
       };
       check(run);
     } finally {
-      fs.rmSync(dataDir, { recursive: true, force: true });
+      fixture.cleanup();
     }
   }
 
@@ -78,17 +71,13 @@ describe('logs：编号省略与归档序号映射', () => {
 
   it('logs 0（当前日志）不存在时退出码透传 tail 的非零（脚本消费契约：空结果不当成功）', () => {
     // 独立 fixture：logs 目录存在但无 mihomo.log——tail 退 1，CLI 必须透传而非吞成 0
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-logs-empty-'));
+    const fixture = makeFixture('mihomo-logs-empty');
     try {
-      fs.mkdirSync(path.join(dataDir, 'logs'), { recursive: true });
-      const r = spawnSync(process.execPath, ['--import', 'tsx', ENTRY, 'logs', '0'], {
-        encoding: 'utf8',
-        timeout: 15_000,
-        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, NO_COLOR: '1' },
-      });
+      fs.mkdirSync(path.join(fixture.dataDir, 'logs'), { recursive: true });
+      const r = runCli(['logs', '0'], fixture);
       assert.notEqual(r.status, 0, 'tail 对不存在的文件退非零，CLI 不得吞成 0');
     } finally {
-      fs.rmSync(dataDir, { recursive: true, force: true });
+      fixture.cleanup();
     }
   });
 

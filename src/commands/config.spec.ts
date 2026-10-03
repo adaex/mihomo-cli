@@ -1,18 +1,16 @@
 import assert from 'node:assert/strict';
-import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
+import type { SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
+
+import { makeFixture, runCli } from '../test-support/cli.js';
 
 /**
  * `mihomo-cli config` 凭据脱敏与缺文件提示（CLI 级）。
  * 脱敏规则的单元覆盖在 redact.spec.ts，这里锁命令接线：默认上屏的是掩码、
  * --reveal 才给原文、JSON 信封带 redacted，以及缺文件时三处口径统一指向 sub update。
  */
-const ENTRY = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'index.ts');
-
 const SUBSCRIPTION = [
   'proxies:',
   '  - { name: HK-1, type: ss, server: 1.2.3.4, port: 8388, cipher: aes-128-gcm, password: realpassword }',
@@ -26,8 +24,8 @@ const SUBSCRIPTION = [
 ].join('\n');
 
 function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSyncReturns<string>) => void): void {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-config-cli-'));
-  const label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
+  const fixture = makeFixture('mihomo-config-cli');
+  const { dataDir } = fixture;
   try {
     fs.mkdirSync(path.join(dataDir, 'subscriptions'));
     fs.writeFileSync(
@@ -35,15 +33,10 @@ function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSync
       JSON.stringify({ subscriptions: [{ name: 'demo', url: 'https://example.com/sub' }], active_subscription: 'demo' }),
     );
     fs.writeFileSync(path.join(dataDir, 'subscriptions', 'demo.yaml'), SUBSCRIPTION);
-    const run = (args: string[]) =>
-      spawnSync(process.execPath, ['--import', 'tsx', ENTRY, ...args], {
-        encoding: 'utf8',
-        timeout: 15_000,
-        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: label, NO_COLOR: '1' },
-      });
+    const run = (args: string[]) => runCli(args, fixture);
     check(dataDir, run);
   } finally {
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    fixture.cleanup();
   }
 }
 

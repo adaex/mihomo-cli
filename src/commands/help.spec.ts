@@ -1,34 +1,27 @@
 import assert from 'node:assert/strict';
-import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
+import type { SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
+
+import { makeFixture, runCli } from '../test-support/cli.js';
 
 /**
  * 命令级帮助：`help <命令>` 与 `<命令> -h|--help|help`。
  * 此前三路全是错误（未知选项 / 未知子命令 / 多余位置参数），用户自然试法全是死路。
  * 顺带锁 status 对自定义控制器端口的展示（README 承诺「status 会显示实际端口」）。
  */
-const ENTRY = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'index.ts');
-
 function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSyncReturns<string>) => void): void {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-help-cli-'));
-  const label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
+  const fixture = makeFixture('mihomo-help-cli');
+  const { dataDir } = fixture;
   try {
     fs.mkdirSync(path.join(dataDir, 'runtime'), { recursive: true });
     fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ ports: { mixed: 17890, controller: 19090 } }));
     fs.writeFileSync(path.join(dataDir, 'runtime', 'config.yaml'), ['mixed-port: 17890', 'external-controller: 127.0.0.1:19090', ''].join('\n'));
-    const run = (args: string[]) =>
-      spawnSync(process.execPath, ['--import', 'tsx', ENTRY, ...args], {
-        encoding: 'utf8',
-        timeout: 15_000,
-        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: label, NO_COLOR: '1' },
-      });
+    const run = (args: string[]) => runCli(args, fixture);
     check(dataDir, run);
   } finally {
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    fixture.cleanup();
   }
 }
 

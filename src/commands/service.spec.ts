@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
+import { makeFixture, runCli } from '../test-support/cli.js';
+
 /**
  * cmdUninstall 的幂等判据与残留形态。此前是仅有的零覆盖命令 handler——判据
  * 「四条件全空才早退」与「plist 缺失仍装载」分支是实测踩坑换来的不变量（手动删
@@ -22,9 +24,9 @@ describe('cmdUninstall：幂等判据与残留形态', () => {
   }
 
   function runUninstall(opts: { printExit?: number; fakeKernel?: boolean }): RunResult {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-uninstall-'));
+    const fixture = makeFixture('mihomo-uninstall');
+    const { dataDir, label } = fixture;
     const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-uninstall-bin-'));
-    const label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
     const writeLog = path.join(binDir, 'writes.log');
     const printExit = opts.printExit ?? 113;
     try {
@@ -75,11 +77,7 @@ describe('cmdUninstall：幂等判据与残留形态', () => {
           spawnSync(process.execPath, ['-e', 'setTimeout(() => {}, 50)']);
         }
       }
-      const r = spawnSync(process.execPath, ['--import', 'tsx', path.resolve('src/index.ts'), 'uninstall'], {
-        encoding: 'utf8',
-        timeout: 30_000,
-        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: label, NO_COLOR: '1', PATH: `${binDir}:${process.env.PATH}` },
-      });
+      const r = runCli(['uninstall'], fixture, { timeout: 30_000, env: { PATH: `${binDir}:${process.env.PATH}` } });
       if (kernelPid) {
         try {
           process.kill(kernelPid, 'SIGKILL');
@@ -90,7 +88,7 @@ describe('cmdUninstall：幂等判据与残留形态', () => {
       const writes = fs.existsSync(writeLog) ? fs.readFileSync(writeLog, 'utf8').split('\n').filter(Boolean) : [];
       return { stdout: r.stdout || '', stderr: r.stderr || '', status: r.status, writes };
     } finally {
-      fs.rmSync(dataDir, { recursive: true, force: true });
+      fixture.cleanup();
       fs.rmSync(binDir, { recursive: true, force: true });
     }
   }

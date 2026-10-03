@@ -2,6 +2,7 @@ import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { parsePidList } from './process-probe.js';
+import { lastCurlErrorLine } from './text.js';
 import type { ProxyProbeResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -33,15 +34,6 @@ export function isProbeSuccessStatus(code: number | null): boolean {
 const PROBE_TIMEOUT_MS = 2000;
 
 /**
- * 探测结果的短缓存（按端口）。排查时用户会连敲 status/doctor，代理不通时每次
- * 固定等满 2s——代理状态在几秒内不可能翻转（切节点+节点重连本身远超这个时长），
- * 第二次探测纯属白等。TTL 刻意短：只覆盖「连续查看」这个真实节奏，不牺牲
- * 三态灯的时效性；--no-probe 不经过本函数、不受影响。
- */
-const PROBE_CACHE_TTL_MS = 3_000;
-let probeCache: { port: number; at: number; result: ProxyProbeResult } | null = null;
-
-/**
  * 经本机混合端口发一次真实请求，确认「进程在跑」之外「代理真的通」。
  *
  * 这是 status/start 的独立确认层：进程活着而节点已死、订阅过期、流量用尽时，
@@ -50,17 +42,11 @@ let probeCache: { port: number; at: number; result: ProxyProbeResult } | null = 
  * 用 curl 而非 Node 原生 http：Node 不支持 HTTP 代理（CONNECT），引第三方依赖
  * 又不值当——内核下载本就依赖 curl。探测失败不抛错，返回 ok=false + 原因，
  * 由调用方决定如何展示（status 黄灯 / start 提示）。
+ *
+ * 不做进程内缓存：CLI 是单命令短进程，status 与 doctor 从不在同一进程同时发生，
+ * 缓存没有第二个读端（与 settings 不缓存同一前提，见 D10）；--no-probe 在调用方跳过。
  */
 export async function probeProxyConnectivity(port: number): Promise<ProxyProbeResult> {
-  if (probeCache && probeCache.port === port && Date.now() - probeCache.at < PROBE_CACHE_TTL_MS) {
-    return probeCache.result;
-  }
-  const result = await probeProxyConnectivityUncached(port);
-  probeCache = { port, at: Date.now(), result };
-  return result;
-}
-
-async function probeProxyConnectivityUncached(port: number): Promise<ProxyProbeResult> {
   const start = Date.now();
   try {
     const { stdout } = await execFileAsync(
@@ -79,10 +65,7 @@ async function probeProxyConnectivityUncached(port: number): Promise<ProxyProbeR
     };
   } catch (e) {
     const err = e as { message?: string; stderr?: string | Buffer };
-    const stderr = err.stderr?.toString().trim();
-    // curl 的错误行形如「curl: (7) Failed to connect to ...」，剥掉前缀更可读
-    const lastLine = stderr ? stderr.split('\n').pop() : undefined;
-    const detail = lastLine ? lastLine.replace(/^curl: \(\d+\)\s*/, '') : (err.message ?? '请求失败');
+    const detail = lastCurlErrorLine(err.stderr) ?? err.message ?? '请求失败';
     return { ok: false, statusCode: null, error: detail, durationMs: Date.now() - start };
   }
 }

@@ -5,10 +5,10 @@ import { CliError } from './errors.js';
 import { readLogTail, rotateAndCleanupLogs } from './log-files.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
 import { checkStaleState, getPid, isRunning, MAIN_INSTANCE_PATTERN } from './process-probe.js';
-import { getServiceStatus } from './service.js';
+import { getServiceStatus, tunBlockedByConcurrentStart } from './service.js';
 import { runSudoScript } from './sudo.js';
 import { shellQuote } from './text.js';
-import type { StartResult } from './types.js';
+import type { ServiceStatus } from './types.js';
 import { sleep } from './utils.js';
 
 /**
@@ -97,7 +97,12 @@ export function buildTunLaunchScript(): string {
   );
 }
 
-export async function startTun(): Promise<StartResult> {
+/**
+ * @param prefetched 调用方（runtime.launchOrRestart）在同一同步拍经
+ *   assertTunStartNotRaced 取得的装载态；缺省时自行复核（直接调用与测试路径）。
+ *   两处是同一拍的同一件事，不该各发一次 launchctl
+ */
+export async function startTun(prefetched?: ServiceStatus): Promise<number> {
   ensureDirs();
 
   // 存在性校验先于日志轮转：轮转把 mihomo.log rename 成归档后，仍在运行的旧 TUN
@@ -116,11 +121,11 @@ export async function startTun(): Promise<StartResult> {
   // 复核点到 pkill 执行之间仍隔着 sudo 密码窗口，无法归零（pkill 在 root 脚本内，
   // 进不了锁）；那一侧由 stop epoch 防线兜底：TUN 分支过守卫后已 bump，start 的
   // enable+bootstrap 在锁内必读到变化而放弃——与 kickstart 60s 锁外交错同一级别的
-  // 已知残余，见 CODE_REVIEW「未覆盖与待复核」
-  if (getServiceStatus().loaded) {
-    throw new CliError('另一终端已启动 Mixed 服务，TUN 未启动', {
-      hint: ['两者会抢占同一组端口与配置。请先停止服务:', '  mihomo-cli stop', '', '之后可重试 TUN: mihomo-cli start tun'],
-    });
+  // 已知残余，见 CODE_REVIEW「未覆盖与待复核」。
+  // withDisabled:false——只消费 loaded，print-disabled 是白多一次的阻塞查询
+  const serviceLoaded = prefetched ? prefetched.loaded : getServiceStatus({ withDisabled: false }).loaded;
+  if (serviceLoaded) {
+    throw tunBlockedByConcurrentStart();
   }
 
   rotateAndCleanupLogs();
@@ -173,5 +178,5 @@ export async function startTun(): Promise<StartResult> {
     });
   }
 
-  return { success: true, pid: finalPid, mode: 'tun' };
+  return finalPid;
 }

@@ -125,7 +125,7 @@ export function allocateArchivePath(): string {
   });
 }
 
-function rotateLog(): string | null {
+function rotateLog(): void {
   const logFile = PATHS.logFile;
 
   let stat: fs.Stats;
@@ -133,10 +133,10 @@ function rotateLog(): string | null {
     stat = fs.statSync(logFile);
   } catch (e) {
     // 日志不存在，或恰好被并发轮转搬走（检查与 stat 之间被 rename）——都没有可轮转的内容
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
     throw e;
   }
-  if (stat.size === 0) return null;
+  if (stat.size === 0) return;
 
   const rotatedPath = allocateArchivePath();
   try {
@@ -151,22 +151,18 @@ function rotateLog(): string | null {
     } catch {
       /* ignore */
     }
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
     throw e;
   }
-  return rotatedPath;
 }
 
-export function cleanupOldLogs(): { deleted: number; errors: number } {
+export function cleanupOldLogs(): void {
   const logsDir = DIRS.logs;
-  if (!fs.existsSync(logsDir)) return { deleted: 0, errors: 0 };
+  if (!fs.existsSync(logsDir)) return;
 
   const files = fs.readdirSync(logsDir);
   const now = Date.now();
   const maxAgeMs = DEFAULT_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-
-  let deleted = 0;
-  let errors = 0;
 
   for (const file of files) {
     if (!isArchiveLogFilename(file)) continue;
@@ -176,14 +172,11 @@ export function cleanupOldLogs(): { deleted: number; errors: number } {
       const stat = fs.statSync(filePath);
       if (now - stat.mtimeMs > maxAgeMs) {
         fs.unlinkSync(filePath);
-        deleted++;
       }
     } catch {
-      errors++;
+      // 单个归档删不动（权限/并发删除）不挡其余清理
     }
   }
-
-  return { deleted, errors };
 }
 
 export function listLogs(): LogList {

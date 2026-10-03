@@ -46,10 +46,6 @@ export interface SubscriptionWithCache extends Subscription, Partial<Subscriptio
 export interface DownloadResult {
   proxies: number;
   proxyGroups: number;
-  userInfo: UserInfo | null;
-  updateInterval: number | null;
-  webPageUrl: string | null;
-  username: string | null;
 }
 
 /**
@@ -101,7 +97,6 @@ export interface PreparedConfig {
 
 export interface OverwriteFileEntry {
   name: string;
-  path: string;
   /** YAML 覆写文件的合并内容（match/enabled 元数据键已剥离）；脚本文件无此字段 */
   config?: Record<string, unknown>;
   /** JS 覆写脚本的默认导出函数；YAML 文件无此字段。两类文件二选一 */
@@ -137,7 +132,6 @@ export interface OverwriteScriptContext {
 /** 加载失败（YAML 语法错/元数据键非法等）的覆写文件：诊断面要带着错误列出它 */
 export interface BrokenOverwriteFile {
   name: string;
-  path: string;
   /** 单行失败原因 */
   message: string;
   /** 错误标签（如「覆写配置错误」），合并路径硬失败时重建 CliError 用 */
@@ -148,7 +142,6 @@ export interface BrokenOverwriteFile {
 
 export interface OverwriteFileInfo {
   name: string;
-  path: string;
   /** yaml = 声明式覆写（有 keys/作用域）；script = JS 脚本（无这两样，字段行显示占位） */
   kind: 'yaml' | 'script';
   keys: string[];
@@ -180,15 +173,8 @@ export interface ProcessInfo {
   isRoot: boolean;
 }
 
-export interface StartResult {
-  success: boolean;
-  pid: number;
-  mode?: RuntimeMode;
-}
-
 export interface StopResult {
-  success: boolean;
-  notRunning?: boolean;
+  /** 死亡等待与复核后仍在的主实例 PID；缺省 = 已停干净 */
   remaining?: number[];
 }
 
@@ -474,12 +460,6 @@ export interface HttpClient {
 }
 
 // === Update Result ===
-
-export interface AutoUpdateResult {
-  total: number;
-  updated: number;
-  failed: number;
-}
 
 export interface TryUpdateResult {
   name: string;

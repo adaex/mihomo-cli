@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
-
 import { recordClearedProxyEnv } from '../system-proxy.js';
+import { makeFixture, runCli } from '../test-support/cli.js';
 import { getLatestNpmVersion, isProxyPortListening, resolveUpdateAction, restoreProxyEnvForNpm } from './update.js';
 
 after(() => {
@@ -227,25 +226,17 @@ describe('入口自指代理清除的接线（D9 契约的最后一环，端到�
    * （npm view 输出 0.0.1 → 领先跳过 install），桩 npm dump 收到的 env 断言。
    */
   function runUpdateWithProxyEnv(settingsJson: string | null, proxyEnv: Record<string, string>): Record<string, string> | null {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-clearproxy-'));
+    const fixture = makeFixture('mihomo-clearproxy');
+    const { dataDir } = fixture;
     const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-clearproxy-bin-'));
     const dumpFile = path.join(binDir, 'env-dump');
     try {
       if (settingsJson !== null) fs.writeFileSync(path.join(dataDir, 'settings.json'), settingsJson);
       fs.writeFileSync(path.join(binDir, 'npm'), `#!/bin/bash\nif [ "$1" = "view" ]; then\n  env > "${dumpFile}"\n  echo "0.0.1"\n  exit 0\nfi\nexit 0\n`);
       fs.chmodSync(path.join(binDir, 'npm'), 0o755);
-      const entry = path.resolve('src/index.ts');
-      const r = spawnSync(process.execPath, ['--import', 'tsx', entry, 'update'], {
-        encoding: 'utf8',
+      const r = runCli(['update'], fixture, {
         timeout: 60_000,
-        env: {
-          ...process.env,
-          MIHOMO_CLI_DIR: dataDir,
-          MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(dataDir)}`,
-          NO_COLOR: '1',
-          PATH: `${binDir}:${process.env.PATH}`,
-          ...proxyEnv,
-        },
+        env: { PATH: `${binDir}:${process.env.PATH}`, ...proxyEnv },
       });
       assert.equal(r.status, 0, r.stderr || r.stdout);
       assert.match(r.stdout, /领先/, '桩 view 输出 0.0.1 应走「领先跳过」');
@@ -257,7 +248,7 @@ describe('入口自指代理清除的接线（D9 契约的最后一环，端到�
       }
       return env;
     } finally {
-      fs.rmSync(dataDir, { recursive: true, force: true });
+      fixture.cleanup();
       fs.rmSync(binDir, { recursive: true, force: true });
     }
   }

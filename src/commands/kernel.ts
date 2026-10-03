@@ -6,8 +6,9 @@ import type { DownloadChannel } from '../kernel.js';
 import * as kernel from '../kernel.js';
 import { parseMirrorArg, parseProxyArg } from '../kernel-args.js';
 import { getRunningState, startCommandForCurrentMode } from '../runtime.js';
-import { getMixedPortOrNull } from '../settings.js';
+import { getPortsOrNull } from '../settings.js';
 import { withSpinner } from '../spinner.js';
+import type { KernelUpdateInfo } from '../types.js';
 
 /** 通道的人类可读标签（失败汇总用）；措辞与 printChannelLine 头部行一致 */
 export function channelLabel(channel: DownloadChannel, isExplicitProxy: boolean): string {
@@ -105,9 +106,9 @@ export async function cmdKernel(args: string[]): Promise<void> {
   // 运行状态由命令层探测后注入——kernel.ts 不依赖 runtime/settings，通道决策保持纯函数可测
   const proxyRunning = getRunningState().running;
   // 端口只用于选通道，settings.ports 损坏时降级为「不探测本机代理」走 gh/直连
-  // （getMixedPortOrNull，与 doctor/status 对同一调用的降级姿态一致），
+  // （getPortsOrNull，与 doctor/status 对同一调用的降级姿态一致），
   // 不该在做任何下载前就中止；非法值由 doctor 的「端口配置」检查项单独报出
-  const proxyPort = proxyRunning ? getMixedPortOrNull() : null;
+  const proxyPort = proxyRunning ? (getPortsOrNull()?.mixed ?? null) : null;
   const forceDirect = mirrorInfo.isOverride && !mirrorInfo.mirror;
   // gh 探测只在做决策的形态下花这一次子进程（判据见 ghProbeNeeded）；
   // 不需要时传 false——resolveDownloadChannels 对显式覆盖形态本就不看这个输入
@@ -127,7 +128,7 @@ export async function cmdKernel(args: string[]): Promise<void> {
   // D8）：代理可用直接经代理，无代理才 gh 认证，direct 连 API 一起绕过，镜像绝不碰 API
   const { proxy: apiProxy, useGh } = kernel.resolveReleaseQuery(channelInput);
 
-  let info: Awaited<ReturnType<typeof kernel.checkUpdate>>;
+  let info: KernelUpdateInfo;
   try {
     const spinnerText = apiProxy
       ? `检查内核更新（经代理 ${apiProxy}）`

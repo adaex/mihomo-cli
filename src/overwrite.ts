@@ -245,12 +245,12 @@ function isYamlOverwriteFilename(filename: string): boolean {
  */
 const SCRIPT_EXTENSIONS = ['js', 'mjs', 'cjs'] as const;
 /** 脚本扩展名的正则片段，文件名判定与展示名剥扩展从同一登记表派生 */
-const SCRIPT_EXTENSION_PATTERN = `(?:${(SCRIPT_EXTENSIONS as readonly string[]).join('|')})`;
+const SCRIPT_EXTENSION_PATTERN = `(?:${SCRIPT_EXTENSIONS.join('|')})`;
 /** shortOverwriteName 剥扩展名：YAML（ya?ml）与脚本三扩展同源派生 */
-const OVERWRITE_EXTENSION_RE = new RegExp(`\\.(?:ya?ml|${(SCRIPT_EXTENSIONS as readonly string[]).join('|')})$`);
+const OVERWRITE_EXTENSION_RE = new RegExp(`\\.(?:ya?ml|${SCRIPT_EXTENSIONS.join('|')})$`);
 /** 主脚本文件名（overwrite.js / overwrite.mjs / overwrite.cjs），与 YAML 主文件同理最先加载 */
 function isPrimaryScriptFilename(filename: string): boolean {
-  return (SCRIPT_EXTENSIONS as readonly string[]).some(ext => filename === `overwrite.${ext}`);
+  return SCRIPT_EXTENSIONS.some(ext => filename === `overwrite.${ext}`);
 }
 
 function isScriptOverwriteFilename(filename: string): boolean {
@@ -452,14 +452,17 @@ function urlDomainValueProblem(value: string): string | undefined {
   return undefined;
 }
 
-/** 一行摘要 match 作用域，供 `ow list` 展示；无限定返回 undefined。 */
+/**
+ * 一行摘要 match 作用域，供 `ow list` 展示；无限定返回 undefined。
+ * normalizeMatch 保证 match 至少一个键（空 match 加载期即抛错），parts 必非空
+ */
 function summarizeMatch(match?: OverwriteMatch): string | undefined {
   if (!match) return undefined;
   const parts: string[] = [];
   for (const [key, value] of Object.entries(match)) {
     parts.push(`${key}=${value.join('/')}`);
   }
-  return parts.length > 0 ? parts.join(', ') : undefined;
+  return parts.join(', ');
 }
 
 /**
@@ -646,9 +649,9 @@ function normalizeEnabled(raw: unknown, fileName: string): boolean {
 }
 
 /** 把单文件加载异常归一成纯数据的坏文件条目（诊断面渲染、合并路径重建异常共用） */
-function toBrokenFile(file: string, filePath: string, e: unknown): BrokenOverwriteFile {
+function toBrokenFile(file: string, e: unknown): BrokenOverwriteFile {
   if (e instanceof CliError) {
-    return { name: file, path: filePath, label: e.label, message: e.message, hint: e.hint };
+    return { name: file, label: e.label, message: e.message, hint: e.hint };
   }
   const message = (e as Error).message || String(e);
   // YAML 里 `*` 开头的标量是**别名语法**，`name: *edu`（后缀通配）会解析失败，
@@ -657,7 +660,7 @@ function toBrokenFile(file: string, filePath: string, e: unknown): BrokenOverwri
   if (/alias/i.test(message)) {
     hint.push('若写了以 * 开头的通配值（如 name: *edu），YAML 会把它当别名语法，请加引号写成 name: "*edu"');
   }
-  return { name: file, path: filePath, label: '覆写配置错误', message: `覆写文件 "${file}" 解析失败: ${message}`, hint };
+  return { name: file, label: '覆写配置错误', message: `覆写文件 "${file}" 解析失败: ${message}`, hint };
 }
 
 /**
@@ -726,7 +729,7 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
     const filePath = path.join(USER_DATA_DIR, file);
     try {
       if (isScriptOverwriteFilename(file)) {
-        ok.push({ name: file, path: filePath, transform: loadOverwriteScript(filePath, file) });
+        ok.push({ name: file, transform: loadOverwriteScript(filePath, file) });
         continue;
       }
       const content = fs.readFileSync(filePath, 'utf8');
@@ -745,7 +748,7 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
         const { match, enabled, ...config } = parsed;
         assertNoMetadataKeyLookalikes(config, file);
         assertFileLevelOperatorRules(config, file);
-        ok.push({ name: file, path: filePath, config, match: normalizeMatch(match, file), enabled: normalizeEnabled(enabled, file) });
+        ok.push({ name: file, config, match: normalizeMatch(match, file), enabled: normalizeEnabled(enabled, file) });
       } else if (parsed !== null) {
         const shape = Array.isArray(parsed) ? '数组' : typeof parsed;
         throw new CliError(`覆写文件 "${file}" 顶层必须是映射（键值对），当前是 ${shape}`, {
@@ -755,7 +758,7 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
       }
       // parsed === null（字面 null/~ 或 --- 空文档）无内容可合并，不计入任何一边
     } catch (e) {
-      broken.push(toBrokenFile(file, filePath, e));
+      broken.push(toBrokenFile(file, e));
     }
   }
 
@@ -916,7 +919,6 @@ export function listOverwriteFile(scope?: OverwriteScope): OverwriteListResult {
     entries: ok,
     files: ok.map(f => ({
       name: f.name,
-      path: f.path,
       kind: f.transform ? ('script' as const) : ('yaml' as const),
       keys: f.transform ? [] : Object.keys(f.config || {}),
       scope: summarizeMatch(f.match),

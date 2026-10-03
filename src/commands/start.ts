@@ -11,6 +11,7 @@ import {
   disableServiceAutoStart,
   getServiceStatus,
   recordServiceStopped,
+  tunBlockedByRunningService,
 } from '../service.js';
 import { getPorts } from '../settings.js';
 import * as subscription from '../subscription.js';
@@ -72,7 +73,7 @@ export async function cmdStart(args: string[]): Promise<void> {
     // 快照用入口时值（快）；启动前还有一次现值复核（runtime.assertTunStartNotRaced），
     // 兜住快照之后才被并发 bootstrap 的服务
     if (serviceBefore.loaded) {
-      throw runtime.tunBlockedByRunningService();
+      throw tunBlockedByRunningService();
     }
 
     // 服务未装载但自启位还开着时，必须先关掉自启再起 TUN。

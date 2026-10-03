@@ -1,31 +1,17 @@
 import assert from 'node:assert/strict';
-import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
+import type { SpawnSyncReturns } from 'node:child_process';
 import { describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
-
 import type { DownloadChannel } from '../kernel.js';
+import { makeFixture, runCli as runCliFixture } from '../test-support/cli.js';
 import { buildDownloadFailureError, channelLabel, formatChannelSwitchLine, printChannelLine } from './kernel.js';
 
-const ENTRY = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'index.ts');
-
 function runCli(args: string[]): SpawnSyncReturns<string> {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-kernel-cli-'));
+  const fixture = makeFixture('mihomo-kernel-cli');
   try {
-    return spawnSync(process.execPath, ['--import', 'tsx', ENTRY, ...args], {
-      encoding: 'utf8',
-      timeout: 30_000,
-      env: {
-        ...process.env,
-        MIHOMO_CLI_DIR: dataDir,
-        MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(dataDir)}`,
-        NO_COLOR: '1',
-      },
-    });
+    // 真网络场景（kernel update 不带下载参数）给足 30s
+    return runCliFixture(args, fixture, { timeout: 30_000 });
   } finally {
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    fixture.cleanup();
   }
 }
 

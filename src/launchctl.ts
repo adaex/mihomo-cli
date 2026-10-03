@@ -124,7 +124,7 @@ export function runLaunchctl(args: string[], timeoutMs: number = LAUNCHCTL_TIMEO
  * 异常、launchctl 缺失、超时都会走到这里），故保留这道独立检查——
  * 与 `getMihomoPids` 对 pgrep 退出码的处理同一原则：**探测失败 ≠ 目标不存在**。
  */
-export function assertLaunchctlQueryOk(status: number | null, what: string): void {
+function assertLaunchctlQueryOk(status: number | null, what: string): void {
   if (status === 0 || status === LAUNCHCTL_NOT_LOADED) return;
 
   throw new CliError(`无法查询服务状态（launchctl ${what} 退出码 ${status ?? '执行失败'}）`, {

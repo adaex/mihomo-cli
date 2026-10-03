@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { type SpawnSyncReturns, spawn, spawnSync } from 'node:child_process';
+import { type SpawnSyncReturns, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
+
+import { ENTRY, makeFixture, runCli } from '../test-support/cli.js';
 
 /**
  * sub 的选项白名单按子命令校验（此前分发前对全组放行同一份白名单）：
@@ -12,8 +14,8 @@ import { describe, it } from 'node:test';
  * 选项一律用空格形式（`-u 30000`）：紧贴值形式的解析由另一分支统一处理。
  */
 function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSyncReturns<string>) => void): void {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-sub-'));
-  const label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
+  const fixture = makeFixture('mihomo-sub');
+  const { dataDir, label } = fixture;
   try {
     assert.ok(dataDir.startsWith(os.tmpdir()));
     // sub use 会经 isRestartNeededOnChange 查服务状态：label 必须隔离，
@@ -29,15 +31,10 @@ function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSync
         active_subscription: 'alpha',
       }),
     );
-    const run = (args: string[]) =>
-      spawnSync(process.execPath, ['--import', 'tsx', path.resolve('src/index.ts'), ...args], {
-        encoding: 'utf8',
-        timeout: 15_000,
-        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: label, NO_COLOR: '1' },
-      });
+    const run = (args: string[]) => runCli(args, fixture);
     check(dataDir, run);
   } finally {
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    fixture.cleanup();
   }
 }
 
@@ -246,7 +243,7 @@ describe('sub update 批量结果', () => {
 
       // 必须用**异步** spawn：桩 server 与测试同进程，spawnSync 会阻塞事件循环，
       // server 无法 accept，子进程的 fetch 挂到超时——父子死锁
-      const child = spawn(process.execPath, ['--import', 'tsx', path.resolve('src/index.ts'), 'sub', 'update'], { env });
+      const child = spawn(process.execPath, ['--import', 'tsx', ENTRY, 'sub', 'update'], { env });
       let stdout = '';
       let stderr = '';
       child.stdout.on('data', d => {

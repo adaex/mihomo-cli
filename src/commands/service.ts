@@ -12,10 +12,8 @@ import {
   detectLegacySystemInstall,
   getServiceStatus,
   installService,
-  readStopEpoch,
   SERVICE_BINARY_NAME,
-  shouldAbortStartOnDisable,
-  stopEpochBaseline,
+  startAbortedByConcurrentStop,
   uninstallService,
 } from '../service.js';
 
@@ -88,7 +86,7 @@ export async function cmdInstall(args: string[]): Promise<void> {
       // 与 launchOrRestart 同族：bootstrap 之后的健康观察窗（1.2–3s）完全在锁外，
       // 期间的并发 stop 会把任务 bootout，健康确认于是失败。此时报「恢复运行失败」
       // 是把用户自己的 stop 说成故障，必须复读计数区分——判据仍是那唯一一份
-      if (shouldAbortStartOnDisable(stopEpochBaseline(), readStopEpoch())) {
+      if (startAbortedByConcurrentStop()) {
         printRestoreSkipped();
         return;
       }

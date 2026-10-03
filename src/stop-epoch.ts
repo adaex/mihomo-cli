@@ -91,3 +91,13 @@ export function recordServiceStopped(): void {
 export function shouldAbortStartOnDisable(stopEpochBefore: number, stopEpochNow: number): boolean {
   return stopEpochNow !== stopEpochBefore;
 }
+
+/**
+ * 启动路径各消费点的唯一读法：进程基线（命令入口捕获）对现值。调用方没有正当变体
+ * （基线永远取进程基线、现值永远现读），用零参数组合让「取错基线」在结构上不可能
+ * （D4）。需要自由传参的纯判定场景（concludeHotReload、测试）仍用
+ * shouldAbortStartOnDisable。
+ */
+export function startAbortedByConcurrentStop(): boolean {
+  return shouldAbortStartOnDisable(stopEpochBaseline(), readStopEpoch());
+}

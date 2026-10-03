@@ -12,7 +12,7 @@ import { KERNEL_SELF_BACKUP_DIR, KERNEL_SELF_UPDATE_DIR, PATHS, USER_DATA_DIR } 
 import { lsofListenPids, probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
-import { getMixedPortOrNull, getPorts, getSubscriptionsWithCache, isValidSettingsContent, requireSubscriptionRawConfig } from '../settings.js';
+import { getPorts, getPortsOrNull, getSubscriptionsWithCache, isValidSettingsContent, requireSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription, isSubscriptionStale, prepareConfigForStart, resolveUpdateInterval } from '../subscription.js';
 import type { KernelUpdateInfo } from '../types.js';
 import { getLatestNpmVersion } from './update.js';
@@ -77,9 +77,9 @@ async function collectChecks(): Promise<Check[]> {
   // 复用同一份 probe 结果，不再自行 spawn
   const earlyService = getServiceStatus();
   const earlyState = getRunningState(earlyService);
-  // 端口只用于选通道：settings.ports 损坏时降级为「不探测本机代理」（getMixedPortOrNull），
+  // 端口只用于选通道：settings.ports 损坏时降级为「不探测本机代理」（getPortsOrNull），
   // 非法值由下方「端口配置」检查项单独报出
-  const kernelProxyPort = earlyState.running ? getMixedPortOrNull() : null;
+  const kernelProxyPort = earlyState.running ? (getPortsOrNull()?.mixed ?? null) : null;
   const kernelProbe = hasKernel() ? probeKernelVersion() : null;
   // 版本查询出网与 mihomo-cli kernel 同口径（代理在跑直接经代理、无代理才 gh 认证），
   // 决策走 kernel.resolveReleaseQuery 唯一出口——doctor 无 --mirror/--proxy，按无覆盖传入。
@@ -181,18 +181,17 @@ async function collectChecks(): Promise<Check[]> {
     }
   }
 
-  // === 服务 ===
-  const service = earlyService;
+  // === 服务 ===（earlyService 在函数开头取，全段复用同一份快照）
   const legacy = detectLegacySystemInstall();
   if (legacy) {
     push('服务', 'fail', '检测到旧版本的系统级服务（root LaunchDaemon），会抢占端口', 'mihomo-cli uninstall（需一次管理员密码）');
-  } else if (!service.installed && !service.loaded) {
+  } else if (!earlyService.installed && !earlyService.loaded) {
     push('服务', 'warn', '未安装（Mixed 模式需要）', 'mihomo-cli install');
-  } else if (!service.installed) {
+  } else if (!earlyService.installed) {
     push('服务', 'fail', 'plist 不存在但任务仍装载，KeepAlive 会持续拉起内核', 'mihomo-cli uninstall');
-  } else if (service.running) {
-    const abnormalExit = describeAbnormalExit(service);
-    push('服务', 'ok', `运行中${service.disabled ? '（自启已关闭）' : ''}${abnormalExit ? `，上次异常退出（${abnormalExit}）` : ''}`);
+  } else if (earlyService.running) {
+    const abnormalExit = describeAbnormalExit(earlyService);
+    push('服务', 'ok', `运行中${earlyService.disabled ? '（自启已关闭）' : ''}${abnormalExit ? `，上次异常退出（${abnormalExit}）` : ''}`);
     if (abnormalExit) {
       push('服务稳定性', 'warn', `内核上次异常退出（${abnormalExit}）`, 'mihomo-cli logs 0 查看原因');
     }
@@ -200,25 +199,24 @@ async function collectChecks(): Promise<Check[]> {
     // installed && !running：装着、自启开着、却没在跑且上次异常退出 —— 内核在被
     // KeepAlive 反复拉起。与「用户主动 stop」（disabled）区分开，前者是崩溃循环，必须醒目告警。
     // 判据经 describeAbnormalExit 收口，信号死亡（不写 last exit code）同样能检出
-    const abnormalExit = describeAbnormalExit(service);
-    if (!service.disabled && abnormalExit) {
+    const abnormalExit = describeAbnormalExit(earlyService);
+    if (!earlyService.disabled && abnormalExit) {
       push('服务', 'fail', `内核上次异常退出（${abnormalExit}），launchd 正在反复拉起`, 'mihomo-cli logs 0 查看原因，mihomo-cli stop 停止重试');
     } else {
-      push('服务', 'ok', `已安装，未运行${service.disabled ? '（自启已关闭）' : ''}`);
+      push('服务', 'ok', `已安装，未运行${earlyService.disabled ? '（自启已关闭）' : ''}`);
     }
   }
 
   // === 端口 ===
   // getPorts 对非法 ports 抛错：转成检查项（fail），不能让整个体检崩在半路。
   // 兜底用默认端口继续查——配置非法已单独报出，端口检查项用默认值不产生误导
-  const state = earlyState;
   const info = getConfigInfo();
   // 连通性探测（经代理 curl gstatic，不通时固定等满 2s）与下方配置原生校验（mihomo -t，
   // 可达数百 ms、超时 30s）互不依赖，需要的 state/info 此刻已齐——先发起、到连通性段
   // 再 await，让两段网络/子进程等待重叠，代理不通时少等约 2s。push 顺序不变，展示顺序不变。
   // probeProxyConnectivity 全 try/catch 永不 reject（与上方 npm promise 的防御同构），
   // 提前发起无 unhandled rejection 风险；其内部还有 3s 结果缓存，不会重复发请求
-  const connectivityPromise = state.running && info?.mixedPort ? probeProxyConnectivity(info.mixedPort) : null;
+  const connectivityPromise = earlyState.running && info?.mixedPort ? probeProxyConnectivity(info.mixedPort) : null;
   let mixedPortDefault = DEFAULT_MIXED_PORT;
   try {
     const ports = getPorts();
@@ -227,7 +225,7 @@ async function collectChecks(): Promise<Check[]> {
     push('端口配置', 'fail', (e as Error).message, '修正 settings.json 的 ports（1-65535 整数，mixed 与 controller 不能相同）');
   }
   const mixedPort = info?.mixedPort ?? mixedPortDefault;
-  if (state.running) {
+  if (earlyState.running) {
     if (isPortListening(mixedPort)) {
       push('端口', 'ok', `${mixedPort} 正在监听`);
     } else {

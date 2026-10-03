@@ -8,11 +8,10 @@ import {
   describeExitCause,
   getServiceStatus,
   isServiceInstalled,
-  readStopEpoch,
   restartService,
-  shouldAbortStartOnDisable,
+  startAbortedByConcurrentStop,
   startService,
-  stopEpochBaseline,
+  tunBlockedByConcurrentStart,
   waitServiceHealthy,
 } from './service.js';
 import type { ProcessInfo, RuntimeMode, ServiceStatus } from './types.js';
@@ -120,13 +119,13 @@ export function restartModeOnChange(): RuntimeMode | null {
  * 并发基线是命令入口捕获的进程基线（service.ts 的 captureStopEpochBaseline，D4）：
  * `startService` / `restartService` 内部与下方健康确认后的复读都读同一份，
  * 无需透传。TUN 分支在命令层 bump 自启后已重捕获基线（见 cmdStart），此处的复核
- * 消费的正是重捕获后的同一份——判据仍是 shouldAbortStartOnDisable 唯一出口（D2）。
+ * 消费的正是重捕获后的同一份——判据走 startAbortedByConcurrentStop 唯一读法（D2）。
  */
 export async function launchOrRestart(mode: RuntimeMode): Promise<number | null> {
   if (mode === 'tun') {
-    assertTunStartNotRaced();
-    const result = await startTun();
-    return result.pid;
+    // 复核与 startTun 的 pkill 前复核共用同一份装载态：两次查询在同一同步拍，
+    // 透传进去免 startTun 再发一次 launchctl print
+    return startTun(assertTunStartNotRaced());
   }
 
   const status = getServiceStatus();
@@ -136,7 +135,8 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
   let hotReloaded = false;
   let started: boolean;
   if (status.running && !status.disabled) {
-    ({ hotReloaded, started } = await restartService());
+    // status 就是上方同一同步拍的查询，透传进去免热重载再发一次 launchctl print
+    ({ hotReloaded, started } = await restartService(status));
   } else {
     ({ started } = await startService());
   }
@@ -162,9 +162,9 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
     // 后者报「内核未能进入运行状态」+ 日志尾部会把用户指向完全错误的方向——而 bootstrap
     // 之后到健康确认结束有 1.2–3s（SERVICE_OBSERVE_MS + GRACE）**完全在锁外**，锁内判据
     // 覆盖不到这段。
-    // 判据仍是唯一那份 shouldAbortStartOnDisable，只是多一个消费点：只在**失败之后**复读，
+    // 判据仍是唯一那份 startAbortedByConcurrentStop，只是多一个消费点：只在**失败之后**复读，
     // 绝不改写健康的结果，也绝不在计数未变时吞掉真实死因
-    if (shouldAbortStartOnDisable(stopEpochBaseline(), readStopEpoch())) throw cancelledByConcurrentStop();
+    if (startAbortedByConcurrentStop()) throw cancelledByConcurrentStop();
     throw e;
   }
 }
@@ -189,16 +189,6 @@ function cancelledByConcurrentStop(): CliError {
 }
 
 /**
- * 「服务在跑，TUN 起不来」的唯一文案出处。入口快照（cmdStart）与 TUN 启动前复核
- * （assertTunStartNotRaced）共用一份，散写两份会漂移。
- */
-export function tunBlockedByRunningService(): CliError {
-  return new CliError('服务正在运行，无法启动 TUN', {
-    hint: ['两者会抢占同一组端口与配置。请先停止服务:', '  mihomo-cli stop', '', 'TUN 用完后 mihomo-cli start 可恢复服务'],
-  });
-}
-
-/**
  * TUN 启动前的并发复核。TUN 的慢速阶段（订阅更新约 10s、sudo 密码窗最长 60s）全在
  * 锁外，没有这道复核的话（C1，全对枚举推演确认的两条矛盾交错）：
  * ① 并发 stop 在密码窗期间执行「无事可做」并 bump 后，TUN 照常启动——终态与用户
@@ -206,12 +196,16 @@ export function tunBlockedByRunningService(): CliError {
  * ② 并发的 mixed start 在本命令 bump 之后完成 bootstrap（其锁内判定的基线是本命令
  *    bump 后的值，不触发它的取消），TUN 脚本的 pkill 会杀掉它的服务内核。
  * ①用 epoch 判据（本命令已在 bump 后重捕获基线，自己的递增不计入）；②复核装载态。
- * 两个判据都不写第二份比较——epoch 判据仍是 shouldAbortStartOnDisable 唯一出口（D2）。
+ * 两个判据都不写第二份比较——epoch 判据走 startAbortedByConcurrentStop 唯一读法（D2）。
+ *
+ * 返回本次装载态快照供 startTun 的 pkill 前复核复用（同一同步拍，不重查）。
  */
-export function assertTunStartNotRaced(): void {
-  if (shouldAbortStartOnDisable(stopEpochBaseline(), readStopEpoch())) throw cancelledByConcurrentStop();
+export function assertTunStartNotRaced(): ServiceStatus {
+  if (startAbortedByConcurrentStop()) throw cancelledByConcurrentStop();
   // withDisabled:false——本判据只消费 loaded，print-disabled 是白多一次的阻塞查询
-  if (getServiceStatus({ withDisabled: false }).loaded) throw tunBlockedByRunningService();
+  const status = getServiceStatus({ withDisabled: false });
+  if (status.loaded) throw tunBlockedByConcurrentStart();
+  return status;
 }
 
 /** 按当前运行模式给出重启提示命令：TUN 在跑时裸 `mihomo-cli start` 会静默切回

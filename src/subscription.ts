@@ -15,7 +15,6 @@ import {
 import { withSpinner } from './spinner.js';
 import { maskUrl, sanitizeTerminal } from './text.js';
 import type {
-  AutoUpdateResult,
   ConfigSummary,
   DownloadResult,
   HttpResponse,
@@ -294,14 +293,9 @@ export async function downloadSubscription(url: string, subName = 'default', sig
 
   const { proxies, proxyGroups } = countConfigNodes(parsed);
 
-  return {
-    proxies,
-    proxyGroups,
-    userInfo: meta.userInfo,
-    updateInterval: meta.updateInterval,
-    webPageUrl: meta.webPageUrl,
-    username: meta.username,
-  };
+  // 订阅元信息（流量/到期/用户名等）已由 saveSubscriptionMeta 落缓存，
+  // 展示一律从缓存读；返回值只带摘要计数供格式化
+  return { proxies, proxyGroups };
 }
 
 /** 构建配置并交给内核校验；不替换现有 config.yaml，不停止正在运行的内核 */
@@ -376,12 +370,12 @@ export function printUpdateResult(r: TryUpdateResult): void {
   }
 }
 
-export async function autoUpdateStaleSubscription(options: { timeout?: number } = {}): Promise<AutoUpdateResult> {
+export async function autoUpdateStaleSubscription(options: { timeout?: number } = {}): Promise<void> {
   const allSubs = getSubscriptionsWithCache();
   const staleSubs = allSubs.filter(needsAutoUpdate);
 
   if (staleSubs.length === 0) {
-    return { total: 0, updated: 0, failed: 0 };
+    return;
   }
 
   if (staleSubs.length === 1) {
@@ -413,15 +407,9 @@ export async function autoUpdateStaleSubscription(options: { timeout?: number } 
     console.log(colors.yellow(`自动更新超时 (${timeoutMs / 1000}s)，已完成的更新生效，其余使用缓存配置`));
   }
 
-  let updatedCount = 0;
-  let failedCount = 0;
-
+  // aborted（超时跳过）既不算成功也不算失败：用缓存启动是设计内降级；
+  // 逐条结果都由 printUpdateResult 打印，计数无消费者
   for (const r of results) {
-    if (r.success) updatedCount++;
-    else if (!r.aborted) failedCount++;
     printUpdateResult(r);
   }
-
-  // aborted（超时跳过）既不算成功也不算失败：用缓存启动是设计内降级
-  return { total: staleSubs.length, updated: updatedCount, failed: failedCount };
 }

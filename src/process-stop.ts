@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { colors } from './colors.js';
 import { DIRS, ensureDirs, PATHS, rmrf } from './paths.js';
-import { getMihomoPids, isMihomoProcess, isProcessRoot, MAIN_INSTANCE_PATTERN } from './process-probe.js';
+import { getMihomoPids, isProbedMihomo, MAIN_INSTANCE_PATTERN, probeProcess } from './process-probe.js';
 import { describeSudoFailure, runSudoScript } from './sudo.js';
 import { shellQuote } from './text.js';
 import type { CleanupResult, StopResult } from './types.js';
@@ -73,13 +73,33 @@ export function clearPid(): Error | null {
 }
 
 /**
+ * pid 是否仍占着进程表（无信号存活探测）：ESRCH = 已死；EPERM = 进程在但无权
+ * （按在算）。只用于死亡等待轮询的快路径，终态结论一律以 pgrep pattern 复核为准
+ * ——pid 被无关进程复用会让本探测误判「还在」，多等几轮而已，不会错杀也不会
+ * 错报终态；launchd 新拉起的实例是新 pid，本探测看不到，正需要终态 pgrep 兜住
+ */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+/**
  * 轮询等待主实例进程全部退出（发信号 / bootout 后的死亡收割）。零进程提前返回，
  * 超时也正常返回——是否仍有进程由调用方另行复核，不在此抛错。
- * cleanupAll 与 legacy 迁移后的 pid 收口共用这一份等待，不各写第二份
+ * cleanupAll 与 legacy 迁移后的 pid 收口共用这一份等待，不各写第二份。
+ *
+ * cleanupAll 持有刚发信号的 pid 列表时按 pid 轮询（无 spawn，等待窗内 SIGINT 可达，
+ * 不被每次约 11ms 的 pgrep 阻塞）；无列表（reapPidWhenQuiet）沿用 pgrep。
+ * 终态复核（cleanupAll/reap 末尾）始终是 pgrep，判据不因快路径改变
  */
-async function waitUntilNoMihomo(): Promise<void> {
+async function waitUntilNoMihomo(pids?: readonly number[]): Promise<void> {
   for (let i = 0; i < PROCESS_WAIT_ATTEMPTS; i++) {
-    if (getMihomoPids().length === 0) return;
+    const stillThere = pids ? pids.some(pidAlive) : getMihomoPids().length > 0;
+    if (!stillThere) return;
     await sleep(PROCESS_WAIT_INTERVAL);
   }
 }
@@ -170,7 +190,10 @@ export async function cleanupAll(): Promise<CleanupResult> {
   const failedPids: number[] = [];
   let scriptError: Error | null = null;
 
-  const rootPids = pids.filter(isProcessRoot);
+  // 每个 pid 一次 ps 取全存活/属主/命令行：root 判定与逐 pid 复核读同一份 probe，
+  // 不再先查 uid、再查存活、再两 needle 连跑数次
+  const probes = new Map(pids.map(pid => [pid, probeProcess(pid)]));
+  const rootPids = pids.filter(pid => probes.get(pid)?.uid === '0');
   if (rootPids.length > 0) {
     // root 属主进程用户态 kill 不掉；sudo 脚本的 pkill 同时覆盖用户态主实例，
     // 故不再分别处理。先给一句人话预告再弹英文 Password:，与 TUN/legacy 路径同款；
@@ -197,10 +220,11 @@ export async function cleanupAll(): Promise<CleanupResult> {
     }
   } else {
     for (const pid of pids) {
-      // 发信号前复核命令行：pgrep 探测到此刻隔着逐 pid 的 ps（isProcessRoot），
+      // 发信号前复核命令行：pgrep 探测到此发信号隔着上面的 probe（与 root 判定同一份），
       // 目标自行退出且 pid 被复用的话，盲目 SIGKILL 会误杀无关进程——
       // 复核不匹配按「无事可做」计成功（与 pkill 无匹配退 1 的口径一致）
-      if (!isMihomoProcess(pid)) {
+      const probed = probes.get(pid);
+      if (!probed || !isProbedMihomo(probed)) {
         killedCount++;
         continue;
       }
@@ -212,7 +236,7 @@ export async function cleanupAll(): Promise<CleanupResult> {
     }
   }
 
-  await waitUntilNoMihomo();
+  await waitUntilNoMihomo(pids);
 
   // pid 文件的**唯一收口**：先复核 remaining，**有进程活着时不得删**——pid 文件是
   // isRunning/status 的真相源（getPid 只信它），sudo 被取消、root TUN 仍在路由时
@@ -233,7 +257,7 @@ export async function stop(): Promise<StopResult> {
     // 没有进程读它，文件无害，runtime/ 照常清理
     warnPidCleanupFailed(clearPid());
     clearRuntime();
-    return { success: true, notRunning: true };
+    return {};
   }
 
   const result = await cleanupAll();
@@ -256,9 +280,9 @@ export async function stop(): Promise<StopResult> {
     console.log(`进程 PID: ${remaining.join(', ')}`);
     console.log(MANUAL_PKILL_HINT);
     console.log('');
-    return { success: true, remaining };
+    return { remaining };
   }
 
   clearRuntime();
-  return { success: true };
+  return {};
 }

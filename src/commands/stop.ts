@@ -13,7 +13,7 @@ import type { StopResult } from '../types.js';
  * pid 复核结果（无 StopResult 全字段），与 stop() 的结果共用同一出口，改一处文案
  * 两边同步
  */
-export function handleStopResult(result: Pick<StopResult, 'remaining'>): void {
+export function handleStopResult(result: StopResult): void {
   if (result.remaining && result.remaining.length > 0) {
     throw new CliError(result.remaining.join(', '), { label: '部分进程未终止', hint: MANUAL_PKILL_HINT });
   }

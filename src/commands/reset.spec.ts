@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
-import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
+import type { SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
+import { makeFixture, readEpochIn, runCli } from '../test-support/cli.js';
+
 function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSyncReturns<string>) => void): void {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-reset-'));
-  const label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
+  const fixture = makeFixture('mihomo-reset');
+  const { dataDir, label } = fixture;
   try {
     assert.ok(dataDir.startsWith(os.tmpdir()));
     // 数据目录隔离不隔离 LaunchAgent：label 也要隔离，测试只能查询不存在的服务
@@ -31,15 +33,10 @@ function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSync
     fs.writeFileSync(path.join(dataDir, 'subscriptions', 'x.yaml'), 'proxies: []\n');
     fs.writeFileSync(path.join(dataDir, 'kernel', 'mihomo'), 'fixture');
     fs.writeFileSync(path.join(dataDir, 'logs', 'mihomo.log'), 'fixture');
-    const run = (args: string[]) =>
-      spawnSync(process.execPath, ['--import', 'tsx', path.resolve('src/index.ts'), ...args], {
-        encoding: 'utf8',
-        timeout: 15_000,
-        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: label, NO_COLOR: '1' },
-      });
+    const run = (args: string[]) => runCli(args, fixture);
     check(dataDir, run);
   } finally {
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    fixture.cleanup();
   }
 }
 
@@ -137,31 +134,20 @@ describe('reset 的最终数据状态', () => {
    * 并发的慢速 start 看不到变化，就会 bootstrap 一个内核已被删除的 plist，
    * 落进 KeepAlive 每约 10s 拉起一次的崩溃循环。
    */
-  const readEpoch = (dataDir: string): number => {
-    const servicePath = path.resolve('src/service.ts');
-    const r = spawnSync(
-      process.execPath,
-      ['--import', 'tsx', '-e', `import { readStopEpoch } from ${JSON.stringify(servicePath)}; process.stdout.write(String(readStopEpoch()));`],
-      { encoding: 'utf8', env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1' }, timeout: 30_000 },
-    );
-    assert.equal(r.status, 0, `读取子进程应正常退出: ${r.stderr}`);
-    return Number.parseInt(r.stdout.trim(), 10);
-  };
-
   it('删除运行前提的 reset 记录停止，纯配置的 reset 不记录', () =>
     withFixture((dataDir, run) => {
       // logs 的 needsStop 为真：清理游离内核后即将删文件
-      const beforeLogs = readEpoch(dataDir);
+      const beforeLogs = readEpochIn(dataDir);
       const logs = run(['reset', 'logs', '-y']);
       assert.equal(logs.status, 0, logs.stderr);
       assert.equal(fs.existsSync(path.join(dataDir, 'logs', 'mihomo.log')), false);
-      assert.notEqual(readEpoch(dataDir), beforeLogs, 'reset logs 会清进程并删文件，必须让并发的 start 看见');
+      assert.notEqual(readEpochIn(dataDir), beforeLogs, 'reset logs 会清进程并删文件，必须让并发的 start 看见');
 
       // overwrites 的 needsStop 为假：只动配置文件，不该中止并发的 start
-      const beforeOw = readEpoch(dataDir);
+      const beforeOw = readEpochIn(dataDir);
       const ow = run(['reset', 'ow', '-y']);
       assert.equal(ow.status, 0, ow.stderr);
-      assert.equal(readEpoch(dataDir), beforeOw, 'reset ow 不碰运行前提，不该记录停止');
+      assert.equal(readEpochIn(dataDir), beforeOw, 'reset ow 不碰运行前提，不该记录停止');
     }));
 });
 
@@ -203,10 +189,9 @@ describe('确认窗口的并发复核', () => {
    * + 临时 HOME（userAgentPlist 随 homedir 走），桩 launchctl 走 PATH 前置。
    */
   it('确认后服务已被并发卸载：不调卸载、如实报告无内容', () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-reset-recheck-'));
+    const fixture = makeFixture('mihomo-reset-recheck');
     const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-reset-recheck-home-'));
     const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-reset-recheck-bin-'));
-    const label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
     const countFile = path.join(fakeBin, 'count');
     try {
       fs.writeFileSync(
@@ -229,23 +214,14 @@ esac
 `,
       );
       fs.chmodSync(path.join(fakeBin, 'launchctl'), 0o755);
-      const result = spawnSync(process.execPath, ['--import', 'tsx', path.resolve('src/index.ts'), 'reset', 'service', '-y'], {
-        encoding: 'utf8',
-        timeout: 15_000,
-        env: {
-          ...process.env,
-          MIHOMO_CLI_DIR: dataDir,
-          MIHOMO_CLI_DAEMON_LABEL: label,
-          NO_COLOR: '1',
-          HOME: fakeHome,
-          PATH: `${fakeBin}:${process.env.PATH}`,
-        },
+      const result = runCli(['reset', 'service', '-y'], fixture, {
+        env: { HOME: fakeHome, PATH: `${fakeBin}:${process.env.PATH}` },
       });
       assert.equal(result.status, 0, result.stderr);
       assert.match(result.stdout, /没有需要重置的内容/);
       assert.doesNotMatch(result.stdout, /已重置/);
     } finally {
-      fs.rmSync(dataDir, { recursive: true, force: true });
+      fixture.cleanup();
       fs.rmSync(fakeHome, { recursive: true, force: true });
       fs.rmSync(fakeBin, { recursive: true, force: true });
     }

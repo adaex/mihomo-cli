@@ -73,6 +73,13 @@ describe('isMihomoProcess（kill 前复核的判据）', () => {
           process.stdout.write('SELF:' + m.isMihomoProcess(process.pid) + '\\n');
           process.stdout.write('KERNEL:' + m.isMihomoProcess(${JSON.stringify(String(child.pid))}) + '\\n');
           process.stdout.write('GONE:' + m.isMihomoProcess(999999) + '\\n');
+          // probeProcess 单次 ps 的字段解析（uid/rss/command 从同一行拆，曾分散在四个 ps）
+          const self = m.probeProcess(process.pid);
+          process.stdout.write('SELFFIELDS:' + (self.alive && /^\\d+$/.test(self.uid) && Number.isFinite(self.rss) && self.command.length > 0) + '\\n');
+          const kernel = m.probeProcess(${JSON.stringify(String(child.pid))});
+          process.stdout.write('KERNELFIELDS:' + (kernel.alive && kernel.command.includes('mihomo')) + '\\n');
+          const gone = m.probeProcess(999999);
+          process.stdout.write('GONEDEAD:' + (!gone.alive && gone.uid === null && gone.rss === null && gone.command === '') + '\\n');
         `;
         const r = spawnSync(process.execPath, ['--import', 'tsx', '-e', code], {
           encoding: 'utf8',
@@ -82,6 +89,9 @@ describe('isMihomoProcess（kill 前复核的判据）', () => {
         assert.match(r.stdout, /SELF:false/, 'node 自身命令行不含内核路径，应判 false');
         assert.match(r.stdout, /KERNEL:true/, `假内核进程应判 true: ${r.stdout}`);
         assert.match(r.stdout, /GONE:false/, '不存在的 pid 判 false');
+        assert.match(r.stdout, /SELFFIELDS:true/, '自身进程：alive/数字 uid/有限 rss/非空 command 同一次 ps 取全');
+        assert.match(r.stdout, /KERNELFIELDS:true/, '内核进程的 command 必须含 mihomo 路径');
+        assert.match(r.stdout, /GONEDEAD:true/, '不存在的 pid：四字段归 NOT_RUNNING 形态');
       } finally {
         child.kill('SIGKILL');
       }

@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
+
+import { type CliFixture, makeFixture, runCli } from '../test-support/cli.js';
 
 /**
  * 多余位置参数统一报错的端到端回归。
@@ -21,27 +20,20 @@ import { fileURLToPath } from 'node:url';
  * 的带值选项值、`logs 3 -f` 的 flag 位置都不能被算成位置参数）。
  */
 
-const SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
-const ENTRY = path.join(SRC_DIR, '..', 'index.ts');
-
+let fixture: CliFixture;
 let dataDir: string;
-let label: string;
 
 beforeEach(() => {
-  dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-posargs-'));
-  label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
+  fixture = makeFixture('mihomo-posargs');
+  dataDir = fixture.dataDir;
 });
 
 afterEach(() => {
-  fs.rmSync(dataDir, { recursive: true, force: true });
+  fixture.cleanup();
 });
 
 function run(args: string[]): { status: number | null; output: string } {
-  const r = spawnSync(process.execPath, ['--import', 'tsx', ENTRY, ...args], {
-    encoding: 'utf8',
-    env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: label, NO_COLOR: '1' },
-    timeout: 30_000,
-  });
+  const r = runCli(args, fixture, { timeout: 30_000 });
   return { status: r.status, output: `${r.stdout || ''}${r.stderr || ''}` };
 }
 

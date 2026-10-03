@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
+
+import { type CliFixture, makeFixture, runCli } from '../test-support/cli.js';
 
 /**
  * `mihomo-cli doctor`：端到端跑完整体检，锁「配置构建的 warnings 透传进体检输出」。
@@ -16,13 +16,12 @@ import { fileURLToPath } from 'node:url';
  * （「体检完成」在抛错之前打印，它在场即证明全部检查项都跑到了）。
  */
 
-const SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
-const ENTRY = path.join(SRC_DIR, '..', 'index.ts');
-
+let fixture: CliFixture;
 let dataDir: string;
 
 beforeEach(() => {
-  dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-doctor-'));
+  fixture = makeFixture('mihomo-doctor');
+  dataDir = fixture.dataDir;
   fs.mkdirSync(path.join(dataDir, 'subscriptions'));
   fs.mkdirSync(path.join(dataDir, 'kernel'));
   fs.writeFileSync(
@@ -57,20 +56,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  fs.rmSync(dataDir, { recursive: true, force: true });
+  fixture.cleanup();
 });
 
 function run(args: string[]): { status: number | null; stdout: string; output: string } {
-  const r = spawnSync(process.execPath, ['--import', 'tsx', ENTRY, ...args], {
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      MIHOMO_CLI_DIR: dataDir,
-      MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(dataDir)}`,
-      NO_COLOR: '1',
-    },
-    timeout: 60_000,
-  });
+  const r = runCli(args, fixture, { timeout: 60_000 });
   return { status: r.status, stdout: r.stdout || '', output: `${r.stdout || ''}${r.stderr || ''}` };
 }
 
@@ -203,17 +193,7 @@ describe('doctor：npm 查询与本地检查并行', () => {
         { mode: 0o755 },
       );
 
-      const r = spawnSync(process.execPath, ['--import', 'tsx', ENTRY, 'doctor'], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${binDir}:${process.env.PATH}`,
-          MIHOMO_CLI_DIR: dataDir,
-          MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(dataDir)}`,
-          NO_COLOR: '1',
-        },
-        timeout: 60_000,
-      });
+      const r = runCli(['doctor'], fixture, { timeout: 60_000, env: { PATH: `${binDir}:${process.env.PATH}` } });
       const output = `${r.stdout || ''}${r.stderr || ''}`;
 
       // 先确认两个桩都真的被调用了——否则「区间为空」也可能只是因为压根没执行，是假阳性
@@ -269,17 +249,7 @@ describe('doctor：内核版本查询超时不拖住进程退出', () => {
       fs.writeFileSync(path.join(binDir, 'npm'), ['#!/bin/sh', '[ "$1" = "view" ] && { echo "26.9.90"; exit 0; }', 'exit 9', ''].join('\n'), { mode: 0o755 });
 
       const started = Date.now();
-      const r = spawnSync(process.execPath, ['--import', 'tsx', ENTRY, 'doctor'], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${binDir}:${process.env.PATH}`,
-          MIHOMO_CLI_DIR: dataDir,
-          MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(dataDir)}`,
-          NO_COLOR: '1',
-        },
-        timeout: 60_000,
-      });
+      const r = runCli(['doctor'], fixture, { timeout: 60_000, env: { PATH: `${binDir}:${process.env.PATH}` } });
       const elapsed = Date.now() - started;
       const output = `${r.stdout || ''}${r.stderr || ''}`;
 
@@ -310,17 +280,7 @@ describe('doctor：CLI 版本比较的脏数据守卫', () => {
     const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-doctor-dirtyver-bin-'));
     try {
       fs.writeFileSync(path.join(binDir, 'npm'), ['#!/bin/sh', '[ "$1" = "view" ] || exit 9', 'echo "26.10.99.!!not-semver"', ''].join('\n'), { mode: 0o755 });
-      const r = spawnSync(process.execPath, ['--import', 'tsx', ENTRY, 'doctor'], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${binDir}:${process.env.PATH}`,
-          MIHOMO_CLI_DIR: dataDir,
-          MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(dataDir)}`,
-          NO_COLOR: '1',
-        },
-        timeout: 60_000,
-      });
+      const r = runCli(['doctor'], fixture, { timeout: 60_000, env: { PATH: `${binDir}:${process.env.PATH}` } });
       const output = `${r.stdout || ''}${r.stderr || ''}`;
       assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
       assert.match(r.stdout || '', /无法比较/, `应有 skip 提示: ${output}`);
@@ -338,7 +298,8 @@ describe('doctor：坏订阅名不击穿体检', () => {
    * 不能在「订阅配置」项整体退出、后面的端口/连通性检查全不跑。
    */
   it('非法订阅名：订阅配置项报 fail，体检完成', () => {
-    const dirty = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-doctor-badname-'));
+    const badNameFixture = makeFixture('mihomo-doctor-badname');
+    const dirty = badNameFixture.dataDir;
     try {
       fs.mkdirSync(path.join(dirty, 'subscriptions'), { recursive: true });
       fs.mkdirSync(path.join(dirty, 'kernel'), { recursive: true });
@@ -346,22 +307,13 @@ describe('doctor：坏订阅名不击穿体检', () => {
         path.join(dirty, 'settings.json'),
         JSON.stringify({ subscriptions: [{ name: '../evil', url: 'https://example.com' }], active_subscription: '../evil' }),
       );
-      const r = spawnSync(process.execPath, ['--import', 'tsx', ENTRY, 'doctor'], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          MIHOMO_CLI_DIR: dirty,
-          MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(dirty)}`,
-          NO_COLOR: '1',
-        },
-        timeout: 60_000,
-      });
+      const r = runCli(['doctor'], badNameFixture, { timeout: 60_000 });
       const output = `${r.stdout || ''}${r.stderr || ''}`;
       assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
       assert.match(r.stdout || '', /订阅名称无效|订阅配置/, output);
       assert.notEqual(r.status, null);
     } finally {
-      fs.rmSync(dirty, { recursive: true, force: true });
+      badNameFixture.cleanup();
     }
   });
 });

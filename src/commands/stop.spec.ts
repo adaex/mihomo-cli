@@ -6,6 +6,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { shouldAbortStartOnDisable } from '../service.js';
+import { makeFixture, readEpochIn, runCli } from '../test-support/cli.js';
 
 /**
  * `cmdStop` 的两条提前返回路径是否留下「停止过」的记录。
@@ -22,8 +23,8 @@ import { shouldAbortStartOnDisable } from '../service.js';
 
 /** 在隔离目录 + 独立 label 下跑真实 CLI。返回 run 供用例多次调用 */
 function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSyncReturns<string>) => void): void {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-stop-'));
-  const label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
+  const fixture = makeFixture('mihomo-stop');
+  const { dataDir, label } = fixture;
   try {
     // 隔离前提必须有断言，不能只靠约定（CLAUDE：进程匹配需绑定临时 MIHOMO_CLI_DIR，
     // 涉及服务查询时还需隔离 label——LaunchAgent plist 在数据目录之外）
@@ -31,39 +32,15 @@ function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSync
     assert.equal(fs.existsSync(path.join(os.homedir(), 'Library/LaunchAgents', `${label}.plist`)), false);
     assert.equal(fs.existsSync(path.join('/Library/LaunchDaemons', `${label}.plist`)), false);
 
-    const run = (args: string[]) =>
-      spawnSync(process.execPath, ['--import', 'tsx', path.resolve('src/index.ts'), ...args], {
-        encoding: 'utf8',
-        timeout: 20_000,
-        env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: label, NO_COLOR: '1' },
-      });
+    const run = (args: string[]) => runCli(args, fixture);
 
     check(dataDir, run);
 
     // 测试自己不许留下 plist（label 隔离若失效，这里会炸）
     assert.equal(fs.existsSync(path.join(os.homedir(), 'Library/LaunchAgents', `${label}.plist`)), false);
   } finally {
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    fixture.cleanup();
   }
-}
-
-/**
- * 用 service.ts 导出的**真实** `readStopEpoch` 读取，不在测试里另抄一份解析——
- * 抄一份等于在验副本。PATHS 在模块加载时固化 MIHOMO_CLI_DIR，故必须起子进程。
- */
-function readEpochIn(dataDir: string): number {
-  const servicePath = path.resolve('src/service.ts');
-  const r = spawnSync(
-    process.execPath,
-    ['--import', 'tsx', '-e', `import { readStopEpoch } from ${JSON.stringify(servicePath)}; process.stdout.write(String(readStopEpoch()));`],
-    {
-      encoding: 'utf8',
-      env: { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_ALLOW_ANY_PLATFORM: '1' },
-      timeout: 30_000,
-    },
-  );
-  assert.equal(r.status, 0, `读取子进程应正常退出: ${r.stderr}`);
-  return Number.parseInt(r.stdout.trim(), 10);
 }
 
 describe('stop 的提前返回路径记录停止计数', () => {

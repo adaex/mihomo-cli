@@ -28,6 +28,16 @@ export function sanitizeTerminal(s: string): string {
   return s.replace(ansiEscape, '').replace(controlChars, '');
 }
 
+/**
+ * 取 curl stderr 的末行并剥掉 `curl: (N)` 前缀，得到一行可读原因；无内容返回 undefined。
+ * 内核版本查询与代理连通性探测两处的 curl 失败同口径，别各写一份（格式漂移则诊断说法不一）。
+ */
+export function lastCurlErrorLine(stderr: unknown): string | undefined {
+  const text = typeof stderr === 'string' || Buffer.isBuffer(stderr) ? stderr.toString().trim() : '';
+  const lastLine = text ? text.split('\n').pop() : undefined;
+  return lastLine ? lastLine.replace(/^curl: \(\d+\)\s*/, '') : undefined;
+}
+
 /** maskUrl 的 token 参数名黑名单（值可能很短，如 ?token=abc）。键唯一由 text.spec 断言锁定 */
 export const TOKEN_KEY_NAMES = [
   'token',

@@ -252,17 +252,15 @@ describe('stop 真实停止', () => {
 
     const result = await stop();
 
-    assert.equal(result.success, true);
-    assert.equal(result.notRunning, undefined);
+    assert.equal(result.remaining, undefined, '杀干净时结果不带残留集合');
     assert.equal(getMihomoPids().length, 0);
     assert.equal(fs.existsSync(PATHS.pidFile), false);
   });
 
-  it('无进程时报 notRunning 而非谎报杀掉了什么；用户态 pid 文件顺手清掉', async () => {
+  it('无进程时不谎报杀掉了什么（无 remaining）；用户态 pid 文件顺手清掉', async () => {
     fs.writeFileSync(PATHS.pidFile, '99999');
     const result = await stop();
-    assert.equal(result.success, true);
-    assert.equal(result.notRunning, true);
+    assert.equal(result.remaining, undefined, '零进程分支没有残留集合可报告');
     assert.equal(fs.existsSync(PATHS.pidFile), false, '游离 stop 的零进程分支要清用户态 pid 文件');
   });
 

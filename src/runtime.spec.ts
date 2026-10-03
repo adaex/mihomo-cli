@@ -19,8 +19,8 @@ process.env.MIHOMO_CLI_DAEMON_LABEL = `com.mihomo-cli.spec-${process.pid}`;
 const { SERVICE_LABEL } = await import('./constants.js');
 const { PATHS, DIRS } = await import('./paths.js');
 const { isRunning, MAIN_INSTANCE_PATTERN } = await import('./process-probe.js');
-const { assertTunStartNotRaced, restartModeFor, restartModeOnChange, tunBlockedByRunningService } = await import('./runtime.js');
-const { captureStopEpochBaseline, recordServiceStopped } = await import('./service.js');
+const { assertTunStartNotRaced, restartModeFor, restartModeOnChange } = await import('./runtime.js');
+const { captureStopEpochBaseline, recordServiceStopped, tunBlockedByConcurrentStart } = await import('./service.js');
 const { CliError } = await import('./errors.js');
 
 /** 与 getRunningState 的构造口径一致：running 与 kind 同真同假 */
@@ -148,7 +148,7 @@ exit 0
     }
   }
 
-  it('服务已装载 → 抛「服务正在运行」（与入口快照检查同一文案出处）', () => {
+  it('服务已装载 → 抛并发拉起文案（本复核点只可能因另一终端并发启动触发）', () => {
     withStub('running', () => {
       const err = (() => {
         try {
@@ -159,8 +159,8 @@ exit 0
         return null;
       })();
       assert.ok(err instanceof CliError, '应为 CliError');
-      assert.equal(err.message, tunBlockedByRunningService().message);
-      assert.equal(err.message, '服务正在运行，无法启动 TUN');
+      assert.equal(err.message, tunBlockedByConcurrentStart().message);
+      assert.equal(err.message, '另一终端已启动 Mixed 服务，TUN 未启动');
     });
   });
 

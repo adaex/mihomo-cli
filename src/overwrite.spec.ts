@@ -29,7 +29,7 @@ after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
  * （mergeConfigLevel 是私有实现）。
  */
 function mergeOnce(base: unknown, override: Record<string, unknown>): Record<string, unknown> {
-  const file: OverwriteFileEntry = { name: 'overwrite.yaml', path: path.join(tmpDir, 'overwrite.yaml'), config: override };
+  const file: OverwriteFileEntry = { name: 'overwrite.yaml', config: override };
   // applyOverwrite 的展开（{...null}）与旧私有合并入口同语义：null 底按空映射起算
   return applyOverwrite((base ?? {}) as Record<string, unknown>, [file], { mode: 'mixed' }).config;
 }
@@ -225,7 +225,6 @@ describe('合并层嵌套键一律字面（操作符只在顶层生效）', () =
 describe('matchesScope (经 selectActiveOverwriteFiles)', () => {
   const mk = (match: OverwriteMatch | undefined): OverwriteFileEntry => ({
     name: 'overwrite.yaml',
-    path: '/tmp/overwrite.yaml',
     config: {},
     match,
   });
@@ -300,7 +299,7 @@ describe('合并层数组语义误用（+key / key+ 作用于非数组）', () =
 });
 
 describe('matchesScope 订阅名大小写不敏感', () => {
-  const file = (match: OverwriteMatch): OverwriteFileEntry => ({ name: 'overwrite.x.yaml', path: '/x', config: {}, match });
+  const file = (match: OverwriteMatch): OverwriteFileEntry => ({ name: 'overwrite.x.yaml', config: {}, match });
 
   it('match 值小写命中大写订阅名（与 sub use 的解析口径一致）', () => {
     const files = [file({ name: ['home'] })];
@@ -389,7 +388,6 @@ describe('match name 通配：尾部 *（前缀）与头部 *（后缀），其�
   /** 经 normalizeMatch 走一遍，验证的是「用户写的 YAML」而非手搓的内部结构 */
   const fromYaml = (match: Record<string, unknown>): OverwriteFileEntry => ({
     name: 'overwrite.x.yaml',
-    path: '/x',
     config: {},
     match: normalizeMatch(match, 'overwrite.x.yaml'),
   });

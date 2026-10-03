@@ -7,7 +7,7 @@ import { listOverwriteFile, shortOverwriteName } from '../overwrite.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
-import { getControllerPortOrNull, getSubscriptionsWithCache, readSubscriptionRawConfig, subscriptionUrgency } from '../settings.js';
+import { getPortsOrNull, getSubscriptionsWithCache, readSubscriptionRawConfig, subscriptionUrgency } from '../settings.js';
 import { formatProxySummary, getActiveSubscription, isSubscriptionStale, resolveUpdateInterval } from '../subscription.js';
 import type { OverwriteFileInfo, ProxyProbeResult, StatusJson, SubscriptionUrgency } from '../types.js';
 
@@ -34,6 +34,14 @@ function expireColor(line: string, urgency: SubscriptionUrgency): string {
   if (urgency === 'expiring') return colors.yellow(line);
   return line;
 }
+
+/**
+ * 「本次真正生效的覆写文件」的唯一谓词：文件未被停用且 match 命中（matched 不是
+ * 显式 false；undefined＝无法判定，按生效算）。JSON 的 applied 与文本主行共用——
+ * 同一份命令输出的两个面不许各抄一份过滤式。注意这是**展示判定**，与合并闸门
+ * selectActiveOverwriteFiles 的平行是 D7 的刻意设计，不要互相收拢
+ */
+const isActiveOverwrite = (f: OverwriteFileInfo): boolean => f.enabled && f.matched !== false;
 
 /** 组装 status 的机器可读快照（与文本展示同源数据） */
 function buildStatusJson(args: {
@@ -87,7 +95,7 @@ function buildStatusJson(args: {
       files: args.overwriteFiles.filter(f => f.enabled).map(f => f.name),
       // 全局关闭时 buildConfig 不加载任何覆写，applied 必须空——只滤 enabled/match
       // 会列出「生效文件」，与同一份 JSON 里的 enabled:false 自相矛盾
-      applied: args.overwriteEnabled ? args.overwriteFiles.filter(f => f.enabled && f.matched !== false).map(f => f.name) : [],
+      applied: args.overwriteEnabled ? args.overwriteFiles.filter(isActiveOverwrite).map(f => f.name) : [],
       // 加载失败的文件不属于 files/applied（既没合并也无法判 enabled/match），单列 errors。
       // hint 必须带出：最有用的迁移指引（已移除操作符改 JS、*edu 加引号等）都在里面，
       // 只给 message 等于把可执行的修复步骤扔在启动硬失败那一条路径上
@@ -143,7 +151,7 @@ export async function printStatus(args: string[] = []): Promise<void> {
   const cached = activeSub ? getSubscriptionsWithCache().find(s => s.name === activeSub.name) : undefined;
   const legacy = detectLegacySystemInstall();
   // 控制器端口在 settings 非法时不应让整个 status 崩掉（doctor 另有一项专查非法 ports）
-  const controllerPort = getControllerPortOrNull();
+  const controllerPort = getPortsOrNull()?.controller ?? null;
 
   const { running, pid, kind } = state;
 
@@ -307,7 +315,7 @@ function printOverwriteLines(
     return;
   }
 
-  const active = files.filter(f => f.enabled && f.matched !== false);
+  const active = files.filter(isActiveOverwrite);
   const unmatched = files.filter(f => f.enabled && f.matched === false);
   const disabledCount = files.filter(f => !f.enabled).length;
 

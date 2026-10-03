@@ -5,6 +5,7 @@ import { PATHS } from './paths.js';
 import { lsofListenPids } from './proxy-probe.js';
 import { getPorts, readSettings } from './settings.js';
 import { shouldAbortStartOnDisable } from './stop-epoch.js';
+import type { ServiceStatus } from './types.js';
 
 /**
  * 热重载（PUT /configs）探测与结论，及 kickstart 顺便轮转的 oversized 判定。
@@ -37,7 +38,7 @@ export function logOversized(): boolean {
  * 但也正因回退路径会真的重启内核，调用方必须对回退结果做健康检查——
  * 见 restartService 的返回值与 launchOrRestart。
  */
-export async function tryHotReload(): Promise<boolean> {
+export async function tryHotReload(prefetched?: ServiceStatus): Promise<boolean> {
   // 先确认 controller 端口上确实是我们托管的服务内核，再把配置变更托付给它。
   // 只看「服务已装」+ PUT 返回 2xx 是不够的：该端口被其他服务占用（另一个 Clash、
   // 开发服务器）且对该 PUT 返回 2xx 时，CLI 会打印「已启动」而服务内核仍跑旧配置——
@@ -47,9 +48,11 @@ export async function tryHotReload(): Promise<boolean> {
     // 状态查询同样可能抛错（launchctl 超时/112/125、settings 端口非法）：探测类失败
     // 必须按「热重载不可用」处理并回退 kickstart，不能让一次读状态失败直接废掉整个
     // restartService——launchd 病态时恰恰最需要 kickstart 自愈。契约见函数头注释。
+    // 调用方（restartService←launchOrRestart）在同一同步拍已查过完整状态时经
+    // prefetched 透传，免再发一次 launchctl print；缺省自查保留直接调用与测试路径。
     // withDisabled:false——热重载只消费 running/pid，print-disabled 是白多一次的阻塞
     // 查询；abort 预算也不该被它分食（见下方 timer 起表位置的注释）
-    const status = getServiceStatus({ withDisabled: false });
+    const status = prefetched ?? getServiceStatus({ withDisabled: false });
     if (!status.running || status.pid === null) return false;
 
     // 端口经 settings.ports 解析（默认 9090），与 buildConfig 写进配置的值同源；

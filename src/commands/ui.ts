@@ -5,7 +5,7 @@ import { UI_URLS } from '../constants.js';
 import { CliError } from '../errors.js';
 import { openUrl } from '../open.js';
 import { getRunningState } from '../runtime.js';
-import { getControllerPortOrNull, readSettings } from '../settings.js';
+import { getPortsOrNull, readSettings } from '../settings.js';
 
 /**
  * 解析 UI 名称：未传参取默认 zash，传参就小写归一（与启动模式/目录目标/reset 同口径）。
@@ -45,9 +45,9 @@ export function cmdUI(args: string[]): void {
   }
 
   const url = UI_URLS[uiName];
-  // 与 status 同款的降级（getControllerPortOrNull）：ports 配置写坏不应把整个命令
+  // 与 status 同款的降级（getPortsOrNull）：ports 配置写坏不应把整个命令
   // 挡死——控制器地址是排查「UI 连不上」的唯一可见线索，必须能打印
-  const controllerPort = getControllerPortOrNull();
+  const controllerPort = getPortsOrNull()?.controller ?? null;
 
   console.log(`打开 Web UI: ${uiName}`);
   console.log(`页面: ${url}`);

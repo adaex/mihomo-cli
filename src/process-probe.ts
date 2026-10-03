@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { CliError } from './errors.js';
 import { PATHS } from './paths.js';
 import { escapeRegExp } from './text.js';
-import type { ProcessInfo, ProcessStatus, StaleState } from './types.js';
+import type { ProcessStatus, StaleState } from './types.js';
 
 /**
  * 进程探测：ps/pgrep 查询、pid 文件、运行状态。只读、无副作用，是启停与状态展示的共同底层。
@@ -14,42 +14,45 @@ import type { ProcessInfo, ProcessStatus, StaleState } from './types.js';
 /** ps 查询超时：探测进程存活/属主/命令行的统一上限，卡住时按不存在处理 */
 const PS_TIMEOUT_MS = 5000;
 
-function isProcessRunning(pid: number): boolean {
-  if (!pid) return false;
-  try {
-    const result = spawnSync('ps', ['-p', String(pid), '-o', 'pid='], { encoding: 'utf8', timeout: PS_TIMEOUT_MS });
-    return (result.stdout || '').trim().length > 0;
-  } catch {
-    return false;
-  }
-}
-
 /**
- * 校验 pid 对应进程的命令行是否包含指定子串（防 PID 复用误杀：pid 文件残留后该 pid 可能已被
- * 系统分配给无关进程）。读不到命令行时保守返回 false。
+ * 一次 ps 取一个 pid 的存活、属主、RSS 与命令行四个事实——存活/属主/命令行匹配/
+ * 内存展示与逐 pid 清理都从这同一份结果派生，不再各发一次 ps（一次清理对每个 pid
+ * 曾最多连发四次：uid 一次、存活一次、两条 needle 各一次）。
  *
  * 必须带 `-ww`：BSD/macOS 的 ps 即使 stdout 不是终端也会把 command 列截断到 79 列。
  * needle 是 binary 路径（偏移 0，截不掉），但命令行其余部分越过 79 列就会被截断，
  * `-ww` 不能去掉。
+ * ps 失败或查不到统一为 NOT_RUNNING：存活、属主与命令行匹配的所有派生判定在查询
+ * 失败时都取保守默认，与旧的四个独立函数一致。
  */
-function isProcessCommandMatching(pid: number, needle: string): boolean {
-  if (!pid) return false;
+export interface ProbedProcess {
+  alive: boolean;
+  uid: string | null;
+  rss: number | null;
+  command: string;
+}
+
+const NOT_RUNNING: ProbedProcess = { alive: false, uid: null, rss: null, command: '' };
+
+export function probeProcess(pid: number): ProbedProcess {
+  if (!pid) return NOT_RUNNING;
   try {
-    const result = spawnSync('ps', ['-ww', '-p', String(pid), '-o', 'command='], { encoding: 'utf8', timeout: PS_TIMEOUT_MS });
-    return (result.stdout || '').includes(needle);
+    const result = spawnSync('ps', ['-ww', '-p', String(pid), '-o', 'pid=,uid=,rss=,command='], {
+      encoding: 'utf8',
+      timeout: PS_TIMEOUT_MS,
+    });
+    // command 自身含空格，只拆前三段（数字右对齐带前导空格，trim 后统一解析）
+    const match = (result.stdout || '').trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
+    if (!match) return NOT_RUNNING;
+    return { alive: true, uid: match[2], rss: Number.parseInt(match[3], 10), command: match[4] };
   } catch {
-    return false;
+    return NOT_RUNNING;
   }
 }
 
-export function isProcessRoot(pid: number): boolean {
-  if (!pid) return false;
-  try {
-    const result = spawnSync('ps', ['-p', String(pid), '-o', 'uid='], { encoding: 'utf8', timeout: PS_TIMEOUT_MS });
-    return (result.stdout || '').trim() === '0';
-  } catch {
-    return false;
-  }
+/** 命令行是否含任一内核二进制路径（服务走符号链、TUN 走真实文件，两种都要认） */
+export function isProbedMihomo(p: ProbedProcess): boolean {
+  return p.alive && (p.command.includes(PATHS.mihomoBinary) || p.command.includes(PATHS.serviceBinary));
 }
 
 /**
@@ -100,12 +103,7 @@ export function isRunning(): boolean {
  * 前由 pkill 自身重估 pattern，逐 pid 分支此前没有等价防线（两侧安全性倒挂）。
  */
 export function isMihomoProcess(pid: number): boolean {
-  if (!pid) return false;
-  // 同时校验命令行含内核路径：pidFile 残留 + 系统重启后 PID 可能被无关进程复用，
-  // 只看存活会把无关进程误判成运行中的 mihomo。
-  // 两种路径都要认：pid 文件虽只由 tun 写（真实二进制），但用户可能手工介入，
-  // 只认真实路径会把符号链启动的实例判成「不是 mihomo」
-  return isProcessRunning(pid) && (isProcessCommandMatching(pid, PATHS.mihomoBinary) || isProcessCommandMatching(pid, PATHS.serviceBinary));
+  return isProbedMihomo(probeProcess(pid));
 }
 
 /**
@@ -168,33 +166,23 @@ export function checkStaleState(): StaleState {
   };
 }
 
-function getProcessInfo(pid: number): ProcessInfo | null {
-  try {
-    // 一次 ps 同时取 rss 与 uid
-    const result = spawnSync('ps', ['-p', String(pid), '-o', 'rss=,uid='], { encoding: 'utf8', timeout: 5000 });
-    const psOutput = (result.stdout || '').trim();
-    if (!psOutput) return null;
-
-    const [rssRaw, uidRaw] = psOutput.split(/\s+/);
-    const rss = parseInt(rssRaw, 10);
-
-    return {
-      pid,
-      memory: rss ? `${(rss / 1024).toFixed(1)} MB` : '未知',
-      isRoot: uidRaw === '0',
-    };
-  } catch {
-    return { pid, memory: '未知', isRoot: false };
-  }
-}
-
 export function getStatus(): ProcessStatus {
-  const running = isRunning();
   const pid = getPid();
+  if (!pid) return { running: false, pid: null, processInfo: null };
+
+  // 存活判定与内存/属主同源一次 ps：旧实现先 isMihomoProcess（最多三次 ps）再
+  // getProcessInfo（又一次），同一拍四个查询；probe 不匹配（PID 被复用/已退出）
+  // 即未运行，不附带信息
+  const p = probeProcess(pid);
+  if (!isProbedMihomo(p)) return { running: false, pid: null, processInfo: null };
 
   return {
-    running,
-    pid: running ? pid : null,
-    processInfo: running && pid ? getProcessInfo(pid) : null,
+    running: true,
+    pid,
+    processInfo: {
+      pid,
+      memory: p.rss ? `${(p.rss / 1024).toFixed(1)} MB` : '未知',
+      isRoot: p.uid === '0',
+    },
   };
 }

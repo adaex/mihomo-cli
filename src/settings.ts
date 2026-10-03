@@ -141,23 +141,15 @@ export function getPorts(settings: Settings = readSettings()): { mixed: number; 
   return { mixed, controller };
 }
 
-/** 控制器端口的安全读取：ports 配置非法（如两端口相同）时返回 null 而非抛错。
- * status/ui 这类只读展示命令不应被坏设置挡死——控制器地址是排查「连不上」的唯一
- * 可见线索；doctor 另有专查非法 ports 的检查项 */
-export function getControllerPortOrNull(): number | null {
+/**
+ * 两端口的安全读取：ports 配置非法（getPorts 一次性校验两端口，含两端口相同）时
+ * 返回 null 而非抛错——status/ui 这类只读展示与探测/下载的通道决策不该在做正事
+ * 之前被坏设置挡住；非法值本身由 doctor 的「端口配置」检查项单独报出。
+ * 两个端口的失败面绑定（同一次校验），不设两个各自 try/catch 的出口
+ */
+export function getPortsOrNull(): { mixed: number; controller: number } | null {
   try {
-    return getPorts().controller;
-  } catch {
-    return null;
-  }
-}
-
-/** Mixed 端口的安全读取，与 getControllerPortOrNull 同款降级：探测/展示路径
- * （doctor 端口检查、kernel 通道决策）不该在做正事之前被坏设置挡住；非法值
- * 本身由 doctor 的「端口配置」检查项单独报出 */
-export function getMixedPortOrNull(): number | null {
-  try {
-    return getPorts().mixed;
+    return getPorts();
   } catch {
     return null;
   }
