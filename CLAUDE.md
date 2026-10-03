@@ -24,6 +24,7 @@ macOS 命令行客户端，TypeScript ESM，Node.js >= 22.22.1。入口 `src/ind
 | `kernel.ts` / `http.ts` | 内核下载与有超时、大小限制的 HTTP 客户端 |
 | `paths.ts` | 路径、目录、原子写与跨进程锁 |
 | `log-files.ts` / `open.ts` | 日志轮转、查询与系统打开操作 |
+| `redact.ts` | `config` 展示侧的凭据脱敏：敏感键递归掩码、provider 订阅 URL 复用 maskUrl |
 | `system-proxy.ts` | env 自代理判定（isLoopbackHost/proxyEnvPointsAtSelf）与系统代理只读检测、分档提示（不写系统设置） |
 | `proxy-probe.ts` / `spinner.ts` / `sudo.ts` | 连通性探测、等待反馈、按需提权 |
 | `errors.ts` / `utils.ts` / `colors.ts` / `lifecycle.ts` | 错误、杂项（sleep）、颜色、信号处理 |

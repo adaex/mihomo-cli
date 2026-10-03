@@ -10,8 +10,7 @@ updates:
     groups:
       dev-dependencies:
         dependency-type: development
-  # CI 只有一个 workflow，但 actions 的大版本更新（checkout@v5、setup-node@v5）
-  # 不跟会在 runner 侧变旧
+  # CI 只有一个 workflow，但 actions 的大版本更新不跟会在 runner 侧变旧
   - package-ecosystem: github-actions
     directory: /
     schedule:
