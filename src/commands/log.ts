@@ -7,6 +7,9 @@ import { openLogFile, viewLogWithTail } from '../open.js';
 import { PATHS } from '../paths.js';
 import type { LogEntry } from '../types.js';
 
+/** 编号类报错共用的用法提示（两处同款报错共用一份，改口径不漂移） */
+const INVALID_INDEX_HINT = '用法: mihomo-cli logs <编号>（0=当前，1+=归档）；查看列表: mihomo-cli logs';
+
 export function cmdLogs(args: string[]): void {
   assertKnownFlags(args, ['-f', '--follow', '-n', '--lines', '-o', '--open'], 'logs [-f] [-n N] [编号] [-o]');
   // 编号至多一个：`logs 1 2` 此前静默忽略 2
@@ -23,7 +26,7 @@ export function cmdLogs(args: string[]): void {
   // 空串按显式提供处理（与 ui ""/sub update "" 同口径）：getNonFlagArg 对空串返回 '' 而非
   // null，下方 if (targetName) 会把它当缺省静默落列表——变量展开为空的笔误要有反馈
   if (positional === '') {
-    throw new CliError('无效的日志编号 ""', { hint: '用法: mihomo-cli logs <编号>（0=当前，1+=归档）；查看列表: mihomo-cli logs' });
+    throw new CliError('无效的日志编号 ""', { hint: INVALID_INDEX_HINT });
   }
   const targetName = positional ?? (follow || openInViewer || hasLinesFlag ? '0' : null);
 
@@ -37,7 +40,7 @@ export function cmdLogs(args: string[]): void {
     } else {
       const parsedIdx = parseInt(targetName, 10);
       if (Number.isNaN(parsedIdx) || parsedIdx < 1 || String(parsedIdx) !== targetName) {
-        throw new CliError(`无效的日志编号 "${targetName}"`, { hint: '用法: mihomo-cli logs <编号>（0=当前，1+=归档）；查看列表: mihomo-cli logs' });
+        throw new CliError(`无效的日志编号 "${targetName}"`, { hint: INVALID_INDEX_HINT });
       }
       const archive = listLogs().archives[parsedIdx - 1];
       if (!archive) {

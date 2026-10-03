@@ -14,7 +14,7 @@ import type { ServiceStatus } from './types.js';
  */
 
 /** 热重载（PUT /configs）超时 */
-export const HOT_RELOAD_TIMEOUT_MS = 5000;
+const HOT_RELOAD_TIMEOUT_MS = 5000;
 
 /** 日志超过该大小时，restartService 借 kickstart 顺便 copy-truncate（startService 走 rotateAndCleanupLogs 无条件轮转） */
 const LOG_ROTATE_MAX_BYTES = 10 * 1024 * 1024;

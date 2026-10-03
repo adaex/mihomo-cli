@@ -87,15 +87,15 @@ export const DEFAULT_SERVICE_LABEL = 'com.mihomo-cli.daemon';
  * 未校验时可借此以 root 身份写入/删除任意路径，内容还部分可控 → 提权原语。
  * 同时该值也拼进 launchctl 的服务目标（`gui/<uid>/<label>` 或 `system/<label>`）。
  */
-export const SERVICE_LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const SERVICE_LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export function isValidServiceLabel(label: string): boolean {
   return SERVICE_LABEL_RE.test(label) && !label.includes('..');
 }
 
 const RAW_SERVICE_LABEL = process.env.MIHOMO_CLI_DAEMON_LABEL;
-/** 环境变量提供的原始 label（可能非法），供 service.ts 校验时报出用户实际传入的值。 */
-export const RAW_SERVICE_LABEL_INPUT: string | undefined = RAW_SERVICE_LABEL;
+/** 环境变量提供的原始 label（可能非法），仅在下方校验与报错时引用 */
+const RAW_SERVICE_LABEL_INPUT: string | undefined = RAW_SERVICE_LABEL;
 export const SERVICE_LABEL: string = RAW_SERVICE_LABEL && isValidServiceLabel(RAW_SERVICE_LABEL) ? RAW_SERVICE_LABEL : DEFAULT_SERVICE_LABEL;
 
 /** 服务二进制符号链名。见 paths.ts 的 serviceBinary 与 service.ts 的 ensureServiceSymlink。 */
