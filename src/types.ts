@@ -74,13 +74,6 @@ export interface BuildConfigResult {
    * 错误路径只需展示，不该把整份覆写 config 拖进类型。
    */
   overwriteSummaries: string[];
-  /**
-   * 各 JS 脚本的命中判定（return true = 命中当前订阅）。与 overwriteSummaries
-   * 不同，**包含未命中的脚本**——status 的生效提示要能指出「脚本对当前订阅
-   * 提前退出」，只列命中的看不出谁缺席。YAML 文件的命中走 match 静态判定，
-   * 不在此列（listOverwriteFile 的 matched 字段）。
-   */
-  scriptMatches: ScriptMatch[];
 }
 
 /** 配置规模摘要，用于启动时的一行提示（`Mixed · default · 12 组, 340 节点`） */
@@ -297,7 +290,8 @@ export interface OverwriteScope {
 /**
  * JS 覆写脚本的命中判定：脚本没有 YAML 的 match 声明，改由变换函数的返回值报告
  * ——`return true` 即命中当前订阅（matched），其余返回值（含提前退出的 undefined）
- * 一律视为未命中。合并本身不受影响，判定只供 status/config 的生效提示。
+ * 一律视为未命中。合并本身不受影响，判定经 judgeScriptMatches 供 status 的
+ * 生效清单与「不适用」计数。
  */
 export interface ScriptMatch {
   file: string;

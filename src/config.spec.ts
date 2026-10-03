@@ -700,14 +700,13 @@ describe('buildConfig 带出本次生效的覆写清单', () => {
   });
 
   it('未返回 true 的脚本不进 warnings（分歧行为是设计内常态，非「配置没按预期生效」）', () => {
-    // 此前未命中会在 start 顶部打黄色「配置提示」且与 status 的「不适用」清单重复；
-    // 可见性只归 status/ow（走 scriptMatches），warnings 只留真异常。CLI 层同款断言见 commands/overwrite.spec
+    // 此前未命中会在 start 顶部打黄色「配置提示」且与 status 计数重复；
+    // 「未命中仍可见」由 overwrite.spec 的 status 计数用例端到端锁住（走 judgeScriptMatches）
     const OW_SCRIPT = 'overwrite.miss.js';
     fs.writeFileSync(path.join(tmpDir, OW_SCRIPT), 'export default function () { return; }\n');
     try {
-      const { warnings, scriptMatches } = buildConfig(SUB, 'mixed');
+      const { warnings } = buildConfig(SUB, 'mixed');
       assert.deepEqual(warnings, [], '未命中不得进配置告警（start/config/doctor 的提示源）');
-      assert.deepEqual(scriptMatches, [{ file: OW_SCRIPT, matched: false }], '未命中事实仍要在 scriptMatches 里可见');
     } finally {
       fs.rmSync(path.join(tmpDir, OW_SCRIPT));
     }

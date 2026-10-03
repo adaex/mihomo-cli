@@ -85,7 +85,7 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 **配置与覆写**
 - 入站与控制面锁定快照表的唯一真相是 `LOCKED_CONFIG_KEYS`（tls 不属上游 Inbound 结构体、不在表内），实际剥除执行集是 constants.ts 的 `EFFECTIVELY_LOCKED_KEYS`（快照表 + tls）：YAML 告警扫描（经 overwrite.ts 的 `lockedKeysReferencedBy`）、剥除循环、脚本探针、快照 spec 全派生自它，不许重抄；判定判据与上游核对方法见 D5，完整性由 `config-inbound-snapshot.spec.ts` 兜底
 - 合并闸门唯一出口 `selectActiveOverwriteFiles`；加载双路径（合并硬失败/诊断旁路）见 D7
-- 覆写操作符（`key!`/`+key`/`key+`）只在顶层生效；带条件的变换（按 name 合并数组元素等）一律写 JS 脚本（`export default (config, ctx) => {}`，就地修改、必须同步，`return true` = 命中当前订阅、严格 `=== true`，status 据此区分生效与不适用，未命中不进配置告警，status 也只计数不点名——点名与作用域在 `ow` 列表），脚本在 YAML 之前、剥锁定键之前执行（脚本只看订阅、YAML 后做声明式微调，D13），改不动系统锁定项（LOCKED_CONFIG_KEYS 对脚本输出一视同仁）；`~`/`~?`/`<x>` 与 match 的 `subscription` 键已移除，写这些形态显式报错给迁移指引，不许静默当字面键
+- 覆写操作符（`key!`/`+key`/`key+`）只在顶层生效；带条件的变换（按 name 合并数组元素等）一律写 JS 脚本（`export default (config, ctx) => {}`，就地修改、必须同步，`return true` = 命中当前订阅、严格 `=== true`，status 据此区分生效与不适用，未命中不进配置告警、status 只计数不点名（查哪个文件对照 `ow` 列表的作用域栏）），脚本在 YAML 之前、剥锁定键之前执行（脚本只看订阅、YAML 后做声明式微调，D13），改不动系统锁定项（LOCKED_CONFIG_KEYS 对脚本输出一视同仁）；`~`/`~?`/`<x>` 与 match 的 `subscription` 键已移除，写这些形态显式报错给迁移指引，不许静默当字面键
 - match 的 name 只支持尾部 `*`（前缀）与头部 `*`（后缀）两种通配，其余报错——不引入通用匹配器（正则转义实现曾有灾难性回溯）；JS 脚本无 match 机制，作用域写在脚本里
 - 配置解析只走 YAML（D6）； Mixed 清 tun 字段，TUN 强制 dns.enable=true
 

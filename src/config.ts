@@ -146,12 +146,13 @@ export function buildConfig(subRawContent: string, mode: RuntimeMode, scope?: Ov
   const settings = readSettings();
   const allFiles = settings.overwrite_enabled !== false ? loadOverwriteFile() : [];
   const overwriteFiles = selectActiveOverwriteFiles(allFiles, scope);
-  // 脚本执行需要 mode/scope 构造 ctx（订阅信息与运行模式），YAML 合并不用
+  // 脚本执行需要 mode/scope 构造 ctx（订阅信息与运行模式），YAML 合并不用。
+  // 命中判定（scriptMatches）不取：那是 status 走 judgeScriptMatches 的独立通道，
+  // warnings 只收真异常（脚本 ctx.warn、锁定键剥除、TUN 强制 DNS）
   const {
     config: withOverwrites,
     scriptWarnings,
     scriptLockedHits,
-    scriptMatches,
   } = applyOverwrite(subscriptionConfig, overwriteFiles, {
     mode,
     scope,
@@ -160,8 +161,7 @@ export function buildConfig(subRawContent: string, mode: RuntimeMode, scope?: Ov
 
   const systemConfig: Record<string, unknown> = {};
   // 系统约束覆盖显式设置时告警，节点与分流规则保持用户给出的内容
-  // 未命中脚本不进 warnings：按订阅分歧行为是脚本设计内的常态，不是告警——
-  // 可见性由 status/ow 的「不适用」清单承担（走 scriptMatches，与本数组无关）
+  // 未命中脚本不进 warnings：按订阅分歧行为是脚本设计内的常态，不是告警
   const lockedWarnings: string[] = [...scriptWarnings];
   // 脚本设置的锁定键与 YAML 覆写同款告警（剥除对脚本输出一视同仁，但不静默——
   // 脚本作者会困惑「设置了怎么没生效」）
@@ -259,7 +259,7 @@ export function buildConfig(subRawContent: string, mode: RuntimeMode, scope?: Ov
   }
 
   assertConfigShape(merged);
-  return { config: merged, warnings: lockedWarnings, overwriteSummaries, scriptMatches };
+  return { config: merged, warnings: lockedWarnings, overwriteSummaries };
 }
 
 /** 锁定键告警的统一文案（YAML 覆写与 JS 脚本共用一份，避免两处解释漂移） */

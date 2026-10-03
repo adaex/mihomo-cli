@@ -150,7 +150,8 @@ describe('status 覆写行按 match 区分是否适用当前订阅', () => {
       fs.writeFileSync(path.join(dataDir, 'overwrite.miss.yaml'), 'match:\n  name: mini*\nlog-level: info\n');
       const out = run(['status', '--no-probe']).stdout;
       assert.match(out, /覆写:.*已启用 \(hit，1 个不适用\)/);
-      assert.ok(!out.includes('不适用于当前订阅'), '不适用常态只计数，不逐行点名刷屏');
+      // 锁名字不锁句子：短名 miss 在整个 status 输出零出现，才是「只计数不点名」的不变量
+      assert.ok(!out.includes('miss'), '不适用文件除计数外不得点名');
       assert.ok(!/\(hit, miss/.test(out), '不命中的文件不得出现在生效清单里');
     });
   });
@@ -242,7 +243,7 @@ describe('status/config 按脚本返回值区分是否适用当前订阅', () =>
       fs.writeFileSync(path.join(dataDir, 'overwrite.miss.js'), 'export default function () { return; }\n');
       const out = run(['status', '--no-probe']).stdout;
       assert.match(out, /覆写:.*已启用 \(hit，1 个不适用\)/);
-      assert.ok(!out.includes('不适用于当前订阅'), '不适用常态只计数，不逐行点名刷屏');
+      assert.ok(!out.includes('miss'), '不适用文件除计数外不得点名（锁名字，与措辞解耦）');
       assert.ok(!out.includes('未返回 true'), 'status 文本不得暴露脚本 API 术语');
       assert.ok(!/\(hit, miss/.test(out), '未命中的脚本不得出现在生效清单里');
     });
@@ -257,12 +258,11 @@ describe('status/config 按脚本返回值区分是否适用当前订阅', () =>
     });
   });
 
-  it('config 提示段不列未返回 true 的脚本（分歧行为是常态，可见性只在 status/ow 的「不适用」清单）', () => {
+  it('config 提示段不列未返回 true 的脚本（分歧行为是常态，可见性归 status 计数）', () => {
     withFixture((dataDir, run) => {
       fs.writeFileSync(path.join(dataDir, 'overwrite.miss.js'), 'export default function () { return; }\n');
       const out = run(['config']).stdout;
-      assert.ok(!out.includes('未返回 true'), 'config 提示段不得复述未命中（会与 status 的「不适用」重复）');
-      assert.ok(!out.includes('不视为命中'));
+      assert.ok(!out.includes('未返回 true'), 'config 提示段不得复述未命中（会与 status 计数重复）');
     });
   });
 

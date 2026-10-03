@@ -319,12 +319,12 @@ function printOverwriteLines(enabled: boolean, files: OverwriteFileInfo[], broke
   }
 
   const active = files.filter(isActiveOverwrite);
-  const unmatched = files.filter(f => f.enabled && f.matched === false);
+  const unmatchedCount = files.filter(f => f.enabled && f.matched === false).length;
   const disabledCount = files.filter(f => !f.enabled).length;
 
   // 两类失效各自成句，都挂在主行的括号里；主行永远只说生效的那些
   const suffixes: string[] = [];
-  if (unmatched.length > 0) suffixes.push(`${unmatched.length} 个不适用`);
+  if (unmatchedCount > 0) suffixes.push(`${unmatchedCount} 个不适用`);
   if (disabledCount > 0) suffixes.push(`${disabledCount} 个已禁用`);
   const suffix = suffixes.length > 0 ? `，${suffixes.join('，')}` : '';
 
