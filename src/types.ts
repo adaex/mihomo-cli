@@ -108,7 +108,7 @@ export interface OverwriteFileEntry {
 
 /**
  * JS 覆写脚本的变换函数：**就地修改**传入的 config。返回值约定：`return true`
- * 表示命中当前订阅（脚本没有 match 声明，status/config 靠它区分生效与不适用），
+ * 表示命中当前订阅（脚本没有 match 声明，status 靠它区分生效与不适用），
  * 其余返回值（含无返回值）一律视为未命中、不影响合并。必须同步——
  * 返回 Promise 报错（buildConfig 是同步管线，纯转换也没有要等网络的场景）。
  * 全信任模型：脚本以当前用户身份运行（同 .zshrc），不沙箱、不超时；

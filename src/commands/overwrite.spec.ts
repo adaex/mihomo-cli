@@ -257,11 +257,12 @@ describe('status/config 按脚本返回值区分是否适用当前订阅', () =>
     });
   });
 
-  it('config 提示段列出未返回 true 的脚本（只说事实，不断言没改配置）', () => {
+  it('config 提示段不列未返回 true 的脚本（分歧行为是常态，可见性只在 status/ow 的「不适用」清单）', () => {
     withFixture((dataDir, run) => {
       fs.writeFileSync(path.join(dataDir, 'overwrite.miss.js'), 'export default function () { return; }\n');
       const out = run(['config']).stdout;
-      assert.match(out, /# 覆写脚本 overwrite\.miss\.js 未返回 true，不视为命中当前订阅 edu1/);
+      assert.ok(!out.includes('未返回 true'), 'config 提示段不得复述未命中（会与 status 的「不适用」重复）');
+      assert.ok(!out.includes('不视为命中'));
     });
   });
 

@@ -160,13 +160,9 @@ export function buildConfig(subRawContent: string, mode: RuntimeMode, scope?: Ov
 
   const systemConfig: Record<string, unknown> = {};
   // 系统约束覆盖显式设置时告警，节点与分流规则保持用户给出的内容
+  // 未命中脚本不进 warnings：按订阅分歧行为是脚本设计内的常态，不是告警——
+  // 可见性由 status/ow 的「不适用」清单承担（走 scriptMatches，与本数组无关）
   const lockedWarnings: string[] = [...scriptWarnings];
-  // 未命中的脚本给一行提示：脚本无 match 声明、进了合并清单，不提示的话会被误当
-  // 生效中（与 match 不命中的 YAML 同族）。只说事实「未返回 true」，不断言「没改
-  // 配置」——约定靠脚本自觉，漏写 return true 的脚本可能已改了配置
-  for (const m of scriptMatches.filter(s => !s.matched)) {
-    lockedWarnings.push(`覆写脚本 ${m.file} 未返回 true，不视为命中当前订阅${scope?.subName ? ` ${scope.subName}` : ''}`);
-  }
   // 脚本设置的锁定键与 YAML 覆写同款告警（剥除对脚本输出一视同仁，但不静默——
   // 脚本作者会困惑「设置了怎么没生效」）
   for (const hit of scriptLockedHits) {

@@ -245,7 +245,7 @@ async function collectChecks(): Promise<Check[]> {
       const warnings = prepared.buildResult.warnings;
       if (warnings.length > 0) {
         // 内核校验是通过的，不升为 fail；但 warnings 是「配置没按用户预期生效」的信号
-        // （~? 补丁未命中被跳过、TUN 强制开 DNS），丢掉的话体检反而成了盲区。逐条挂
+        // （脚本 ctx.warn、锁定键被剥除、TUN 强制开 DNS），丢掉的话体检反而成了盲区。逐条挂
         // notes，缩进沿用 hint 的样式；措辞强调校验已过，提示不等于失败
         push(
           '配置构建',

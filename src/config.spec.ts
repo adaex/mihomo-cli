@@ -686,8 +686,6 @@ describe('buildConfig 带出本次生效的覆写清单', () => {
 
   it('脚本设置的锁定键被剥除且告警可见（安全边界对脚本输出一视同仁）', () => {
     const OW_SCRIPT = 'overwrite.evil.js';
-    // return true：锁定键用例关心的是剥除与告警，不关心命中提示的叠加——
-    // 不写的话「未返回 true」会多出第二条 warning，超出本用例断言范围
     fs.writeFileSync(path.join(tmpDir, OW_SCRIPT), 'export default function (config) { config["allow-lan"] = true; return true; }\n');
     try {
       const { config, warnings } = buildConfig(SUB, 'mixed');
@@ -696,6 +694,20 @@ describe('buildConfig 带出本次生效的覆写清单', () => {
       assert.match(warnings[0], /overwrite\.evil\.js/);
       assert.match(warnings[0], /allow-lan/);
       assert.match(warnings[0], /系统锁定项已忽略/);
+    } finally {
+      fs.rmSync(path.join(tmpDir, OW_SCRIPT));
+    }
+  });
+
+  it('未返回 true 的脚本不进 warnings（分歧行为是设计内常态，非「配置没按预期生效」）', () => {
+    // 此前未命中会在 start 顶部打黄色「配置提示」且与 status 的「不适用」清单重复；
+    // 可见性只归 status/ow（走 scriptMatches），warnings 只留真异常。CLI 层同款断言见 commands/overwrite.spec
+    const OW_SCRIPT = 'overwrite.miss.js';
+    fs.writeFileSync(path.join(tmpDir, OW_SCRIPT), 'export default function () { return; }\n');
+    try {
+      const { warnings, scriptMatches } = buildConfig(SUB, 'mixed');
+      assert.deepEqual(warnings, [], '未命中不得进配置告警（start/config/doctor 的提示源）');
+      assert.deepEqual(scriptMatches, [{ file: OW_SCRIPT, matched: false }], '未命中事实仍要在 scriptMatches 里可见');
     } finally {
       fs.rmSync(path.join(tmpDir, OW_SCRIPT));
     }
