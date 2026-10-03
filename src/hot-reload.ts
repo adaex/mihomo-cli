@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { getServiceStatus } from './launchctl.js';
 import { PATHS } from './paths.js';
 import { lsofListenPids } from './proxy-probe.js';
-import { getPorts, readSettings } from './settings.js';
+import { getControllerEndpoint } from './settings.js';
 import { shouldAbortStartOnDisable } from './stop-epoch.js';
 import type { ServiceStatus } from './types.js';
 
@@ -56,17 +56,16 @@ export async function tryHotReload(prefetched?: ServiceStatus): Promise<boolean>
     if (!status.running || status.pid === null) return false;
 
     // 端口经 settings.ports 解析（默认 9090），与 buildConfig 写进配置的值同源；
-    // 端口与 secret 取**同一份快照**（D10）：两次独立读盘之间 settings 被原子替换时，
-    // PUT 可能发往新控制器端口却带旧 secret（或反之），本可成功的热重载无谓回退重启
-    const settingsSnapshot = readSettings();
-    const { controller: controllerPort } = getPorts(settingsSnapshot);
-    const baseUrl = `http://127.0.0.1:${controllerPort}`;
-    // 配置了 controller_secret 时必须带 Bearer，否则内核返回 401 → 热重载恒失败回退重启。
-    // 只接受字符串：非字符串在 buildConfig 已 fail-closed（start 链路先构建配置），
-    // 这里是纵深防御，别把数字/对象拼进 Authorization
-    const secret = settingsSnapshot.controller_secret;
+    // 端口与 secret 由 getControllerEndpoint 取同一份快照（D10）——两次独立读盘之间
+    // settings 被原子替换时，PUT 可能发往新控制器端口却带旧 secret（或反之），
+    // 本可成功的热重载无谓回退重启。端口非法按「热重载不可用」回退 kickstart
+    // （原 getPorts 抛错由外层 catch 归同一路径，此处显化）
+    const endpoint = getControllerEndpoint();
+    if (endpoint.port === null) return false;
+    const baseUrl = `http://127.0.0.1:${endpoint.port}`;
+    // 配置了 controller_secret 时必须带 Bearer，否则内核返回 401 → 热重载恒失败回退重启
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (typeof secret === 'string' && secret) headers.Authorization = `Bearer ${secret}`;
+    if (endpoint.secret) headers.Authorization = `Bearer ${endpoint.secret}`;
     // timer 起表在状态查询之后、第一个 fetch 之前：abort 预算覆盖 /version 探测、
     // lsof（自带 5s 超时的同步调用，夹在两个 fetch 之间）与 PUT，唯独不被前置的
     // launchctl 查询分食——launchctl 病态慢（print 各 2-3s）时 timer 在 fetch 前已
@@ -82,7 +81,7 @@ export async function tryHotReload(prefetched?: ServiceStatus): Promise<boolean>
 
       // /version 只确认「端口上是个 mihomo」，挡不住「另一个 mihomo」（手工起的实例、
       // 端口冲突）。用 lsof 取监听 pid 与服务 pid 比对，不一致则回退 kickstart
-      const listenerPids = lsofListenPids(controllerPort);
+      const listenerPids = lsofListenPids(endpoint.port);
       if (listenerPids === null || listenerPids[0] !== status.pid) return false;
 
       const res = await fetch(`${baseUrl}/configs?force=true`, {

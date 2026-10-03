@@ -155,6 +155,18 @@ export function getPortsOrNull(settings: Settings = readSettings()): { mixed: nu
   }
 }
 
+/**
+ * 控制器端点（端口 + 访问密钥）的同快照读取（D10）：ui 打印连接信息与 hot-reload 拼
+ * 请求共用——两次独立读盘之间 settings 被原子替换时，打印/请求的端口与密钥可能来自
+ * 两个版本，排查方向自相矛盾。端口非法归 null（getPortsOrNull 的降级语义），密钥只
+ * 认非空字符串（数字/对象不拼进 Authorization、不进剪贴板）
+ */
+export function getControllerEndpoint(settings: Settings = readSettings()): { port: number | null; secret: string | null } {
+  const port = getPortsOrNull(settings)?.controller ?? null;
+  const secret = settings.controller_secret;
+  return { port, secret: typeof secret === 'string' && secret ? secret : null };
+}
+
 // === Subscription cache ===
 
 /**
@@ -407,14 +419,14 @@ export function removeSubscriptionRawConfig(subName: string): void {
 
 export function readSubscriptionRawConfig(subName: string): string | null {
   const filePath = getSubscriptionRawConfigPath(subName);
-  if (!fs.existsSync(filePath)) return null;
+  // 不做 existsSync 预检：它与 readFileSync 之间照样能被并发删除（另一终端 sub remove
+  // 的 postCommit / reset subs 整目录删除），预检只让快乐路径多付一次系统调用——
+  // 「文件没了」统一由下方 ENOENT 归「不可用」
   try {
     return fs.readFileSync(filePath, 'utf8');
   } catch (e) {
-    // existsSync 与 readFileSync 之间被并发删除（另一终端 sub remove 的 postCommit /
-    // reset subs 整目录删除）：与 readSettings/readSubscriptionCache 对 ENOENT 的
-    // 处置同款，「文件没了」是正常形态，回退 null 走「没有本地配置」指引，
-    // 不让裸 ENOENT 意外错误击穿命令；EISDIR（同名目录）同理归「不可用」
+    // 与 readSettings/readSubscriptionCache 对 ENOENT 的处置同款，回退 null 走
+    // 「没有本地配置」指引，不让裸 ENOENT 意外错误击穿命令；EISDIR（同名目录）同理
     const code = (e as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'EISDIR') return null;
     throw e;

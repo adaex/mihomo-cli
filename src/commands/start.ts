@@ -17,6 +17,7 @@ import {
 import { getPortsOrNull } from '../settings.js';
 import * as subscription from '../subscription.js';
 import { printSystemProxyHint } from '../system-proxy.js';
+import { firstLine } from '../text.js';
 import type { PreparedConfig, RuntimeMode } from '../types.js';
 
 import { printStatus } from './status.js';
@@ -128,6 +129,9 @@ export async function cmdStart(args: string[]): Promise<void> {
   // disabledAutoStartForTun 只可能在 targetMode==='tun' 分支内置真，无需再判模式；
   // 值此刻起不变，取一次常量供两个 catch 共用
   const tunHint: string[] = disabledAutoStartForTun ? ['', '服务自启已被关闭（启动 TUN 前关闭以避免自启失败循环）。', '恢复 Mixed 模式: mihomo-cli start'] : [];
+  // 两个 catch 的唯一动作都是「有 hint 就追加再抛」：非 CliError（程序缺陷）原样上抛，
+  // 错误语义与既有出口一致；没有要追加的 hint 时不重包——保留原错误对象与 stack
+  const appendTunHint = (e: CliError): CliError => (tunHint.length > 0 ? relabelCliError(e, { hint: [...e.hint, ...tunHint] }) : e);
 
   try {
     const sub = subscription.requireActiveSubscription();
@@ -150,11 +154,7 @@ export async function cmdStart(args: string[]): Promise<void> {
 
     console.log([colors.cyan(runtimeModeLabel(targetMode)), sub.name, subscription.formatProxySummary(configInfo)].join(' · '));
   } catch (e) {
-    // 追加是唯一动作：非 CliError（程序缺陷）原样上抛，错误语义与既有出口一致。
-    // 没有要追加的 hint 时不重包——保留原错误对象与 stack
-    if (e instanceof CliError && tunHint.length > 0) {
-      throw relabelCliError(e, { hint: [...e.hint, ...tunHint] });
-    }
+    if (e instanceof CliError) throw appendTunHint(e);
     throw e;
   }
 
@@ -162,11 +162,8 @@ export async function cmdStart(args: string[]): Promise<void> {
     const pid = await runtime.launchOrRestart(targetMode);
     console.log(`${colors.green('已启动')}${pid ? ` (PID ${pid})` : ''}`);
   } catch (e) {
+    if (e instanceof CliError) throw appendTunHint(e);
     const lines = (e as Error).message.split('\n');
-    if (e instanceof CliError) {
-      if (tunHint.length > 0) throw relabelCliError(e, { hint: [...e.hint, ...tunHint] });
-      throw e;
-    }
     throw new CliError(lines[0], { label: '启动失败', hint: [...lines.slice(1), ...tunHint] });
   }
 
@@ -175,7 +172,7 @@ export async function cmdStart(args: string[]): Promise<void> {
   try {
     await printStatus();
   } catch (e) {
-    console.log(colors.yellow(`状态展示失败（不影响已完成的启动）: ${(e as Error).message.split('\n')[0]}`));
+    console.log(colors.yellow(`状态展示失败（不影响已完成的启动）: ${firstLine((e as Error).message)}`));
   }
 
   // Mixed 模式需手动配置系统代理：进程活着 ≠ 流量走代理，这是 Mixed 最大的日常摩擦。

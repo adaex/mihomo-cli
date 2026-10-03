@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { escapeRegExp, maskUrl, sanitizeTerminal, shellQuote, TOKEN_KEY_NAMES } from './text.js';
+import { escapeRegExp, firstLine, maskUrl, sanitizeTerminal, shellQuote, TOKEN_KEY_NAMES } from './text.js';
 
 describe('sanitizeTerminal', () => {
   it('剥除 \\r（回行首覆盖是终端伪造的经典手段）', () => {
@@ -56,6 +56,14 @@ describe('shellQuote', () => {
     // 首尾必须是引号；内嵌单引号已转义为 '\''，串内不再有「裸露」的引号边界
     assert.ok(quoted.startsWith("'") && quoted.endsWith("'"));
     assert.equal(quoted, '\'$(rm -rf /) `id` "x" $HOME\'');
+  });
+});
+
+describe('firstLine', () => {
+  it('多行取首行，单行原样', () => {
+    assert.equal(firstLine('首行\n次行\n末行'), '首行');
+    assert.equal(firstLine('单行'), '单行');
+    assert.equal(firstLine('\n以空行开头'), '');
   });
 });
 

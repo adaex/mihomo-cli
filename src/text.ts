@@ -14,6 +14,15 @@ export function shellQuote(s: string): string {
 }
 
 /**
+ * 取多行文本的首行。错误 message 渲染进紧凑列表/单行标签前的统一收口——
+ * 多行错误的其余行有各自的渲染归属（hint/notes），全仓各消费点同口径，
+ * 别各写一份（与 lastCurlErrorLine 同族约定）
+ */
+export function firstLine(text: string): string {
+  return text.split('\n')[0];
+}
+
+/**
  * 剥除终端控制字符与 ANSI 转义序列：服务器返回的字符串（订阅名、错误信息等）
  * 可能含 \x1b[2J（清屏）、光标上移、\r 回行首覆盖等序列，伪造 CLI 输出。
  * 展示前必须消毒。\r 必须剥：它与 \n 不同，不换行而是回行首覆盖已输出内容

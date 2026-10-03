@@ -5,7 +5,7 @@ import { UI_URLS } from '../constants.js';
 import { CliError } from '../errors.js';
 import { openUrl } from '../open.js';
 import { getRunningState } from '../runtime.js';
-import { getPortsOrNull, readSettings } from '../settings.js';
+import { getControllerEndpoint } from '../settings.js';
 
 /**
  * 解析 UI 名称：未传参取默认 zash，传参就小写归一（与启动模式/目录目标/reset 同口径）。
@@ -45,23 +45,21 @@ export function cmdUI(args: string[]): void {
   }
 
   const url = UI_URLS[uiName];
-  // 与 status 同款的降级（getPortsOrNull）：ports 配置写坏不应把整个命令
-  // 挡死——控制器地址是排查「UI 连不上」的唯一可见线索，必须能打印。
-  // 端口与 secret 取同一份快照（D10）：两次读盘之间 settings 被替换时，打印的
-  // 控制器地址与给出的密钥可能来自不同版本，排查方向自相矛盾
-  const settingsSnapshot = readSettings();
-  const controllerPort = getPortsOrNull(settingsSnapshot)?.controller ?? null;
+  // 与 status 同款的降级（端口非法归 null）：ports 配置写坏不应把整个命令挡死——
+  // 控制器地址是排查「UI 连不上」的唯一可见线索，必须能打印。端口与密钥由
+  // getControllerEndpoint 取同一份快照（D10）
+  const endpoint = getControllerEndpoint();
 
   console.log(`打开 Web UI: ${uiName}`);
   console.log(`页面: ${url}`);
   // 控制器地址固定打印：托管网页默认连 127.0.0.1:9090，自定义端口后这里是唯一可见的
   // 实际连接地址（排查「UI 连不上」全靠它）
-  console.log(`控制器: http://127.0.0.1:${controllerPort ?? '（settings.json 的 ports 配置非法，无法确定）'}`);
+  console.log(`控制器: http://127.0.0.1:${endpoint.port ?? '（settings.json 的 ports 配置非法，无法确定）'}`);
 
   // 非字符串值在 buildConfig 时会报错（start/doctor/config 路径），这里只读 settings
   // 展示 UI 信息，单独收口：不把数字/布尔塞进 pbcopy 或当成密钥提示
-  const secret = settingsSnapshot.controller_secret;
-  if (typeof secret === 'string' && secret) {
+  const secret = endpoint.secret;
+  if (secret) {
     if (copySecret) {
       // 显式 -c 才动剪贴板：默认复制会悄悄覆盖用户原有内容，且通用剪贴板可能同步到
       // 同 Apple ID 的其他设备；复制与否由用户当次决定

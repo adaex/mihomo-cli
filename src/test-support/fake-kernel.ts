@@ -4,7 +4,8 @@ import path from 'node:path';
 
 /**
  * 假内核（桩「内核」）辅助：落盘、起进程、等出现、判死、收尾击杀，
- * runtime.spec 与 process-stop.spec 共用这一份（commands/stop.spec 复用其中同形片段）。
+ * runtime.spec 与 process-stop.spec 共用这一份；commands/subscription.spec
+ * 经 startRunningTun 取用「TUN 在跑」形态（commands/stop.spec 复用其中同形片段）。
  *
  * 桩的形态：放在隔离数据目录 kernel/mihomo 位置的长睡 bash 脚本，用真实二进制名与
  * 真实 config 路径拼 `-d <data> -f <configFile>` 命令行，让 pgrep/pkill 能按生产
@@ -79,6 +80,20 @@ export function killFakeKernel(pid: number): void {
     // 组内已无成员（ESRCH）：桩已退出的正常形态
   }
   spawnedPgids.delete(pid);
+}
+
+/**
+ * 伪造「TUN 在跑」的最小形态：桩内核落盘 + 起进程 + pid 写入 runtime/pid（isRunning
+ * 的真相源），命令行含隔离目录下的内核路径（isProbedMihomo 的判据）。供「删除/变更
+ * 订阅时运行中提示」类用例使用；返回 pid 供用例按 killFakeKernel 精确收尾
+ */
+export function startRunningTun(dataDir: string): number {
+  const binary = path.join(dataDir, 'kernel', 'mihomo');
+  const configFile = path.join(dataDir, 'runtime', 'config.yaml');
+  writeFakeKernelFiles({ binaries: [binary], configFile });
+  const pid = spawnFakeKernel({ binary, dataDir: path.join(dataDir, 'data'), configFile });
+  fs.writeFileSync(path.join(dataDir, 'runtime', 'pid'), String(pid));
+  return pid;
 }
 
 /**

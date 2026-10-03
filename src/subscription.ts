@@ -13,7 +13,7 @@ import {
   saveSubscriptionRawConfig,
 } from './settings.js';
 import { withSpinner } from './spinner.js';
-import { maskUrl, sanitizeTerminal } from './text.js';
+import { firstLine, maskUrl, sanitizeTerminal } from './text.js';
 import type {
   ConfigSummary,
   DownloadResult,
@@ -379,7 +379,7 @@ export function printUpdateResult(r: TryUpdateResult): void {
   } else if (r.aborted) {
     console.log(`${colors.gray('·')} ${r.name}: ${colors.gray('跳过（更新超时，使用本地缓存）')}`);
   } else {
-    console.log(`${colors.red('✗')} ${r.name}: ${colors.red('失败')} (${(r.error || '').split('\n')[0]})`);
+    console.log(`${colors.red('✗')} ${r.name}: ${colors.red('失败')} (${firstLine(r.error || '')})`);
   }
 }
 

@@ -8,6 +8,7 @@ import { parseMirrorArg, parseProxyArg } from '../kernel-args.js';
 import { getRunningState, startCommandForCurrentMode } from '../runtime.js';
 import { getPortsOrNull } from '../settings.js';
 import { withSpinner } from '../spinner.js';
+import { firstLine } from '../text.js';
 import type { KernelUpdateInfo } from '../types.js';
 
 /** 通道的人类可读标签（失败汇总用）；措辞与 printChannelLine 头部行一致 */
@@ -47,7 +48,7 @@ export function printChannelLine(channel: DownloadChannel, isExplicitProxy: bool
  * （失败明细只在全失败分支打印），不带上用户就不知道首条通道是 HTTP 错误还是低速/超时
  * （决定要不要换节点） */
 export function formatChannelSwitchLine(previousError: Error | null): string {
-  const reason = previousError?.message.split('\n')[0] ?? '';
+  const reason = previousError ? firstLine(previousError.message) : '';
   return reason ? `上一通道失败（${reason}），切换为:` : '上一通道失败，切换为:';
 }
 
@@ -71,7 +72,7 @@ export function buildDownloadFailureError(attempts: { channel: DownloadChannel; 
   return new CliError('全部下载通道均失败', {
     label: '下载失败',
     hint: [
-      ...attempts.map(a => `  ${channelLabel(a.channel, isExplicitProxy)}: ${a.error.message.split('\n')[0]}`),
+      ...attempts.map(a => `  ${channelLabel(a.channel, isExplicitProxy)}: ${firstLine(a.error.message)}`),
       '',
       '若两条通道都是低速失败：问题在当前选中的机场节点（url-test 只按握手延迟选、不测带宽），',
       '在面板里手动给 Default Proxy 换个线路或节点后重试；也可换个时间等 url-test 重选',

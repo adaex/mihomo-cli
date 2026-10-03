@@ -9,7 +9,7 @@ import { CliError } from './errors.js';
 import { applyOverwrite, describeOverwriteScope, loadOverwriteFile, lockedKeysReferencedBy, selectActiveOverwriteFiles } from './overwrite.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, USER_DATA_DIR } from './paths.js';
 import { getPorts, readSettings } from './settings.js';
-import { sanitizeTerminal } from './text.js';
+import { firstLine, sanitizeTerminal } from './text.js';
 import type { BuildConfigResult, ConfigInfo, OverwriteFileEntry, OverwriteScope, RuntimeMode, ScriptMatch } from './types.js';
 
 /**
@@ -43,7 +43,7 @@ export function parseConfigContent(content: string, errorMsg?: string): Record<s
     // YAML 的报错含行列号，对定位笔误很有用，原样带出（首行即可，堆栈无意义）。
     // CliError 而非裸 Error：config 命令直接消费本函数，裸 Error 会按「未预期错误」
     // 渲染完整堆栈——预期错误（订阅内容坏）被当成程序 bug 呈现
-    throw new CliError(`${label}格式错误，无法解析: ${(e as Error).message.split('\n')[0]}`, { label: '配置错误' });
+    throw new CliError(`${label}格式错误，无法解析: ${firstLine((e as Error).message)}`, { label: '配置错误' });
   }
 
   if (result == null || typeof result !== 'object' || Array.isArray(result)) {
@@ -292,7 +292,7 @@ export function judgeScriptMatches(
     });
     return { matches: scriptMatches };
   } catch (e) {
-    return { matches: [], error: (e as Error).message?.split('\n')[0] ?? String(e) };
+    return { matches: [], error: firstLine((e as Error).message ?? String(e)) };
   }
 }
 
@@ -480,7 +480,7 @@ export function getKernelVersion(probe?: KernelProbe): string | null {
   try {
     const p = probe ?? probeKernelVersion();
     if (!p.output) return 'unknown';
-    return p.version ?? p.output.split('\n')[0];
+    return p.version ?? firstLine(p.output);
   } catch {
     return 'unknown';
   }

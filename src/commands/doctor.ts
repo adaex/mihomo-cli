@@ -14,6 +14,7 @@ import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
 import { getPorts, getPortsOrNull, getSubscriptionsWithCache, isValidSettingsContent, requireSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription, isSubscriptionStale, prepareConfigForStart, resolveUpdateInterval } from '../subscription.js';
+import { firstLine } from '../text.js';
 import type { KernelUpdateInfo } from '../types.js';
 import { getLatestNpmVersion } from './update.js';
 
@@ -265,7 +266,7 @@ async function collectChecks(): Promise<Check[]> {
       // hint 带着内核原文与本次生效的覆写清单；只取 message 首行会把唯一有用的线索丢掉
       // （体检是紧凑列表，滤掉纯排版空行）
       const notes = e instanceof CliError ? e.hint.filter(l => l.trim().length > 0) : undefined;
-      push('配置构建', 'fail', (e as Error).message.split('\n')[0], '修正订阅或覆写后 mihomo-cli start', notes);
+      push('配置构建', 'fail', firstLine((e as Error).message), '修正订阅或覆写后 mihomo-cli start', notes);
     }
   } else {
     push('配置构建', 'skip', active ? '未安装内核，跳过校验' : '无订阅，跳过');
@@ -288,16 +289,14 @@ async function collectChecks(): Promise<Check[]> {
   // 与 CLI 版本同结构：查询在函数开头发起、此处收口。未装内核时「内核」项已 fail，
   // 不再重复列版本；GitHub 不可达/超时 skip（内核更新不是本机体检能解决的问题）
   const kernelInfo = await kernelVersionPromise;
-  // 失败原因只取首行（多行错误的其余行有各自的渲染归属），两个 skip 分支共用
-  const errorReason = kernelInfo instanceof Error ? `（${kernelInfo.message.split('\n')[0]}）` : '';
-  if (hasKernel() && (kernelInfo === null || kernelInfo instanceof Error)) {
-    // 超时（AbortError）按不可达说、不带原因——它就是「不可达」的一种
-    const reason = kernelInfo instanceof Error && kernelInfo.name !== 'AbortError' ? errorReason : '';
-    push('内核版本', 'skip', `GitHub 不可达，跳过检查${reason}`);
-  } else if (kernelInfo instanceof Error) {
-    // 查询发起时内核还在、收口时 hasKernel() 已转假（两者隔着多个 await，
-    // 并发 reset 删内核即如此）：不把 Error 漏进 needsUpdate 分支
-    push('内核版本', 'skip', `跳过检查${errorReason}`);
+  const kernelPresent = hasKernel();
+  // 失败（不可达/超时/数据形态）与「查询发起时有内核、收口时已无」收敛为一个 skip 分支：
+  // 超时（AbortError）按不可达说、不带原因——它就是「不可达」的一种；内核已无时去掉
+  // 「GitHub 不可达」前缀（两者隔着多个 await，并发 reset 删内核即如此），不把 Error
+  // 漏进 needsUpdate 分支；其余失败带首行原因（多行错误的其余行有各自的渲染归属）
+  if (kernelInfo instanceof Error || (kernelInfo === null && kernelPresent)) {
+    const detail = kernelInfo instanceof Error && (kernelInfo.name !== 'AbortError' || !kernelPresent) ? `（${firstLine(kernelInfo.message)}）` : '';
+    push('内核版本', 'skip', `${kernelPresent ? 'GitHub 不可达，跳过检查' : '跳过检查'}${detail}`);
   } else if (kernelInfo?.needsUpdate) {
     push('内核版本', 'warn', `当前 ${kernelInfo.current}，最新 ${kernelInfo.latest}`, 'mihomo-cli kernel');
   } else if (kernelInfo) {

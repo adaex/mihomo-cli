@@ -7,6 +7,7 @@ import { BASE_CONFIG, EFFECTIVELY_LOCKED_KEYS, YAML_MAX_ALIASES } from './consta
 import { CliError } from './errors.js';
 import { USER_DATA_DIR } from './paths.js';
 import { readSettings, SAFE_NAME_RE, writeSettings } from './settings.js';
+import { firstLine } from './text.js';
 import type {
   BrokenOverwriteFile,
   OverwriteFileEntry,
@@ -684,7 +685,7 @@ function loadOverwriteScript(filePath: string, fileName: string): OverwriteTrans
   try {
     mod = createRequire(filePath)(filePath);
   } catch (e) {
-    throw new CliError(`覆写脚本 "${fileName}" 加载失败: ${(e as Error).message?.split('\n')[0] ?? String(e)}`, {
+    throw new CliError(`覆写脚本 "${fileName}" 加载失败: ${firstLine((e as Error).message ?? String(e))}`, {
       label: '覆写配置错误',
       hint: ['该脚本当前未参与合并。常见原因：语法错误、import/require 了不存在的模块、或使用了 top-level await（脚本必须可同步加载）。'],
     });
@@ -878,7 +879,7 @@ export function applyOverwrite(
       try {
         returned = file.transform(result, ctx);
       } catch (e) {
-        throw new CliError(`覆写脚本 "${file.name}" 执行失败: ${(e as Error).message?.split('\n')[0] ?? String(e)}`, {
+        throw new CliError(`覆写脚本 "${file.name}" 执行失败: ${firstLine((e as Error).message ?? String(e))}`, {
           label: '覆写配置错误',
           hint: ['本次构建已中止；修复脚本后重试（mihomo-cli ow 可查看全部覆写文件与脚本）。'],
         });

@@ -9,7 +9,7 @@ import * as runtime from '../runtime.js';
 import { addSubscription, getSubscriptions, getSubscriptionsWithCache, removeSubscription, setDefaultSubscription } from '../settings.js';
 import { withSpinner } from '../spinner.js';
 import * as subscription from '../subscription.js';
-import { maskUrl } from '../text.js';
+import { firstLine, maskUrl } from '../text.js';
 import { confirmOrThrow, confirmPrompt, dispatchSubcommand, restartToApply, type SubCommand, unknownSubcommandError } from './shared.js';
 
 /** 订阅内容更新后，运行中的实例仍用旧配置，提示重启生效。
@@ -20,17 +20,17 @@ import { confirmOrThrow, confirmPrompt, dispatchSubcommand, restartToApply, type
  * 删的是最后一个订阅时没有「新订阅」可切，指引改为先重新添加。复用同一重启命令判据 */
 function printRestartHintIfRunning(variant: 'update' | 'removed-active' | 'removed-last' = 'update'): void {
   const state = runtime.getRunningState();
-  if (state.running) {
-    const hintCommand = runtime.startCommandForCurrentMode(state);
-    const message =
-      variant === 'removed-active'
-        ? `提示: 运行中的实例仍在使用已删除订阅的配置，执行 ${hintCommand} 切换到新订阅`
-        : variant === 'removed-last'
-          ? `提示: 运行中的实例仍在使用已删除订阅的配置（订阅已全部删除），重新添加订阅后执行 ${hintCommand}`
-          : `提示: 运行中的实例仍使用旧配置，执行 ${hintCommand} 使更新生效`;
-    console.log(colors.yellow(message));
-    console.log('');
-  }
+  if (!state.running) return;
+  const hintCommand = runtime.startCommandForCurrentMode(state);
+  // 删除类的两个分支共用前缀；后缀按「有没有可切换的新订阅」分档
+  const message =
+    variant === 'update'
+      ? `提示: 运行中的实例仍使用旧配置，执行 ${hintCommand} 使更新生效`
+      : `提示: 运行中的实例仍在使用已删除订阅的配置${
+          variant === 'removed-active' ? `，执行 ${hintCommand} 切换到新订阅` : `（订阅已全部删除），重新添加订阅后执行 ${hintCommand}`
+        }`;
+  console.log(colors.yellow(message));
+  console.log('');
 }
 
 /** 纯只读列表：不触发自动更新（更新是写操作，交给 start 与显式 sub update） */
@@ -207,7 +207,7 @@ async function subUpdate(args: string[]): Promise<void> {
   console.log(`更新订阅: ${target.name}`);
   const result = await withSpinner('下载订阅', () => subscription.tryUpdateOne(target));
   if (!result.success) {
-    throw new CliError((result.error || '').split('\n')[0], { label: '更新失败' });
+    throw new CliError(firstLine(result.error || ''), { label: '更新失败' });
   }
   console.log(`已更新 (${subscription.formatProxySummary(result)})`);
   console.log('');

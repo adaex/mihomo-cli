@@ -2,6 +2,7 @@ import { assertKnownFlags, assertPositionalCount, hasFlag } from '../argv.js';
 import { colors } from '../colors.js';
 import { deriveRuntimeMode, getConfigInfo, getKernelVersion, hasKernel, judgeScriptMatches, runtimeModeLabel } from '../config.js';
 import { VERSION } from '../constants.js';
+import { CliError } from '../errors.js';
 import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic } from '../format.js';
 import { listOverwriteFile, shortOverwriteName } from '../overwrite.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
@@ -156,8 +157,11 @@ export async function printStatus(args: string[] = []): Promise<void> {
           if (f.kind === 'script' && matchedByName.has(f.name)) f.matched = matchedByName.get(f.name);
         }
       }
-    } catch {
-      /* 富化失败按未判定处理，不拦 status */
+    } catch (e) {
+      // 富化降级只针对预期错误（手改 settings.json 写入非法订阅名时路径防御的 CliError）；
+      // 程序缺陷（TypeError 之类）不属于「未判定」，原样上抛——吞掉只会让 status 永远
+      // 安静地少一列而无人知道为什么
+      if (!(e instanceof CliError)) throw e;
     }
   }
   const cached = activeSub ? getSubscriptionsWithCache().find(s => s.name === activeSub.name) : undefined;
