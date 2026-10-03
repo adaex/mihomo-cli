@@ -373,7 +373,7 @@ describe('buildKernelCurlArgs', () => {
     assert.equal(args[i + 1], '*');
   });
 
-  it('proxy 通道不设 --noproxy（-x 与 --noproxy 并存时 noproxy 优先级更高，会废掉代理）', () => {
+  it('proxy 通道不设 --noproxy（并存时 noproxy 优先级更高会废掉代理；no_proxy 免疫由 spawn env 出口承担）', () => {
     const args = buildKernelCurlArgs({ ...common, proxy: 'socks5://127.0.0.1:7897' });
     assert.ok(!args.includes('--noproxy'));
   });
@@ -432,6 +432,48 @@ describe('buildReleaseApiCurlArgs（代理路径的 release API 查询）', () =
   it('-x 原样透传代理地址（显式 --proxy 与本机混合端口同一路径）', () => {
     const args = buildReleaseApiCurlArgs('http://192.168.1.2:7897', url);
     assert.equal(args[args.indexOf('-x') + 1], 'http://192.168.1.2:7897');
+  });
+});
+
+describe('checkUpdate 代理路径（curl spawn env 出口端到端）', () => {
+  it("shell 注入 no_proxy='*' 时桩 curl 实见空串（例外表绕过 -x 的回归闸）", () => {
+    // 反向验证锚点：getLatestRelease 的 curl spawn 若去掉 buildCurlSpawnEnv 接线，本用例转红
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-release-env-'));
+    const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-release-env-bin-'));
+    const script = [
+      `const { checkUpdate } = await import(${JSON.stringify(path.resolve('src/kernel.ts'))});`,
+      "const r = await checkUpdate({ proxy: 'http://127.0.0.1:7890', useGh: false, currentVersion: 'v0.0.1' });",
+      "console.log('LATEST:' + r.latest);",
+    ].join('\n');
+    try {
+      fs.writeFileSync(
+        path.join(fakeBin, 'curl'),
+        `#!/bin/bash
+printf '%s' "\${no_proxy-__UNSET__}" > "$MIHOMO_TEST_CURL_ENV_MARKER.no_proxy"
+printf '%s' "\${NO_PROXY-__UNSET__}" > "$MIHOMO_TEST_CURL_ENV_MARKER.NO_PROXY"
+# 伪造 -w '\\n%{http_code}' 的输出形态：响应体 + 末行状态码
+printf '[{"tag_name":"v1.0.0","assets":[]}]\\n200'
+exit 0
+`,
+      );
+      fs.chmodSync(path.join(fakeBin, 'curl'), 0o755);
+      const r = runModule(script, dataDir, {
+        env: {
+          PATH: `${fakeBin}:${process.env.PATH}`,
+          MIHOMO_TEST_CURL_ENV_MARKER: path.join(dataDir, 'curl-env'),
+          no_proxy: '*',
+          NO_PROXY: '*',
+        },
+        timeout: 30_000,
+      });
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /LATEST:v1\.0\.0/);
+      assert.equal(fs.readFileSync(path.join(dataDir, 'curl-env.no_proxy'), 'utf8'), '');
+      assert.equal(fs.readFileSync(path.join(dataDir, 'curl-env.NO_PROXY'), 'utf8'), '');
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      fs.rmSync(fakeBin, { recursive: true, force: true });
+    }
   });
 });
 
@@ -554,12 +596,16 @@ describe('downloadKernel：下载后完整性闸门（子进程 + PATH 桩 curl/
     binaryContent: string;
     downloadUrl?: string;
     preExisting?: string;
-    channel?: { kind: 'direct' } | { kind: 'mirror'; mirror: string };
+    channel?: { kind: 'direct' } | { kind: 'mirror'; mirror: string } | { kind: 'proxy'; proxy: string };
+    /** 子进程 shell 注入 no_proxy='*'/'NO_PROXY=*'，验证 curl spawn 的 env 出口置空（proxy 通道用） */
+    injectNoProxyStar?: boolean;
   }): {
     stdout: string;
     stderr: string;
     /** 桩 curl 是否被调用过（白名单用例断言拒绝先于下载） */
     curlCalled: boolean;
+    /** 桩 curl spawn 时实见的 no_proxy/NO_PROXY（__UNSET__ 表示未设置），env 出口断言用 */
+    curlEnv: { noProxy: string; noProxyUpper: string };
   } {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-kernel-gate-'));
     const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-kernel-gate-bin-'));
@@ -592,6 +638,8 @@ describe('downloadKernel：下载后完整性闸门（子进程 + PATH 桩 curl/
         path.join(fakeBin, 'curl'),
         `#!/bin/bash
 printf '' > "$MIHOMO_TEST_CURL_MARKER"
+printf '%s' "\${no_proxy-__UNSET__}" > "$MIHOMO_TEST_CURL_ENV_MARKER.no_proxy"
+printf '%s' "\${NO_PROXY-__UNSET__}" > "$MIHOMO_TEST_CURL_ENV_MARKER.NO_PROXY"
 out=""; prev=""
 for a in "$@"; do
   if [ "$prev" = "-o" ]; then out="$a"; fi
@@ -617,11 +665,24 @@ exit 0
           MIHOMO_TEST_CURL_BODY: opts.curlBody,
           MIHOMO_TEST_BINARY_CONTENT: opts.binaryContent,
           MIHOMO_TEST_CURL_MARKER: path.join(dataDir, 'curl-called'),
+          MIHOMO_TEST_CURL_ENV_MARKER: path.join(dataDir, 'curl-env'),
+          // 模拟用户 shell export 过的例外表：curl spawn 不经统一出口置空就会绕过 -x
+          ...(opts.injectNoProxyStar ? { no_proxy: '*', NO_PROXY: '*' } : {}),
         },
         timeout: 30_000,
       });
       assert.equal(r.status, 0, r.stderr);
-      return { stdout: r.stdout, stderr: r.stderr, curlCalled: fs.existsSync(path.join(dataDir, 'curl-called')) };
+      // 白名单用例里桩 curl 不会被调用（marker 不存在），按 __UNSET__ 哨兵返回
+      const envMarker = (suffix: string) => {
+        const f = path.join(dataDir, `curl-env.${suffix}`);
+        return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '__UNSET__';
+      };
+      return {
+        stdout: r.stdout,
+        stderr: r.stderr,
+        curlCalled: fs.existsSync(path.join(dataDir, 'curl-called')),
+        curlEnv: { noProxy: envMarker('no_proxy'), noProxyUpper: envMarker('NO_PROXY') },
+      };
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });
       fs.rmSync(fakeBin, { recursive: true, force: true });
@@ -693,5 +754,20 @@ exit 0
     });
     assert.match(resultLineOf(stdout), /NO-THROW/);
     assert.match(stderr, /镜像前缀未能作用/);
+  });
+
+  it("proxy 通道：shell 注入 no_proxy='*' 时桩 curl 实见空串（例外表绕过 -x 的回归闸）", () => {
+    // 反向验证锚点：kernel.ts 下载 spawn 若去掉 buildCurlSpawnEnv 接线，本用例转红
+    const { stdout, curlCalled, curlEnv } = runKernelDownloadCase({
+      assetSize: 3,
+      curlBody: 'abc',
+      binaryContent: '#!/bin/sh\necho "Mihomo Meta v1.19.30 darwin"\n',
+      channel: { kind: 'proxy', proxy: 'http://127.0.0.1:7890' },
+      injectNoProxyStar: true,
+    });
+    assert.equal(curlCalled, true);
+    assert.match(resultLineOf(stdout), /NO-THROW/);
+    assert.equal(curlEnv.noProxy, '', 'no_proxy 必须置空，否则 * 会让 curl 绕过 -x 直连');
+    assert.equal(curlEnv.noProxyUpper, '');
   });
 });

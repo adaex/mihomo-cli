@@ -1,6 +1,7 @@
 import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import { buildCurlSpawnEnv } from './curl-spawn.js';
 import { parsePidList } from './process-probe.js';
 import { lastCurlErrorLine } from './text.js';
 import type { ProxyProbeResult } from './types.js';
@@ -54,12 +55,8 @@ export async function probeProxyConnectivity(port: number): Promise<ProxyProbeRe
       ['-x', `http://127.0.0.1:${port}`, '-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', String(Math.ceil(PROBE_TIMEOUT_MS / 1000)), PROBE_URL],
       {
         timeout: PROBE_TIMEOUT_MS + 2_000,
-        // no_proxy/NO_PROXY 的例外表会**绕过显式 -x**（实测 curl 8.7：命中目标 host 即
-        // 直连，代理完全不经手）——用户 shell 里 export 过 no_proxy='*' 或含 gstatic 域的
-        // 条目时，探测考的是直连而非本机代理：直连通则内核已死也亮绿灯（恰好废掉本函数
-        // 「进程在跑 ≠ 代理通」的存在意义），直连被墙则健康代理被误报不通。空串按 curl
-        // 语义清空例外表，只作用于本次 spawn（与 kernel.ts 注入 env 的 per-spawn 范式同款）
-        env: { ...process.env, no_proxy: '', NO_PROXY: '' },
+        // 例外表会绕过显式 -x、让探测考成直连（绿灯作废），置空兜住统一走 curl-spawn.ts 出口
+        env: buildCurlSpawnEnv(),
       },
     );
     const code = Number.parseInt(stdout.trim(), 10);

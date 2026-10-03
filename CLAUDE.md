@@ -27,6 +27,7 @@ macOS 命令行客户端，TypeScript ESM，Node.js >= 22.22.1。入口 `src/ind
 | `redact.ts` | `config` 展示侧的凭据脱敏：敏感键递归掩码、provider 订阅 URL 复用 maskUrl |
 | `system-proxy.ts` | env 自代理判定（isLoopbackHost/proxyEnvPointsAtSelf）与系统代理只读检测、分档提示（不写系统设置） |
 | `proxy-probe.ts` / `spinner.ts` / `sudo.ts` | 连通性探测、等待反馈、按需提权 |
+| `curl-spawn.ts` | 全仓 curl 子进程代理策略唯一出口：per-spawn env 置空 no_proxy/NO_PROXY 保 -x 权威，三处 spawn（产物下载/release API 查询/连通性探测）共用 |
 | `errors.ts` / `utils.ts` / `colors.ts` / `lifecycle.ts` | 错误、杂项（sleep）、颜色、信号处理 |
 
 ## 开发与验证
@@ -99,6 +100,7 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 - 镜像只作用产物下载、选择不持久化；版本查询代理可用时直接经代理（D8）
 - 守卫前清 env 代理只清指向本机 Mixed 端口的自指形态（D9）；gh 回退与 npm 恢复两个 per-spawn 并存例外的判据与构造见 D9（共同前提「全程不重启内核」，均不写回 process.env）
 - 下载候选为列表、逐个尝试首个成功即用；显式 --mirror/--proxy 只有一个候选（显式意图不自动换道）
+- curl 子进程代理策略唯一出口是 `curl-spawn.ts` 的 `buildCurlSpawnEnv`：per-spawn env 置空 no_proxy/NO_PROXY（例外表会绕过显式 -x，用户 shell 的 no_proxy='*' 或目标域条目会静默改写通道决策）；直连通道的 `--noproxy '*'` 在 args 层（buildKernelCurlArgs），proxy 通道 args 绝不能加 --noproxy（并存时优先级更高会废掉 -x）；三处 spawn（产物下载/release API 查询/连通性探测）不得另写 env 代理处理
 
 ## Git 与流程
 

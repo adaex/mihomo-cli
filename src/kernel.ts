@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { compareVersions } from 'compare-versions';
 import { getKernelVersion, probeKernelVersion } from './config.js';
 import { VERSION } from './constants.js';
+import { buildCurlSpawnEnv } from './curl-spawn.js';
 import { createHttpClient, createHttpError } from './http.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
 import { escapeRegExp, lastCurlErrorLine } from './text.js';
@@ -226,7 +227,8 @@ export function pickLatestRelease(releases: GitHubRelease[]): GitHubRelease {
 /**
  * 构造代理路径查询 release API 的 curl 参数。纯函数，参数数组单测锁死（口径同 buildKernelCurlArgs）：
  * - URL 直指 api.github.com 且居末位——API 绝不经过镜像（镜像可伪造 browser_download_url，D8）
- * - `-x <proxy>`：curl 的代理传输层（本机混合端口或显式 --proxy），TLS 端到端，响应仍来自 GitHub
+ * - `-x <proxy>`：curl 的代理传输层（本机混合端口或显式 --proxy），TLS 端到端，响应仍来自 GitHub。
+ *   no_proxy 例外表会绕过 -x，由调用处经 buildCurlSpawnEnv（curl-spawn.ts）置空兜住
  * - `--proto '=https'` / `--proto-redir '=https'`：全链路强制 https，与下载通道同防线
  * - `--fail-with-body` + `-w '\n%{http_code}'`：4xx（未认证限流 60 次/时，403 常见）时 curl
  *   退出码仍为 0，JSON 错误对象会一路流到 pickLatestRelease 才抛笼统的「无法获取版本信息」；
@@ -376,6 +378,8 @@ async function getLatestRelease(repo: string, opts: ReleaseQueryOptions): Promis
         maxBuffer: 50 * 1024 * 1024,
         timeout: KERNEL_HTTP_TIMEOUT + 10_000,
         signal: opts.signal,
+        // no_proxy 例外表会绕过显式 -x——统一出口置空，保 -x 权威（curl-spawn.ts）
+        env: buildCurlSpawnEnv(),
       });
       stdout = result.stdout;
     } catch (e) {
@@ -467,12 +471,15 @@ export function buildKernelCurlArgs(args: { url: string; proxy: string | null; m
   ];
   if (args.proxy) {
     argv.push('-x', args.proxy);
+    // no_proxy 例外表会绕过显式 -x：env 层由统一出口 buildCurlSpawnEnv 置空（curl-spawn.ts），
+    // 此处绝不能加 --noproxy——--noproxy 与 -x 并存时前者优先级更高，会废掉代理
   } else {
     // 无显式代理的通道（direct / 无 proxy 的 mirror）必须显式禁用 env 代理：curl 默认
     // 读 https_proxy 等环境变量，通道决策（resolveDownloadChannels）却从不把 env 代理
     // 当输入——版本查询走 Node fetch（undici 不认 env 代理、真直连）而产物走 curl 经
     // env 代理出网，同一命令两条出网路径分叉；`--mirror direct` 的「强制直连」名存实亡，
-    // env 代理故障时报错还把原因误导成直连被墙/节点带宽
+    // env 代理故障时报错还把原因误导成直连被墙/节点带宽。
+    // 这是 args 层防线，与 env 层（buildCurlSpawnEnv 置空 no_proxy）分工见 curl-spawn.ts
     argv.push('--noproxy', '*');
   }
   argv.push('-o', args.outputPath, args.url);
@@ -637,7 +644,8 @@ export async function downloadKernel(
           maxBytes,
           outputPath: tempPath,
         }),
-        { stdio: 'inherit' },
+        // no_proxy 例外表会绕过显式 -x——统一出口置空，保 -x 权威（curl-spawn.ts）
+        { stdio: 'inherit', env: buildCurlSpawnEnv() },
       );
 
       if (curlResult.error) {
