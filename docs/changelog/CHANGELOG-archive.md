@@ -2,6 +2,59 @@
 
 以下为 2026-09-30 及更早（含 26.9.90 起的对齐序号与误序的 26.9.37）的发布记录，自 CHANGELOG.md 原样迁入、未作改写。近期版本见 [CHANGELOG.md](../../CHANGELOG.md)。
 
+## [26.10.96] - 2026-10-01
+
+### 修复
+
+- **裸 `-` 一律按未知选项报错**：此前被 argv 校验豁免、取位置参数时又跳过，两头不认等于静默丢弃——`sub update -`（短横线笔误）会被当成无参形态批量更新全部订阅，`start -` 静默起默认代理，`sub add <url> -` 更会建出 remove/use 都无法指定的订阅（只剩 reset 能收拾）
+- **pid 文件清理免提权**：文件在 runtime/ 下（用户属主目录），目录可写即可删其中任意文件、与文件属主无关——root 属主的 TUN 残留文件也直接删，不再走 sudo rm。此前零进程的 `mihomo stop` 会为一个没有进程读的无害文件弹管理员密码（取消后还警告「未能清理」，而文件随后就被免提权的 runtime 清理删掉）；sudo 清理脚本被取消后也不再紧接着弹第二次密码
+- **进程还活着时不再删 pid 文件**：sudo 清理被取消、root TUN 内核仍在路由时，pid 文件是 status/isRunning 的真相源——免提权化初版在此场景把它删掉，status 从此对活着的内核报「未运行」；现改为复核确认进程清零后才清理
+- **legacy 迁移脚本不再删活进程的 pid**：清理旧 v3–v4 root LaunchDaemon 的脚本在 `bootout` 后无条件 `rm pid`，机器残留旧 plist（检测只看文件存在）却另有一个无关活 root TUN 时，bootout 返回 113（未装载）仍会删掉活 TUN 的 pid——之后并发 `mihomo status` 对仍在路由的内核误报「未运行」，此刻 Ctrl+C 凝固成「活 TUN + 无 pid」。脚本不再碰 pid，改为拆除成功、复核进程清零后免提权清理；有并存的活 TUN 时保留其 pid
+- `mihomo reset` 遇 root 残留清理的 sudo 未走通（取消/非 TTY/脚本失败）时不再完全静默：进程复核已清空则继续重置，但黄字告知可能有残留未清及重试入口（26.10.95 统一后该场景的警告通道被丢弃）
+- `mihomo stop` 收尾警告归因修正：进程在死亡等待内自行退光、而 sudo 清理脚本被取消/失败时，旧逻辑把它说成「root 属主的 pid 文件未能清理」（文件可能根本没出过问题），现按「清理未完成、进程目前已不在」归因；两类收尾错误（脚本/pid 文件）拆为独立字段，服务路径的提示同步按字段分开
+- 残留清理报错不再把 surviving 进程一概说成「root 属主」：没进过 root 分支（用户态 SIGKILL 未能终止）时按「用户态未能终止」描述，root 断言只跟随 sudo 脚本失败出现；pid 文件清理失败的文案也不再断言「root 属主」（免提权 unlink 失败与属主无关），且「用户态残留 + pid 文件小错」不再被拦成命令失败（错误消息会是 unlink 报错、与「进程未终止」的提示自相矛盾），归外层残留处置
+- pid 文件清理失败的警告不再连打两遍（clearPid 内部遗留的 console.warn 与调用方警告叠加）；sudo 失败短语全仓统一为 describeSudoFailure（非鉴权错误保留原始消息——非交互环境的具体原因不再被「sudo 执行失败」笼统盖掉），pid 文件短语统一 describePidCleanupFailure
+- 空环境裸 `mihomo sub remove`（未给名称）改报「没有订阅」，与带名称形态及 use/update 同口径（旧报「请指定名称」并引导补一个不存在的参数）
+- 混合属主时 root 残留清理的预告只列 root 属主的 PID：用户态游离内核混在其中时，旧消息把全部 PID 都标成「root 属主的内核残留」，与实际属主不符
+
+### 内部
+
+- root 残留清理脚本 buildKernelCleanupScript 不再 `rm pid`：cleanupAll 路径的 pid 删除统一在末尾、复核 remaining 为空才免提权 unlink，消除该路径「活进程不删 isRunning 真相源」在提权脚本内的字面例外（此前仅靠「sudo 取消脚本不执行 + pkill 失败 exit 2」两道时序间接保证；legacy 迁移脚本 buildLegacyCleanupScript 的同款 `rm pid` 也已收口，见上方修复段）；buildRootResidueCleanupError 在 scriptError 与 pidError 并存时改为 scriptError 优先（主归因「清理未走完」、pid 错误仅附带，手动命令给 pkill 而非 rm，防漏掉潜在存活进程）；reset 的警告理由去掉 `as Error` 断言、改显式空值守卫；补「脚本不得含 rm」的结构断言、只读文件免提权删除与双错误并存象限用例
+- `CleanupResult.sudoError` 拆为 `scriptError`（pkill 脚本）与 `pidError`（pid 文件删除）两个字段：进程死光但脚本没走完与仅 pid 文件残留是两种归因，合并字段让调用方提示说错事；处置判据 classifyResidueCleanup 同步（throw 档只看 scriptError，pidError 不参与拦截），reset 的警告判据也收口到它
+- `StaleState` 删除无消费方的 `needsSudo`/`hasRootPidFile`/`hasRootProcess` 字段；`clearPid` 的三态返回值（cancelled/failed/null）随免提权化收敛为 `Error | null`
+- 覆写数组拼接误用的「值类型描述」抽为 describeValueKind：文件级（系统默认值）与合并级（订阅现值）两处检查共用，消除已漂移的双实现
+- 测试注释清理：三处历史叙事（引入版本、旧实现去向）改为只留判据，历史留在 CHANGELOG/git
+
+## [26.10.95] - 2026-10-01
+
+### 修复
+
+- **README 承诺的覆写反例现在真的报错**：`log-level+: warning`（数组操作符作用于系统默认的标量键）此前静默产出 `log-level: [warning]`，配置一路存活到内核 `-t`——类型检查只看得到订阅层，而该键只存在于系统默认配置（在合并之后才注入）。现在文件加载阶段即报错并给出改写指引
+- **坏覆写文件在 `ow` / `status` 的结论与启动硬失败不再自相矛盾**：`~dns` 这类已移除操作符此前在 `ow`/status 被列为「已生效」（`status --json` 的 `applied` 也带着它），而 `start`/`config`/`doctor` 对同一文件硬失败。操作符形态错误（`~`/尖括号/互斥/空键）提前到加载阶段校验，诊断与合并两条路径看到同一份坏文件清单；坏文件的修复/迁移指引（hint）此前只在启动报错时可见，现在 `ow`、status 文本与 `status --json` 都带出
+- `mihomo status` 里 JS 覆写脚本的短名显示修复：`overwrite.js` 不再显示成 `js`（正确是「主文件」），`overwrite.dns.js` 不再带 `.js` 尾巴（26.9.93 引入脚本时漏改）
+- `mihomo doctor` 订阅新鲜度不再输出「N 分钟前**前**更新」；未来时间戳（时钟偏移）单独显示「更新时间记录异常」
+- 自动更新整体超时后，没赶上的订阅显示灰色「跳过（更新超时，使用本地缓存）」，不再与真实网络失败同刷红叉英文（`The operation was aborted...`），也不计入失败数——超时用缓存启动本是正常降级
+- 内核下载/解压中被强制终止后，`kernel/.tmp-*` 临时目录（可能几十 MB）不再永久残留：与原子写 `*.tmp` 同受按 1 小时龄的崩溃残留清扫，旧内核完好时无需手动 `reset kernel`
+- 空环境 `mihomo sub remove <名字>` 改报「没有订阅」，与 `use`/`update` 同口径（旧报「未找到匹配」）
+- `mihomo start -u 5s` 等非法选项值现在先报参数错误，不再先撞「未找到内核」
+- 服务路径清理 root 残留内核后偶发误报「部分进程未终止」（重跑一次又正常）消除：杀进程统一走带死亡等待轮询的同一实现，不再在发出 SIGKILL 后立刻复核 pgrep；三处 root 提权（start/stop/uninstall）前都补了「为什么需要管理员密码」的预告，不再无预警弹英文 `Password:`
+- 非交互终端（或取消密码）下 `mihomo stop`/`uninstall` 不再因一个无害的 root 属主 pid 文件残留而整体失败：无残留进程时该文件清理失败只警告（无进程读它、下次自愈），与旧服务路径「无进程不弹密码」的语义对齐；root 进程确实没杀掉仍照常报错
+- `uninstall` 不再重复执行第二次 disable（锁内已写入并经 `print-disabled` 复核成功，第二次必成功，纯冗余）
+
+### 新增
+
+- `mihomo reset overwrites` 完成后，若目录里还有不被加载的疑似覆写文件（`overwrite.yml`、`overwrite.ts`、大小写变体），点名告知「N 个疑似文件保留未删」及原因（保守起见这些近失文件仍不自动删）
+- `mihomo kernel` 首选 gh 认证查询但回退直连成功时，打印一行实际来源（spinner 说的「gh 认证通道」与实际响应不再可能悄悄不一致）
+- 连续查看状态时连通性探测结果按端口缓存 3 秒：代理不通时连敲 `status`/`doctor` 不再每次干等 2 秒（代理状态秒级不可能翻转；`--no-probe` 不受影响）
+- README 修正 JS 脚本可见性描述：`ctx.warn()` 与脚本执行期抛错只在 `config`/`doctor`/`start` 可见，`status` 只加载脚本、不执行函数体
+
+### 内部
+
+- 残留内核清理收敛为唯一入口 `cleanupAll`（服务启停/卸载/重置/游离内核共用），删除 service.ts 内与之重复的约 100 行实现（`killResidualKernels`/`cleanupRootResidue` 等）；`cleanupAll`/`stop` 的 `forceSudo` 死参删除（无任何调用方传值）
+- 删除 `withFileLock` 的 deadline 分支：过线后重新核对的还是循环顶部微秒前算过的同一个锁龄谓词，该分支永不产生行为差异；锁的心智模型回到「强夺唯一依据是锁龄」
+- 健康轮询（每 100ms 一次、最坏 31 轮）不再白跑 `print-disabled`：健康判定从不读 disabled 字段，`getServiceStatus` 新增 `withDisabled` 选项，轮询关闭该查询以减少阻塞事件循环的 spawnSync；循环外从未被消费的首次快照一并删除
+- 删除测试专用的第二合并入口 `deepMergeWithOverrides`，相关用例改走生产唯一入口 `applyOverwrite`
+
 ## [26.9.94] - 2026-09-30
 
 ### 破坏性变更（覆写执行顺序）
