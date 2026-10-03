@@ -337,11 +337,13 @@ function printOverwriteLines(
   }
 
   // 「不适用」是本次唯一可能让人意外的一类（文件是启用的，却没生效），给出文件名、
-  // 作用域与当前订阅名——三者凑齐才看得出为什么没命中。停用的不展开：那是用户自己
-  // 在文件里写的 enabled: false，改法也写在 `ow` 列表的固定提示里
+  // 作用域与当前订阅名——三者凑齐才看得出为什么没命中。脚本不带理由：return true
+  // 约定是脚本作者的知识，不对使用者展示——改法在 `ow` 列表的脚本行提示里。停用的
+  // 不展开：那是用户自己在文件里写的 enabled: false，改法也写在 `ow` 列表的固定提示里
   for (const f of unmatched) {
-    const reason = f.kind === 'script' ? '脚本未返回 true' : f.scope ? `作用域 ${f.scope}` : '作用域受限';
-    console.log(colors.gray(`  ${shortOverwriteName(f.name)} 不适用于当前订阅${activeSub ? ` ${activeSub.name}` : ''}（${reason}）`));
+    const reason = f.kind === 'script' ? '' : f.scope ? `作用域 ${f.scope}` : '作用域受限';
+    const suffix = reason ? `（${reason}）` : '';
+    console.log(colors.gray(`  ${shortOverwriteName(f.name)} 不适用于当前订阅${activeSub ? ` ${activeSub.name}` : ''}${suffix}`));
   }
 
   // 加载失败的文件不参与任何分类，红字给出原因、灰字给出修复指引；

@@ -234,7 +234,7 @@ describe('status 覆写行按 match 区分是否适用当前订阅', () => {
  * matched 恒为 true——作用域不中的脚本永远列在「生效」里，正是这组用例要拦的回归。
  */
 describe('status/config 按脚本返回值区分是否适用当前订阅', () => {
-  it('未返回 true 的脚本移出生效清单，理由是「脚本未返回 true」而非作用域', () => {
+  it('未返回 true 的脚本移出生效清单，行内不带理由（return true 是脚本作者知识，不对使用者展示）', () => {
     withFixture((dataDir, run) => {
       fs.writeFileSync(
         path.join(dataDir, 'overwrite.hit.js'),
@@ -243,7 +243,8 @@ describe('status/config 按脚本返回值区分是否适用当前订阅', () =>
       fs.writeFileSync(path.join(dataDir, 'overwrite.miss.js'), 'export default function () { return; }\n');
       const out = run(['status', '--no-probe']).stdout;
       assert.match(out, /覆写:.*已启用 \(hit，1 个不适用\)/);
-      assert.match(out, /miss 不适用于当前订阅 edu1（脚本未返回 true）/);
+      assert.match(out, /miss 不适用于当前订阅 edu1$/m);
+      assert.ok(!out.includes('未返回 true'), 'status 文本不得暴露脚本 API 术语');
       assert.ok(!/\(hit, miss/.test(out), '未命中的脚本不得出现在生效清单里');
     });
   });
@@ -282,7 +283,7 @@ describe('status/config 按脚本返回值区分是否适用当前订阅', () =>
       fs.writeFileSync(path.join(dataDir, 'overwrite.bad.yaml'), 'match: [broken\n');
       fs.writeFileSync(path.join(dataDir, 'overwrite.miss.js'), 'export default function () { return; }\n');
       const out = run(['status', '--no-probe']).stdout;
-      assert.match(out, /miss 不适用于当前订阅 edu1（脚本未返回 true）/);
+      assert.match(out, /miss 不适用于当前订阅 edu1$/m);
       assert.match(out, /加载失败|解析失败/, '坏文件本身仍要红字可见');
     });
   });

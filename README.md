@@ -482,7 +482,7 @@ export default function (config, ctx) {
 约定与边界：
 
 - **必须同步**：返回 Promise 会报错。脚本是纯数据变换，没有要等网络的场景
-- **`return true` = 命中当前订阅**：脚本没有 `match` 声明，`status` / `config` 靠返回值区分「生效中」与「不适用于当前订阅」——判据过了就在最后 `return true`，不中就提前退出。判定严格认 `true`（返回别的 truthy 值不算），也不影响合并本身
+- **`return true` = 命中当前订阅**：脚本没有 `match` 声明，`status` 靠返回值区分「生效中」与「不适用于当前订阅」——判据过了就在最后 `return true`，不中就提前退出。判定严格认 `true`（返回别的 truthy 值不算），也不影响合并本身
 - **全信任**：脚本以你的用户身份运行（和 `.zshrc` 一个待遇），不做沙箱与超时——别装来路不明的覆写脚本
 - **改不动系统锁定项**：`mixed-port`、`external-controller`、`allow-lan` 等入站与控制面键由 CLI 管理，脚本设置了会被剥除并提示（与 YAML 覆写同一条边界）
 - **脚本先于 YAML 执行**：脚本看到的是订阅原始配置，读不到 YAML 覆写注入的内容；需要脚本处理 YAML 注入项时，把那段逻辑也写进脚本
