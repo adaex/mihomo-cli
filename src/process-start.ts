@@ -121,7 +121,7 @@ export async function startTun(prefetched?: ServiceStatus): Promise<number> {
   // 复核点到 pkill 执行之间仍隔着 sudo 密码窗口，无法归零（pkill 在 root 脚本内，
   // 进不了锁）；那一侧由 stop epoch 防线兜底：TUN 分支过守卫后已 bump，start 的
   // enable+bootstrap 在锁内必读到变化而放弃——与 kickstart 60s 锁外交错同一级别的
-  // 已知残余，见 CODE_REVIEW「未覆盖与待复核」。
+  // 已知残余，见 CONCLUSIONS「未覆盖与待复核」。
   // withDisabled:false——只消费 loaded，print-disabled 是白多一次的阻塞查询
   const serviceLoaded = prefetched ? prefetched.loaded : getServiceStatus({ withDisabled: false }).loaded;
   if (serviceLoaded) {

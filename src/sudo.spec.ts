@@ -6,7 +6,7 @@ import { describeSudoFailure, SudoAuthError, sudoExitToError, sudoTimeoutError }
 
 /**
  * sudo 退出码映射的纯函数回归。真实 sudo 路径（密码提示、脚本执行）不自动测试
- * （见 CODE_REVIEW「自动化测试边界」），能锁住的是这份「退出码 → 错误」的分工协议：
+ * （见 CONCLUSIONS「自动化测试边界」），能锁住的是这份「退出码 → 错误」的分工协议：
  * 1 恒归 sudo 鉴权（用户主动取消的判据），脚本内部失败用 ≥2 并经 codeMessages 登记。
  */
 describe('sudoExitToError：退出码到错误的分工协议', () => {

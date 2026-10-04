@@ -428,7 +428,7 @@ describe('concludeHotReload：热重载成功后复读计数再下结论', () =>
  * 不在测试里另抄一份——抄一份等于在验副本，两边一漂移就测了个假的。
  *
  * 不碰 launchctl——`disableServiceAutoStart` 会真改 launchd 的 disabled 表（在系统里
- * 留永久记录，见 `CODE_REVIEW.md` 的「决策豁免」）。这里只验计数机制本身：
+ * 留永久记录，见 `CONCLUSIONS.md` 的「自动化测试边界」）。这里只验计数机制本身：
  * 文件层通了，配合上面的判据用例，整条链路的正确性就锁住了。
  */
 describe('停止计数的读取（并发判定的物理基础）', () => {
@@ -549,7 +549,7 @@ describe('isValidServiceLabel：全仓唯一挡住 root 任意路径写的校验
  * 「未预期错误」（main().catch 兜底）渲染，而 start 的兜底又包成「启动失败」，
  * 同一错误在不同命令下两副面孔。这里锁住包装后的关键事实：
  * 主体动作已完成到哪一步、残留 PID、重试入口，以及 sudo 取消按「已取消」
- * （用户主动行为）而非「错误」渲染。真实 sudo 路径不自动测试（CODE_REVIEW），
+ * （用户主动行为）而非「错误」渲染。真实 sudo 路径不自动测试（CONCLUSIONS），
  * 可测的是这份包装的纯逻辑。
  */
 /**

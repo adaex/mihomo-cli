@@ -17,7 +17,7 @@ import { writeStubExecutable } from './test-support/stub-bin.js';
  * **消费点漏铺**——热重载成功路径不查计数、stop 锁体持锁超过强夺阈值。判据纯函数
  * 测不出来，只有把真实 restartService/stopService 跑起来才能咬住。而真实 launchctl
  * 写操作不进自动化测试（enable/disable 会在 /var/db/com.apple.xpc.launchd/ 留永久
- * 记录，见 CODE_REVIEW「自动化测试边界」）——桩 launchctl 让代码走真实路径、
+ * 记录，见 CONCLUSIONS「自动化测试边界」）——桩 launchctl 让代码走真实路径、
  * launchd 一点不被碰。
  *
  * 隔离三层：MIHOMO_CLI_DIR 指临时数据目录（锁、epoch、settings 都在里面）；

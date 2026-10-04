@@ -153,7 +153,7 @@ describe('saveSubscriptionCache 跨进程并发', () => {
 
 describe('updateSettings 跨进程并发', () => {
   it('多进程同时改订阅列表不丢条目（settings.json 的读-改-写持锁）', async () => {
-    // CODE_REVIEW 曾声称此场景有测试、实际缺失（只有 cache.json 版）。
+    // CONCLUSIONS 曾声称此场景有测试、实际缺失（只有 cache.json 版）。
     // settings.json 的丢失形态：后写者整块覆盖先写者刚写入的 subscriptions，
     // 双方都拿到成功回执——与 cache.json 同一族，防线同为 withFileLock
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-settings-race-'));

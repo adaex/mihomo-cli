@@ -72,7 +72,7 @@ export const PATHS = {
   subscriptionCacheLock: path.join(USER_DATA_DIR, 'subscription-cache.lock'),
   serviceLock: path.join(USER_DATA_DIR, 'service.lock'),
   /**
-   * 「服务被要求停止」的单调计数（`service.ts` 的 `bumpStopEpoch`/`readStopEpoch`，
+   * 「服务被要求停止」的单调计数（`stop-epoch.ts` 的 `bumpStopEpoch`/`readStopEpoch`，
    * 为什么用计数而非 disable 位见 docs/decisions.md D2）。
    *
    * 与锁同放 USER_DATA_DIR 根下：`runtime/` 等目录会被 `rmrf`，文件消失即读作 0，

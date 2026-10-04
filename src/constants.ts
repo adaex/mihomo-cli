@@ -190,7 +190,7 @@ export const LOCKED_CONFIG_KEYS = [
   // allow-lan 恒为 false 由 config.ts 的 systemConfig 写入（**不在 BASE_CONFIG**，
   // 理由同 mixed-port：锁定项是「恒定此值」，不是「用户没写时的默认」）。剥除来源盲，
   // 故覆写也不能再给 Mixed 端口设 authentication——缓解是 allow-lan 已强制 false、
-  // Mixed 只在回环，残余威胁面是同机其他进程（见 CODE_REVIEW）
+  // Mixed 只在回环，残余威胁面是同机其他进程（见 CONCLUSIONS）
   'allow-lan',
   'bind-address',
   'authentication',

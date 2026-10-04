@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-本仓开发约定；使用说明见 README，架构决策见 docs/decisions.md，验证结论与边界见 CODE_REVIEW，版本历史见 CHANGELOG。代码注释只写判据与契约，历史叙事不进注释。
+本仓开发约定；使用说明见 README，架构决策见 docs/decisions.md，验证结论与边界见 CONCLUSIONS，版本历史见 CHANGELOG。代码注释只写判据与契约，历史叙事不进注释。
 
 ## 项目与架构
 
@@ -41,7 +41,7 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 - 端到端夹具统一收在 `src/test-support/`，不在各 spec 重抄 spawn 与 env：cli.ts（makeFixture/runCli/readEpochIn/ENTRY，模块级子进程 runModule/moduleUrl，CLI 夹具自带临时 MIHOMO_CLI_DIR + 一次性 label + NO_COLOR 三件套）、fake-kernel.ts（假内核落盘/起进程/等出现/判死/收尾，禁静态 import 模块加载期固化 DIR 的模块）、guard.ts（守卫类 preload spawn 骨架，env 整体替换以表达「刻意不设 DIR」形态）
 - 验收命令不接管道收尾（`npm test | tail` 的退出码是 tail 的）：红会被吞成 0，要截断输出就重定向到文件再看
 - 修完必做反向验证（还原修复、确认用例转红），规则见 decisions.md D11；预测落空处是认知与实现的偏差点，补不变量用例挡在结构层
-- 真实 sudo/TUN 与永久污染 launchd disabled 表的用例不自动执行，理由见 CODE_REVIEW
+- 真实 sudo/TUN 与永久污染 launchd disabled 表的用例不自动执行，理由见 CONCLUSIONS
 - 进程类测试必须有隔离断言：临时 `MIHOMO_CLI_DIR`，涉及服务/reset 再加一次性 `MIHOMO_CLI_DAEMON_LABEL`
 - 删除或更名导出后全仓搜索（含测试内嵌脚本与 Markdown 示例）；typecheck 看不到字符串里的 import
 - 跨进程并发用 spawn 并行验证，spawnSync 顺序跑验不了
