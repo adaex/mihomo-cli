@@ -298,10 +298,14 @@ export function getSubscriptions(settings: Settings = readSettings()): Subscript
 export function getSubscriptionsWithCache(): SubscriptionWithCache[] {
   const subs = getSubscriptions();
   const cache = readSubscriptionCache();
-  return subs.map(s => ({
-    ...s,
-    ...(cache[s.name] || {}),
-  }));
+  return subs.map(s => {
+    // 手改缓存可能把单条写成字符串/数字（saveSubscriptionCache 的合并、
+    // subscriptionUrgency/formatTraffic 的运算对同一形态都有防护）：非对象条目
+    // 直接展开会让字符串产出 0..n 的字符键垃圾，混进 status/doctor 消费的对象
+    const entry = cache[s.name];
+    const safe = entry !== null && typeof entry === 'object' && !Array.isArray(entry) ? entry : {};
+    return { ...s, ...safe };
+  });
 }
 
 /**

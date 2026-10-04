@@ -35,7 +35,8 @@ function withDns(dnsYaml: string): string {
  * 内置 DNS 关着就无组件接管，网络直接不可用。而 `dns.enable: false` 在 mixed 下合法、
  * 常由机场下发且用户改不了——故强制打开并告警，不拒绝启动。
  *
- * 此前的缺陷（CONCLUSIONS v4.2.3 记录、v4.7.3 修）：生成 `dns: {enable: false, ...}`
+ * 此前的缺陷（v4.7.3 修，见 docs/changelog/CHANGELOG-archive.md；v4.2.3 审查列为未处理项）：
+ * 生成 `dns: {enable: false, ...}`
  * 的同时保留 `tun.dns-hijack`，还往已关闭的 dns 块里补注 fake-ip 字段。
  */
 describe('TUN 模式锁定 dns.enable', () => {

@@ -25,7 +25,9 @@ export function resolveUiName(args: string[]): string {
 /** 复制到剪贴板（macOS pbcopy）；失败返回 false，调用方回退到手动提示 */
 function copyToClipboard(text: string): boolean {
   try {
-    return spawnSync('pbcopy', [], { input: text }).status === 0;
+    // 超时与剪贴板读取（readUrlFromClipboard 的 pbpaste）同款：剪贴板服务卡住时
+    // 不能让 `ui -c` 无限期挂死
+    return spawnSync('pbcopy', [], { input: text, timeout: 3_000 }).status === 0;
   } catch {
     return false;
   }

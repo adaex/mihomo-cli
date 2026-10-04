@@ -448,3 +448,46 @@ describe('removeSubscription：数据最终状态（子进程真实模块）', (
     }
   });
 });
+
+/**
+ * getSubscriptionsWithCache 对手改缓存的非对象条目（字符串/数字）不得展开。
+ * saveSubscriptionCache 的合并、subscriptionUrgency/formatTraffic 的运算对同一
+ * 「cache.json 被手改」形态都有防护，列表合并此前是漏网的一处：字符串条目经
+ * `{...s, ...entry}` 展开产出 0..n 的字符键垃圾，混进 status/doctor 消费的对象。
+ */
+describe('getSubscriptionsWithCache：手改缓存的非对象条目不进合并结果', () => {
+  it('字符串/数字条目按无缓存处理，对象条目照常合并', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-withcache-'));
+    try {
+      const code = `
+        const fs = await import('node:fs');
+        const nodePath = await import('node:path');
+        const m = await import(${JSON.stringify(moduleUrl('src/settings.ts'))});
+        const paths = await import(${JSON.stringify(moduleUrl('src/paths.ts'))});
+        fs.mkdirSync(nodePath.dirname(paths.PATHS.settingsFile), { recursive: true });
+        fs.writeFileSync(paths.PATHS.settingsFile, JSON.stringify({
+          subscriptions: [
+            { name: 'a', url: 'https://example.com/a' },
+            { name: 'b', url: 'https://example.com/b' },
+          ],
+        }));
+        fs.mkdirSync(nodePath.dirname(paths.PATHS.subscriptionsCacheFile), { recursive: true });
+        fs.writeFileSync(paths.PATHS.subscriptionsCacheFile, JSON.stringify({
+          a: 'oops',
+          b: { updated_at: '2026-01-01T00:00:00.000Z', total: 100 },
+        }));
+        const merged = m.getSubscriptionsWithCache();
+        process.stdout.write('GARBAGE:' + String(Object.keys(merged[0]).some(k => /^\\d+$/.test(k))) + '\\n');
+        process.stdout.write('URL_A:' + merged[0].url + '\\n');
+        process.stdout.write('MERGED_B:' + JSON.stringify(merged[1].updated_at) + '\\n');
+      `;
+      const r = runModule(code, dir);
+      assert.equal(r.status, 0, r.stderr || r.stdout);
+      assert.match(r.stdout, /GARBAGE:false/, '字符串条目不得展开成字符键');
+      assert.match(r.stdout, /URL_A:https:\/\/example.com\/a/, '订阅本体字段不受影响');
+      assert.match(r.stdout, /MERGED_B:"2026-01-01T00:00:00.000Z"/, '正常对象条目照常合并');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

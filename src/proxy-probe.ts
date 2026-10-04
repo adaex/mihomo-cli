@@ -9,9 +9,13 @@ import type { ProxyProbeResult } from './types.js';
 const execFileAsync = promisify(execFile);
 
 /**
- * lsof 查端口监听 pid（doctor 端口检查 / 热重载身份核对共用）：flags、超时与
- * 「查不到按无监听处理」的口径单点维护。返回 null 表示 lsof 本身不可用/调用失败
- * （探测失败 ≠ 端口没人听）；空数组 = 调用成立但无人监听。
+ * lsof 查端口监听 pid（doctor 端口检查 / 热重载身份核对共用）：flags、超时单点维护。
+ *
+ * **null 与 [] 不可赖以区分「探测失败」与「无人监听」**：`lsof -t` 无匹配与 fatal error
+ * 同退 1（man 的 EXIT STATUS），本函数把非 0 一律归 null——「确认无人监听」的空数组
+ * 形态实践中不可达。两个消费方都按此设计：tryHotReload 对 null 与 [] 同样回退
+ * kickstart（不核对到 pid 就不托付热重载），doctor 的 isPortListening 对 null 按
+ * 「未监听」折算。新增消费方同样不得假设 null=失败、[]=确定无人。
  */
 export function lsofListenPids(port: number): number[] | null {
   try {

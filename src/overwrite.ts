@@ -722,9 +722,13 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
   // 扩展码点序）——「程序化结构变换在前，声明式微调兜底」（D13）。段内码点序，不用 localeCompare：
   // 后者随系统 locale 漂移（同一组中文文件名在 en/zh_CN/ja 下三种顺序），而排序即
   // 合并顺序——不同机器合并出不同运行配置，全程静默。排序是合并语义的一部分，不是展示细节。
+  // 排序键一次算好再排（comparator 里反复构建是 O(n log n) 次字符串拼装）；
+  // sort 对相等键稳定，先 filter 后 map 的顺序不变
   const files = entries
     .filter(isOverwriteFilename)
-    .sort((a, b) => (overwriteSortKey(a) < overwriteSortKey(b) ? -1 : overwriteSortKey(a) > overwriteSortKey(b) ? 1 : 0));
+    .map(name => ({ name, key: overwriteSortKey(name) }))
+    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    .map(e => e.name);
 
   // 近失文件名：意图明显是覆写文件却不被任何合法模式认（最典型：主文件写成 overwrite.yml）。
   // 静默不加载 = 用户以为覆写生效了、`ow` 列表里也看不见，故打一行警告。
