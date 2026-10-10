@@ -14,7 +14,6 @@ function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSync
     assert.ok(dataDir.startsWith(os.tmpdir()));
     // 数据目录隔离不隔离 LaunchAgent：label 也要隔离，测试只能查询不存在的服务
     assert.equal(fs.existsSync(path.join(os.homedir(), 'Library/LaunchAgents', `${label}.plist`)), false);
-    assert.equal(fs.existsSync(path.join('/Library/LaunchDaemons', `${label}.plist`)), false);
     for (const dir of ['subscriptions', 'kernel', 'logs']) fs.mkdirSync(path.join(dataDir, dir));
     fs.writeFileSync(
       path.join(dataDir, 'settings.json'),

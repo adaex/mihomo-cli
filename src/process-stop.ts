@@ -142,7 +142,7 @@ function killAllMihomo(): boolean {
 }
 
 /**
- * root 残留（TUN 内核、旧系统级服务）的一次性清理脚本：sudo 内只做 pkill，
+ * root 残留（TUN 内核）的一次性清理脚本：sudo 内只做 pkill，
  * **只弹一次密码**。pkill 的 pattern 匹配所有主实例（含用户态进程），故调用方
  * 只要发现 root 残留即可整体交给本脚本。
  *
@@ -271,7 +271,6 @@ export interface RootResidueCleanupContext {
  */
 export function buildRootResidueCleanupError(result: Pick<CleanupResult, 'remaining' | 'scriptError' | 'pidError'>, ctx: RootResidueCleanupContext): CliError {
   const { scriptError, pidError } = result;
-  const cancelled = scriptError instanceof SudoAuthError;
   const hasKernelResidue = result.remaining.length > 0;
   const pidList = `PID ${result.remaining.join(', ')}`;
   const residueHint = hasKernelResidue
@@ -286,8 +285,9 @@ export function buildRootResidueCleanupError(result: Pick<CleanupResult, 'remain
   const hint = [ctx.mainOutcome, residueHint, `重新运行可再次尝试清理: ${ctx.retryCommand}`];
   // 有 kernel 残留、或脚本没走完（可能仍有进程）→ pkill 幂等兜底；仅 pid 文件残留才引导 rm
   hint.push(hasKernelResidue || scriptError ? MANUAL_PKILL_HINT : `手动清理: sudo rm -f ${PATHS.pidFile}`);
-  if (cancelled) {
-    return new CliError('管理员密码未输入或有误，root 残留未被清理', { label: '已取消', hint });
+  if (scriptError instanceof SudoAuthError) {
+    // 取消短语走 describeSudoFailure（全仓唯一说法）；此处只补「残留未被清理」的语境
+    return new CliError(`${describeSudoFailure(scriptError)}，root 残留未被清理`, { label: '已取消', hint });
   }
   return new CliError(scriptError?.message ?? pidError?.message ?? 'root 残留未清理干净', { label: '清理残留进程失败', hint });
 }

@@ -113,7 +113,7 @@ export const LAUNCHCTL_NOT_LOADED = 113;
  * `launchctl bootout` 实测退 3）。print 路径只认 113——那里 3 不属同一语义；
  * bootout 必须两码都收，重复卸载才幂等
  */
-export const BOOTOUT_NOT_LOADED_CODES: readonly number[] = [3, LAUNCHCTL_NOT_LOADED];
+const BOOTOUT_NOT_LOADED_CODES: readonly number[] = [3, LAUNCHCTL_NOT_LOADED];
 
 /** bootout 退出码是否属于「未装载」（null = spawn 自身失败，不收） */
 export function isBootoutNotLoaded(status: number | null): boolean {

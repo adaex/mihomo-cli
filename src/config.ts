@@ -10,7 +10,7 @@ import { applyOverwrite, describeOverwriteScope, loadOverwriteFile, lockedKeysRe
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, USER_DATA_DIR } from './paths.js';
 import { getPorts, readSettings } from './settings.js';
 import { firstLine, sanitizeTerminal } from './text.js';
-import type { BuildConfigResult, ConfigInfo, OverwriteFileEntry, OverwriteScope, RuntimeMode, ScriptMatch } from './types.js';
+import type { BuildConfigResult, ConfigInfo, ConfigSummary, OverwriteFileEntry, OverwriteScope, RuntimeMode, ScriptMatch } from './types.js';
 
 /**
  * 安全 YAML 解析选项:限制别名展开次数,防御远程订阅/覆写里的 YAML 别名炸弹(alias bomb)DoS。
@@ -311,7 +311,7 @@ export function runtimeModeLabel(mode: RuntimeMode): string {
 }
 
 /** 统计一份配置里的节点与节点组数量：订阅下载、启动准备与配置信息三处的同一取值口径 */
-export function countConfigNodes(config: Record<string, unknown>): { proxies: number; proxyGroups: number } {
+export function countConfigNodes(config: Record<string, unknown>): ConfigSummary {
   const proxies = config.proxies as unknown[] | undefined;
   const proxyGroups = config['proxy-groups'] as unknown[] | undefined;
   return {

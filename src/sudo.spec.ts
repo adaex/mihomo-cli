@@ -24,9 +24,9 @@ describe('sudoExitToError：退出码到错误的分工协议', () => {
   });
 
   it('登记过的脚本退出码（清理脚本的 3）映射到专属文案', () => {
-    const e = sudoExitToError('清理残留进程', 3, { 3: 'launchctl bootout 未能卸载旧 daemon（详见上方输出）' });
+    const e = sudoExitToError('清理残留进程', 3, { 3: '终止残留内核失败（pkill 退出码异常）' });
     assert.ok(!(e instanceof SudoAuthError), '脚本内部失败不得被误判成用户取消');
-    assert.equal(e.message, 'launchctl bootout 未能卸载旧 daemon（详见上方输出）');
+    assert.equal(e.message, '终止残留内核失败（pkill 退出码异常）');
   });
 
   it('登记过的另一形态（TUN 的 2）同样生效', () => {

@@ -42,12 +42,6 @@ export {
   waitUntilUnloaded,
 } from './launchctl.js';
 export {
-  buildRootResidueCleanupError,
-  classifyResidueCleanup,
-  cleanupKernelsOrThrow,
-  warnResidueCleanup,
-} from './process-stop.js';
-export {
   captureStopEpochBaseline,
   readStopEpoch,
   recordServiceStopped,

@@ -31,7 +31,6 @@ function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSync
     // 涉及服务查询时还需隔离 label——LaunchAgent plist 在数据目录之外）
     assert.ok(dataDir.startsWith(os.tmpdir()));
     assert.equal(fs.existsSync(path.join(os.homedir(), 'Library/LaunchAgents', `${label}.plist`)), false);
-    assert.equal(fs.existsSync(path.join('/Library/LaunchDaemons', `${label}.plist`)), false);
 
     const run = (args: string[]) => runCli(args, fixture);
 

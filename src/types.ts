@@ -369,7 +369,12 @@ export interface StatusJson {
   pid: number | null;
   kernel: string | null;
   kernelInstalled: boolean;
-  ports: NonNullable<Settings['ports']> & { tun?: boolean };
+  /**
+   * **解析后的生效端口**（ConfigInfo 的 mixed、控制器回退链的 controller），不是
+   * settings.json 原文——这是 README 逐字段宣传的公开 JSON 契约，字段集显式钉死、
+   * 不随用户可编辑的 Settings schema 漂移
+   */
+  ports: { mixed?: number; controller?: number; tun?: boolean };
   subscription: {
     name: string;
     proxies: number;
@@ -399,9 +404,16 @@ export interface StatusJson {
     files: string[];
     applied: string[];
     /** hint 是可执行的迁移/修复指引（如已移除操作符的改写示例），诊断界面与 JSON 都必须带出 */
-    errors: Omit<BrokenOverwriteFile, 'label'>[];
+    errors: { name: string; message: string; hint: string[] }[];
   };
-  service: Omit<ServiceStatus, 'pid'>;
+  service: {
+    installed: boolean;
+    loaded: boolean;
+    running: boolean;
+    disabled: boolean;
+    lastExitCode: number | null;
+    lastTerminatingSignal: string | null;
+  };
 }
 
 // === Reset ===

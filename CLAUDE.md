@@ -107,4 +107,4 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 - 不需要 Co-Authored-By；提交后按 `.claude/commands/wt-done.md` 合入 main 并立即清理
 - 发布仅在用户要求时执行，按 `.claude/commands/release.md`
 - 历史修复叙事留在 CHANGELOG/git，不复制进现行文档
-- CHANGELOG 每条 1–3 句：改了什么、用户会看到什么变化、必要时一句根因；按用户可见变化组织、**不按轮次组织**（「第 N 轮审查发现」式叙事写出来的是验证流水，不是升级说明）。当轮验证过程（实测耗时、差分组数、反向验证转红）留在当轮 git 提交；长期有效的结论、边界与教训收编进 CONCLUSIONS 对应节，过时的删掉。主文件超 10 个版本节时把最旧整节**原样**搬进 `docs/changelog/CHANGELOG-archive.md`，不改写
+- CHANGELOG 每条 1–3 句：改了什么、用户会看到什么变化、必要时一句根因；按用户可见变化组织、**不按轮次组织**（「第 N 轮审查发现」式叙事写出来的是验证流水，不是升级说明）。内容分发去向：用户可见变化进 CHANGELOG；当轮验证过程（实测耗时、差分组数、反向验证转红）留在当轮 git 提交；长期有效的结论、边界与教训收编进 CONCLUSIONS 对应节，过时的删掉；稳定约束、判据收口点与「别退回哪一边」的告诫留在这里与代码注释。主文件超 10 个版本节时把最旧整节**原样**搬进 `docs/changelog/CHANGELOG-archive.md`，不改写

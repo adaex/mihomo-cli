@@ -149,7 +149,7 @@ function assertSupportedNodeVersion(commandName: string): void {
 }
 
 /**
- * 平台守卫：本工具的 launchd 服务（LaunchAgent/LaunchDaemon）、目录与 UI 打开（open）、提权（sudo）
+ * 平台守卫：本工具的 launchd 服务（LaunchAgent）、目录与 UI 打开（open）、提权（sudo）
  * 全部为 macOS 专有实现，无其他平台后端。缺此守卫时非 macOS 会「部分成功」——
  * status/sub 看着正常，install 才在 launchctl 撞墙，
  * ui 报成功却什么都没打开（Linux 的 open 多指向 run-mailcap，会把 URL 当附件处理）。

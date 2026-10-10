@@ -16,7 +16,7 @@ argument-hint: [版本号]
 - [ ] `npm run typecheck`、`npm test`、`npm run check` 全绿；worktree 下显式 `npx biome check src/`，检查数量不能为 0
 - [ ] 所有新增功能已在 `README.md` 中说明
 - [ ] 命令列表与 `src/commands/registry.ts` 实际注册一致
-- [ ] `CHANGELOG.md` 顶部已添加新版本记录，且每条控制在 1–3 句（规范见 CLAUDE.md「Git 与流程」）
+- [ ] `CHANGELOG.md` 顶部已添加新版本记录，且每条控制在 1–3 句
 - [ ] 若本轮改了 CONCLUSIONS 记录的结论或边界涉及的代码，同步更新该文档对应节
 - [ ] 版本号定得对：序号 = registry 全部版本数 + 1（`npm view mihomo-cli versions --json` 数组长度 + 1），年.月 按发布当日日历
 - [ ] `git log vX.Y.Z(上一个)..main` 过一遍——**发布区间可能含上轮遗留的未发布提交**，CHANGELOG 要覆盖它们，不只是本次会话做的事
@@ -67,11 +67,6 @@ npm test 2>&1 | grep '^ℹ tests'     # 与文档里的计数对得上吗
 ```
 
 为什么要单列一步：发布前的文档同步（检查清单第 5 项）改不了「已发布」这个事实——那时它还没发布。这条**只能在 publish 之后做**，而那时人的注意力已经转到「发出去了、验一下产物」上。v4.9.1 与 v4.12.0 两次栽在同一处：前者留着「待发布」和过期计数（596），后者八步全走完、还从 registry 拉回产物验过六项行为，唯独状态行没改。教训记在 CONCLUSIONS 的复盘里两次都没拦住——**不在清单上的提醒等于不存在**。
-
-
-## CHANGELOG 写多长
-
-每条 1–3 句、按用户可见变化组织、不按轮次——规范与内容分发去向表已收进 CLAUDE.md「Git 与流程」，写 CHANGELOG 前先读那里，本节不再复述（v4.11.0 的 186KB 膨胀史与 26.10.100 反面样本的完整论证留在本文件的 git 历史）。
 
 ## 发布结果核实
 
