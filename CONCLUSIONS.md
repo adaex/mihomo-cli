@@ -2,9 +2,9 @@
 
 规则见 CLAUDE.md，架构决策论证见 docs/decisions.md，版本历史见 CHANGELOG。与 decisions.md 的分界：跨模块、稳定、回答「仓为什么长这样」的架构级决定记在那边（D 条目，含其拒绝的替代方案）；本文记审查产出的处置与边界——某条 finding 为什么不修（「记录不修」「已评估未采纳」）。本文只保留**现行有效**的三样东西：实测结论、未覆盖风险、流程教训。历轮审查的逐项验证流水不在此堆放——看当轮 CHANGELOG 条目与 git 历史；每轮审查收尾时，把仍然成立的结论合并进对应节，过时的删掉。改相关代码时同步更新对应节。头部只保留**最近一轮**的摘要（给下轮审查当上下文），更早轮次删除——第十七轮清理时这里堆过 12 条流水，「只保留现行有效」的原则没拦住逐轮追加。状态行单独一类且始终存在：有未发布轮次时标「未发布（将进 vX.Y.Z）」、发布收尾改为「已发布 vX.Y.Z」（release.md 第 9 步消费）——发布状态只写这一处，不散进最近审查摘要行、也不随轮次重写消失。
 
-状态：已发布 v26.10.108。
+状态：已发布 v26.10.109。
 
-最近审查：2026-10-04，第二十二轮（/code-review 全仓存量内容 --fix，60 个源文件、8 个视角、high 力度、--max-findings all）。5 条 finding 全部存真且均为低危，修复 4、记录不修 1；全量 961 例全绿（新增 1 条不变量用例，修复经 D11 反向验证转红确认）。修复：①**getSubscriptionsWithCache 对手改 cache.json 的坏条目按无缓存处理**——单条被写成字符串/数字时直接展开会产出 0..n 字符键垃圾对象混进 status/doctor 消费的对象（saveSubscriptionCache 对同形态早有防护，此处是漏网），与同判据补防护；②**lsofListenPids 注释如实写明 null/[] 三态不可达**——lsof 对「无匹配」与 fatal 同退 1，两个现役消费方恰对二者等价故无表面缺陷，新消费方不得假设「确认无人监听」与「探测失败」之别；③**copyToClipboard 补 3s 超时**——与同文件 pbpaste 侧对称，剪贴板服务卡住不再挂死 `ui -c`；④**readOverwriteFiles 排序键改先 map 再排**——comparator 每次比较重建排序键，改为每文件只构建一次，排序结果不变。**记录不修 1 项**：remove 并发在途 sub update/add 的孤儿 yaml 与 cache 条目——update 路径复活刚删 yaml、cache 条目随写回、add 路径「已添加并切换」文案失真三个新形状并入「未覆盖与待复核」既有孤儿条目（封死需打破 downloadSubscription 与 settings 解耦的下载原语契约——回滚与写闸两套 spec 拿未入库 probe 名直接调它，收益不抵复杂度）。
+最近审查：2026-10-04，第二十二轮（/code-review 全仓存量内容 --fix，60 个源文件、8 个视角、high 力度、--max-findings all）。5 条 finding 全部存真且均为低危，修复 4、记录不修 1；全量 961 例全绿（新增 1 条不变量用例，修复经 D11 反向验证转红确认；v26.10.109 起经 legacy 移除等精简，现为 956）。修复：①**getSubscriptionsWithCache 对手改 cache.json 的坏条目按无缓存处理**——单条被写成字符串/数字时直接展开会产出 0..n 字符键垃圾对象混进 status/doctor 消费的对象（saveSubscriptionCache 对同形态早有防护，此处是漏网），与同判据补防护；②**lsofListenPids 注释如实写明 null/[] 三态不可达**——lsof 对「无匹配」与 fatal 同退 1，两个现役消费方恰对二者等价故无表面缺陷，新消费方不得假设「确认无人监听」与「探测失败」之别；③**copyToClipboard 补 3s 超时**——与同文件 pbpaste 侧对称，剪贴板服务卡住不再挂死 `ui -c`；④**readOverwriteFiles 排序键改先 map 再排**——comparator 每次比较重建排序键，改为每文件只构建一次，排序结果不变。**记录不修 1 项**：remove 并发在途 sub update/add 的孤儿 yaml 与 cache 条目——update 路径复活刚删 yaml、cache 条目随写回、add 路径「已添加并切换」文案失真三个新形状并入「未覆盖与待复核」既有孤儿条目（封死需打破 downloadSubscription 与 settings 解耦的下载原语契约——回滚与写闸两套 spec 拿未入库 probe 名直接调它，收益不抵复杂度）。
 
 ## 已有验证仍支持的结论
 
