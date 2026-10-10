@@ -14,17 +14,7 @@ import {
 } from './settings.js';
 import { withSpinner } from './spinner.js';
 import { firstLine, maskUrl, sanitizeTerminal } from './text.js';
-import type {
-  ConfigSummary,
-  DownloadResult,
-  HttpResponse,
-  PreparedConfig,
-  RuntimeMode,
-  Subscription,
-  SubscriptionWithCache,
-  TryUpdateResult,
-  UserInfo,
-} from './types.js';
+import type { ConfigSummary, HttpResponse, PreparedConfig, RuntimeMode, Subscription, SubscriptionWithCache, TryUpdateResult, UserInfo } from './types.js';
 
 /** 取有效更新间隔（小时）：缓存值需为正整数，否则回退默认值。 */
 export function resolveUpdateInterval(cachedInterval?: number | null): number {
@@ -245,7 +235,7 @@ function assertLooksLikeSubscription(parsed: Record<string, unknown>, maskedUrl:
   });
 }
 
-export async function downloadSubscription(url: string, subName = 'default', signal?: AbortSignal): Promise<DownloadResult> {
+export async function downloadSubscription(url: string, subName = 'default', signal?: AbortSignal): Promise<ConfigSummary> {
   let response: HttpResponse<string>;
   try {
     response = await HTTP_CLIENT.get<string>(url, { responseType: 'text', signal });

@@ -68,7 +68,7 @@ function buildStatusJson(args: {
   return {
     version: VERSION,
     running: args.running,
-    connectivity: args.probe ? { ok: args.probe.ok, statusCode: args.probe.statusCode, error: args.probe.error, durationMs: args.probe.durationMs } : null,
+    connectivity: args.probe,
     mode: args.info ? deriveRuntimeMode(args.info) : null,
     carrier: args.kind,
     pid: args.pid,

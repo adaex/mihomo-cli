@@ -21,7 +21,7 @@
 - root-guard.spec 验证入口在创建数据目录前拒绝 root；用户态 LaunchAgent 无权创建 TUN
 - launchd 的 terminating signal 与 last exit code 两字段互斥；需要 describeExitCause 同时覆盖
 - disabled label 的 bootstrap 硬失败，enable 必须在前；bootstrap 返回 0 不表示内核已健康，TUN 的 kill -0 也不能排除僵尸进程
-- 内核四种下载通道曾各自下载真实产物；kernel.spec 覆盖通道选择、标准资产选择、curl/gh 参数纯函数。资产形态按上游 v1.19.30 实测只有单文件 `.gz`（gzip 解压，maxBuffer 256MB 即体积上限），tar 设施已移除；非 `.gz` 资产显式报错
+- 内核各下载通道曾各自下载真实产物；kernel.spec 覆盖通道选择、标准资产选择、curl/gh 参数纯函数。资产形态按上游 v1.19.30 实测只有单文件 `.gz`（gzip 解压，maxBuffer 256MB 即体积上限），tar 设施已移除；非 `.gz` 资产显式报错
 - gh 回退通道必须带本机代理地址并 per-spawn 注入 env：v26.10.98 初版只在注释里假设「gh 继承同一代理」，但 main() 入口 clearProxyEnv（D9）会把指向本机 Mixed 的自指 env 删掉（shell export https_proxy 的最常见形态），gh 实际直连，回退定位与全失败诊断双双失准；现由 resolveDownloadChannels 给 gh 候选注入 proxy、buildGhDownloadEnv 只作用于该次 spawn（真 gh + 拒绝端口实证报 `proxyconnect`，通道形状与 env 构造由 kernel.spec 锁定）。gh（Go）只认 HTTPS_PROXY/https_proxy，无命令行代理选项
 - 上游面板自升级（update_core.go）的 meta-backup 是有意永久保留的旧内核副本：成功路径只 defer 清理 meta-update、从不清 meta-backup（每次升级覆盖写，已核对上游源码）——doctor 只把 meta-update 当真残留告警，meta-backup 按信息项给独立删除口径，绝不与暂存共用一条 rm -rf（合并告警会让面板成功升级一次后 doctor 永久误报，修复命令还会连回滚备份一起删）
 - npm（update 的 view/install 与 doctor 的版本检查）同样在 clearProxyEnv 后失去自指代理，但 npm 是用户环境工具、不由通道决策管辖：恢复策略与 gh 不同——recordClearedProxyEnv 只登记用户被清的原值，buildNpmSpawnEnv 每次 spawn 前 TCP 探活（0.0.0.0/:: 归一到确定回环地址，500ms 封顶），活才原样注回；null 记录（没清过）不凭空注入，探活失败（env 残留/内核已停）保持清除。桩 npm 透传 + 真实本地监听三态用例锁定；反向验证删掉注回即「端口在监听」用例转红、两个反例保持绿

@@ -41,12 +41,7 @@ export interface SubscriptionCache {
 
 export interface SubscriptionWithCache extends Subscription, Partial<SubscriptionCacheEntry> {}
 
-// === Download Result ===
-
-export interface DownloadResult {
-  proxies: number;
-  proxyGroups: number;
-}
+// === Subscription Download ===
 
 /**
  * `Subscription-Userinfo` 头解析结果。四个字段都是**可选**的：机场可能只返回其中
@@ -76,7 +71,7 @@ export interface BuildConfigResult {
   overwriteSummaries: string[];
 }
 
-/** 配置规模摘要，用于启动时的一行提示（`Mixed · default · 12 组, 340 节点`） */
+/** 配置规模摘要（节点/组计数）：订阅解析与提交后共用于启动提示（`Mixed · default · 12 组, 340 节点`） */
 export interface ConfigSummary {
   proxies: number;
   proxyGroups: number;
@@ -329,9 +324,7 @@ export interface LogList {
 
 // === Config Info (runtime) ===
 
-export interface ConfigInfo {
-  proxies: number;
-  proxyGroups: number;
+export interface ConfigInfo extends ConfigSummary {
   mixedPort: number | null;
   tun: boolean;
 }
@@ -370,13 +363,13 @@ export interface StatusJson {
   version: string;
   running: boolean;
   /** 运行中且探测过连通性时有值；未运行或无端口信息为 null */
-  connectivity: { ok: boolean; statusCode: number | null; error: string | null; durationMs: number } | null;
+  connectivity: ProxyProbeResult | null;
   mode: RuntimeMode | null;
   carrier: 'service' | 'tun' | null;
   pid: number | null;
   kernel: string | null;
   kernelInstalled: boolean;
-  ports: { mixed?: number; controller?: number; tun?: boolean };
+  ports: NonNullable<Settings['ports']> & { tun?: boolean };
   subscription: {
     name: string;
     proxies: number;
@@ -406,16 +399,9 @@ export interface StatusJson {
     files: string[];
     applied: string[];
     /** hint 是可执行的迁移/修复指引（如已移除操作符的改写示例），诊断界面与 JSON 都必须带出 */
-    errors: { name: string; message: string; hint: string[] }[];
+    errors: Omit<BrokenOverwriteFile, 'label'>[];
   };
-  service: {
-    installed: boolean;
-    loaded: boolean;
-    running: boolean;
-    disabled: boolean;
-    lastExitCode: number | null;
-    lastTerminatingSignal: string | null;
-  };
+  service: Omit<ServiceStatus, 'pid'>;
 }
 
 // === Reset ===
