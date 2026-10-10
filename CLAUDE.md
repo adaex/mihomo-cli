@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-本仓开发约定；使用说明见 README，架构决策见 docs/decisions.md，验证结论与边界见 CONCLUSIONS，版本历史见 CHANGELOG。代码注释只写判据与契约，历史叙事不进注释。
+本仓开发约定；使用说明见 README，架构决策见 docs/decisions.md，验证结论与边界见 CONCLUSIONS，版本历史见 CHANGELOG，刻意推迟的重构待办见 docs/todo.md。代码注释只写判据与契约，历史叙事不进注释。
 
 ## 项目与架构
 
