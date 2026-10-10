@@ -251,7 +251,7 @@ function isYamlOverwriteFilename(filename: string): boolean {
  * overwrite.*.{js,mjs,cjs}。三种主文件形态都认——只认 .js 的话，写 overwrite.mjs
  * 的用户会得到静默不加载（typo 检测也不覆盖），正是本仓要消灭的那类零提示失效。
  * .mjs/.cjs 显式声明模块格式；.js 在数据目录（无 package.json）下靠 Node 的模块语法
- * 探测判 ESM/CJS（本仓 Node 下界 22.22.1，探测自 22.7 起默认启用），两种写法都认。
+ * 探测判 ESM/CJS（探测自 22.7 起默认启用，远早于本仓下界），两种写法都认。
  */
 const SCRIPT_EXTENSIONS = ['js', 'mjs', 'cjs'] as const;
 /** 脚本扩展名的正则片段，文件名判定与展示名剥扩展从同一登记表派生 */
@@ -675,8 +675,8 @@ function toBrokenFile(file: string, e: unknown): BrokenOverwriteFile {
 
 /**
  * 加载 JS 覆写脚本并校验默认导出。createRequire 以脚本自身路径为基准：脚本内
- * require/import 的相对依赖按它所在目录解析。require(esm)（Node ≥22.12，本仓下界
- * 22.22.1）同步加载 ESM——buildConfig 是同步管线，脚本契约也要求同步；.cjs 走 CJS
+ * require/import 的相对依赖按它所在目录解析。require(esm)（Node ≥22.12 即支持，
+ * 本仓下界 24）同步加载 ESM——buildConfig 是同步管线，脚本契约也要求同步；.cjs 走 CJS
  * 加载，`module.exports = fn` 的写法同样认。加载即执行模块顶层代码（契约：顶层只
  * 定义函数，副作用放变换函数内——status/doctor/config 等只读命令也会执行脚本）。
  */

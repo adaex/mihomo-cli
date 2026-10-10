@@ -40,7 +40,7 @@ describe('Node 版本守卫', () => {
   // engines 的写法若从 `>=x.y.z` 变成别的 range，守卫会整体跳过（宁可不拦也不能挡死所有命令）。
   // 这条断言让那种变化立刻可见，而不是让守卫静默失效
   it('最低版本取自 package.json 的 engines', () => {
-    assert.equal(MIN_NODE_VERSION, '22.22.1');
+    assert.equal(MIN_NODE_VERSION, '24.20.0');
   });
 
   for (const cmd of ['status', 'stop', 'start', 'install']) {
@@ -48,7 +48,7 @@ describe('Node 版本守卫', () => {
       const { status, output } = runAsNodeVersion('20.0.0', [cmd]);
       assert.notEqual(status, 0, `旧 Node 下 ${cmd} 必须失败，不能带着未定义行为往下跑`);
       assert.match(output, /Node 版本过低/);
-      assert.match(output, /22\.22\.1/, '错误里要给出所需版本，否则用户不知道该升到哪');
+      assert.match(output, /24\.20\.0/, '错误里要给出所需版本，否则用户不知道该升到哪');
     });
   }
 
@@ -68,7 +68,7 @@ describe('Node 版本守卫', () => {
   });
 
   it('满足下限时放行（不误伤当前支持的版本）', () => {
-    const { status, output } = runAsNodeVersion(MIN_NODE_VERSION ?? '22.22.1', ['version']);
+    const { status, output } = runAsNodeVersion(MIN_NODE_VERSION ?? '24.20.0', ['version']);
     assert.equal(status, 0, output);
   });
 });

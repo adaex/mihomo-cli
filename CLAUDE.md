@@ -4,7 +4,7 @@
 
 ## 项目与架构
 
-macOS 命令行客户端，TypeScript ESM，Node.js >= 22.22.1。入口 `src/index.ts`，tsx 开发，tsup 打包。命令入口 `mihomo-cli`（全称）/`mh`（简写），package.json bin 是唯一登记表。
+macOS 命令行客户端，TypeScript ESM，Node.js >= 24.20.0。入口 `src/index.ts`，tsx 开发，tsup 打包。命令入口 `mihomo-cli`（全称）/`mh`（简写），package.json bin 是唯一登记表。
 
 | 模块 | 职责 |
 | --- | --- |
