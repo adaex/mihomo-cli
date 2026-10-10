@@ -1,5 +1,21 @@
 # Changelog
 
+## [26.10.109] - 2026-10-11
+
+### 变更
+
+- **移除旧版（v3.0–v4.0）root 服务的检测与自动清理**：兼容窗口面向 2026-07–08 的安装，存量设备已全部升级。极少数仍残留旧 root 服务的机器（症状：代理停不掉、`/Library/LaunchDaemons/com.mihomo-cli.daemon.plist` 存在）需手动清理——`sudo launchctl bootout system/com.mihomo-cli.daemon` 后 `sudo rm -f /Library/LaunchDaemons/com.mihomo-cli.daemon.plist`
+- **Node 版本要求升至 >= 24.20.0**：低版本运行时入口守卫直接报错并给出升级指引（brew / nvm）
+- **`status --json` 移除 `service.legacySystemInstall` 字段**：随旧 root 服务检测一并移除，脚本消费者如有引用需更新
+
+### 修复
+
+- **root 残留清理的取消提示统一措辞**：sudo 密码取消/错误此前在不同命令下有三种说法，统一为「sudo 已取消或密码错误，root 残留未被清理」
+
+### 变更（内部清理，无用户可见变化）
+
+- uninstall 无服务分支少一次重复的进程探测；残留分档用例归位 process-stop.spec、service.ts 拆除 process-stop 转发 re-export、StatusJson 公开契约改回显式声明。956 用例全绿
+
 ## [26.10.108] - 2026-10-04
 
 ### 修复
