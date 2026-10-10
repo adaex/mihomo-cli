@@ -83,9 +83,9 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 - 并发判据唯一：`shouldAbortStartOnDisable`（epoch）与 `describeExitCause`，调用点不散写第二份比较；基线由 main() 捕获为进程状态（D2/D4）
 
 **配置与覆写**
-- 入站与控制面锁定快照表的唯一真相是 `LOCKED_CONFIG_KEYS`（tls 不属上游 Inbound 结构体、不在表内），实际剥除执行集是 constants.ts 的 `EFFECTIVELY_LOCKED_KEYS`（快照表 + tls）：YAML 告警扫描（经 overwrite.ts 的 `lockedKeysReferencedBy`）、剥除循环、脚本探针、快照 spec 全派生自它，不许重抄；判定判据与上游核对方法见 D5，完整性由 `config-inbound-snapshot.spec.ts` 兜底
+- 入站与控制面锁定的唯一真相是 constants.ts 的 `LOCKED_CONFIG_KEYS` 与实际执行集 `EFFECTIVELY_LOCKED_KEYS`（快照表 + tls）：告警扫描、剥除循环、脚本探针、快照 spec 全派生自它，不许重抄；判据与上游核对方法见 D5，完整性由 `config-inbound-snapshot.spec.ts` 兜底
 - 合并闸门唯一出口 `selectActiveOverwriteFiles`；加载双路径（合并硬失败/诊断旁路）见 D7
-- 覆写操作符（`key!`/`+key`/`key+`）只在顶层生效；带条件的变换（按 name 合并数组元素等）一律写 JS 脚本（`export default (config, ctx) => {}`，就地修改、必须同步，`return true` = 命中当前订阅、严格 `=== true`，status 据此区分生效与不适用，未命中不进配置告警、status 只计数不点名（查哪个文件对照 `ow` 列表的作用域栏）），脚本在 YAML 之前、剥锁定键之前执行（脚本只看订阅、YAML 后做声明式微调，D13），改不动系统锁定项（LOCKED_CONFIG_KEYS 对脚本输出一视同仁）；`~`/`~?`/`<x>` 与 match 的 `subscription` 键已移除，写这些形态显式报错给迁移指引，不许静默当字面键
+- 覆写操作符（`key!`/`+key`/`key+`）只在顶层生效；带条件的变换一律写 JS 脚本（`export default (config, ctx) => {}`，契约见 D12/D13：就地修改、必须同步、`return true` 严格 `=== true` 报命中，status 据此区分生效与不适用且只计数不点名——查哪个文件对照 `ow` 列表的作用域栏）；脚本在 YAML 之前、剥锁定键之前执行，改不动系统锁定项；`~`/`~?`/`<x>` 与 match 的 `subscription` 键已移除，写这些形态显式报错，不许静默当字面键
 - match 的 name 只支持尾部 `*`（前缀）与头部 `*`（后缀）两种通配，其余报错——不引入通用匹配器（正则转义实现曾有灾难性回溯）；JS 脚本无 match 机制，作用域写在脚本里
 - 配置解析只走 YAML（D6）； Mixed 清 tun 字段，TUN 强制 dns.enable=true
 
@@ -99,7 +99,7 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 - 镜像只作用产物下载、选择不持久化；版本查询代理可用时直接经代理（D8）
 - 守卫前清 env 代理只清指向本机 Mixed 端口的自指形态（D9）；gh 回退与 npm 恢复两个 per-spawn 并存例外的判据与构造见 D9（共同前提「全程不重启内核」，均不写回 process.env）
 - 下载候选为列表、逐个尝试首个成功即用；显式 --mirror/--proxy 只有一个候选（显式意图不自动换道）
-- curl 子进程代理策略唯一出口是 `curl-spawn.ts` 的 `buildCurlSpawnEnv`：per-spawn env 置空 no_proxy/NO_PROXY（例外表会绕过显式 -x，用户 shell 的 no_proxy='*' 或目标域条目会静默改写通道决策）；直连通道的 `--noproxy '*'` 在 args 层（buildKernelCurlArgs），proxy 通道 args 绝不能加 --noproxy（并存时优先级更高会废掉 -x）；三处 spawn（产物下载/release API 查询/连通性探测）不得另写 env 代理处理
+- curl 子进程代理策略唯一出口是 `curl-spawn.ts` 的 `buildCurlSpawnEnv`：per-spawn env 置空 no_proxy/NO_PROXY 保 `-x` 权威；直连通道的 `--noproxy '*'` 在 args 层（buildKernelCurlArgs），proxy 通道 args 绝不能加 --noproxy；三处 spawn（产物下载/release API 查询/连通性探测）不得另写 env 代理处理
 
 ## Git 与流程
 
@@ -107,3 +107,4 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 - 不需要 Co-Authored-By；提交后按 `.claude/commands/wt-done.md` 合入 main 并立即清理
 - 发布仅在用户要求时执行，按 `.claude/commands/release.md`
 - 历史修复叙事留在 CHANGELOG/git，不复制进现行文档
+- CHANGELOG 每条 1–3 句：改了什么、用户会看到什么变化、必要时一句根因；按用户可见变化组织、**不按轮次组织**（「第 N 轮审查发现」式叙事写出来的是验证流水，不是升级说明）。当轮验证过程（实测耗时、差分组数、反向验证转红）留在当轮 git 提交；长期有效的结论、边界与教训收编进 CONCLUSIONS 对应节，过时的删掉。主文件超 10 个版本节时把最旧整节**原样**搬进 `docs/changelog/CHANGELOG-archive.md`，不改写

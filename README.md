@@ -697,7 +697,7 @@ sudo pkill -9 mihomo
 - **URL 脱敏**：订阅 URL 中的 token、key、password 等敏感参数（含 query、userinfo 及路径型令牌）自动替换为 `***`。按整条 URL 处理、不按逗号切分——逗号在 query 中合法，切开会让 `?nodes=us,hk&token=xxx` 的 token 参数识别不出而明文输出
 - **文件权限**：配置文件使用 `0o600` 权限（仅所有者可读可写），目录使用 `0o700` 权限
 - **入站固定只监听回环**：`allow-lan` 由本工具恒定为 `false`，**订阅与覆写都改不了**（自 v4.13.0；此前订阅里写 `allow-lan: true` 即可把混合端口开到全网卡）。确需局域网设备连入的场景请在本机另起一个 mihomo 实例，不通过订阅投递
-- **入站与控制面由本工具独占**：订阅与覆写里凡是自带监听地址、或直接决定「监听在哪、要不要验身份」的键——入站端口（`mixed-port` 等）、独立入站服务端（`tuic-server`、`ss-config` 等）、通用入站声明（`listeners`/`tunnels`）、局域网暴露与入站鉴权（`allow-lan`、`authentication` 等）、外部控制器全家桶（`external-controller*`、`secret` 等）与控制器证书段（`tls`）——一律剥除，不进运行配置。远端订阅若能投递这些键，即可在全网卡开出无鉴权控制器或开放代理——`allow-lan: true` 让内核把端口绑到所有网卡，而 `skip-auth-prefixes: ["0.0.0.0/0"]` 会让唯一的补偿防线 `authentication` 整个失效；端口与密钥只认 `settings.json`。完整清单的唯一真相是代码里的锁定键注册表（`src/constants.ts` 的 `LOCKED_CONFIG_KEYS`，由上游结构体快照测试兜底），本页不逐一罗列；覆写文件里写了会有提示，订阅侧静默剥除。确需额外入站的场景出路同上一条
+- **入站与控制面由本工具独占**：订阅与覆写里凡是自带监听地址、或直接决定「监听在哪、要不要验身份」的键——入站端口、独立入站服务端、通用入站声明、局域网暴露与入站鉴权、外部控制器全家桶与控制器证书段——一律剥除，不进运行配置；远端订阅若能投递这些键，即可在全网卡开出无鉴权控制器或开放代理。端口与密钥只认 `settings.json`。完整清单的唯一真相是代码里的锁定键注册表（`src/constants.ts` 的 `LOCKED_CONFIG_KEYS`，由上游结构体快照测试兜底），本页不逐一罗列；覆写文件里写了会有提示，订阅侧静默剥除。确需额外入站的场景出路同上一条
 - **信号处理**：优雅处理 SIGINT/SIGTERM 信号
 - **异常捕获**：全局 uncaughtException 和 unhandledRejection 处理
 

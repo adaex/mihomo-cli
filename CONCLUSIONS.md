@@ -6,10 +6,6 @@
 
 最近审查：2026-10-04，第二十二轮（/code-review 全仓存量内容 --fix，60 个源文件、8 个视角、high 力度、--max-findings all）。5 条 finding 全部存真且均为低危，修复 4、记录不修 1；全量 961 例全绿（新增 1 条不变量用例，修复经 D11 反向验证转红确认）。修复：①**getSubscriptionsWithCache 对手改 cache.json 的坏条目按无缓存处理**——单条被写成字符串/数字时直接展开会产出 0..n 字符键垃圾对象混进 status/doctor 消费的对象（saveSubscriptionCache 对同形态早有防护，此处是漏网），与同判据补防护；②**lsofListenPids 注释如实写明 null/[] 三态不可达**——lsof 对「无匹配」与 fatal 同退 1，两个现役消费方恰对二者等价故无表面缺陷，新消费方不得假设「确认无人监听」与「探测失败」之别；③**copyToClipboard 补 3s 超时**——与同文件 pbpaste 侧对称，剪贴板服务卡住不再挂死 `ui -c`；④**readOverwriteFiles 排序键改先 map 再排**——comparator 每次比较重建排序键，改为每文件只构建一次，排序结果不变。**记录不修 1 项**：remove 并发在途 sub update/add 的孤儿 yaml 与 cache 条目——update 路径复活刚删 yaml、cache 条目随写回、add 路径「已添加并切换」文案失真三个新形状并入「未覆盖与待复核」既有孤儿条目（封死需打破 downloadSubscription 与 settings 解耦的下载原语契约——回滚与写闸两套 spec 拿未入库 probe 名直接调它，收益不抵复杂度）。
 
-第二十一轮（2026-10-03）摘要见 CHANGELOG 26.10.103 条目；其结论已并入正文对应节（陈旧锁双窃取者窗口见「未覆盖与待复核」等）。
-
-第十九轮（同日早些）摘要见版本历史与 CHANGELOG 26.10.102 条目；其「跳过项」结论仍有效（curl -x 与控制器 base URL 不并 loopbackHttpUrl；stop() 游离路径 warn 保留）。
-
 ## 已有验证仍支持的结论
 
 以下结论来自既有测试或真机实测，引用时注意各自的验证条件：
@@ -22,9 +18,9 @@
 - launchd 的 terminating signal 与 last exit code 两字段互斥；需要 describeExitCause 同时覆盖
 - disabled label 的 bootstrap 硬失败，enable 必须在前；bootstrap 返回 0 不表示内核已健康，TUN 的 kill -0 也不能排除僵尸进程
 - 内核各下载通道曾各自下载真实产物；kernel.spec 覆盖通道选择、标准资产选择、curl/gh 参数纯函数。资产形态按上游 v1.19.30 实测只有单文件 `.gz`（gzip 解压，maxBuffer 256MB 即体积上限），tar 设施已移除；非 `.gz` 资产显式报错
-- gh 回退通道必须带本机代理地址并 per-spawn 注入 env：v26.10.98 初版只在注释里假设「gh 继承同一代理」，但 main() 入口 clearProxyEnv（D9）会把指向本机 Mixed 的自指 env 删掉（shell export https_proxy 的最常见形态），gh 实际直连，回退定位与全失败诊断双双失准；现由 resolveDownloadChannels 给 gh 候选注入 proxy、buildGhDownloadEnv 只作用于该次 spawn（真 gh + 拒绝端口实证报 `proxyconnect`，通道形状与 env 构造由 kernel.spec 锁定）。gh（Go）只认 HTTPS_PROXY/https_proxy，无命令行代理选项
+- gh 回退通道的代理注入是实测结论、不是假设：v26.10.98 初版只写注释假设「gh 继承同一代理」，实际被入口 clearProxyEnv（D9）打掉、gh 直连（真 gh + 拒绝端口实证报 `proxyconnect`），回退定位与全失败诊断双双失准；现由通道决策给 gh 候选挂代理、buildGhDownloadEnv per-spawn 注入（kernel.spec 锁定）。gh（Go）只认 HTTPS_PROXY/https_proxy，无命令行代理选项
 - 上游面板自升级（update_core.go）的 meta-backup 是有意永久保留的旧内核副本：成功路径只 defer 清理 meta-update、从不清 meta-backup（每次升级覆盖写，已核对上游源码）——doctor 只把 meta-update 当真残留告警，meta-backup 按信息项给独立删除口径，绝不与暂存共用一条 rm -rf（合并告警会让面板成功升级一次后 doctor 永久误报，修复命令还会连回滚备份一起删）
-- npm（update 的 view/install 与 doctor 的版本检查）同样在 clearProxyEnv 后失去自指代理，但 npm 是用户环境工具、不由通道决策管辖：恢复策略与 gh 不同——recordClearedProxyEnv 只登记用户被清的原值，buildNpmSpawnEnv 每次 spawn 前 TCP 探活（0.0.0.0/:: 归一到确定回环地址，500ms 封顶），活才原样注回；null 记录（没清过）不凭空注入，探活失败（env 残留/内核已停）保持清除。桩 npm 透传 + 真实本地监听三态用例锁定；反向验证删掉注回即「端口在监听」用例转红、两个反例保持绿
+- npm（update 的 view/install 与 doctor 的版本检查）的 env 代理恢复机制与判据见 D9（recordClearedProxyEnv 登记原值 + 每 spawn 前 TCP 探活决定注回，不凭空注入）；此处只记验证结论：桩 npm 透传 + 真实本地监听三态用例锁定，反向验证删掉注回即「端口在监听」用例转红、两个反例保持绿
 - 上游 mihomo v1.19.30 的已查资产未提供 checksums；来源约束、大小比对和执行自检应保留，不能写成已验证哈希
 - HTTP 超时覆盖响应体，错误体读取限量；订阅 URL 按完整 URL 脱敏，不能按合法逗号拆开
 - 归档列表与清理使用相同判据，同秒多次轮转的序号后缀可被列出（log-files.spec）
@@ -98,6 +94,7 @@
 - **process-stop 的 stop() warn 分档与 classifyResidueCleanup 语义等价但不合并**：合并需动行为语义；拆分后 classifyResidueCleanup 已是唯一判据出口，漂移面已缩小，收益不抵风险（第八轮判定，流水清理时打捞）
 - **stopService/uninstallService 的同形锁体不抽公共函数**：两处各四行、注释各带不可拆理由，抽取收益低（第八轮判定，流水清理时打捞）
 - **README 不逐一罗列裸 `-v`/`-h` 与 logs 的 `--follow`/`--open` 长形式**：与各命令帮助行同口径（短形式优先），逐一罗列反成冗余；`-p`/`status -j` 因「长短对应表漏第三条」「同屏写法不一致」已补（第十七轮判定）
+- **curl `-x` 与控制器 base URL 不并入 loopbackHttpUrl**：第十九轮跳过项，结论仍有效；stop() 游离路径的 warn 分档保留现状见上条
 
 ## 自动化测试边界
 

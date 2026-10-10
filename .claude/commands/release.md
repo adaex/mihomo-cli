@@ -16,7 +16,7 @@ argument-hint: [版本号]
 - [ ] `npm run typecheck`、`npm test`、`npm run check` 全绿；worktree 下显式 `npx biome check src/`，检查数量不能为 0
 - [ ] 所有新增功能已在 `README.md` 中说明
 - [ ] 命令列表与 `src/commands/registry.ts` 实际注册一致
-- [ ] `CHANGELOG.md` 顶部已添加新版本记录，且每条控制在 1–3 句（见「CHANGELOG 写多长」）
+- [ ] `CHANGELOG.md` 顶部已添加新版本记录，且每条控制在 1–3 句（规范见 CLAUDE.md「Git 与流程」）
 - [ ] 若本轮改了 CONCLUSIONS 记录的结论或边界涉及的代码，同步更新该文档对应节
 - [ ] 版本号定得对：序号 = registry 全部版本数 + 1（`npm view mihomo-cli versions --json` 数组长度 + 1），年.月 按发布当日日历
 - [ ] `git log vX.Y.Z(上一个)..main` 过一遍——**发布区间可能含上轮遗留的未发布提交**，CHANGELOG 要覆盖它们，不只是本次会话做的事
@@ -35,7 +35,7 @@ for (const c of COMMANDS) console.log([c.name, ...c.aliases].join(', ').padEnd(4
 ## 步骤
 
 1. 更新 `package.json` 中的 `version`；`npm install --package-lock-only` 让 lock 的 version 跟上（长期漂移过一次：lock 停在 4.7.1 而 package.json 已是 4.7.7）
-2. `CHANGELOG.md` 顶部添加新版本记录（格式参照既有条目：新增/变更/修复/安全 分组），**每条 1–3 句**，见下方「CHANGELOG 写多长」；主文件超过 10 个版本小节时，把最旧的整节搬进 `docs/changelog/CHANGELOG-archive.md`（26.10.100 的归档是一次性手工动作、没有滚动规则，本条就是补上的规则，别等主文件再次膨胀才想起来）
+2. `CHANGELOG.md` 顶部添加新版本记录（格式参照既有条目：新增/变更/修复/安全 分组），**每条 1–3 句**（规范与内容分发去向见 CLAUDE.md「Git 与流程」）；主文件超过 10 个版本小节时，把最旧的整节原样搬进 `docs/changelog/CHANGELOG-archive.md`
 3. 检查并更新 `README.md`（新增功能、命令变更、示例）
 4. `npm run build`（`prepublishOnly` 已兜底，此步为提前验证）
 5. 提交：`git add . && git commit -m "chore: 发布 vX.Y.Z"`
@@ -71,22 +71,7 @@ npm test 2>&1 | grep '^ℹ tests'     # 与文档里的计数对得上吗
 
 ## CHANGELOG 写多长
 
-**每个条目 1–3 句：改了什么、用户会看到什么变化、必要时一句根因。** 深度论证不写在这里。
-
-CHANGELOG 的读者是「想知道升级后有什么不一样」的人，不是要复核决策的人。几处去处已有明确分工，同一段论证不该出现在两处：
-
-| 内容 | 去处 |
-| --- | --- |
-| 用户可见的变化、影响面 | CHANGELOG |
-| 当轮验证过程（怎么验的、反向验证转红、实测数据） | 当轮 git 提交；结论 1–3 句进 CHANGELOG |
-| **仍然成立**的实测结论、未覆盖项、流程教训 | CONCLUSIONS 对应节（轮次收尾时合并进去，过时的删掉） |
-| 稳定约束、判据收口点、「别退回哪一边」的告诫 | CLAUDE + 代码注释 |
-
-v4.11.0 时本文件已 186 KB——是 README 的 4.7 倍、源码（不含测试）的两倍多，单条动辄数百字含实测耗时与差分测试组数。这些内容有价值，但它们挤掉了「这版到底改了什么」，且随每次发布无上限增长。
-
-写完自检：**条目里出现「实测 N 秒」「反向验证 N 条转红」「30 万组差分」这类字样，过程细节留在当轮提交里，CHANGELOG 只留结论；该结论若长期有效（边界、教训、未覆盖项），收编进 CONCLUSIONS 对应节。**
-
-**补录与多轮合并同样受 1–3 句约束**：一个版本里攒了几轮修复时，条目按「用户可见的变化」组织、不按「轮次」组织——「第 N 轮审查发现」这类叙事结构一出现，写出来的就是验证流水而非升级说明。反面样本是 26.10.100 的条目（52 行、以轮次组织、满是差分组数），它违反的是半页纸之前刚写下的本节规则——规则对补录场景没有约束力，这里补上。
+每条 1–3 句、按用户可见变化组织、不按轮次——规范与内容分发去向表已收进 CLAUDE.md「Git 与流程」，写 CHANGELOG 前先读那里，本节不再复述（v4.11.0 的 186KB 膨胀史与 26.10.100 反面样本的完整论证留在本文件的 git 历史）。
 
 ## 发布结果核实
 
