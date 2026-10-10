@@ -5,7 +5,7 @@ import { getMihomoPids } from '../process-probe.js';
 import { MANUAL_PKILL_HINT, stop } from '../process-stop.js';
 // getMihomoPids 用于停止前的无事可做判定；服务路径的停止后复核消费 stopService 返回的
 // cleanup 结果，不再重发 pgrep
-import { announceLegacyCleanupOrThrow, detectLegacySystemInstall, getServiceStatus, recordServiceStopped, stopService } from '../service.js';
+import { getServiceStatus, recordServiceStopped, stopService } from '../service.js';
 import type { StopResult } from '../types.js';
 
 /**
@@ -29,12 +29,6 @@ export async function cmdStop(args: string[]): Promise<void> {
   assertKnownFlags(args.slice(1), [], 'stop');
   // 不接受位置参数（`stop tun` 之类的写法此前被静默忽略）；校验先于任何服务操作
   assertPositionalCount(args, 0, 1, 'mihomo-cli stop');
-  // 遗留 root daemon 带 KeepAlive：不清理它，下面杀掉的内核约 10s 后就被拉回，
-  // 「已停止」即成谎报。detectLegacySystemInstall 只查 plist 文件，不要求任务在跑，
-  // 幂等清理无副作用
-  if (detectLegacySystemInstall()) {
-    await announceLegacyCleanupOrThrow('停止前需清理');
-  }
 
   const status = getServiceStatus();
   const pids = getMihomoPids();

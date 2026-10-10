@@ -6,15 +6,7 @@ import { isOverwriteFilename, listTypoOverwriteFiles } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
 import { cleanupAll, MANUAL_PKILL_HINT, printResidueWarning } from '../process-stop.js';
-import {
-  cleanupLegacyInstallOrThrow,
-  detectLegacySystemInstall,
-  getServiceStatus,
-  recordServiceStopped,
-  stopService,
-  uninstallService,
-  warnResidueCleanup,
-} from '../service.js';
+import { getServiceStatus, recordServiceStopped, stopService, uninstallService, warnResidueCleanup } from '../service.js';
 import { updateSettings } from '../settings.js';
 import type { CleanupResult, ResetTarget, Settings } from '../types.js';
 import { confirmOrThrow } from './shared.js';
@@ -85,10 +77,9 @@ export async function cmdReset(args: string[]): Promise<void> {
   const serviceTargeted = ids.has('service');
   const service = getServiceStatus();
   let serviceActive = service.installed || service.loaded;
-  const legacy = detectLegacySystemInstall();
 
   if (targets.length === 1) {
-    if (serviceTargeted && !serviceActive && !legacy) {
+    if (serviceTargeted && !serviceActive) {
       console.log('服务未安装，无需删除');
       return;
     }
@@ -102,9 +93,6 @@ export async function cmdReset(args: string[]): Promise<void> {
     console.log(colors.yellow('将卸载 launchd 服务（Mixed 模式需重新 install 才能使用）'));
   } else if (needsStop && serviceActive) {
     console.log(colors.yellow('将停止服务并关闭登录自启（安装保留，mihomo-cli start 可重新启动）'));
-  }
-  if ((needsStop || serviceTargeted) && legacy) {
-    console.log(colors.yellow('将清理遗留的系统级服务（root LaunchDaemon，需要一次管理员密码）'));
   }
   console.log(`将删除: ${targets.map(t => t.label).join('、')}`);
   // 「订阅」两个字传达不出删掉的是找不回的机场链接——裸 reset 的默认集就含它，
@@ -124,13 +112,10 @@ export async function cmdReset(args: string[]): Promise<void> {
     return;
   }
 
-  // 先停止/卸载托管服务，使 KeepAlive 失效，再清理游离内核
-  if ((needsStop || serviceTargeted) && legacy) await cleanupLegacyInstallOrThrow();
-
-  // 服务状态在 legacy 清理之后、停止/卸载判定之前重读：交互确认的等待与 legacy 清理的
-  // sudo 密码窗（最长约 60s）期间，另一终端 install+start 都可能把服务装上。按确认前
-  // 快照判定 serviceActive=false 会既不停也不卸载，直接删 config/kernel 目录——已
-  // bootstrap 的服务不受下方 recordServiceStopped 的 epoch 防线保护（它只拦
+  // 服务状态在交互确认之后、停止/卸载判定之前重读：确认的等待期间，另一终端
+  // install+start 都可能把服务装上。按确认前快照判定 serviceActive=false 会既不停
+  // 也不卸载，直接删 config/kernel 目录——已 bootstrap 的服务不受下方
+  // recordServiceStopped 的 epoch 防线保护（它只拦
   // 「enable/bootstrap 之前」的并发 start），KeepAlive 会对着已删文件落入崩溃循环。
   // 与 start.ts 的「快照 + 现值」双读同姿态（D2/D4 的并发防线精神）
   const current = getServiceStatus();
@@ -183,7 +168,7 @@ export async function cmdReset(args: string[]): Promise<void> {
 
   const deleted = new Set<string>();
   for (const target of targets) {
-    let hadContent = target.id === 'service' && (serviceActive || legacy);
+    let hadContent = target.id === 'service' && serviceActive;
     for (const filePath of target.paths()) {
       if (!fs.existsSync(filePath)) continue;
       try {

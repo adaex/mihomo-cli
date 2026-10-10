@@ -8,7 +8,7 @@
 
 v3.0–v4.0 用 root LaunchDaemon（system 域），每次启停都要输密码。改用用户域（`gui/<uid>`）后 install/start/stop/uninstall 全程免密。旧实现选 root 是为绕开 macOS 本地网络隐私对局域网设备的限制，但 Apple DTS 明确豁免条件是「以 root 运行」而非「身为 daemon」——用户域 agent 只意味着走正常授权弹窗，且回环地址（如自建 ssh -D 出口）本就不属于「本地网络」，完全不触发该机制。
 
-后果：CLI 全程以普通用户运行，TUN 的 root 需求由 CLI 内部按需 sudo（临时进程）；仍保留遗留 root LaunchDaemon 的识别与清理（它有 KeepAlive 会抢端口，不认就是幽灵）；不做「读 SUDO_UID 回落用户域」的自动降级（sudo 下 HOME 是否保留取决于 sudoers，静默改域只会制造更难查的错位），index.ts 的 root 守卫直接拒绝。
+后果：CLI 全程以普通用户运行，TUN 的 root 需求由 CLI 内部按需 sudo（临时进程）；不做「读 SUDO_UID 回落用户域」的自动降级（sudo 下 HOME 是否保留取决于 sudoers，静默改域只会制造更难查的错位），index.ts 的 root 守卫直接拒绝。遗留 root LaunchDaemon 的识别与清理曾按本条保留（它有 KeepAlive 会抢端口，不认就是幽灵），2026-10 移除：兼容窗口面向 2026-07–08 的 v3.0–v4.0 安装，存量设备已全部升级；极少数仍残留旧安装的机器（症状：代理停不掉、`/Library/LaunchDaemons/com.mihomo-cli.daemon.plist` 存在）手动清理——`sudo launchctl bootout system/com.mihomo-cli.daemon` 后 `sudo rm -f /Library/LaunchDaemons/com.mihomo-cli.daemon.plist`。
 
 ## D2 并发防线的判据是停止计数（epoch），不是 launchd 的 disable 位
 

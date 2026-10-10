@@ -11,7 +11,7 @@ import { checkUpdate, hasGh, resolveReleaseQuery } from '../kernel.js';
 import { KERNEL_SELF_BACKUP_DIR, KERNEL_SELF_UPDATE_DIR, PATHS, USER_DATA_DIR } from '../paths.js';
 import { lsofListenPids, probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
-import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
+import { describeAbnormalExit, getServiceStatus } from '../service.js';
 import { getPorts, getPortsOrNull, getSubscriptionsWithCache, isValidSettingsContent, requireSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription, isSubscriptionStale, prepareConfigForStart, resolveUpdateInterval } from '../subscription.js';
 import { firstLine } from '../text.js';
@@ -187,10 +187,7 @@ async function collectChecks(): Promise<Check[]> {
   }
 
   // === 服务 ===（earlyService 在函数开头取，全段复用同一份快照）
-  const legacy = detectLegacySystemInstall();
-  if (legacy) {
-    push('服务', 'fail', '检测到旧版本的系统级服务（root LaunchDaemon），会抢占端口', 'mihomo-cli uninstall（需一次管理员密码）');
-  } else if (!earlyService.installed && !earlyService.loaded) {
+  if (!earlyService.installed && !earlyService.loaded) {
     push('服务', 'warn', '未安装（Mixed 模式需要）', 'mihomo-cli install');
   } else if (!earlyService.installed) {
     push('服务', 'fail', 'plist 不存在但任务仍装载，KeepAlive 会持续拉起内核', 'mihomo-cli uninstall');

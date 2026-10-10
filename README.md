@@ -105,7 +105,7 @@ mihomo-cli ui yacd     # YACD
 
 | 命令                        | 说明                                                                         |
 | --------------------------- | ---------------------------------------------------------------------------- |
-| `mihomo-cli install`            | 安装服务（Mixed 模式的前置，只需一次；升级用户会顺带清理旧的 root 服务）      |
+| `mihomo-cli install`            | 安装服务（Mixed 模式的前置，只需一次）      |
 | `mihomo-cli start [tun\|mixed]` | 启动代理并开启登录自启（`-s` 跳过订阅更新，`-u` 更新超时） |
 | `mihomo-cli stop`               | 停止代理并关闭登录自启                                                       |
 | `mihomo-cli uninstall`          | 卸载服务                                                                     |
@@ -243,8 +243,6 @@ mihomo-cli status          # 查看状态
 **大多数人碰不到这个**：`127.0.0.1` / `::1` 属于 loopback，不出网卡，**不算本地网络**。
 自己运行 `ssh -D 127.0.0.1:1080` 并把节点指向它，不受本地网络授权影响
 只有节点直接指向 `192.168.x.x`、`10.x.x.x`、`*.local` 这类地址时才会触发。
-
-若 `/Library/LaunchDaemons` 仍有旧 root 服务，它可能持续自启并抢占端口；`install`/`uninstall`/`stop`/`tun` 和需要停机的 `reset` 会检测并清理，删除 root 文件时需要一次管理员密码
 
 若确实有局域网节点且始终不弹框、连不通，本地网络授权**没有便捷的重置手段**（它不在 TCC 数据库里，
 `tccutil reset LocalNetwork` 会直接失败），只能进恢复模式删 `/Library/Preferences/com.apple.networkextension.*.plist`，

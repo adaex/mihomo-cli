@@ -65,27 +65,24 @@ export const UI_URLS: Record<string, string> = {
 };
 
 /**
- * launchd 服务的标签（同时用作 plist 文件名：用户级在 ~/Library/LaunchAgents/，
- * 系统级在 /Library/LaunchDaemons/）。
+ * launchd 服务的标签（同时用作用户级 plist 文件名：~/Library/LaunchAgents/）。
  * 可用 MIHOMO_CLI_DAEMON_LABEL 覆盖，供隔离测试使用一次性 label，避免碰生产 plist 文件名。
  *
  * 非法值在此静默回退到默认标签，另由本文件的 assertServiceLabelSafe()
- * （launchctl 写操作与 root 清理脚本的入口校验）抛出可读错误——不能在模块顶层抛：constants 在 import 阶段求值，早于 index.ts 的
+ * （launchctl 写操作的入口校验）抛出可读错误——不能在模块顶层抛：constants 在 import 阶段求值，早于 index.ts 的
  * main().catch 注册，抛出会直接打印堆栈而绕过统一收口。
  *
- * **值与环境变量名都保持 `daemon` 字样不变**：改了值会让老用户 v4.0 及更早装的
- * /Library/LaunchDaemons/com.mihomo-cli.daemon.plist 变成新 CLI 看不见的幽灵，而它带
- * KeepAlive 会持续拉起内核，用户没有任何途径卸载它。保持不变则遗留系统级安装天然
- * 可被识别与清理（D1）。
+ * **值与环境变量名都保持 `daemon` 字样不变**：label 是持久化注册键——plist 文件名与
+ * launchd 域条目都以它为键，随意改名会让已装的服务变成新 CLI 看不见的幽灵，而它带
+ * KeepAlive 会持续拉起内核，用户没有任何途径卸载它。
  */
 export const DEFAULT_SERVICE_LABEL = 'com.mihomo-cli.daemon';
 
 /**
- * 合法 label 字符集。必须校验：该值经 path.join 拼成 plist 路径后，是系统级安装时
- * `sudo install -m 644 -o root -g wheel` 的写入目标与 `sudo rm -f` 的删除目标。
- * path.join 会折叠 `..`（`../../etc/sudoers.d/evil` → `/etc/sudoers.d/evil.plist`），
- * 未校验时可借此以 root 身份写入/删除任意路径，内容还部分可控 → 提权原语。
- * 同时该值也拼进 launchctl 的服务目标（`gui/<uid>/<label>` 或 `system/<label>`）。
+ * 合法 label 字符集。必须校验：该值经 path.join 拼成用户级 plist 路径，
+ * path.join 会折叠 `..`（`../../evil` → `~/evil.plist` 越出 LaunchAgents），
+ * 未校验时可把自启 plist 写到任意用户可写位置（持久化原语）、或把已装的
+ * 服务 plist 删到任意路径。同时该值也拼进 launchctl 的服务目标（`gui/<uid>/<label>`）。
  */
 const SERVICE_LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -237,14 +234,14 @@ export const DEFAULT_UPDATE_INTERVAL_HOURS = 12;
 /** 启动时自动更新订阅的默认超时（毫秒），超时后使用缓存配置 */
 export const DEFAULT_AUTO_UPDATE_TIMEOUT = 10_000;
 
-/** 校验 MIHOMO_CLI_DAEMON_LABEL：该值经 path.join 折叠 `..` 后会成为 root 清理路径
- * （`../../etc/sudoers.d/evil` → `/etc/sudoers.d/evil.plist`），不校验即提权原语。
+/** 校验 MIHOMO_CLI_DAEMON_LABEL：该值经 path.join 折叠 `..` 后会越出
+ * ~/Library/LaunchAgents（路径穿越），不校验即任意位置的 plist 写/删。
  * constants 已把非法值回退为默认标签，此处在执行写/删前拒绝并告知用户。 */
 export function assertServiceLabelSafe(): void {
   if (RAW_SERVICE_LABEL_INPUT !== undefined && !isValidServiceLabel(RAW_SERVICE_LABEL_INPUT)) {
     throw new CliError(`MIHOMO_CLI_DAEMON_LABEL 无效: "${RAW_SERVICE_LABEL_INPUT}"`, {
       label: '配置错误',
-      hint: ['只允许字母、数字、点、下划线、短横线，且不能含 ".."。', '该值会成为 launchd plist 的文件名，并参与清理遗留安装时的 root 删除路径。'],
+      hint: ['只允许字母、数字、点、下划线、短横线，且不能含 ".."。', '该值会成为 launchd plist 的文件名，参与 plist 写入与删除路径。'],
     });
   }
 }

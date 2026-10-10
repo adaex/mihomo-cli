@@ -415,7 +415,6 @@ export interface StatusJson {
     disabled: boolean;
     lastExitCode: number | null;
     lastTerminatingSignal: string | null;
-    legacySystemInstall: boolean;
   };
 }
 

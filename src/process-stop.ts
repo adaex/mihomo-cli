@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { colors } from './colors.js';
+import { CliError } from './errors.js';
 import { DIRS, ensureDirs, PATHS, rmrf } from './paths.js';
 import { getMihomoPids, isProbedMihomo, MAIN_INSTANCE_PATTERN, probeProcess } from './process-probe.js';
-import { describeSudoFailure, runSudoScript } from './sudo.js';
+import { describeSudoFailure, runSudoScript, SudoAuthError } from './sudo.js';
 import { shellQuote } from './text.js';
 import type { CleanupResult, StopResult } from './types.js';
 import { sleep } from './utils.js';
@@ -11,7 +12,8 @@ import { sleep } from './utils.js';
 /**
  * 内核进程的停止与残留清理。与启动（process-start.ts）分家：
  * 游离内核的 stop()、服务路径（service.ts）的残留收口、reset 的停机清理
- * 都走本文件唯一的 cleanupAll，不再各维护一份杀进程实现。
+ * 都走本文件唯一的 cleanupAll，不再各维护一份杀进程实现；
+ * cleanupAll 结果的三档处置（classifyResidueCleanup 一族）也收口在此。
  *
  * 「等进程退出」的轮询用 async 的 `sleep` 而非 `sleepSync`：后者是 `Atomics.wait`，
  * 会阻塞整个事件循环，**期间 SIGINT 完全不被处理**（实测 50×100ms 的忙等要等循环
@@ -43,7 +45,7 @@ export function describePidCleanupFailure(err: Error): string {
 
 /**
  * 杀不掉的内核进程的幂等兜底命令，五处提示（stop/handleStopResult/reset/
- * legacy-cleanup/uninstall）共用——前缀曾漂移出「请手动运行/手动命令/手动清理」三种说法
+ * 残留错误包装/uninstall）共用——前缀曾漂移出「请手动运行/手动命令/手动清理」三种说法
  */
 export const MANUAL_PKILL_HINT = '手动清理: sudo pkill -9 mihomo';
 
@@ -100,30 +102,15 @@ function pidAlive(pid: number): boolean {
 /**
  * 轮询等待主实例进程全部退出（发信号 / bootout 后的死亡收割）。零进程提前返回，
  * 超时也正常返回——是否仍有进程由调用方另行复核，不在此抛错。
- * cleanupAll 与 legacy 迁移后的 pid 收口共用这一份等待，不各写第二份。
  *
- * cleanupAll 持有刚发信号的 pid 列表时按 pid 轮询（无 spawn，等待窗内 SIGINT 可达，
- * 不被每次约 11ms 的 pgrep 阻塞）；无列表（reapPidWhenQuiet）沿用 pgrep。
- * 终态复核（cleanupAll/reap 末尾）始终是 pgrep，判据不因快路径改变
+ * 按持有的 pid 列表轮询（无 spawn，等待窗内 SIGINT 可达，不被每次约 11ms 的
+ * pgrep 阻塞）；终态复核始终是 pgrep，判据不因这条快路径改变
  */
-async function waitUntilNoMihomo(pids?: readonly number[]): Promise<void> {
+async function waitUntilNoMihomo(pids: readonly number[]): Promise<void> {
   for (let i = 0; i < PROCESS_WAIT_ATTEMPTS; i++) {
-    const stillThere = pids ? pids.some(pidAlive) : getMihomoPids().length > 0;
-    if (!stillThere) return;
+    if (!pids.some(pidAlive)) return;
     await sleep(PROCESS_WAIT_INTERVAL);
   }
-}
-
-/**
- * 等进程退出并复核：**零进程才免提权删 pid**；有活进程（legacy 拆除时并存的无关
- * TUN）时保留 pid——它仍是 isRunning/status 的真相源，删掉会让 status 对活内核
- * 报「未运行」。给不经过 cleanupAll 的提权路径（cleanupLegacyInstallOrThrow）
- * 收口 pid 用。返回 Error 仅当「零进程但 unlink 失败」；「有活进程、保留」归 null
- */
-export async function reapPidWhenQuiet(): Promise<Error | null> {
-  await waitUntilNoMihomo();
-  if (getMihomoPids().length > 0) return null;
-  return clearPid();
 }
 
 function killProcess(pid: number): boolean {
@@ -165,7 +152,7 @@ function killAllMihomo(): boolean {
  * 这道唯一防线（此前仅靠这两条时序间接保证）。且 root 属主 pid 在用户拥有的
  * runtime/ 下本就能免提权 unlink，放进 sudo 删没有收益。
  *
- * 退出码协议与 legacy 清理脚本同款：2 = 脚本内真实失败，1 留给 sudo 鉴权取消。
+ * 退出码协议：2 = 脚本内真实失败，1 留给 sudo 鉴权取消。
  */
 export function buildKernelCleanupScript(): string {
   return [
@@ -206,7 +193,7 @@ export async function cleanupAll(): Promise<CleanupResult> {
   const rootPids = pids.filter(pid => probes.get(pid)?.uid === '0');
   if (rootPids.length > 0) {
     // root 属主进程用户态 kill 不掉；sudo 脚本的 pkill 同时覆盖用户态主实例，
-    // 故不再分别处理。先给一句人话预告再弹英文 Password:，与 TUN/legacy 路径同款；
+    // 故不再分别处理。先给一句人话预告再弹英文 Password:，与 TUN 路径同款；
     // 预告只列 root 属主的 PID（sudo 的动因），用户态游离内核混在其中时全列会失实
     console.log(`检测到 root 属主的内核残留（PID ${rootPids.join(', ')}），清理需要一次管理员密码`);
     try {
@@ -258,6 +245,98 @@ export async function cleanupAll(): Promise<CleanupResult> {
   // 两类错误各自独立带出：进程死光但脚本没走完（scriptError）与仅 pid 文件没删掉
   // （pidError）归因不同，合并成一个字段会让调用方的提示说错事
   return { killed: killedCount, failed: failedPids.length, remaining, scriptError, pidError };
+}
+
+// === cleanupAll 结果的三档处置 ===
+
+/** root 残留清理失败包装的上下文：主体动作进行到哪一步、重试入口，三个调用点各不相同 */
+export interface RootResidueCleanupContext {
+  /** 主体动作的结果描述，如「服务已停止，登录自启已关闭」；start 路径是「服务尚未启动」 */
+  mainOutcome: string;
+  /** 重新尝试清理的命令，如 'mihomo-cli stop' */
+  retryCommand: string;
+}
+
+/**
+ * 把 cleanupAll 的 root 清理结果包成 CliError——纯函数，供测试。
+ * 统一说清三件关键事实：主体动作已完成到哪一步、root 残留还在（带 PID）、重试入口。
+ * sudo 取消（scriptError 是 SudoAuthError；pidError 免提权、不可能是它）label 用
+ * 「已取消」；其余失败保留原始消息（scriptError 优先——它先于 pid 收口发生）。
+ * remaining 的归因按 scriptError 分：非空 = root 脚本没走通，残留按 root 论；
+ * 空 = 没进过 root 分支，残留是用户态没能终止的，不许说成 root 属主。
+ * remaining 为空时 **scriptError 优先于 pidError**：仅 pidError = pid 文件残留；
+ * scriptError（无论是否并存 pidError）= 进程在死亡等待内自行退光、清理没走完，
+ * 主归因随脚本、pid 文件错误只作附带——「可能仍有进程」比「文件残留」更需用户行动，
+ * 被 pidError 盖成 rm 引导会漏掉潜在的存活内核
+ */
+export function buildRootResidueCleanupError(result: Pick<CleanupResult, 'remaining' | 'scriptError' | 'pidError'>, ctx: RootResidueCleanupContext): CliError {
+  const { scriptError, pidError } = result;
+  const cancelled = scriptError instanceof SudoAuthError;
+  const hasKernelResidue = result.remaining.length > 0;
+  const pidList = `PID ${result.remaining.join(', ')}`;
+  const residueHint = hasKernelResidue
+    ? scriptError
+      ? `root 残留内核仍在运行（${pidList}），可能继续占用代理端口`
+      : `残留内核仍在运行（${pidList}）——用户态未能终止，与提权无关`
+    : scriptError
+      ? `root 残留清理未完成，进程目前已不在（死亡等待内自行退出，非 sudo 清理）${pidError ? `；${describePidCleanupFailure(pidError)}` : ''}`
+      : pidError
+        ? `${describePidCleanupFailure(pidError)}: ${PATHS.pidFile}`
+        : 'root 残留未清理干净';
+  const hint = [ctx.mainOutcome, residueHint, `重新运行可再次尝试清理: ${ctx.retryCommand}`];
+  // 有 kernel 残留、或脚本没走完（可能仍有进程）→ pkill 幂等兜底；仅 pid 文件残留才引导 rm
+  hint.push(hasKernelResidue || scriptError ? MANUAL_PKILL_HINT : `手动清理: sudo rm -f ${PATHS.pidFile}`);
+  if (cancelled) {
+    return new CliError('管理员密码未输入或有误，root 残留未被清理', { label: '已取消', hint });
+  }
+  return new CliError(scriptError?.message ?? pidError?.message ?? 'root 残留未清理干净', { label: '清理残留进程失败', hint });
+}
+
+/**
+ * 残留清理结果的三档处置（纯判据，供测试——真实 root/非 TTY 场景无法黑盒构造）：
+ * - 'throw'：root 清理没走通且进程仍在（remaining + scriptError），主体动作结果要说清
+ * - 'warn'：无残留进程但有收尾错误（pid 文件没删掉，或进程自行退光而清理没走完），
+ *   无害不拦命令
+ * - 'ok'：无问题；用户态残留（remaining 非空、无 scriptError）也归这档——交各命令
+ *   外层既有的复核（cmdStop 抛、cmdUninstall 提示、start 健康确认）。pidError 是
+ *   免提权 unlink 的小错，不参与 throw 分档：remaining 非空时它跟着外层的残留
+ *   处置走，不单独拦命令
+ */
+export type ResidueCleanupVerdict = 'ok' | 'warn' | 'throw';
+
+export function classifyResidueCleanup(result: Pick<CleanupResult, 'remaining' | 'scriptError' | 'pidError'>): ResidueCleanupVerdict {
+  // 有进程活着：root 清理没走通（scriptError）才拦命令；用户态残留无论是否
+  // 带着pidError 小错都交外层复核。进程清零：收尾错误只警告
+  if (result.remaining.length > 0) return result.scriptError !== null ? 'throw' : 'ok';
+  return result.scriptError !== null || result.pidError !== null ? 'warn' : 'ok';
+}
+
+/**
+ * warn 档的统一渲染：服务路径（cleanupKernelsOrThrow）与 reset 的无服务分支共用——
+ * 同一份 cleanupAll 结果只允许有一种说法（此前 reset 自组的「可能仍有残留进程」与
+ * 这里的「进程目前已不在」互相矛盾）。throw 档的 CliError 也由同一个 builder 产出
+ */
+export function warnResidueCleanup(result: Pick<CleanupResult, 'remaining' | 'scriptError' | 'pidError'>, ctx: RootResidueCleanupContext): void {
+  const err = buildRootResidueCleanupError(result, ctx);
+  console.warn(colors.yellow(`警告: ${err.message}`));
+  for (const line of err.hint) console.warn(colors.gray(line));
+}
+
+/**
+ * 服务路径的残留内核收口。唯一实现是上面的 cleanupAll
+ * （用户态逐 pid 复核 / root 一次 sudo 脚本 + 死亡等待），抛错/警告判据见
+ * classifyResidueCleanup。pid 文件免提权清理、失败只警告，非 TTY 的
+ * `mihomo-cli stop` 不会被一个无害残留挡成 exit 1。
+ *
+ * 返回 cleanupAll 的原始结果：stop/uninstall/reset 各自的外层残留判定（抛
+ * 「部分进程未终止」/「重置中止」）消费同一份 remaining，不再重新 pgrep 或再跑一遍清理
+ */
+export async function cleanupKernelsOrThrow(ctx: RootResidueCleanupContext): Promise<CleanupResult> {
+  const result = await cleanupAll();
+  const verdict = classifyResidueCleanup(result);
+  if (verdict === 'throw') throw buildRootResidueCleanupError(result, ctx);
+  if (verdict === 'warn') warnResidueCleanup(result, ctx);
+  return result;
 }
 
 export async function stop(): Promise<StopResult> {

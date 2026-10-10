@@ -20,16 +20,16 @@ import {
   serviceTarget,
   waitUntilUnloaded,
 } from './launchctl.js';
-import { cleanupKernelsOrThrow } from './legacy-cleanup.js';
 import { allocateArchivePath, cleanupOldLogs, rotateAndCleanupLogs } from './log-files.js';
 import { atomicWriteFileSync, ensureDirs, PATHS, withFileLock } from './paths.js';
 import { getMihomoPids } from './process-probe.js';
+import { cleanupKernelsOrThrow } from './process-stop.js';
 import { bumpStopEpoch, readStopEpoch, startAbortedByConcurrentStop, stopEpochBaseline } from './stop-epoch.js';
 import type { CleanupResult, ServiceStatus } from './types.js';
 import { sleep } from './utils.js';
 
 export { concludeHotReload } from './hot-reload.js';
-// 拆分 re-export：launchctl 解析 / 停止计数 / 遗留清理 / 热重载四节移出本文件后，既有
+// 拆分 re-export：launchctl 解析 / 停止计数 / 热重载各节移出本文件后，既有
 // 消费方（commands、runtime、spec）仍统一从 './service.js' 取——导出清单是跨模块契约，
 // 拆分不该迫使全仓改 import。新代码内部引用走各自模块。
 export {
@@ -42,34 +42,28 @@ export {
   waitUntilUnloaded,
 } from './launchctl.js';
 export {
-  announceLegacyCleanupOrThrow,
-  buildLegacyCleanupScript,
   buildRootResidueCleanupError,
   classifyResidueCleanup,
   cleanupKernelsOrThrow,
-  cleanupLegacyInstallOrThrow,
-  detectLegacySystemInstall,
   warnResidueCleanup,
-} from './legacy-cleanup.js';
+} from './process-stop.js';
 export {
   captureStopEpochBaseline,
   readStopEpoch,
   recordServiceStopped,
   shouldAbortStartOnDisable,
   startAbortedByConcurrentStop,
-  stopEpochBaseline,
 } from './stop-epoch.js';
 
 /**
  * launchd 服务层：Mixed 模式的唯一运行方式。
  *
  * 装在用户域（`~/Library/LaunchAgents` + `gui/<uid>`），install/start/stop/uninstall 全程免 sudo。
- * 为什么不用 root LaunchDaemon、遗留系统级安装为何仍要识别与清理，见 docs/decisions.md D1。
+ * 为什么不用 root LaunchDaemon，见 docs/decisions.md D1。
  *
- * 结构（自本文件拆出的四节，re-export 保持导出清单不变）：
+ * 结构（自本文件拆出的三节，re-export 保持导出清单不变）：
  * - launchctl.ts：print 输出解析、退出码语义、查询包装与服务状态读取
  * - stop-epoch.ts：停止计数与并发判定基线（D2/D4）
- * - legacy-cleanup.ts：遗留 root 安装清理与残留处置分档
  * - hot-reload.ts：热重载探测与结论；restartService 留在此处（消费 startService 的自举链）
  */
 

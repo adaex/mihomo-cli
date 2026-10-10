@@ -111,8 +111,7 @@ export const LAUNCHCTL_NOT_LOADED = 113;
 /**
  * bootout 对「未装载」的容忍码：文档化的 113 与实测形态 3（旧实例已不存在时
  * `launchctl bootout` 实测退 3）。print 路径只认 113——那里 3 不属同一语义；
- * bootout 必须两码都收，重复卸载才幂等。TS 判定与 legacy-cleanup 的 bash 脚本
- * 生成共用这一份，新增容忍码不许在两处各抄
+ * bootout 必须两码都收，重复卸载才幂等
  */
 export const BOOTOUT_NOT_LOADED_CODES: readonly number[] = [3, LAUNCHCTL_NOT_LOADED];
 

@@ -5,15 +5,7 @@ import { DEFAULT_AUTO_UPDATE_TIMEOUT, DEFAULT_MIXED_PORT } from '../constants.js
 import { CliError, relabelCliError } from '../errors.js';
 import { START_RESTART_FLAG_FORMS as START_FLAGS } from '../flags.js';
 import * as runtime from '../runtime.js';
-import {
-  announceLegacyCleanupOrThrow,
-  captureStopEpochBaseline,
-  detectLegacySystemInstall,
-  disableServiceAutoStart,
-  getServiceStatus,
-  recordServiceStopped,
-  tunBlockedByRunningService,
-} from '../service.js';
+import { captureStopEpochBaseline, disableServiceAutoStart, getServiceStatus, recordServiceStopped, tunBlockedByRunningService } from '../service.js';
 import { getPortsOrNull } from '../settings.js';
 import * as subscription from '../subscription.js';
 import { printSystemProxyHint } from '../system-proxy.js';
@@ -64,12 +56,6 @@ export async function cmdStart(args: string[]): Promise<void> {
   const serviceBefore = getServiceStatus();
 
   if (targetMode === 'tun') {
-    // 遗留 root daemon 与 TUN 抢同一组端口：KeepAlive 会反复拉起旧内核，
-    // 不清理的话 TUN 内核与它互抢，两边都不稳（停止侧的 cmdStop 同样先清它）
-    if (detectLegacySystemInstall()) {
-      await announceLegacyCleanupOrThrow('启动 TUN 前需清理');
-    }
-
     // 判据是 loaded 而非 installed：`mh stop` 之后服务虽仍装着但不会被拉起，
     // 此时起 TUN 是正常用法。只看 installed 会把它一并拦掉，与「stop 后可用 tun」矛盾。
     // 快照用入口时值（快）；启动前还有一次现值复核（runtime.assertTunStartNotRaced），

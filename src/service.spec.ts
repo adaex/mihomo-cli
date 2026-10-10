@@ -6,9 +6,7 @@ import { describe, it } from 'node:test';
 
 import { isValidServiceLabel } from './constants.js';
 import { CliError } from './errors.js';
-import { PATHS } from './paths.js';
 import {
-  buildLegacyCleanupScript,
   buildPlist,
   buildRootResidueCleanupError,
   classifyResidueCleanup,
@@ -511,9 +509,9 @@ describe('buildPlist', () => {
   });
 });
 
-describe('isValidServiceLabel：全仓唯一挡住 root 任意路径写的校验', () => {
-  // 该值经 path.join 拼成 plist 路径后，也是清理遗留 root 安装时 `sudo rm -f` 的删除目标。
-  // `..` 被 path.join 折叠即可越出 /Library/LaunchDaemons，以 root 删除任意路径
+describe('isValidServiceLabel：挡住 plist 路径穿越的校验', () => {
+  // 该值经 path.join 拼成用户级 plist 路径后，是 plist 写入与删除的目标。
+  // `..` 被 path.join 折叠即可越出 ~/Library/LaunchAgents，把自启 plist 写到任意用户可写位置
   it('拒绝含 .. 的值（路径穿越 → 以 root 写任意路径）', () => {
     assert.equal(isValidServiceLabel('../../etc/sudoers.d/evil'), false);
     assert.equal(isValidServiceLabel('a..b'), false);
@@ -678,34 +676,6 @@ describe('buildRootResidueCleanupError', () => {
       '有脚本错误时给 pkill（幂等覆盖潜在存活进程）',
     );
     assert.ok(!err.hint.some(l => l.startsWith('手动清理: sudo rm -f')), '不该把用户引向 rm 而漏掉潜在进程');
-  });
-});
-
-/**
- * buildLegacyCleanupScript 的退出码协议。真实失败（bootout 拒绝）只有真机 sudo 能验证，
- * 能锁住的是协议本身：脚本内部失败用 ≥2（此处 3），1 留给 sudo 鉴权取消/密码错误。
- * 此前 `exit 1` 报真实失败，被 runSudoScript 映射成「已取消或密码错误」。
- */
-describe('buildLegacyCleanupScript：sudo 脚本退出码协议', () => {
-  it('bootout 真实失败用 exit 3（≥2），脚本内不出现 exit 1', () => {
-    const script = buildLegacyCleanupScript();
-    assert.ok(script.includes('exit 3'), 'bootout 失败应以 ≥2 的退出码报真实失败');
-    assert.ok(!/\bexit 1\b/.test(script), '脚本内 exit 1 会被 runSudoScript 误报成「已取消或密码错误」');
-  });
-
-  it('脚本不删共用 pid（活进程真相源），body 不含 pidFile 路径', () => {
-    const script = buildLegacyCleanupScript();
-    assert.ok(!script.includes(PATHS.pidFile), '提权脚本删 pid = 绕过「活进程不删 isRunning 真相源」防线；pid 由包装层零进程复核后免提权收口');
-  });
-
-  it('删 plist 后复核存在性：rm -f 静默失败必须可见（exit 4），不复核则残留 plist 下次开机被 launchd 重新加载', () => {
-    const script = buildLegacyCleanupScript();
-    // rm 之后必须有 -e 复核，且复核失败走 ≥2 退出码（不可 || true 吞掉）
-    const rmIndex = script.indexOf(`rm -f`);
-    const checkIndex = script.indexOf('-e');
-    assert.ok(rmIndex !== -1 && checkIndex > rmIndex, 'rm 之后必须有存在性复核');
-    assert.ok(script.includes('exit 4'), '复核失败应以 exit 4 报真实失败');
-    assert.ok(!/rm -f [^\n]*\|\| true/.test(script), 'rm 不得 || true 吞错');
   });
 });
 

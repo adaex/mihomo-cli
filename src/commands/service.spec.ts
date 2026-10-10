@@ -92,7 +92,7 @@ describe('cmdUninstall：幂等判据与残留形态', () => {
     }
   }
 
-  it('四条件全空（未装/未装载/无 legacy/零进程）：早退且零 launchctl 写动词', () => {
+  it('三条件全空（未装/未装载/零进程）：早退且零 launchctl 写动词', () => {
     const r = runUninstall({});
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /服务未安装/);

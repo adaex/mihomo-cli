@@ -7,8 +7,7 @@ import { cmdStart } from './start.js';
 
 /**
  * 命令层公共工具：收敛跨命令重复的守卫、分发与重启模式。
- * 依赖方向单向：shared → start/runtime；start 不反向 import shared（cleanupLegacyInstallOrThrow
- * 已移至 service.ts，此前它在 shared.ts 造成 shared ↔ start 循环依赖）。
+ * 依赖方向单向：shared → start/runtime；start 不反向 import shared（会造成循环依赖）。
  */
 
 /** 子命令表条目：主名 + 可选别名 + handler（收到完整 argv，自取 args[2..]）。 */

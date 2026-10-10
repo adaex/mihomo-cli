@@ -11,20 +11,20 @@ import { describeSudoFailure, SudoAuthError, sudoExitToError, sudoTimeoutError }
  */
 describe('sudoExitToError：退出码到错误的分工协议', () => {
   it('退出码 1 → SudoAuthError（鉴权取消/密码错误），供包装层识别用户主动取消', () => {
-    const e = sudoExitToError('清理遗留的系统级服务', 1);
+    const e = sudoExitToError('清理残留进程', 1);
     assert.ok(e instanceof SudoAuthError, '退出码 1 必须是 SudoAuthError，包装层按 instanceof 区分取消与失败');
     assert.equal(e.message, '已取消或密码错误');
   });
 
   it('codeMessages 即便登记了 1 也不生效：退出码 1 不归脚本', () => {
-    // legacy-cleanup 脚本曾用 exit 1 报 bootout 真实失败，被映射成「已取消或密码错误」——
-    // 用户密码明明输对了。此用例锁死「1 恒归鉴权」的优先级
-    const e = sudoExitToError('清理遗留的系统级服务', 1, { 1: '脚本失败' });
+    // 历史脚本曾用 exit 1 报真实失败，被映射成「已取消或密码错误」——用户密码明明
+    // 输对了。此用例锁死「1 恒归鉴权」的优先级
+    const e = sudoExitToError('清理残留进程', 1, { 1: '脚本失败' });
     assert.ok(e instanceof SudoAuthError, 'codeMessages 不得抢走退出码 1 的鉴权语义');
   });
 
-  it('登记过的脚本退出码（legacy-cleanup 的 3）映射到专属文案', () => {
-    const e = sudoExitToError('清理遗留的系统级服务', 3, { 3: 'launchctl bootout 未能卸载旧 daemon（详见上方输出）' });
+  it('登记过的脚本退出码（清理脚本的 3）映射到专属文案', () => {
+    const e = sudoExitToError('清理残留进程', 3, { 3: 'launchctl bootout 未能卸载旧 daemon（详见上方输出）' });
     assert.ok(!(e instanceof SudoAuthError), '脚本内部失败不得被误判成用户取消');
     assert.equal(e.message, 'launchctl bootout 未能卸载旧 daemon（详见上方输出）');
   });
@@ -45,9 +45,9 @@ describe('sudoExitToError：退出码到错误的分工协议', () => {
   it('超时单独成错：点明是本工具时限、操作可能只完成一半，不漏 ETIMEDOUT 内部串', () => {
     // spawnSync 超时的结果形态与被信号终止相同（status=null、signal=SIGTERM），
     // 但含义是 CLI 自己的超时，文案必须区分，见 runSudoScript 的 ETIMEDOUT 分支
-    const e = sudoTimeoutError('清理遗留的系统级服务');
+    const e = sudoTimeoutError('清理残留进程');
     assert.ok(!(e instanceof SudoAuthError));
-    assert.match(e.message, /^清理遗留的系统级服务超时/);
+    assert.match(e.message, /^清理残留进程超时/);
     assert.ok(e.message.includes('可能只完成了一部分'), '超时可能落在脚本中途，必须提示半截状态');
     assert.ok(!e.message.includes('ETIMEDOUT'), '内部错误码不得漏进用户面文案');
   });

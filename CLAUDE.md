@@ -19,8 +19,8 @@ macOS 命令行客户端，TypeScript ESM，Node.js >= 22.22.1。入口 `src/ind
 | `overwrite.ts` | 覆写加载（YAML + JS 脚本）、作用域过滤与合并语法 |
 | `runtime.ts` | Mixed 服务与 TUN 临时进程的运行时入口 |
 | `service.ts` | 用户级 LaunchAgent 的安装与启停、健康确认；拆出节统一 re-export，导出清单不变 |
-| `launchctl.ts` / `stop-epoch.ts` / `legacy-cleanup.ts` / `hot-reload.ts` | 自 service.ts 拆出：launchctl 解析与状态读取、停止计数与并发基线（D2/D4）、遗留 root 清理与残留分档、热重载探测与结论 |
-| `process-probe.ts` / `process-start.ts` / `process-stop.ts` | 进程探测、TUN 启动与清理 |
+| `launchctl.ts` / `stop-epoch.ts` / `hot-reload.ts` | 自 service.ts 拆出：launchctl 解析与状态读取、停止计数与并发基线（D2/D4）、热重载探测与结论 |
+| `process-probe.ts` / `process-start.ts` / `process-stop.ts` | 进程探测、TUN 启动、清理与残留分档处置 |
 | `kernel.ts` / `http.ts` | 内核下载与有超时、大小限制的 HTTP 客户端 |
 | `paths.ts` | 路径、目录、原子写与跨进程锁 |
 | `log-files.ts` / `open.ts` | 日志轮转、查询与系统打开操作 |
@@ -52,7 +52,6 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 - 不自动设置系统代理、不提供 proxy on/off；需要代理的应用自行配置 Mixed 端口
 - 单活跃订阅；多机场节点用 mihomo 原生 proxy-providers；SSH 出口由用户自行 `ssh -D`
 - 注册表只登记当前支持的命令与别名；未知命令/子命令/选项统一报错，不维护旧版本迁移分支
-- 保留旧 root LaunchDaemon 的识别与清理（决策背景见 decisions.md D1）
 - 破坏性操作需要确认：非 TTY 且无显式跳过选项时报错退出 1，交互拒绝才显示已取消
 - reset 流程固定：解析与确认 → 停止或卸载服务 → 清理进程 → 删除目标 → 更新相关设置；确认前不做破坏性操作；删除失败必须报错，成功提示以实际删除为准
 - 服务 label 固定 `com.mihomo-cli.daemon`，可用 `MIHOMO_CLI_DAEMON_LABEL` 隔离；label 是持久化注册键，随意改名会遗留无法管理的自启进程
@@ -74,7 +73,7 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 **错误与结果**
 - 预期错误抛 `CliError` 由 main().catch 统一渲染；再包装前透传已有 CliError；模块顶层不抛 CliError
 - 报告成功要有独立结果依据（写入结果/健康/卸载/大小），不能用「命令没报错」代替
-- 探测失败 ≠ 目标不存在：launchctl print 只认 113 为未装载，bootout 容忍 3/113（`BOOTOUT_NOT_LOADED_CODES`/`isBootoutNotLoaded` 唯一出处，TS 判定与 legacy bash 脚本生成共用），pgrep/pkill 只收退出码 0/1
+- 探测失败 ≠ 目标不存在：launchctl print 只认 113 为未装载，bootout 容忍 3/113（`BOOTOUT_NOT_LOADED_CODES`/`isBootoutNotLoaded` 唯一出处），pgrep/pkill 只收退出码 0/1
 
 **数据与并发**
 - `readSettings()` 每次读盘；一致视图由调用方在命令开头取快照显式传递（D4/D10）

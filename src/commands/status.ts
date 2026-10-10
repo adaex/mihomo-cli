@@ -7,7 +7,7 @@ import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic } from '
 import { listOverwriteFile, shortOverwriteName } from '../overwrite.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
-import { describeAbnormalExit, detectLegacySystemInstall, getServiceStatus } from '../service.js';
+import { describeAbnormalExit, getServiceStatus } from '../service.js';
 import { getPortsOrNull, getSubscriptionsWithCache, readSubscriptionRawConfig, subscriptionUrgency } from '../settings.js';
 import { formatProxySummary, getActiveSubscription, isSubscriptionStale, resolveUpdateInterval } from '../subscription.js';
 import type { OverwriteFileInfo, ProxyProbeResult, StatusJson, SubscriptionUrgency } from '../types.js';
@@ -63,7 +63,6 @@ function buildStatusJson(args: {
   overwriteFiles: OverwriteFileInfo[];
   overwriteBroken: ReturnType<typeof listOverwriteFile>['broken'];
   service: ReturnType<typeof getServiceStatus>;
-  legacy: boolean;
 }): StatusJson {
   const urgency = args.cached ? subscriptionUrgency(args.cached) : null;
   return {
@@ -114,7 +113,6 @@ function buildStatusJson(args: {
       disabled: args.service.disabled,
       lastExitCode: args.service.lastExitCode,
       lastTerminatingSignal: args.service.lastTerminatingSignal,
-      legacySystemInstall: args.legacy,
     },
   };
 }
@@ -165,7 +163,6 @@ export async function printStatus(args: string[] = []): Promise<void> {
     }
   }
   const cached = activeSub ? getSubscriptionsWithCache().find(s => s.name === activeSub.name) : undefined;
-  const legacy = detectLegacySystemInstall();
   // 控制器端口在 settings 非法时不应让整个 status 崩掉（doctor 另有一项专查非法 ports）
   const controllerPort = getPortsOrNull()?.controller ?? null;
 
@@ -196,7 +193,6 @@ export async function printStatus(args: string[] = []): Promise<void> {
           overwriteFiles,
           overwriteBroken,
           service,
-          legacy,
         }),
         null,
         2,
@@ -298,7 +294,7 @@ export async function printStatus(args: string[] = []): Promise<void> {
 
   printOverwriteLines(overwriteEnabled, overwriteFiles, overwriteBroken);
 
-  printServiceLines(service, legacy);
+  printServiceLines(service);
 
   // TUN 是临时 root 进程且不随终端退出消失，每次查看状态都提醒怎么收掉
   if (kind === 'tun') {
@@ -353,7 +349,7 @@ function printOverwriteLines(enabled: boolean, files: OverwriteFileInfo[], broke
   }
 }
 
-function printServiceLines(service: ReturnType<typeof getServiceStatus>, legacy: boolean): void {
+function printServiceLines(service: ReturnType<typeof getServiceStatus>): void {
   if (!service.installed && !service.loaded) {
     console.log(`${colors.gray('服务: ')}${colors.yellow('未安装')} ${colors.gray('(mihomo-cli install 安装后可用 Mixed 模式)')}`);
   } else if (!service.installed) {
@@ -365,12 +361,6 @@ function printServiceLines(service: ReturnType<typeof getServiceStatus>, legacy:
   } else {
     console.log(`${colors.gray('服务: ')}${colors.green('已安装')}`);
     printAutoStart(service);
-  }
-
-  // 旧版本（v4.0 及更早）的 root LaunchDaemon 会与用户级服务抢端口，且用户态动不了它（D1）
-  if (legacy) {
-    console.log(colors.yellow('  异常: 检测到旧版本的系统级服务（root LaunchDaemon）'));
-    console.log(colors.gray('  它会抢占同一组端口，清理: mihomo-cli uninstall（需一次管理员密码）'));
   }
 }
 

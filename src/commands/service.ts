@@ -7,15 +7,7 @@ import { PATHS } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
 import { printResidueWarning } from '../process-stop.js';
 import * as runtime from '../runtime.js';
-import {
-  announceLegacyCleanupOrThrow,
-  detectLegacySystemInstall,
-  getServiceStatus,
-  installService,
-  SERVICE_BINARY_NAME,
-  startAbortedByConcurrentStop,
-  uninstallService,
-} from '../service.js';
+import { getServiceStatus, installService, SERVICE_BINARY_NAME, startAbortedByConcurrentStop, uninstallService } from '../service.js';
 
 /**
  * 服务的安装与卸载。启停在 start.ts / stop.ts。
@@ -23,16 +15,6 @@ import {
  * install 只负责「装」，不启动——与 ssh-socks-install 同语义。这样「装」和「跑」
  * 是两个可独立推理的状态，用户重启后服务是否回来只取决于 start/stop 置的 enable 位。
  */
-
-/**
- * 遗留的系统级安装（v3.0–v4.0 的 `daemon on`）会与用户级服务抢端口，
- * 且带 KeepAlive 会持续拉起内核。安装前必须先清掉，否则两个实例互相打架。
- * 前后提示统一走 announceLegacyCleanupOrThrow（stop/start 同源）。
- */
-async function handleLegacyInstall(): Promise<void> {
-  if (!detectLegacySystemInstall()) return;
-  await announceLegacyCleanupOrThrow('需先清理', ['  它会与新的用户级服务抢占同一组端口']);
-}
 
 /**
  * 「装好了，但没恢复运行，因为期间有人停了它」。两个消费点共用（installService 锁内判据、
@@ -54,10 +36,8 @@ export async function cmdInstall(args: string[]): Promise<void> {
   assertKernelInstalled();
 
   // 并发判定基线由 main() 在命令入口捕获（service.ts captureStopEpochBaseline），
-  // 必须早于任何慢速阶段：下面的 handleLegacyInstall 可能卡在交互式 sudo 密码输入上
-  // （时长无上界），installService 内部又有 bootout + 等待卸载（最多 5s）；基线取晚了，
-  // 这些窗口里发生的 stop 就被算进基线，重装的恢复运行会把它覆盖掉
-  await handleLegacyInstall();
+  // 必须早于任何慢速阶段：installService 内部有 bootout + 等待卸载（最多 5s）；
+  // 基线取晚了，这些窗口里发生的 stop 就被算进基线，重装的恢复运行会把它覆盖掉
 
   // 重装保持原运行状态：不这么做的话，「代理开着时更新内核后重装」会静默把代理关掉
   const wasRunning = getServiceStatus().running;
@@ -109,13 +89,12 @@ export async function cmdUninstall(args: string[]): Promise<void> {
   assertKnownFlags(args.slice(1), [], 'uninstall');
   assertPositionalCount(args, 0, 1, 'mihomo-cli uninstall');
   const status = getServiceStatus();
-  const legacy = detectLegacySystemInstall();
   const residue = getMihomoPids();
 
   // 幂等判据必须涵盖全部残留形态，不能只看 plist：用户手动删掉 plist 后任务仍处
   // bootstrapped 状态，KeepAlive 会继续把内核拉起——只看文件会直接返回、永不执行
   // bootout，用户陷入「永远停不掉且 CLI 无路可走」的死胡同
-  if (!status.installed && !status.loaded && !legacy && residue.length === 0) {
+  if (!status.installed && !status.loaded && residue.length === 0) {
     console.log('服务未安装');
     return;
   }
@@ -126,17 +105,12 @@ export async function cmdUninstall(args: string[]): Promise<void> {
   }
 
   // 服务卸载路径消费 uninstallService 内 cleanupAll 的复核结果，不再重发 pgrep；
-  // legacy 清理（其内部另有 bootout + reap）或两条路径都没走时，终态需在此统一观察
+  // 没走卸载路径（无服务、只有游离内核）时，终态需在此统一观察
   let remaining: number[] | null = null;
   if (status.installed || status.loaded) {
     const cleanup = await uninstallService();
     console.log(colors.green('已卸载服务'));
     remaining = cleanup.remaining;
-  }
-
-  if (legacy) {
-    await announceLegacyCleanupOrThrow('卸载时一并清理');
-    remaining = null;
   }
 
   if (remaining === null) remaining = getMihomoPids();
