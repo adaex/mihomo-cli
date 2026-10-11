@@ -156,9 +156,7 @@ export interface ProcessStatus {
 }
 
 export interface ProcessInfo {
-  pid: number;
   memory: string;
-  isRoot: boolean;
 }
 
 export interface StopResult {
@@ -185,11 +183,6 @@ export interface CleanupResult {
    * 没有理由跳过）——不设「错误优先级」，两个字段各自如实带出
    */
   pidError: Error | null;
-}
-
-export interface StaleState {
-  needsCleanup: boolean;
-  allPids: number[];
 }
 
 // === Service (launchd 服务) ===
@@ -443,7 +436,6 @@ export interface HttpClientOptions {
 export interface HttpResponse<T = string> {
   data: T;
   headers: Headers;
-  status: number;
 }
 
 export interface HttpClient {

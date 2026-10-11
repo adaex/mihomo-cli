@@ -22,11 +22,6 @@ export function openUrl(url: string): void {
   }
 }
 
-export function openLogFile(logPath: string): void {
-  console.log(`用系统默认程序打开: ${logPath}`);
-  openUrl(logPath);
-}
-
 export function viewLogWithTail(logPath: string, options?: { follow?: boolean; lines?: number }): void {
   const follow = options?.follow;
   const lines = options?.lines || 100;

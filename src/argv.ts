@@ -62,22 +62,16 @@ export function assertKnownFlags(args: string[] | undefined, known: readonly str
  *
  * 带值选项的值不算位置参数；跳值只在下一个 token **不是 flag** 时进行——可选值选项
  * （`--mirror`）裸写后跟 `--proxy 7897` 时它没有值，无条件跳会吞掉 `--proxy` 本身、
- * 把 7897 误判成多余位置参数。某命令的带值选项口径与登记表不同时，才经 valueFlags 传入。
+ * 把 7897 误判成多余位置参数。
  */
-export function assertPositionalCount(
-  args: string[] | undefined,
-  max: number,
-  startIdx: number,
-  usage: string,
-  valueFlags: ReadonlySet<string> = VALUE_FLAGS,
-): void {
+export function assertPositionalCount(args: string[] | undefined, max: number, startIdx: number, usage: string): void {
   if (!args) return;
   let count = 0;
   for (let i = startIdx; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith('-')) {
       // 跳过该带值选项的值；值位置上是 flag 说明该选项没有值（可选值选项裸写）
-      if (valueFlags.has(a) && i + 1 < args.length && !args[i + 1].startsWith('-')) i++;
+      if (VALUE_FLAGS.has(a) && i + 1 < args.length && !args[i + 1].startsWith('-')) i++;
       continue;
     }
     count++;

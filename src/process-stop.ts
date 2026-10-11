@@ -39,7 +39,7 @@ function clearRuntime(): void {
  * pid 文件清理失败的核心短语，三处警告（游离 stop / 服务路径 / reset）共用——
  * 各写一份会漂移出多种说法；语境后缀（重试入口等）由调用方自行拼接
  */
-export function describePidCleanupFailure(err: Error): string {
+function describePidCleanupFailure(err: Error): string {
   return `pid 文件未能清理（${err.message}）`;
 }
 

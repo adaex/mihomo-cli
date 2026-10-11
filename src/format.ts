@@ -80,7 +80,8 @@ export function formatTimestamp(ts: unknown): string {
 }
 
 /** 本地时间戳，用于归档文件名（yyyy-MM-dd_HH-mm-ss）；与列表展示的本地 mtime 时区一致。 */
-export function formatLocalTimestamp(d = new Date()): string {
+export function formatLocalTimestamp(): string {
+  const d = new Date();
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
 }

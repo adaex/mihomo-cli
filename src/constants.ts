@@ -76,7 +76,7 @@ export const UI_URLS: Record<string, string> = {
  * launchd 域条目都以它为键，随意改名会让已装的服务变成新 CLI 看不见的幽灵，而它带
  * KeepAlive 会持续拉起内核，用户没有任何途径卸载它。
  */
-export const DEFAULT_SERVICE_LABEL = 'com.mihomo-cli.daemon';
+const DEFAULT_SERVICE_LABEL = 'com.mihomo-cli.daemon';
 
 /**
  * 合法 label 字符集。必须校验：该值经 path.join 拼成用户级 plist 路径，

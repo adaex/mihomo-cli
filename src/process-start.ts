@@ -4,7 +4,7 @@ import { assertKernelInstalled, assertRuntimeConfigPresent } from './config.js';
 import { CliError } from './errors.js';
 import { readLogTail, rotateAndCleanupLogs } from './log-files.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
-import { checkStaleState, getPid, isRunning, MAIN_INSTANCE_PATTERN } from './process-probe.js';
+import { getMihomoPids, getPid, isPidFileOwnedByRoot, isRunning, MAIN_INSTANCE_PATTERN } from './process-probe.js';
 import { getServiceStatus, tunBlockedByConcurrentStart } from './service.js';
 import { runSudoScript } from './sudo.js';
 import { shellQuote } from './text.js';
@@ -146,14 +146,12 @@ export async function startTun(prefetched?: ServiceStatus): Promise<number> {
     }
   }
 
-  const staleState = checkStaleState();
-  if (staleState.needsCleanup) {
-    // needsCleanup 也可能仅因 root pid 文件存在（无进程），此时「清理 0 个残留进程」是误导
-    if (staleState.allPids.length > 0) {
-      console.log(`清理 ${staleState.allPids.length} 个残留进程...`);
-    } else {
-      console.log('清理残留的 root pid 文件...');
-    }
+  const stalePids = getMihomoPids();
+  // 需清理也可能仅因 root pid 文件存在（无进程），此时「清理 0 个残留进程」是误导
+  if (stalePids.length > 0) {
+    console.log(`清理 ${stalePids.length} 个残留进程...`);
+  } else if (isPidFileOwnedByRoot()) {
+    console.log('清理残留的 root pid 文件...');
   }
   console.log('TUN 模式需要 sudo 权限...');
 

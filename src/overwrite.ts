@@ -494,7 +494,7 @@ function hostMatchesDomain(host: string, domain: string): boolean {
 
 /**
  * 订阅名匹配：精确值、尾部单个 `*`（前缀 `edu*`）、头部单个 `*`（后缀 `*edu`），
- * 大小写不敏感（与 findSubscriptionFuzzy / `sub use` 口径一致——同一名称不能有两套
+ * 大小写不敏感（与 resolveSubscription / `sub use` 口径一致——同一名称不能有两套
  * 匹配规则）。只做字面前缀/后缀比对、**无通用匹配器**：glob 转正则的实现曾在合法输入
  * 内灾难性回溯（`*a`×20 配 64 字符订阅名实测 70 秒，64 正是 SAFE_NAME_RE 的上限），
  * 而真实使用面只有前缀区分（同机场套餐系列 edu1/edu2）——复杂匹配走 JS 覆写脚本。

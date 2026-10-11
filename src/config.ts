@@ -280,7 +280,7 @@ export function judgeScriptMatches(
   mode: RuntimeMode,
   scope: OverwriteScope | undefined,
   entries: OverwriteFileEntry[],
-): { matches: ScriptMatch[]; error?: string } {
+): { matches: ScriptMatch[] } {
   try {
     const subscriptionConfig = parseConfigContent(subRawContent, '订阅内容');
     const settings = readSettings();
@@ -291,8 +291,8 @@ export function judgeScriptMatches(
       scope,
     });
     return { matches: scriptMatches };
-  } catch (e) {
-    return { matches: [], error: firstLine((e as Error).message ?? String(e)) };
+  } catch {
+    return { matches: [] };
   }
 }
 
@@ -410,12 +410,8 @@ export async function validateConfigWithKernel(config: Record<string, unknown>, 
   }
 }
 
-function hasConfig(): boolean {
-  return fs.existsSync(PATHS.configFile);
-}
-
 export function getConfigInfo(): ConfigInfo | null {
-  if (!hasConfig()) return null;
+  if (!fs.existsSync(PATHS.configFile)) return null;
 
   try {
     const content = fs.readFileSync(PATHS.configFile, 'utf8');

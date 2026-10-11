@@ -164,7 +164,7 @@ async function subUpdate(args: string[]): Promise<void> {
   const subs = getSubscriptions();
 
   if (subs.length === 0) {
-    throw new CliError('没有订阅');
+    throw subscription.noSubscriptionsError();
   }
 
   // 区分「无参数」（更新所有）与「空串参数」（`sub update ""`，变量展开为空的常见笔误），
@@ -221,7 +221,7 @@ async function subUse(args: string[]): Promise<void> {
   const subs = getSubscriptions();
 
   if (subs.length === 0) {
-    throw new CliError('没有订阅，请先添加订阅', { hint: 'mihomo-cli sub add <url> [name]' });
+    throw subscription.noSubscriptionsError();
   }
 
   if (!name) {
@@ -265,7 +265,7 @@ async function subRemove(args: string[]): Promise<void> {
   // 与 use/update 同口径：零订阅先报「没有订阅」——环境里没有订阅时，
   // 「请指定名称」会把用户引去补一个不存在的参数
   if (subs.length === 0) {
-    throw new CliError('没有订阅，请先添加订阅', { hint: 'mihomo-cli sub add <url> [name]' });
+    throw subscription.noSubscriptionsError();
   }
 
   if (!name) {

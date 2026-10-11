@@ -3,7 +3,7 @@ import { CliError } from '../errors.js';
 import { matchValueFlagToken } from '../flags.js';
 import { formatBytes, formatDate } from '../format.js';
 import { listLogs } from '../log-files.js';
-import { openLogFile, viewLogWithTail } from '../open.js';
+import { openUrl, viewLogWithTail } from '../open.js';
 import { PATHS } from '../paths.js';
 import type { LogEntry } from '../types.js';
 
@@ -57,7 +57,8 @@ export function cmdLogs(args: string[]): void {
           hint: '跟随输出请去掉 -o: mihomo-cli logs 0 -f',
         });
       }
-      openLogFile(logPath);
+      console.log(`用系统默认程序打开: ${logPath}`);
+      openUrl(logPath);
       return;
     }
 

@@ -106,7 +106,7 @@ export function parseDisabledList(output: string, label: string): boolean {
  * 只有 113 是「查到了，答案是没有」；112/125 是「这次查询根本没成立」，
  * 把它们当成「未装载」会让 status 谎报、stop 静默跳过。
  */
-export const LAUNCHCTL_NOT_LOADED = 113;
+const LAUNCHCTL_NOT_LOADED = 113;
 
 /**
  * bootout 对「未装载」的容忍码：文档化的 113 与实测形态 3（旧实例已不存在时

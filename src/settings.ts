@@ -161,7 +161,8 @@ export function getPortsOrNull(settings: Settings = readSettings()): { mixed: nu
  * 两个版本，排查方向自相矛盾。端口非法归 null（getPortsOrNull 的降级语义），密钥只
  * 认非空字符串（数字/对象不拼进 Authorization、不进剪贴板）
  */
-export function getControllerEndpoint(settings: Settings = readSettings()): { port: number | null; secret: string | null } {
+export function getControllerEndpoint(): { port: number | null; secret: string | null } {
+  const settings = readSettings();
   const port = getPortsOrNull(settings)?.controller ?? null;
   const secret = settings.controller_secret;
   return { port, secret: typeof secret === 'string' && secret ? secret : null };

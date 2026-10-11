@@ -4,11 +4,10 @@ import fs from 'node:fs';
 import { CliError } from './errors.js';
 import { PATHS } from './paths.js';
 import { escapeRegExp } from './text.js';
-import type { ProcessStatus, StaleState } from './types.js';
+import type { ProcessStatus } from './types.js';
 
 /**
  * 进程探测：ps/pgrep 查询、pid 文件、运行状态。只读、无副作用，是启停与状态展示的共同底层。
- * 依赖 config 仅为 getStatus 顺带返回 hasConfig/hasKernel/kernelVersion（均为只读文件检查）。
  */
 
 /** ps 查询超时：探测进程存活/属主/命令行的统一上限，卡住时按不存在处理 */
@@ -148,7 +147,7 @@ export function parsePidList(stdout: string): number[] {
     .filter(p => Number.isInteger(p) && p > 0);
 }
 
-function isPidFileOwnedByRoot(): boolean {
+export function isPidFileOwnedByRoot(): boolean {
   if (!fs.existsSync(PATHS.pidFile)) return false;
   try {
     const stat = fs.statSync(PATHS.pidFile);
@@ -156,14 +155,6 @@ function isPidFileOwnedByRoot(): boolean {
   } catch {
     return false;
   }
-}
-
-export function checkStaleState(): StaleState {
-  const allPids = getMihomoPids();
-  return {
-    needsCleanup: allPids.length > 0 || isPidFileOwnedByRoot(),
-    allPids,
-  };
 }
 
 export function getStatus(): ProcessStatus {
@@ -180,9 +171,7 @@ export function getStatus(): ProcessStatus {
     running: true,
     pid,
     processInfo: {
-      pid,
       memory: p.rss ? `${(p.rss / 1024).toFixed(1)} MB` : '未知',
-      isRoot: p.uid === '0',
     },
   };
 }

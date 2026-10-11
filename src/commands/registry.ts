@@ -50,7 +50,7 @@ export interface Command {
  * 命令注册表:index.ts 的唯一分发来源,help 的命令清单也由此生成。
  * 新增命令只需在此加一条(name + aliases + handler + usage),路由与帮助自动生效。
  */
-export const COMMANDS: Command[] = [
+const COMMANDS: Command[] = [
   // === 控制 ===
   {
     name: 'install',

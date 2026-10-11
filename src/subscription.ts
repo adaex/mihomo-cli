@@ -156,16 +156,22 @@ export function getActiveSubscription(): Subscription | null {
   return subs[0];
 }
 
+/** 「没有订阅」的统一报错（requireActive 与 use/update/remove 前置校验共用，文案不漂移） */
+export function noSubscriptionsError(): CliError {
+  return new CliError('没有订阅，请先添加订阅', { hint: '添加订阅: mihomo-cli sub add <url>' });
+}
+
 /** 取当前活跃订阅，无则抛 CliError。 */
 export function requireActiveSubscription(): Subscription {
   const sub = getActiveSubscription();
   if (!sub) {
-    throw new CliError('没有订阅，请先添加订阅', { hint: '添加订阅: mihomo-cli sub add <url>' });
+    throw noSubscriptionsError();
   }
   return sub;
 }
 
-function findSubscriptionFuzzy<T extends Subscription>(subs: T[], pattern: string): T[] {
+/** 模糊匹配（精确 > 前缀 > 包含，取首个非空档位）并收敛到唯一订阅；不唯一时抛 CliError。 */
+export function resolveSubscription<T extends Subscription>(subs: T[], pattern: string): T {
   const lowerPattern = pattern.toLowerCase();
   const exact: T[] = [];
   const prefix: T[] = [];
@@ -182,24 +188,14 @@ function findSubscriptionFuzzy<T extends Subscription>(subs: T[], pattern: strin
     }
   }
 
-  if (exact.length > 0) return exact;
-  if (prefix.length > 0) return prefix;
-  return includes;
-}
-
-function pickSingleSubscription<T extends Subscription>(subs: T[], pattern: string): T {
-  if (subs.length === 0) {
+  const matched = exact.length > 0 ? exact : prefix.length > 0 ? prefix : includes;
+  if (matched.length === 0) {
     throw new CliError(`未找到匹配 "${pattern}" 的订阅`);
   }
-  if (subs.length === 1) return subs[0];
+  if (matched.length === 1) return matched[0];
   throw new CliError('匹配到多个订阅，请更精确指定', {
-    hint: ['', '匹配的订阅:', ...subs.map(s => `  ${s.name}`)],
+    hint: ['', '匹配的订阅:', ...matched.map(s => `  ${s.name}`)],
   });
-}
-
-/** 模糊匹配并收敛到唯一订阅（折叠 findSubscriptionFuzzy + pickSingleSubscription）；不唯一时抛 CliError。 */
-export function resolveSubscription<T extends Subscription>(subs: T[], pattern: string): T {
-  return pickSingleSubscription(findSubscriptionFuzzy(subs, pattern), pattern);
 }
 
 /**
@@ -235,7 +231,7 @@ function assertLooksLikeSubscription(parsed: Record<string, unknown>, maskedUrl:
   });
 }
 
-export async function downloadSubscription(url: string, subName = 'default', signal?: AbortSignal): Promise<ConfigSummary> {
+export async function downloadSubscription(url: string, subName: string, signal?: AbortSignal): Promise<ConfigSummary> {
   let response: HttpResponse<string>;
   try {
     response = await HTTP_CLIENT.get<string>(url, { responseType: 'text', signal });
@@ -289,7 +285,7 @@ export async function downloadSubscription(url: string, subName = 'default', sig
 }
 
 /** 构建配置并交给内核校验；不替换现有 config.yaml，不停止正在运行的内核 */
-export async function prepareConfigForStart(mode: RuntimeMode, subName = 'default'): Promise<PreparedConfig> {
+export async function prepareConfigForStart(mode: RuntimeMode, subName: string): Promise<PreparedConfig> {
   // 条目还在、文件没了（手动删除/外部清理）→ 指引重新下载：守卫收口在
   // requireSubscriptionRawConfig（与 config/doctor 同口径，三处不出现两个方向）。
   // 例外：subName 来自命令入口的快照，本函数之前的自动更新窗口（约 10s）里条目
