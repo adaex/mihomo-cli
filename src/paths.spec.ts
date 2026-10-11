@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,6 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { DIRS, PATHS, USER_DATA_DIR, withFileLock } from './paths.js';
 import { runModule } from './test-support/cli.js';
+import { spawnEval } from './test-support/spawn-eval.js';
 
 let tmpDir: string;
 /** 锁文件路径。withFileLock 收的就是锁本身（不再是被保护的数据文件 + 内部拼 .lock） */
@@ -101,20 +101,11 @@ describe('withFileLock', () => {
     // 主进程先拿锁，在锁内记录时刻；子进程尝试拿同一把锁并记录拿到的时刻。
     // 子进程必须在主进程放锁之后才拿到。
     const marker = path.join(tmpDir, 'child-acquired-at');
-    const child = spawn(
-      process.execPath,
-      [
-        '--import',
-        'tsx',
-        '-e',
-        `import { withFileLock } from ${JSON.stringify(path.resolve('src/paths.ts'))};
+    const { child } = spawnEval(`import { withFileLock } from ${JSON.stringify(path.resolve('src/paths.ts'))};
          import fs from 'node:fs';
          withFileLock(${JSON.stringify(lockPath)}, () => {
            fs.writeFileSync(${JSON.stringify(marker)}, String(Date.now()));
-         });`,
-      ],
-      { stdio: 'ignore' },
-    );
+         });`);
 
     let releasedAt = 0;
     withFileLock(lockPath, () => {
@@ -140,21 +131,12 @@ describe('withFileLock', () => {
     // 任何一轮抢进临界区都是回归——等待超时本身永远不构成强夺理由
     const ready = path.join(tmpDir, 'waiter-ready');
     const entered = path.join(tmpDir, 'waiter-entered-at');
-    const child = spawn(
-      process.execPath,
-      [
-        '--import',
-        'tsx',
-        '-e',
-        `import { withFileLock } from ${JSON.stringify(path.resolve('src/paths.ts'))};
+    const { child } = spawnEval(`import { withFileLock } from ${JSON.stringify(path.resolve('src/paths.ts'))};
          import fs from 'node:fs';
          fs.writeFileSync(${JSON.stringify(ready)}, '1');
          withFileLock(${JSON.stringify(lockPath)}, () => {
            fs.writeFileSync(${JSON.stringify(entered)}, String(Date.now()));
-         });`,
-      ],
-      { stdio: 'ignore' },
-    );
+         });`);
 
     let releasedAt = 0;
     withFileLock(lockPath, () => {
@@ -190,31 +172,16 @@ describe('withFileLock', () => {
 
     // 等待者子进程：记录进入/退出临界区的时刻（跨进程可见的文件信号）
     const spawnWaiter = (tag: string, holdMs: number, staleMs: number) =>
-      spawn(
-        process.execPath,
-        [
-          '--import',
-          'tsx',
-          '-e',
-          `import { withFileLock } from ${JSON.stringify(path.resolve('src/paths.ts'))};
+      spawnEval(`import { withFileLock } from ${JSON.stringify(path.resolve('src/paths.ts'))};
            import fs from 'node:fs';
            withFileLock(${JSON.stringify(lockPath)}, () => {
              fs.writeFileSync(${JSON.stringify(path.join(tmpDir, `${tag}-enter`))}, String(Date.now()));
              Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${holdMs});
              fs.writeFileSync(${JSON.stringify(path.join(tmpDir, `${tag}-exit`))}, String(Date.now()));
-           }, { staleMs: ${staleMs} });`,
-        ],
-        { stdio: 'ignore' },
-      );
+           }, { staleMs: ${staleMs} });`);
 
-    const children = [spawnWaiter('B', 150, 250), spawnWaiter('C', 60, 2000)];
-    const exits = children.map(
-      child =>
-        new Promise<number | null>(resolve => {
-          child.on('close', code => resolve(code));
-          child.on('error', () => resolve(-1));
-        }),
-    );
+    const waiters = [spawnWaiter('B', 150, 250), spawnWaiter('C', 60, 2000)];
+    const exits = waiters.map(w => w.done);
 
     // 修复正确时两个子进程 ~600ms 内自行退出；超时说明互相死等（等价于把 CLI
     // 锁死），杀掉并判失败，避免回归成挂起时拖死整个测试套件。
@@ -231,7 +198,7 @@ describe('withFileLock', () => {
       clearTimeout(timeoutHandle);
     }
     if (codes === null) {
-      for (const child of children) child.kill();
+      for (const w of waiters) w.child.kill();
       assert.fail('等待者子进程未在 20s 内退出（可能互相死等或死循环）');
     }
     for (const code of codes) {
@@ -367,14 +334,7 @@ describe('锁文件的存放位置', () => {
         `  assert.ok(fs.existsSync(PATHS.subscriptionCacheLock), 'reset subs 的 rmrf 把正被持有的缓存锁一起删掉了：第三方可立刻进入临界区');`,
         `});`,
       ].join('\n');
-      const code = await new Promise<number | null>(resolve => {
-        const child = spawn(process.execPath, ['--import', 'tsx', '-e', script], {
-          stdio: 'ignore',
-          env: { ...process.env, MIHOMO_CLI_DIR: dataDir },
-        });
-        child.on('close', c => resolve(c));
-        child.on('error', () => resolve(-1));
-      });
+      const code = await spawnEval(script, { env: { MIHOMO_CLI_DIR: dataDir } }).done;
       assert.equal(code, 0, '缓存锁应在 rmrf(subscriptions/) 后幸存（子进程退出码非 0 表示断言失败）');
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });
@@ -442,14 +402,7 @@ describe('cleanupStaleTmpFiles：崩溃残留清扫', () => {
         `assert.equal(fs.existsSync(DIRS.kernel + '/../check-old'), false, '超龄 config 校验临时目录应删');`,
         `assert.equal(fs.existsSync(DIRS.kernel + '/../service.plist.stage'), false, '超龄 install stage 残留应删');`,
       ].join('\n');
-      const code = await new Promise<number | null>(resolve => {
-        const child = spawn(process.execPath, ['--import', 'tsx', '-e', script], {
-          stdio: 'inherit',
-          env: { ...process.env, MIHOMO_CLI_DIR: dataDir },
-        });
-        child.on('close', c => resolve(c));
-        child.on('error', () => resolve(-1));
-      });
+      const code = await spawnEval(script, { env: { MIHOMO_CLI_DIR: dataDir }, stdio: 'inherit' }).done;
       assert.equal(code, 0, '子进程退出码非 0 表示清扫断言失败');
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });

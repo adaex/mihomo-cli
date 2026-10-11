@@ -8,6 +8,7 @@ import { describe, it } from 'node:test';
 import { LOCK_STALE_MS } from './paths.js';
 import { SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS } from './service.js';
 import { writeStubExecutable } from './test-support/stub-bin.js';
+import { sleep } from './utils.js';
 
 /**
  * 服务层两条并发防线的消费点验证。
@@ -26,8 +27,6 @@ import { writeStubExecutable } from './test-support/stub-bin.js';
  * 场景 env 由 scenarioEnv 统一拼装）。真实用到的系统工具只有
  * lsof（找桩 controller 的监听 pid）与 pgrep（隔离目录下匹配不到任何进程）。
  */
-
-const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 /** 一次性隔离三件套：数据目录、桩 HOME、桩 launchctl 所在 bin 目录 */
 function makeFixture(prefix: string): { dataDir: string; fakeHome: string; fakeBin: string; label: string } {

@@ -1,15 +1,25 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
+
+import { spawnEval } from './test-support/spawn-eval.js';
 
 // paths.ts 在 import 期求值 MIHOMO_CLI_DIR，必须先设环境变量再动态 import
 // （config-dns.spec.ts 同款手法）。归档分配直接写 logs/ 目录；并发用例的子进程
 // 也靠同一个 MIHOMO_CLI_DIR 与主进程共享同一份目录。
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-logfiles-'));
 process.env.MIHOMO_CLI_DIR = tmpDir;
+
+/** 轮询等子进程写出标记文件（跨进程就绪信号），超时断言失败 */
+function waitMarker(name: string): void {
+  const deadline = Date.now() + 10_000;
+  while (!fs.existsSync(path.join(tmpDir, name)) && Date.now() < deadline) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
+  assert.ok(fs.existsSync(path.join(tmpDir, name)), `等待子进程标记 ${name} 超时`);
+}
 
 const { allocateArchivePath, isArchiveLogFilename, readLogTail } = await import('./log-files.js');
 const { CliError } = await import('./errors.js');
@@ -106,25 +116,13 @@ describe('allocateArchivePath：原子占名', () => {
       fs.writeFileSync(path.join(tmpDir, 'alloc-result-${id}'), p);
     `;
 
-    const children = ['a', 'b'].map(id =>
-      spawn(process.execPath, ['--import', 'tsx', '-e', childScript(id)], {
-        stdio: 'ignore',
-        env: { ...process.env, MIHOMO_CLI_DIR: tmpDir },
-      }),
-    );
+    const runs = ['a', 'b'].map(id => spawnEval(childScript(id), { env: { MIHOMO_CLI_DIR: tmpDir } }));
 
-    const waitMarker = (name: string) => {
-      const deadline = Date.now() + 10_000;
-      while (!fs.existsSync(path.join(tmpDir, name)) && Date.now() < deadline) {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-      }
-      assert.ok(fs.existsSync(path.join(tmpDir, name)), `等待子进程标记 ${name} 超时`);
-    };
     waitMarker('alloc-ready-a');
     waitMarker('alloc-ready-b');
     fs.writeFileSync(path.join(tmpDir, 'alloc-go'), '');
 
-    const exitCodes = await Promise.all(children.map(child => new Promise<number | null>(resolve => child.on('close', resolve))));
+    const exitCodes = await Promise.all(runs.map(r => r.done));
     assert.deepEqual(exitCodes, [0, 0], '两个子进程都不该失败');
 
     const pathA = fs.readFileSync(path.join(tmpDir, 'alloc-result-a'), 'utf8');
@@ -151,25 +149,13 @@ describe('allocateArchivePath：原子占名', () => {
       }
       rotateAndCleanupLogs();
     `;
-    const children = ['a', 'b'].map(id =>
-      spawn(process.execPath, ['--import', 'tsx', '-e', childScript(id)], {
-        stdio: 'ignore',
-        env: { ...process.env, MIHOMO_CLI_DIR: tmpDir },
-      }),
-    );
+    const runs = ['a', 'b'].map(id => spawnEval(childScript(id), { env: { MIHOMO_CLI_DIR: tmpDir } }));
 
-    const waitMarker = (name: string) => {
-      const deadline = Date.now() + 10_000;
-      while (!fs.existsSync(path.join(tmpDir, name)) && Date.now() < deadline) {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-      }
-      assert.ok(fs.existsSync(path.join(tmpDir, name)), `等待子进程标记 ${name} 超时`);
-    };
     waitMarker('rotate-ready-a');
     waitMarker('rotate-ready-b');
     fs.writeFileSync(path.join(tmpDir, 'rotate-go'), '');
 
-    const exitCodes = await Promise.all(children.map(child => new Promise<number | null>(resolve => child.on('close', resolve))));
+    const exitCodes = await Promise.all(runs.map(r => r.done));
     assert.deepEqual(exitCodes, [0, 0], '并发轮转的输家也不该抛错（日志已被赢家归档，无事可做）');
 
     const archives = fs
