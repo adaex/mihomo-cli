@@ -11,8 +11,12 @@ import { updateSettings } from '../settings.js';
 import type { CleanupResult, ResetTarget, Settings } from '../types.js';
 import { confirmOrThrow } from './shared.js';
 
-/** 目标表只描述数据；服务操作与设置更新由 cmdReset 分阶段处理 */
-const RESET_TARGETS: ResetTarget[] = [
+/**
+ * 目标表只描述数据；服务操作与设置更新由 cmdReset 分阶段处理。
+ * 导出供 help.spec 断言 reset 帮助行的「留空保留」清单与 preserveOnBare 集合一致——
+ * 帮助行手抄曾漏「服务」漂移过一次，表是唯一真相
+ */
+export const RESET_TARGETS: ResetTarget[] = [
   { id: 'subs', aliases: ['sub', 'subs', 'subscription', 'subscriptions'], label: '订阅', paths: () => [DIRS.subscriptions], needsStop: true },
   { id: 'logs', aliases: ['log', 'logs'], label: '日志', paths: () => [DIRS.logs], needsStop: true },
   { id: 'data', aliases: ['data'], label: '运行数据', paths: () => [DIRS.data], needsStop: true },

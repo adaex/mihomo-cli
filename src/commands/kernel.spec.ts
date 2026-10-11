@@ -94,7 +94,7 @@ describe('buildDownloadFailureError（全失败错误分档）', () => {
     const err = buildDownloadFailureError(attempts, false);
     assert.equal(err.message, '下载失败: 镜像或服务器返回 HTTP 错误（4xx/5xx）');
     assert.ok(!err.hint.join('\n').includes('全部下载通道均失败'));
-    assert.ok(!err.hint.join('\n').includes('Default Proxy'), '单候选运行的换节点话术不适用');
+    assert.ok(!err.hint.join('\n').includes('主分组'), '单候选运行的换节点话术不适用');
     assert.ok(err.hint.join('\n').includes('--proxy'), '应给出改用其他通道的出路');
   });
 
@@ -111,6 +111,8 @@ describe('buildDownloadFailureError（全失败错误分档）', () => {
     const hint = err.hint.join('\n');
     assert.match(hint, /本机代理 http:\/\/127\.0\.0\.1:7890: 下载失败: 连接或传输超时/);
     assert.match(hint, /gh（经本机代理 http:\/\/127\.0\.0\.1:7890）: 下载超时/);
-    assert.match(hint, /主分组（通常名为 Default Proxy 或 PROXY）/);
+    // 锁不变量（不把分组名写成定数）而非「通常名为」后的举例清单——举例措辞可改，锚全句会让每次润色都误报
+    assert.match(hint, /主分组/);
+    assert.doesNotMatch(hint, /给 Default Proxy 换/, '不得回退到写死分组名的旧话术');
   });
 });

@@ -55,7 +55,7 @@ export function cmdUI(args: string[]): void {
   console.log(`打开 Web UI: ${uiName}`);
   console.log(`页面: ${url}`);
   // 控制器地址固定打印：托管网页默认连 127.0.0.1:9090，自定义端口后这里是唯一可见的
-  // 实际连接地址（排查「UI 连不上」全靠它）。端口取不到（ports 配置非法）时整行换说法，
+  // 实际连接地址（排查「UI 连不上」全靠它）。端口取不到时整行换说法，
   // 不能把说明文字拼进 URL 冒号后面——那形态像坏数据
   console.log(endpoint.port !== null ? `控制器: http://127.0.0.1:${endpoint.port}` : '控制器: 端口无法确定（settings.json 的 ports 配置非法）');
 

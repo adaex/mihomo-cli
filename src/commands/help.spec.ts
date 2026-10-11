@@ -5,6 +5,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { makeFixture, runCli } from '../test-support/cli.js';
+import { RESET_TARGETS } from './reset.js';
 
 /**
  * 命令级帮助：`help <命令>` 与 `<命令> -h|--help|help`。
@@ -110,12 +111,22 @@ describe('帮助文案与实际行为一致', () => {
     });
   });
 
-  it('subscription use 用法行写明运行中自动重启，与 use 快捷行口径一致', () => {
+  it('sub use / use / ow on|off 用法行统一写明运行中自动重启', () => {
     // 「运行中」限定与实际行为对齐：停止状态下 sub use 只切换、不重启也不启动
     withFixture((_d, run) => {
       const out = run(['help', 'subscription']).stdout;
       assert.match(out, /subscription use <name>.*运行中自动重启/);
       assert.match(run(['help', 'use']).stdout, /use <name>.*运行中自动重启/);
+      assert.match(run(['help', 'overwrite']).stdout, /overwrite on\|off.*运行中自动重启/);
+    });
+  });
+
+  it('reset 用法行的留空保留清单覆盖表中全部 preserveOnBare 目标', () => {
+    withFixture((_d, run) => {
+      const out = run(['help', 'reset']).stdout;
+      for (const target of RESET_TARGETS.filter(t => t.preserveOnBare)) {
+        assert.ok(out.includes(target.label), `reset 帮助应提到保留目标「${target.label}」`);
+      }
     });
   });
 
