@@ -164,7 +164,7 @@ function assertSupportedPlatform(commandName: string): void {
     label: '平台不支持',
     hint: [
       '服务托管依赖 launchd、目录/UI 打开依赖 open、提权依赖 sudo，均无其他平台实现。',
-      'Windows / Linux 适配仍在进行中。',
+      'Windows / Linux 适配尚无时间表。',
       '如需在非 macOS 上开发调试，可设 MIHOMO_CLI_ALLOW_ANY_PLATFORM=1（功能不保证可用）。',
     ],
   });

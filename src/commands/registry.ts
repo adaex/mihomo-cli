@@ -108,7 +108,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdLogs,
     group: 'interface',
-    usage: [{ signature: 'logs [-f] [-n N] [编号] [-o]', description: '日志列表/查看（裸 logs 列列表；0=当前，1+=归档；省略编号但给 -f/-n/-o 时即当前）' }],
+    usage: [{ signature: 'logs [-f] [-n N] [编号] [-o]', description: '日志列表/查看（裸 logs 列列表；0=当前，1+=归档；省略编号但给 -f/-n/-o 时看当前日志）' }],
   },
   // === 订阅 ===
   {
@@ -118,7 +118,7 @@ export const COMMANDS: Command[] = [
     handler: cmdSubscription,
     rewrite: args => ['subscription', 'use', ...args.slice(1)],
     group: 'subscription',
-    usage: [{ signature: 'use <name>', description: '切换订阅（subscription use 快捷方式，自动重启）' }],
+    usage: [{ signature: 'use <name>', description: '切换订阅（subscription use 快捷方式，运行中自动重启）' }],
   },
   {
     name: 'subscription',
@@ -127,7 +127,7 @@ export const COMMANDS: Command[] = [
     group: 'subscription',
     usage: [
       { signature: 'subscription', description: '列出所有订阅（别名 sub/subs）' },
-      { signature: 'subscription use <name>', description: '切换当前订阅（自动重启；重启透传 -s/-u 等启动选项）' },
+      { signature: 'subscription use <name>', description: '切换当前订阅（运行中自动重启；重启透传 -s/-u 等启动选项）' },
       { signature: 'subscription add [url] [name]', description: '添加订阅（无 url 时交互读取剪贴板）' },
       { signature: 'subscription update [name]', description: '更新订阅（无参更新所有）' },
       { signature: 'subscription remove <name>', description: '删除订阅（模糊匹配需确认，-y 跳过）' },
@@ -181,7 +181,7 @@ export const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdReset,
     group: 'system',
-    usage: [{ signature: 'reset [目标...] [--full] [-y]', description: '重置: 留空保留设置/内核/覆写，指定目标删对应项，--full 删全部，-y 跳过确认' }],
+    usage: [{ signature: 'reset [目标...] [--full] [-y]', description: '重置: 留空保留设置/内核/覆写/服务，指定目标删对应项，--full 删全部，-y 跳过确认' }],
   },
   {
     name: 'doctor',

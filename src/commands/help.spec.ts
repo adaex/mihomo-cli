@@ -98,7 +98,7 @@ describe('帮助文案与实际行为一致', () => {
     withFixture((_d, run) => {
       const out = run(['help', 'logs']).stdout;
       assert.match(out, /裸 logs 列列表/);
-      assert.match(out, /省略编号但给 -f\/-n\/-o 时即当前/);
+      assert.match(out, /省略编号但给 -f\/-n\/-o 时看当前日志/);
     });
   });
 
@@ -110,10 +110,12 @@ describe('帮助文案与实际行为一致', () => {
     });
   });
 
-  it('subscription use 用法行写明自动重启，与 use 快捷行口径一致', () => {
+  it('subscription use 用法行写明运行中自动重启，与 use 快捷行口径一致', () => {
+    // 「运行中」限定与实际行为对齐：停止状态下 sub use 只切换、不重启也不启动
     withFixture((_d, run) => {
       const out = run(['help', 'subscription']).stdout;
-      assert.match(out, /subscription use <name>.*自动重启/);
+      assert.match(out, /subscription use <name>.*运行中自动重启/);
+      assert.match(run(['help', 'use']).stdout, /use <name>.*运行中自动重启/);
     });
   });
 

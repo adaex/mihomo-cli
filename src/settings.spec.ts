@@ -203,7 +203,7 @@ describe('updateSettings 跨进程并发', () => {
   });
 });
 
-describe('getPorts：端口逃生口（settings.ports）', () => {
+describe('getPorts：端口覆盖（settings.ports）', () => {
   it('缺省回默认、合法覆盖生效、非法值 fail-closed 抛错', async () => {
     // USER_DATA_DIR 在模块求值时读 MIHOMO_CLI_DIR（顶层常量），测试进程已定死——
     // 与并发测试同法：spawn 子进程带 env 跑全部场景，退出码 0 即全部断言通过
