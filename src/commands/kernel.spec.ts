@@ -111,6 +111,6 @@ describe('buildDownloadFailureError（全失败错误分档）', () => {
     const hint = err.hint.join('\n');
     assert.match(hint, /本机代理 http:\/\/127\.0\.0\.1:7890: 下载失败: 连接或传输超时/);
     assert.match(hint, /gh（经本机代理 http:\/\/127\.0\.0\.1:7890）: 下载超时/);
-    assert.match(hint, /Default Proxy/);
+    assert.match(hint, /主分组（通常名为 Default Proxy 或 PROXY）/);
   });
 });

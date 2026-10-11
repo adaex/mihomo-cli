@@ -75,7 +75,7 @@ export function buildDownloadFailureError(attempts: { channel: DownloadChannel; 
       ...attempts.map(a => `  ${channelLabel(a.channel, isExplicitProxy)}: ${firstLine(a.error.message)}`),
       '',
       '若两条通道都是低速失败：问题在当前选中的机场节点（url-test 只按握手延迟选、不测带宽），',
-      '在面板里手动给 Default Proxy 换个线路或节点后重试；也可换个时间等 url-test 重选',
+      '在面板里手动给主分组（通常名为 Default Proxy 或 PROXY）换个线路或节点后重试；也可换个时间等 url-test 重选',
       '',
       '通道选择：本机代理在跑时自动优先（含低速快速失败），失败回退 gh（仍经同一本机代理）；',
       '手动指定: mihomo-cli kernel --mirror [镜像]（强制镜像）/ mihomo-cli kernel --mirror direct（强制直连）',

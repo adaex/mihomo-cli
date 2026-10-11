@@ -127,7 +127,7 @@ export const COMMANDS: Command[] = [
     group: 'subscription',
     usage: [
       { signature: 'subscription', description: '列出所有订阅（别名 sub/subs）' },
-      { signature: 'subscription use <name>', description: '切换当前订阅（运行中自动重启；重启透传 -s/-u 等启动选项）' },
+      { signature: 'subscription use <name>', description: '切换当前订阅（运行中自动重启，重启时可用 -s/-u 等启动选项）' },
       { signature: 'subscription add [url] [name]', description: '添加订阅（无 url 时交互读取剪贴板）' },
       { signature: 'subscription update [name]', description: '更新订阅（无参更新所有）' },
       { signature: 'subscription remove <name>', description: '删除订阅（模糊匹配需确认，-y 跳过）' },
@@ -148,7 +148,7 @@ export const COMMANDS: Command[] = [
     group: 'config',
     usage: [
       { signature: 'overwrite', description: '查看覆写状态（别名 ow）' },
-      { signature: 'overwrite on|off [-s] [-u ms]', description: '启用/禁用覆写配置（运行中自动重启，可透传启动选项）' },
+      { signature: 'overwrite on|off [-s] [-u ms]', description: '启用/禁用覆写配置（运行中自动重启，可带 -s/-u 等启动选项）' },
     ],
   },
   {
