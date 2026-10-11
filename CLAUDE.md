@@ -38,7 +38,7 @@ npm run dev && npm run typecheck && npm test && npm run check && npm run build
 
 - Biome 管格式与 import 排序；worktree 里显式 `npx biome check src/` 并确认实际检查了文件，不接受 `Checked 0 files`；`npm run check` 只在 error 级失败，warn 级不拦——别只看退出码
 - 测试用 node:test + tsx，命名 `*.spec.ts`；验证行为与数据最终状态，不用实现清单断言代替
-- 端到端夹具统一收在 `src/test-support/`，不在各 spec 重抄 spawn 与 env：cli.ts（makeFixture/runCli/readEpochIn/ENTRY，模块级子进程 runModule/moduleUrl，CLI 夹具自带临时 MIHOMO_CLI_DIR + 一次性 label + NO_COLOR 三件套）、fake-kernel.ts（假内核落盘/起进程/等出现/判死/收尾，禁静态 import 模块加载期固化 DIR 的模块）、guard.ts（守卫类 preload spawn 骨架，env 整体替换以表达「刻意不设 DIR」形态）
+- 端到端夹具统一收在 `src/test-support/`，不在各 spec 重抄 spawn 与 env：cli.ts（makeFixture/runCli/readEpochIn/ENTRY，模块级子进程 runModule/moduleUrl，CLI 夹具自带临时 MIHOMO_CLI_DIR + 一次性 label + NO_COLOR 三件套）、fake-kernel.ts（假内核落盘/起进程/等出现/判死/收尾，禁静态 import 模块加载期固化 DIR 的模块）、guard.ts（守卫类 preload spawn 骨架，env 整体替换以表达「刻意不设 DIR」形态）、stub-bin.ts（PATH 桩可执行文件原语）、stub-curl-env.ts（桩 curl 记录 no_proxy 实见值的回归闸夹具）
 - 验收命令不接管道收尾（`npm test | tail` 的退出码是 tail 的）：红会被吞成 0，要截断输出就重定向到文件再看
 - 修完必做反向验证（还原修复、确认用例转红），规则见 decisions.md D11；预测落空处是认知与实现的偏差点，补不变量用例挡在结构层
 - 真实 sudo/TUN 与永久污染 launchd disabled 表的用例不自动执行，理由见 CONCLUSIONS

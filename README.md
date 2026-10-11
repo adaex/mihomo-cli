@@ -219,7 +219,7 @@ mihomo-cli status          # 查看状态
 
 > `uninstall` 只卸服务，订阅/内核/日志仍留在数据目录（重装后可继续用）。要彻底移除 mihomo-cli：`mihomo-cli reset --full` 删全部数据，再 `npm uninstall -g mihomo-cli`——`uninstall` 结束时也会提示这两步。
 >
-> **顺序别反**：先 `npm uninstall -g` 的话，LaunchAgent plist 会留下来，而能清理它的命令已经没了（plist 带 `KeepAlive`，仍会尝试拉起一个不存在的内核）。npm 现代版本**不会执行** uninstall 生命周期钩子（实测 npm 11.19.0 三种卸载场景均不触发，官方文档亦注明 uninstall lifecycle scripts 未实现），所以别指望卸载时看到任何提醒——按上面的顺序来。真反了也能救，手动执行：
+> **顺序别反**：先 `npm uninstall -g` 的话，LaunchAgent plist 会留下来，而能清理它的命令已经没了（plist 带 `KeepAlive`，仍会尝试拉起一个不存在的内核）。npm 现代版本**不会执行** uninstall 生命周期钩子，所以别指望卸载时看到任何提醒——按上面的顺序来。真反了也能救，手动执行：
 >
 > ```bash
 > launchctl bootout gui/$(id -u)/com.mihomo-cli.daemon 2>/dev/null

@@ -38,14 +38,13 @@ CLI 会下载 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 的 releas
 
 ### 订阅凭据
 
-原始订阅 URL 与下载到的配置**以明文存放**在数据目录（默认 `~/.mihomo-cli`），依赖文件系统权限保护（文件 `0o600`、目录 `0o700`），不做加密；展示侧的 URL 脱敏口径见 README「安全特性」。
+原始订阅 URL 与下载到的配置**以明文存放**在数据目录（默认 `~/.mihomo-cli`），依赖文件系统权限保护、不做加密；文件权限与展示侧的 URL 脱敏口径见 README「安全特性」（该节是这两处细节的唯一详版）。
 
 ### 提权范围
 
-- CLI 本身**拒绝以 root 运行**（`sudo mihomo-cli …` 会直接报错，因为服务是用户级 LaunchAgent，root 下域名错位会让所有服务操作静默失效）
+- CLI 本身**拒绝以 root 运行**（`sudo mihomo-cli …` 会直接报错；根因与正确用法见 README「不要用 sudo 运行」）
 - Mixed 模式全程免密，由用户级 LaunchAgent（`gui/<uid>`）托管
 - 只有 TUN 模式按需 `sudo` 启动临时进程（创建 utun 需要 root），用 `mihomo-cli stop` 清理
-- 清理遗留的 root LaunchDaemon（v3.0–v4.0 遗留）需要一次管理员密码
 
 ### 平台
 
