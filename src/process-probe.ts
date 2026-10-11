@@ -159,19 +159,17 @@ export function isPidFileOwnedByRoot(): boolean {
 
 export function getStatus(): ProcessStatus {
   const pid = getPid();
-  if (!pid) return { running: false, pid: null, processInfo: null };
+  if (!pid) return { running: false, pid: null, memory: null };
 
   // 存活判定与内存/属主同源一次 ps：旧实现先 isMihomoProcess（最多三次 ps）再
   // getProcessInfo（又一次），同一拍四个查询；probe 不匹配（PID 被复用/已退出）
   // 即未运行，不附带信息
   const p = probeProcess(pid);
-  if (!isProbedMihomo(p)) return { running: false, pid: null, processInfo: null };
+  if (!isProbedMihomo(p)) return { running: false, pid: null, memory: null };
 
   return {
     running: true,
     pid,
-    processInfo: {
-      memory: p.rss ? `${(p.rss / 1024).toFixed(1)} MB` : '未知',
-    },
+    memory: p.rss ? `${(p.rss / 1024).toFixed(1)} MB` : '未知',
   };
 }

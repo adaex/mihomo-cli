@@ -152,11 +152,8 @@ export type RuntimeMode = 'mixed' | 'tun';
 export interface ProcessStatus {
   running: boolean;
   pid: number | null;
-  processInfo: ProcessInfo | null;
-}
-
-export interface ProcessInfo {
-  memory: string;
+  /** 运行中进程的内存展示串（如 `12.3 MB`）；未运行为 null */
+  memory: string | null;
 }
 
 export interface StopResult {

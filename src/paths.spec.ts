@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { DIRS, PATHS, USER_DATA_DIR, withFileLock } from './paths.js';
 import { runModule } from './test-support/cli.js';
+import { pollUntil } from './test-support/poll.js';
 import { spawnEval } from './test-support/spawn-eval.js';
 
 let tmpDir: string;
@@ -142,11 +143,10 @@ describe('withFileLock', () => {
     withFileLock(lockPath, () => {
       // 等子进程就位（写出 ready 后立刻进 withFileLock），确保它的忙等
       // 发生在主进程持锁期间，而不是压根还没开始等
-      const readyDeadline = Date.now() + 5000;
-      while (!fs.existsSync(ready) && Date.now() < readyDeadline) {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-      }
-      assert.equal(fs.existsSync(ready), true, '子进程未就位');
+      assert.ok(
+        pollUntil(() => fs.existsSync(ready), 5_000),
+        '子进程未就位',
+      );
       // 子进程已忙等多个重试轮，而锁对它仍新鲜（默认 staleMs=10s），不得抢进
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 120);
       assert.equal(fs.existsSync(entered), false, '等待者不得抢进新鲜锁');

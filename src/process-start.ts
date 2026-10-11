@@ -147,10 +147,10 @@ export async function startTun(prefetched?: ServiceStatus): Promise<number> {
   }
 
   const stalePids = getMihomoPids();
-  // 需清理也可能仅因 root pid 文件存在（无进程），此时「清理 0 个残留进程」是误导
   if (stalePids.length > 0) {
     console.log(`清理 ${stalePids.length} 个残留进程...`);
   } else if (isPidFileOwnedByRoot()) {
+    // 无残留进程但 pid 文件是 root 属主：按文件说，「清理 0 个残留进程」是误导
     console.log('清理残留的 root pid 文件...');
   }
   console.log('TUN 模式需要 sudo 权限...');

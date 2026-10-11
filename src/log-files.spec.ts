@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
 
+import { pollUntil } from './test-support/poll.js';
 import { spawnEval } from './test-support/spawn-eval.js';
 
 // paths.ts 在 import 期求值 MIHOMO_CLI_DIR，必须先设环境变量再动态 import
@@ -13,13 +14,11 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-logfiles-'));
 process.env.MIHOMO_CLI_DIR = tmpDir;
 
 /** 轮询等子进程写出标记文件（跨进程就绪信号），超时断言失败 */
-function waitMarker(name: string): void {
-  const deadline = Date.now() + 10_000;
-  while (!fs.existsSync(path.join(tmpDir, name)) && Date.now() < deadline) {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-  }
-  assert.ok(fs.existsSync(path.join(tmpDir, name)), `等待子进程标记 ${name} 超时`);
-}
+const waitMarker = (name: string) =>
+  assert.ok(
+    pollUntil(() => fs.existsSync(path.join(tmpDir, name)), 10_000),
+    `等待子进程标记 ${name} 超时`,
+  );
 
 const { allocateArchivePath, isArchiveLogFilename, readLogTail } = await import('./log-files.js');
 const { CliError } = await import('./errors.js');

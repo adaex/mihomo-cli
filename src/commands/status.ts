@@ -244,8 +244,8 @@ export async function printStatus(args: string[] = []): Promise<void> {
 
   if (pid) {
     console.log(`${colors.gray('PID:  ')}${pid}`);
-    if (kind === 'tun' && state.processInfo) {
-      console.log(`${colors.gray('内存: ')}${state.processInfo.memory}`);
+    if (kind === 'tun' && state.memory) {
+      console.log(`${colors.gray('内存: ')}${state.memory}`);
     }
   }
 

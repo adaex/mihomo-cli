@@ -1,10 +1,9 @@
 import { assertKnownFlags, assertPositionalCount, hasFlag } from '../argv.js';
 import { colors } from '../colors.js';
 import { buildConfig, deriveRuntimeMode, dumpYaml, getConfigInfo } from '../config.js';
-import { CliError } from '../errors.js';
 import { redactConfigSecrets } from '../redact.js';
 import { requireSubscriptionRawConfig } from '../settings.js';
-import { getActiveSubscription } from '../subscription.js';
+import { getActiveSubscription, noSubscriptionsError } from '../subscription.js';
 
 /**
  * 展示当前生效的运行配置。只读，不写盘、不校验、不重启。
@@ -29,7 +28,7 @@ export function cmdConfig(args: string[] = []): void {
 
   const active = getActiveSubscription();
   if (!active) {
-    throw new CliError('尚无订阅，无法推导配置', { hint: '添加订阅: mihomo-cli sub add <url>' });
+    throw noSubscriptionsError();
   }
 
   const rawContent = requireSubscriptionRawConfig(active.name);

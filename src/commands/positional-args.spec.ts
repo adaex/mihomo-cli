@@ -204,7 +204,7 @@ describe('声明个数内的合法形态不触发参数错误', () => {
   it('config 到达订阅检查', () => {
     const { status, output } = run(['config']);
     assert.notEqual(status, 0);
-    assert.match(output, /尚无订阅/);
+    assert.match(output, /没有订阅/);
   });
 });
 

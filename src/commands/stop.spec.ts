@@ -7,7 +7,8 @@ import { describe, it } from 'node:test';
 
 import { shouldAbortStartOnDisable } from '../service.js';
 import { makeFixture, moduleUrl, readEpochIn, runCli, runModule } from '../test-support/cli.js';
-import { isDead, killLeftovers, pollUntil, spawnFakeKernel, writeFakeKernelFiles } from '../test-support/fake-kernel.js';
+import { isDead, killLeftovers, spawnFakeKernel, writeFakeKernelFiles } from '../test-support/fake-kernel.js';
+import { pollUntil } from '../test-support/poll.js';
 
 /**
  * `cmdStop` 的两条提前返回路径是否留下「停止过」的记录。

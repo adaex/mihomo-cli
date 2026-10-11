@@ -2,6 +2,8 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { pollUntil } from './poll.js';
+
 /**
  * 假内核（桩「内核」）辅助：落盘、起进程、等出现、判死、收尾击杀，
  * runtime.spec 与 process-stop.spec 共用这一份；commands/subscription.spec
@@ -94,27 +96,6 @@ export function startRunningTun(dataDir: string): number {
   const pid = spawnFakeKernel({ binary, dataDir: path.join(dataDir, 'data'), configFile });
   fs.writeFileSync(path.join(dataDir, 'runtime', 'pid'), String(pid));
   return pid;
-}
-
-/**
- * 同步睡 ms 毫秒。Node 主线程允许带超时的 Atomics.wait，进程内零开销；
- * fork 一个 `/bin/sleep` 子进程来计时，每个轮询 tick 都白付一次进程创建
- */
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
- * 轮询等待谓词为真（50ms 步进，超时后再验一次并返回该次结果）。spawn 返回不代表
- * exec 完成：桩进程的命令行要等 ps/pgrep 能读到才算「在跑」。
- */
-export function pollUntil(predicate: () => boolean, timeoutMs = 3000): boolean {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return true;
-    sleepSync(50);
-  }
-  return predicate();
 }
 
 /**

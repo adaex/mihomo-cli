@@ -6,7 +6,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { makeFixture, runCli } from '../test-support/cli.js';
-import { pollUntil } from '../test-support/fake-kernel.js';
+import { pollUntil } from '../test-support/poll.js';
 
 /**
  * cmdUninstall 的幂等判据与残留形态。此前是仅有的零覆盖命令 handler——判据

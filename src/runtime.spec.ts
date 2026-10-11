@@ -5,7 +5,8 @@ import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import type { RunningState } from './runtime.js';
-import { type FakeKernelLayout, killLeftovers, pollUntil, spawnFakeKernel, writeFakeKernelFiles } from './test-support/fake-kernel.js';
+import { type FakeKernelLayout, killLeftovers, spawnFakeKernel, writeFakeKernelFiles } from './test-support/fake-kernel.js';
+import { pollUntil } from './test-support/poll.js';
 
 // paths.ts / constants.ts 在 import 期求值 MIHOMO_CLI_DIR 与 MIHOMO_CLI_DAEMON_LABEL，
 // 故必须先设环境变量再动态 import（同 process-stop.spec.ts）。
@@ -25,7 +26,7 @@ const { CliError } = await import('./errors.js');
 
 /** 与 getRunningState 的构造口径一致：running 与 kind 同真同假 */
 function stateOf(kind: RunningState['kind']): RunningState {
-  return { running: kind !== null, pid: kind === null ? null : 4321, kind, processInfo: null };
+  return { running: kind !== null, pid: kind === null ? null : 4321, kind, memory: null };
 }
 
 describe('restartModeFor：重启模式取决于实际在跑的东西', () => {

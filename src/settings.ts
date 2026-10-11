@@ -321,7 +321,7 @@ function validateSubscriptionName(name: string): void {
   }
 }
 
-export function addSubscription(url: string, name = 'default'): void {
+export function addSubscription(url: string, name: string): void {
   validateSubscriptionName(name);
   updateSettings(settings => {
     const subs = getSubscriptions(settings);

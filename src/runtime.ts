@@ -14,7 +14,7 @@ import {
   tunBlockedByConcurrentStart,
   waitServiceHealthy,
 } from './service.js';
-import type { ProcessInfo, RuntimeMode, ServiceStatus } from './types.js';
+import type { RuntimeMode, ServiceStatus } from './types.js';
 
 /**
  * 运行时门面：收敛「launchd 服务(Mixed) vs 临时进程(TUN)」双轨的差异。
@@ -47,7 +47,7 @@ export interface RunningState {
    * TUN 进程的内存信息（复用 getStatus 内部已查的结果，免命令层再发一次 ps）；
    * 服务模式为 null——launchd 托管进程不查内存，且 status 本就不展示
    */
-  processInfo: ProcessInfo | null;
+  memory: string | null;
 }
 
 /**
@@ -65,15 +65,15 @@ export function getRunningState(serviceStatus?: ServiceStatus): RunningState {
   // 的调用方（status）自行查完整状态后经 serviceStatus 传入
   const service = serviceStatus ?? getServiceStatus({ withDisabled: false });
   if (service.running) {
-    return { running: true, pid: service.pid, kind: 'service', processInfo: null };
+    return { running: true, pid: service.pid, kind: 'service', memory: null };
   }
 
   const status = getStatus();
   if (status.running) {
-    return { running: true, pid: status.pid, kind: 'tun', processInfo: status.processInfo };
+    return { running: true, pid: status.pid, kind: 'tun', memory: status.memory };
   }
 
-  return { running: false, pid: null, kind: null, processInfo: null };
+  return { running: false, pid: null, kind: null, memory: null };
 }
 
 /**
