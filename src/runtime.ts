@@ -1,19 +1,12 @@
 import { getConfigInfo } from './config.js';
 import { CliError } from './errors.js';
+import { getServiceStatus, isServiceInstalled } from './launchctl.js';
 import { readLogTail } from './log-files.js';
 import { PATHS } from './paths.js';
 import { getStatus } from './process-probe.js';
 import { startTun } from './process-start.js';
-import {
-  describeExitCause,
-  getServiceStatus,
-  isServiceInstalled,
-  restartService,
-  startAbortedByConcurrentStop,
-  startService,
-  tunBlockedByConcurrentStart,
-  waitServiceHealthy,
-} from './service.js';
+import { describeExitCause, restartService, startService, tunBlockedByConcurrentStart, waitServiceHealthy } from './service.js';
+import { startAbortedByConcurrentStop } from './stop-epoch.js';
 import type { RuntimeMode, ServiceStatus } from './types.js';
 
 /**

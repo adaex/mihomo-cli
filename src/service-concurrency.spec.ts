@@ -4,9 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-
+import { SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS } from './launchctl.js';
 import { LOCK_STALE_MS } from './paths.js';
-import { SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS } from './service.js';
 import { writeStubExecutable } from './test-support/stub-bin.js';
 import { sleep } from './utils.js';
 
@@ -140,6 +139,7 @@ function writeScript(dir: string, name: string, content: string): string {
 const MODULES = {
   paths: JSON.stringify(path.resolve('src/paths.ts')),
   service: JSON.stringify(path.resolve('src/service.ts')),
+  stopEpoch: JSON.stringify(path.resolve('src/stop-epoch.ts')),
   runtime: JSON.stringify(path.resolve('src/runtime.ts')),
 };
 
@@ -169,7 +169,7 @@ function hotReloadScript(): string {
 import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from ${MODULES.paths};
-import { captureStopEpochBaseline, recordServiceStopped } from ${MODULES.service};
+import { captureStopEpochBaseline, recordServiceStopped } from ${MODULES.stopEpoch};
 import { launchOrRestart } from ${MODULES.runtime};
 
 const server = http.createServer((req, res) => {
@@ -213,7 +213,8 @@ try {
 /** stop 场景脚本：跑真实 stopService，先报锁路径（父进程据此测持锁时长），收尾报 epoch 终值 */
 function stopScript(): string {
   return `import { PATHS } from ${MODULES.paths};
-import { readStopEpoch, stopService } from ${MODULES.service};
+import { stopService } from ${MODULES.service};
+import { readStopEpoch } from ${MODULES.stopEpoch};
 
 console.log('LOCK:' + PATHS.serviceLock);
 try {
@@ -300,7 +301,7 @@ exit 0
     return `import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from ${MODULES.paths};
-import { captureStopEpochBaseline } from ${MODULES.service};
+import { captureStopEpochBaseline } from ${MODULES.stopEpoch};
 import { launchOrRestart } from ${MODULES.runtime};
 
 fs.writeFileSync(process.env.PID_FILE as string, String(process.pid));
@@ -472,7 +473,7 @@ function tunStartScript(): string {
   return `import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from ${MODULES.paths};
-import { readStopEpoch } from ${MODULES.service};
+import { readStopEpoch } from ${MODULES.stopEpoch};
 import { cmdStart } from ${JSON.stringify(path.resolve('src/commands/start.ts'))};
 
 // 服务已安装 + disabled（起 TUN 的最常见前置：上次 stop/tun 留下的位）
@@ -767,7 +768,8 @@ describe('并发基线是命令入口的进程状态（restartToApply 慢速阶�
     return `import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from ${MODULES.paths};
-import { captureStopEpochBaseline, recordServiceStopped, startService } from ${MODULES.service};
+import { startService } from ${MODULES.service};
+import { captureStopEpochBaseline, recordServiceStopped } from ${MODULES.stopEpoch};
 
 fs.mkdirSync(path.dirname(PATHS.mihomoBinary), { recursive: true });
 fs.writeFileSync(PATHS.mihomoBinary, 'stub-kernel');

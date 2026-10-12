@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { assertKernelInstalled, assertRuntimeConfigPresent, getConfigInfo } from './config.js';
-import { assertServiceLabelSafe, SERVICE_BINARY_NAME } from './constants.js';
+import { assertServiceLabelSafe } from './constants.js';
 import { CliError } from './errors.js';
 import { concludeHotReload, logOversized, tryHotReload } from './hot-reload.js';
 import {
@@ -28,34 +28,13 @@ import { bumpStopEpoch, readStopEpoch, startAbortedByConcurrentStop, stopEpochBa
 import type { CleanupResult, ServiceStatus } from './types.js';
 import { sleep } from './utils.js';
 
-export { concludeHotReload } from './hot-reload.js';
-// 拆分 re-export：launchctl 解析 / 停止计数 / 热重载各节移出本文件后，既有
-// 消费方（commands、runtime、spec）仍统一从 './service.js' 取——导出清单是跨模块契约，
-// 拆分不该迫使全仓改 import。新代码内部引用走各自模块。
-export {
-  buildPlist,
-  getServiceStatus,
-  isServiceInstalled,
-  parseDisabledList,
-  parseServicePrint,
-  SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS,
-  waitUntilUnloaded,
-} from './launchctl.js';
-export {
-  captureStopEpochBaseline,
-  readStopEpoch,
-  recordServiceStopped,
-  shouldAbortStartOnDisable,
-  startAbortedByConcurrentStop,
-} from './stop-epoch.js';
-
 /**
  * launchd 服务层：Mixed 模式的唯一运行方式。
  *
  * 装在用户域（`~/Library/LaunchAgents` + `gui/<uid>`），install/start/stop/uninstall 全程免 sudo。
  * 为什么不用 root LaunchDaemon，见 docs/decisions.md D1。
  *
- * 结构（自本文件拆出的三节，re-export 保持导出清单不变）：
+ * 相邻模块（调用方直接从各自模块导入）：
  * - launchctl.ts：print 输出解析、退出码语义、查询包装与服务状态读取
  * - stop-epoch.ts：停止计数与并发判定基线（D2/D4）
  * - hot-reload.ts：热重载探测与结论；restartService 留在此处（消费 startService 的自举链）
@@ -666,5 +645,3 @@ export async function restartService(prefetched?: ServiceStatus): Promise<{ hotR
 
   return { hotReloaded: false, started: true };
 }
-/** 符号链名，供命令层展示「登录项与扩展」里会看到的名字 */
-export { SERVICE_BINARY_NAME };

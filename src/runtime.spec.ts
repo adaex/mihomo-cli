@@ -21,7 +21,8 @@ const { SERVICE_LABEL } = await import('./constants.js');
 const { PATHS, DIRS } = await import('./paths.js');
 const { isRunning, MAIN_INSTANCE_PATTERN } = await import('./process-probe.js');
 const { assertTunStartNotRaced, restartModeFor, restartModeOnChange } = await import('./runtime.js');
-const { captureStopEpochBaseline, recordServiceStopped, tunBlockedByConcurrentStart } = await import('./service.js');
+const { captureStopEpochBaseline, recordServiceStopped } = await import('./stop-epoch.js');
+const { tunBlockedByConcurrentStart } = await import('./service.js');
 const { CliError } = await import('./errors.js');
 
 /** 与 getRunningState 的构造口径一致：running 与 kind 同真同假 */

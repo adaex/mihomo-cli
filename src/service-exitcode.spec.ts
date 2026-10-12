@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 
-import { waitUntilUnloaded } from './service.js';
+import { waitUntilUnloaded } from './launchctl.js';
 
 /**
  * launchctl 退出码的语义回归。

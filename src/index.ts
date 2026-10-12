@@ -9,7 +9,7 @@ import { DEFAULT_MIXED_PORT, isValidPortNumber, MIN_NODE_VERSION } from './const
 import { CliError, errorMessage } from './errors.js';
 import { isSilentSigint } from './lifecycle.js';
 import { cleanupStaleTmpFiles, ensureDirs, PATHS } from './paths.js';
-import { captureStopEpochBaseline } from './service.js';
+import { captureStopEpochBaseline } from './stop-epoch.js';
 import { suggestSimilar } from './suggest.js';
 import { proxyEnvPointsAtSelf, recordClearedProxyEnv } from './system-proxy.js';
 

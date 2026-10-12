@@ -10,7 +10,7 @@ import type { ServiceStatus } from './types.js';
 /**
  * 热重载（PUT /configs）探测与结论，及 kickstart 顺便轮转的 oversized 判定。
  * restartService 留在 service.ts（它消费 startService 的自举链路，拆出去会成环）；
- * 本模块被 service.ts 单向引用。既有消费方经 service.ts 的 re-export 取用。
+ * 本模块被 service.ts 单向引用。
  */
 
 /** 热重载（PUT /configs）超时 */

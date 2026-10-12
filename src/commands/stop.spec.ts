@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { shouldAbortStartOnDisable } from '../service.js';
+import { shouldAbortStartOnDisable } from '../stop-epoch.js';
 import { makeFixture, moduleUrl, readEpochIn, runCli, runModule } from '../test-support/cli.js';
 import { isDead, killLeftovers, spawnFakeKernel, writeFakeKernelFiles } from '../test-support/fake-kernel.js';
 import { pollUntil } from '../test-support/poll.js';

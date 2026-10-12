@@ -18,8 +18,8 @@ macOS 命令行客户端，TypeScript ESM，Node.js >= 24.20.0。入口 `src/ind
 | `config.ts` | YAML 解析、覆写与系统配置合并、内核原生校验 |
 | `overwrite.ts` | 覆写加载（YAML + JS 脚本）、作用域过滤与合并语法 |
 | `runtime.ts` | Mixed 服务与 TUN 临时进程的运行时入口 |
-| `service.ts` | 用户级 LaunchAgent 的安装与启停、健康确认；拆出节统一 re-export，导出清单不变 |
-| `launchctl.ts` / `stop-epoch.ts` / `hot-reload.ts` | 自 service.ts 拆出：launchctl 解析与状态读取、停止计数与并发基线（D2/D4）、热重载探测与结论 |
+| `service.ts` | 用户级 LaunchAgent 的安装与启停、健康确认 |
+| `launchctl.ts` / `stop-epoch.ts` / `hot-reload.ts` | launchctl 解析与状态读取、停止计数与并发基线（D2/D4）、热重载探测与结论；调用方直接从各自模块导入，service.ts 不做转发 |
 | `process-probe.ts` / `process-start.ts` / `process-stop.ts` | 进程探测、TUN 启动、清理与残留分档处置 |
 | `kernel.ts` / `http.ts` | 内核下载与有超时、大小限制的 HTTP 客户端 |
 | `paths.ts` | 路径、目录、原子写与跨进程锁 |

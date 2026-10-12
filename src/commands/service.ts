@@ -2,12 +2,15 @@ import fs from 'node:fs';
 import { assertKnownFlags, assertPositionalCount } from '../argv.js';
 import { colors } from '../colors.js';
 import { assertKernelInstalled } from '../config.js';
+import { SERVICE_BINARY_NAME } from '../constants.js';
 import { CliError, relabelCliError } from '../errors.js';
+import { getServiceStatus } from '../launchctl.js';
 import { PATHS } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
 import { printResidueWarning } from '../process-stop.js';
 import * as runtime from '../runtime.js';
-import { getServiceStatus, installService, SERVICE_BINARY_NAME, startAbortedByConcurrentStop, uninstallService } from '../service.js';
+import { installService, uninstallService } from '../service.js';
+import { startAbortedByConcurrentStop } from '../stop-epoch.js';
 
 /**
  * 服务的安装与卸载。启停在 start.ts / stop.ts。

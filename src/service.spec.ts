@@ -6,16 +6,10 @@ import { describe, it } from 'node:test';
 
 import { isValidServiceLabel } from './constants.js';
 import type { CliError } from './errors.js';
-import {
-  buildPlist,
-  concludeHotReload,
-  describeAbnormalExit,
-  describeExitCause,
-  parseDisabledList,
-  parseServicePrint,
-  shouldAbortStartOnDisable,
-  waitUntilUnloaded,
-} from './service.js';
+import { concludeHotReload } from './hot-reload.js';
+import { buildPlist, parseDisabledList, parseServicePrint, waitUntilUnloaded } from './launchctl.js';
+import { describeAbnormalExit, describeExitCause } from './service.js';
+import { shouldAbortStartOnDisable } from './stop-epoch.js';
 import { moduleUrl, readEpochIn, runModule } from './test-support/cli.js';
 import { writeStubExecutable } from './test-support/stub-bin.js';
 import type { ServiceStatus } from './types.js';
@@ -419,7 +413,7 @@ describe('concludeHotReload：热重载成功后复读计数再下结论', () =>
  * 判据的纯函数用例只锁「给定两个数怎么判」，锁不住「这两个数是否真的反映了并发」。
  * 这一组补的就是后者：epoch 文件在真实文件系统下能否让 start 侧看见 stop 侧的动作。
  *
- * 调的是 `service.ts` 导出的**真实** `readStopEpoch`（经 `MIHOMO_CLI_DIR` 指向 tmpdir），
+ * 调的是 `stop-epoch.ts` 导出的**真实** `readStopEpoch`（经 `MIHOMO_CLI_DIR` 指向 tmpdir），
  * 不在测试里另抄一份——抄一份等于在验副本，两边一漂移就测了个假的。
  *
  * 不碰 launchctl——`disableServiceAutoStart` 会真改 launchd 的 disabled 表（在系统里
@@ -558,7 +552,7 @@ function runWithStubLaunchctl(options: {
   script: string;
   label?: string;
   timeoutMs?: number;
-  prepare?: (dataDir: string) => NodeJS.ProcessEnv | void;
+  prepare?: (dataDir: string) => NodeJS.ProcessEnv | undefined;
 }): { stdout: string } {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), `${options.prefix}-`));
   const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), `${options.prefix}-bin-`));
@@ -822,7 +816,7 @@ describe('getServiceStatus：探测失败 ≠ 未装载（print 只认 113）', 
     const label = `com.mihomo-cli.test.status-${Math.random().toString(36).slice(2)}`;
     const stub = `#!/bin/bash\nif [ "$1" = "print" ]; then exit ${exitCode}; fi\nexit 0\n`;
     const script = [
-      `const { getServiceStatus } = await import(${JSON.stringify(moduleUrl('src/service.ts'))});`,
+      `const { getServiceStatus } = await import(${JSON.stringify(moduleUrl('src/launchctl.ts'))});`,
       'try {',
       '  const s = getServiceStatus();',
       "  console.log('STATUS:' + JSON.stringify({ loaded: s.loaded, running: s.running }));",

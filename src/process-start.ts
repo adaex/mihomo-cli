@@ -2,10 +2,11 @@ import fs from 'node:fs';
 
 import { assertKernelInstalled, assertRuntimeConfigPresent } from './config.js';
 import { CliError } from './errors.js';
+import { getServiceStatus } from './launchctl.js';
 import { readLogTail, rotateAndCleanupLogs } from './log-files.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
 import { getMihomoPids, getPid, isPidFileOwnedByRoot, isRunning, MAIN_INSTANCE_PATTERN } from './process-probe.js';
-import { getServiceStatus, tunBlockedByConcurrentStart } from './service.js';
+import { tunBlockedByConcurrentStart } from './service.js';
 import { runSudoScript } from './sudo.js';
 import { shellQuote } from './text.js';
 import type { ServiceStatus } from './types.js';

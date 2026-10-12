@@ -1,11 +1,13 @@
 import { assertKnownFlags, assertPositionalCount } from '../argv.js';
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
+import { getServiceStatus } from '../launchctl.js';
 import { getMihomoPids } from '../process-probe.js';
 import { MANUAL_PKILL_HINT, stop } from '../process-stop.js';
 // getMihomoPids 用于停止前的无事可做判定；服务路径的停止后复核消费 stopService 返回的
 // cleanup 结果，不再重发 pgrep
-import { getServiceStatus, recordServiceStopped, stopService } from '../service.js';
+import { stopService } from '../service.js';
+import { recordServiceStopped } from '../stop-epoch.js';
 import type { StopResult } from '../types.js';
 
 /**

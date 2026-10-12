@@ -2,12 +2,14 @@ import fs from 'node:fs';
 import { assertKnownFlags } from '../argv.js';
 import { colors } from '../colors.js';
 import { CliError } from '../errors.js';
+import { getServiceStatus } from '../launchctl.js';
 import { isOverwriteFilename, listTypoOverwriteFiles } from '../overwrite.js';
 import { DIRS, ensureDirs, PATHS, rmrf, USER_DATA_DIR } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
 import { cleanupAll, MANUAL_PKILL_HINT, printResidueWarning, warnResidueCleanup } from '../process-stop.js';
-import { getServiceStatus, recordServiceStopped, stopService, uninstallService } from '../service.js';
+import { stopService, uninstallService } from '../service.js';
 import { updateSettings } from '../settings.js';
+import { recordServiceStopped } from '../stop-epoch.js';
 import type { CleanupResult, ResetTarget, Settings } from '../types.js';
 import { confirmOrThrow } from './shared.js';
 

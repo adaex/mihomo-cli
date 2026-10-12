@@ -2,9 +2,9 @@
 
 规则见 CLAUDE.md，架构决策论证见 docs/decisions.md，版本历史见 CHANGELOG。与 decisions.md 的分界：跨模块、稳定、回答「仓为什么长这样」的架构级决定记在那边（D 条目，含其拒绝的替代方案）；本文记审查产出的处置与边界——某条 finding 为什么不修（「记录不修」「已评估未采纳」）。本文只保留**现行有效**的三样东西：实测结论、未覆盖风险、流程教训。历轮审查的逐项验证流水不在此堆放——看当轮 CHANGELOG 条目与 git 历史；每轮审查收尾时，把仍然成立的结论合并进对应节，过时的删掉。改相关代码时同步更新对应节。头部只保留**最近一轮**的摘要（给下轮审查当上下文），更早轮次删除——第十七轮清理时这里堆过 12 条流水，「只保留现行有效」的原则没拦住逐轮追加。状态行单独一类且始终存在：有未发布轮次时标「未发布（将进 vX.Y.Z）」、发布收尾改为「已发布 vX.Y.Z」（release.md 第 9 步消费）——发布状态只写这一处，不散进最近审查摘要行、也不随轮次重写消失。
 
-状态：已发布 v26.10.111。
+状态：未发布（将进 v26.10.112）。
 
-最近审查：2026-10-12，第二十四轮（整体冗余审查四维度并行，随后 /simplify 四角度对改动增量复核）。修复主线：①**文档过期**——SECURITY 仍把 v26.10.109 已移除的 root LaunchDaemon 清理列为现行提权范围（CHANGELOG/decisions 同步了唯独漏它）、轮询轮数 31→30 对源核实、CLAUDE.md 夹具枚举缺 stub-bin/stub-curl-env；②**死代码**——无人读取的返回字段 ×3、从不传值的参数 ×4、subName 哑弹默认值改必传（D4 静默退化同族，addSubscription 复核轮追平）；③**测试基建私抄**——spawn-eval/poll 两夹具单立，七处私抄 spawn 骨架、两份逐字 waitMarker、四份轮询手写收敛；④**文档双写**——sudo 根因与文件权限归 README 单点、SECURITY 存指针（沿用「唯一详版」先例），npm 钩子实测数字留本文单点。复核轮追加：cmdConfig 第五处订阅报错并入 noSubscriptionsError、ProcessInfo 删成单字段后拍平、pollUntil 从内核夹具挪出。已评估未采纳：24 个仅文件内自用的导出**类型**不逐个降级（churn 大于收益，值级别的四个已降级）；waitForMoment 不并入 pollUntil（「存在≠写完」语义独特且有专项自测）；「上游无 checksums」SECURITY 与本文的双写保留（用户面与开发判据受众不同）。全量 957 例全绿。
+最近审查：2026-10-12，第二十五轮（过度设计收缩）。修复：applyOverwrite 头注释把执行序写反（实际脚本先、YAML 后，D13）；`noConfusingVoidType` 两处 warning（OverwriteTransform 返回类型改 `unknown`，契约仍是 `=== true` 才算命中）。删除：downloadKernel 的可选 releaseInfo 与兜底版本查询（唯一调用方恒传，`resolveFallbackQueryOptions` 及其「正推/反推刻意分歧」不变量随之消失，release 改必传由 typecheck 守住）；service.ts 对 launchctl/stop-epoch/hot-reload 的 re-export 层（CLI 无外部消费方，调用方改为直接从源模块导入；测试内嵌脚本里经 service.ts 取 readStopEpoch 等的 8 处同步改指 stop-epoch.ts——typecheck 看不到，靠全量测试转红发现）。新增：`.node-version` 与 pretest 版本守卫（Node 低于 engines 时 CLI 入口守卫会拒跑，测试只见 151 例「输出为空」断言失败、看不出原因，现一行报错）。全量 952 例全绿（删去的 6 例全部只测被删的反推函数与分歧锁定，补 1 例正推形态）；Biome 剩 1 个既存 noProto warning。
 
 ## 已有验证仍支持的结论
 

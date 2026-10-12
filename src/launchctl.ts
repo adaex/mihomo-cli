@@ -10,8 +10,7 @@ import { sleep } from './utils.js';
 
 /**
  * launchctl 解析与执行层：print / print-disabled 输出解析、退出码语义、查询包装与服务状态读取。
- * 自 service.ts 拆出（服务生命周期语义与 launchd 原语分层）；既有消费方经 service.ts 的
- * re-export 取这些导出，不受拆分影响。
+ * 与 service.ts 分层：这里是 launchd 原语，服务生命周期语义在 service.ts。
  */
 
 /** launchctl 查询超时：只读探测卡住时按「查不到」处理 */

@@ -5,8 +5,8 @@ import { atomicWriteFileSync, ensureDirs, PATHS } from './paths.js';
 /**
  * 「服务被要求停止」的单调计数（epoch）与并发判定基线。判据论证见 docs/decisions.md D2
  * （为什么是停止计数而非 disable 位）、D4（基线在命令入口捕获为进程状态）。
- * 自 service.ts 拆出：只依赖 paths，被 service / hot-reload / runtime / commands
- * 多方消费，独立成节使依赖方向单向。
+ * 只依赖 paths，被 service / hot-reload / runtime / commands 多方直接消费，
+ * 独立成模块使依赖方向单向。
  */
 
 /**

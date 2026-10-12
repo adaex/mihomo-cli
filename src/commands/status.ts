@@ -4,10 +4,11 @@ import { deriveRuntimeMode, getConfigInfo, getKernelVersion, hasKernel, judgeScr
 import { VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
 import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic } from '../format.js';
+import { getServiceStatus } from '../launchctl.js';
 import { listOverwriteFile, shortOverwriteName } from '../overwrite.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
-import { describeAbnormalExit, getServiceStatus } from '../service.js';
+import { describeAbnormalExit } from '../service.js';
 import { getPortsOrNull, getSubscriptionsWithCache, readSubscriptionRawConfig, subscriptionUrgency } from '../settings.js';
 import { formatProxySummary, getActiveSubscription, isSubscriptionStale, resolveUpdateInterval } from '../subscription.js';
 import type { OverwriteFileInfo, ProxyProbeResult, StatusJson, SubscriptionUrgency } from '../types.js';
