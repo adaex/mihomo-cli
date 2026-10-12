@@ -102,7 +102,7 @@ export interface OverwriteFileEntry {
  * 全信任模型：脚本以当前用户身份运行（同 .zshrc），不沙箱、不超时；
  * 但它改不动系统锁定项——脚本执行后 LOCKED_CONFIG_KEYS 照常剥除（见 buildConfig）
  */
-export type OverwriteTransform = (config: Record<string, unknown>, ctx: OverwriteScriptContext) => void | true;
+export type OverwriteTransform = (config: Record<string, unknown>, ctx: OverwriteScriptContext) => unknown;
 
 /** 传给覆写脚本的上下文 */
 export interface OverwriteScriptContext {

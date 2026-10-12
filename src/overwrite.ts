@@ -848,7 +848,7 @@ interface ScriptLockedHit {
 }
 
 /**
- * 应用已按开关与作用域筛选的覆写：YAML 文件按序深度合并，JS 脚本随后按序执行
+ * 应用已按开关与作用域筛选的覆写：JS 脚本先按序执行，YAML 文件随后按序深度合并（D13）
  * （顺序由 readOverwriteFiles 的排序保证，两类混在同一 files 数组里按 transform 分派）。
  * 不额外读取设置或改变节点池。
  *
