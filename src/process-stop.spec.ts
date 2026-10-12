@@ -61,14 +61,12 @@ describe('测试隔离前提', () => {
  * 全靠手工验证——而 v4.2.1 的 pattern 编译失效正是从这里漏过去的。
  */
 describe('cleanupAll 真实杀进程', () => {
-  it('杀掉单个桩进程并如实计数', async () => {
+  it('杀掉单个桩进程，复核无残留', async () => {
     const pid = spawnFakeKernel(fakeKernel);
     waitForPids(1, getMihomoPids);
 
     const result = await cleanupAll();
 
-    assert.equal(result.killed, 1);
-    assert.equal(result.failed, 0);
     assert.deepEqual(result.remaining, []);
     assert.equal(result.scriptError, null, '用户态清理不应产生 sudo 脚本错误');
     assert.equal(result.pidError, null, '用户态 pid 文件无需提权');
@@ -83,8 +81,7 @@ describe('cleanupAll 真实杀进程', () => {
 
     const result = await cleanupAll();
 
-    assert.equal(result.killed, 4);
-    assert.equal(result.failed, 0);
+    assert.deepEqual(result.remaining, [], '返回的复核结论与终态一致');
     assert.equal(getMihomoPids().length, 0);
   });
 
@@ -94,14 +91,13 @@ describe('cleanupAll 真实杀进程', () => {
 
     const result = await cleanupAll();
 
-    assert.equal(result.killed, 1);
+    assert.deepEqual(result.remaining, [], '返回的复核结论与终态一致');
     assert.equal(getMihomoPids().length, 0);
   });
 
-  it('无进程时不报错，killed 为 0', async () => {
+  it('无进程时不报错，remaining 为空', async () => {
     const result = await cleanupAll();
-    assert.equal(result.killed, 0);
-    assert.equal(result.failed, 0);
+    assert.deepEqual(result.remaining, []);
   });
 
   it('清掉 pid 文件（有进程路径的末尾收口；残留会让后续 start 撞上死胡同）', async () => {
@@ -119,7 +115,6 @@ describe('cleanupAll 真实杀进程', () => {
     // 本用例造不出 root 属主文件，「文件自身权限无关」的同构验证见下方 clearPid 组
     fs.writeFileSync(PATHS.pidFile, '99999');
     const result = await cleanupAll();
-    assert.equal(result.killed, 0);
     assert.equal(fs.existsSync(PATHS.pidFile), false, '零进程分支也要清 pid 文件');
     assert.equal(result.scriptError, null);
     assert.equal(result.pidError, null);

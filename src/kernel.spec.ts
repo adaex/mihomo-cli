@@ -480,7 +480,7 @@ describe('translateReleaseApiCurlError（代理路径 4xx 诊断对齐直连）'
 });
 
 describe('pickLatestRelease', () => {
-  const rel = (tag: string, prerelease = false): GitHubRelease => ({ tag_name: tag, name: tag, prerelease, html_url: '', assets: [] });
+  const rel = (tag: string, prerelease = false): GitHubRelease => ({ tag_name: tag, prerelease, assets: [] });
 
   it('空数组抛错', () => {
     assert.throws(() => pickLatestRelease([]), /无法获取版本信息/);

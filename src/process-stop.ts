@@ -113,32 +113,22 @@ async function waitUntilNoMihomo(pids: readonly number[]): Promise<void> {
   }
 }
 
-function killProcess(pid: number): boolean {
+/** 发信号失败（进程已退出、无权限）不在此判：结论由 cleanupAll 的 remaining 复核给出 */
+function killProcess(pid: number): void {
   try {
     process.kill(pid, 'SIGKILL');
-    return true;
   } catch {
-    return false;
+    /* 见函数头 */
   }
 }
 
 /**
- * 批量终止**用户态**内核。**返回值是「pkill 真的跑成功了」，不是「调用没抛异常」**。
- *
- * pkill 的退出码：0 = 有匹配且已发信号，1 = 无匹配（此时本就无事可做，算成功），
- * 2 = 语法/正则错误，3 = 内部错误——后两者是「这次调用根本没执行」，必须报 false，
- * 否则 pattern 编译失败时调用方照样把 killedCount 记成全部、stop 照样打印「已停止」。
+ * 批量终止**用户态**内核。pkill 失败（退 2/3：pattern 编译错误等）不在此判——
+ * 停止是否成功只看 cleanupAll 死亡等待后的 remaining 复核（终态观察，不信调用回执）。
  * root 属主进程不走这里（见 buildKernelCleanupScript 的 sudo 路径）。
  */
-function killAllMihomo(): boolean {
-  try {
-    const result = spawnSync('pkill', ['-9', '-f', MAIN_INSTANCE_PATTERN], { timeout: 10_000 });
-    if (result.error) return false;
-    // 0 = 已发信号，1 = 无匹配（无事可做）；2/3 = pkill 自身出错，没有任何进程被处理
-    return result.status === 0 || result.status === 1;
-  } catch {
-    return false;
-  }
+function killAllMihomo(): void {
+  spawnSync('pkill', ['-9', '-f', MAIN_INSTANCE_PATTERN], { timeout: 10_000 });
 }
 
 /**
@@ -180,11 +170,9 @@ export function buildKernelCleanupScript(): string {
 export async function cleanupAll(): Promise<CleanupResult> {
   const pids = getMihomoPids();
   if (pids.length === 0) {
-    return { killed: 0, failed: 0, remaining: [], scriptError: null, pidError: clearPid() };
+    return { remaining: [], scriptError: null, pidError: clearPid() };
   }
 
-  let killedCount = 0;
-  const failedPids: number[] = [];
   let scriptError: Error | null = null;
 
   // 每个 pid 一次 ps 取全存活/属主/命令行：root 判定与逐 pid 复核读同一份 probe，
@@ -202,34 +190,21 @@ export async function cleanupAll(): Promise<CleanupResult> {
         file: 'cleanup-residue.sh',
         codeMessages: { 2: '终止残留内核失败（pkill 退出码异常）' },
       });
-      killedCount = pids.length;
     } catch (e) {
       // 取消/密码错误（SudoAuthError）与脚本失败都不抛：remaining 复核与本字段
       // 交给调用方按各自语境包装（stop 报残留、服务路径报「已取消」）
       scriptError = e as Error;
     }
   } else if (pids.length > BATCH_KILL_THRESHOLD) {
-    // 批量 pkill 失败（退 2/3）时不能照记 killedCount，由调用方按 remaining 复核
-    if (killAllMihomo()) {
-      killedCount = pids.length;
-    } else {
-      failedPids.push(...pids);
-    }
+    // 批量 pkill 失败（退 2/3）不在此判：结论统一由下方死亡等待后的 remaining 复核给出
+    killAllMihomo();
   } else {
     for (const pid of pids) {
       // 发信号前复核命令行：pgrep 探测到此发信号隔着上面的 probe（与 root 判定同一份），
       // 目标自行退出且 pid 被复用的话，盲目 SIGKILL 会误杀无关进程——
       // 复核不匹配按「无事可做」计成功（与 pkill 无匹配退 1 的口径一致）
       const probed = probes.get(pid);
-      if (!probed || !isProbedMihomo(probed)) {
-        killedCount++;
-        continue;
-      }
-      if (killProcess(pid)) {
-        killedCount++;
-      } else {
-        failedPids.push(pid);
-      }
+      if (probed && isProbedMihomo(probed)) killProcess(pid);
     }
   }
 
@@ -244,7 +219,7 @@ export async function cleanupAll(): Promise<CleanupResult> {
 
   // 两类错误各自独立带出：进程死光但脚本没走完（scriptError）与仅 pid 文件没删掉
   // （pidError）归因不同，合并成一个字段会让调用方的提示说错事
-  return { killed: killedCount, failed: failedPids.length, remaining, scriptError, pidError };
+  return { remaining, scriptError, pidError };
 }
 
 // === cleanupAll 结果的三档处置 ===

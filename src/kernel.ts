@@ -431,7 +431,6 @@ export async function checkUpdate(opts: ReleaseQueryOptions): Promise<KernelUpda
     current: currentDisplay,
     latest: latestVersion,
     needsUpdate,
-    assets: latest.assets,
     release: latest,
     ghFallbackToDirect,
   };

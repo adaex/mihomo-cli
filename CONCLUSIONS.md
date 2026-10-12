@@ -90,7 +90,6 @@
 - **全局 `--verbose`**：输出散在二十余个模块、数百处直接 `console.*`（具体计数随轮次漂移，量级才是论据），无中心化日志层；且选项按命令白名单校验（`assertKnownFlags`，14 处），全局开关要么加满 14 个白名单、要么在 index 集中剥离——横切改动大而收益不明。排查已有三条路径：`doctor`（体检加修复指引）、`logs`、`status --json`。真要做，先建日志层再谈开关
 - **名为 help 的订阅 `use` 撞车**：频率极低、`sub use help` 可用、动 argv 拦截的风险大于收益
 - **lsof 多 pid 取第一个**：误判方向是回退 kickstart，保守侧
-- **cleanupAll 的 killedCount 在 pkill 退 1 时记满**：仅测试消费
 - **process-stop 的 stop() warn 分档与 classifyResidueCleanup 语义等价但不合并**：合并需动行为语义；拆分后 classifyResidueCleanup 已是唯一判据出口，漂移面已缩小，收益不抵风险（第八轮判定，流水清理时打捞）
 - **stopService/uninstallService 的同形锁体不抽公共函数**：两处各四行、注释各带不可拆理由，抽取收益低（第八轮判定，流水清理时打捞）
 - **README 不逐一罗列裸 `-v`/`-h` 与 logs 的 `--follow`/`--open` 长形式**：与各命令帮助行同口径（短形式优先），逐一罗列反成冗余；`-p`/`status -j` 因「长短对应表漏第三条」「同屏写法不一致」已补（第十七轮判定）

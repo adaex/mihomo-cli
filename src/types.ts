@@ -162,10 +162,7 @@ export interface StopResult {
 }
 
 export interface CleanupResult {
-  killed: number;
-  /** 用户态逐个 kill 的失败数（root 路径与批量 pkill 不产出逐项失败） */
-  failed: number;
-  /** 死亡等待与复核后仍在的主实例 PID */
+  /** 死亡等待与复核后仍在的主实例 PID——停止是否成功的唯一结论来源 */
   remaining: number[];
   /**
    * root 清理 sudo 脚本（只 pkill，不删 pid 文件）的提权/脚本错误。SudoAuthError =
@@ -219,7 +216,6 @@ export interface KernelUpdateInfo {
   current: string;
   latest: string;
   needsUpdate: boolean;
-  assets: GitHubAsset[];
   release: GitHubRelease;
   /**
    * 首选 gh 认证查询失败后回退直连成功（命令层据此补一行灰字：spinner 说的
@@ -230,9 +226,7 @@ export interface KernelUpdateInfo {
 
 export interface GitHubRelease {
   tag_name: string;
-  name: string;
   prerelease: boolean;
-  html_url: string;
   assets: GitHubAsset[];
 }
 
