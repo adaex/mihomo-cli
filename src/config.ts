@@ -10,18 +10,11 @@ import { applyOverwrite, describeOverwriteScope, loadOverwriteFile, lockedKeysRe
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, USER_DATA_DIR } from './paths.js';
 import { getPorts, readSettings } from './settings.js';
 import { firstLine, sanitizeTerminal } from './text.js';
-import type { BuildConfigResult, ConfigInfo, ConfigSummary, OverwriteFileEntry, OverwriteScope, RuntimeMode, ScriptMatch } from './types.js';
+import type { BuildConfigResult, ConfigInfo, ConfigSummary, OverwriteScope, RuntimeMode } from './types.js';
 
-/**
- * 安全 YAML 解析选项:限制别名展开次数,防御远程订阅/覆写里的 YAML 别名炸弹(alias bomb)DoS。
- * js-yaml 5 默认 maxAliases=-1(无限制),恶意配置可借指数级别名膨胀撑爆内存/CPU。
- * 所有解析不可信来源(订阅、覆写、运行时配置)的 yaml.load 都应带上此选项。
- */
-const SAFE_YAML_LOAD_OPTIONS: yaml.LoadOptions = { maxAliases: YAML_MAX_ALIASES };
-
-/** 统一入口:带别名上限的 yaml.load,替代裸 yaml.load。 */
+/** 带别名上限的 yaml.load（防别名炸弹 DoS，D6）：解析不可信来源一律走这里 */
 function loadYamlSafe(content: string): unknown {
-  return yaml.load(content, SAFE_YAML_LOAD_OPTIONS);
+  return yaml.load(content, { maxAliases: YAML_MAX_ALIASES });
 }
 
 /**
@@ -147,7 +140,6 @@ export function buildConfig(subRawContent: string, mode: RuntimeMode, scope?: Ov
   const allFiles = settings.overwrite_enabled !== false ? loadOverwriteFile() : [];
   const overwriteFiles = selectActiveOverwriteFiles(allFiles, scope);
   // 脚本执行需要 mode/scope 构造 ctx（订阅信息与运行模式），YAML 合并不用。
-  // 命中判定（scriptMatches）不取：那是 status 走 judgeScriptMatches 的独立通道，
   // warnings 只收真异常（脚本 ctx.warn、锁定键剥除、TUN 强制 DNS）
   const {
     config: withOverwrites,
@@ -161,7 +153,6 @@ export function buildConfig(subRawContent: string, mode: RuntimeMode, scope?: Ov
 
   const systemConfig: Record<string, unknown> = {};
   // 系统约束覆盖显式设置时告警，节点与分流规则保持用户给出的内容
-  // 未命中脚本不进 warnings：按订阅分歧行为是脚本设计内的常态，不是告警
   const lockedWarnings: string[] = [...scriptWarnings];
   // 脚本设置的锁定键与 YAML 覆写同款告警（剥除对脚本输出一视同仁，但不静默——
   // 脚本作者会困惑「设置了怎么没生效」）
@@ -268,35 +259,6 @@ function renderLockedWarning(source: string, keys: string[]): string {
 }
 
 /**
- * status 的脚本命中判定：只读、永不抛（诊断面，D7 姿态）。与 buildConfig 的差别：
- * 加载由调用方把 listOverwriteFile 的 entries 传进来——坏文件已在 broken 里、
- * **不在 entries 也不抛**，一个坏 YAML 不会把全部脚本的判定打回「未判定＝生效」；
- * 不做系统合并与形状断言（判定只关心脚本返回值，不产出可运行配置）。脚本变换
- * 在独立解析的副本上执行，不触碰任何运行态。解析失败（坏订阅）返回空 matches，
- * 调用方按未判定降级。
- */
-export function judgeScriptMatches(
-  subRawContent: string,
-  mode: RuntimeMode,
-  scope: OverwriteScope | undefined,
-  entries: OverwriteFileEntry[],
-): { matches: ScriptMatch[] } {
-  try {
-    const subscriptionConfig = parseConfigContent(subRawContent, '订阅内容');
-    const settings = readSettings();
-    // 全局开关与 selectActiveOverwriteFiles 闸门与 buildConfig 同款（脚本恒过 match 筛）
-    const active = settings.overwrite_enabled !== false ? selectActiveOverwriteFiles(entries, scope) : [];
-    const { scriptMatches } = applyOverwrite(subscriptionConfig, active, {
-      mode,
-      scope,
-    });
-    return { matches: scriptMatches };
-  } catch {
-    return { matches: [] };
-  }
-}
-
-/**
  * 推导路径的运行模式判据（唯一真相）：当前落盘配置有 tun 即 TUN，否则 Mixed。
  * config / status / doctor 三处共用；runtime.ts 的 getRuntimeMode 是另一套——
  * 它带「服务安装优先 Mixed」的前置条件，不在此收敛。
@@ -330,7 +292,7 @@ export function writeMihomoConfig(configObj: Record<string, unknown>): void {
 const HINT_INDENT = '  ';
 
 /**
- * 拼装内核拒绝配置时的 hint。抽成纯函数便于逐行断言文案（同 shouldAbortStartOnDisable
+ * 拼装内核拒绝配置时的 hint。抽成纯函数便于逐行断言文案（同 epochChanged
  * 那类判据收口的用法）——留在 catch 块里就只能靠跑真实/桩内核间接验证。
  *
  * 覆写清单只在**非空**时附加：没有覆写文件、`ow off`、本次订阅没命中任何 match，
@@ -456,7 +418,7 @@ export interface KernelProbe {
   version: string | null;
 }
 
-/** 一次 spawn 拿可执行性与版本两类结论（此前同一信息要 2-3 次 spawn 各自提取） */
+/** 一次 spawn 拿可执行性与版本两类结论 */
 export function probeKernelVersion(binary: string = PATHS.mihomoBinary): KernelProbe {
   const r = spawnSync(binary, ['-v'], { encoding: 'utf8', timeout: 5000 });
   const output = `${r.stdout || ''}${r.stderr || ''}`.trim();

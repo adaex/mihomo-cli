@@ -6,13 +6,12 @@ import { DIRECTORY_TARGETS, USER_DATA_DIR } from '../paths.js';
 import { dispatchSubcommand, type SubCommand, unknownSubcommandError } from './shared.js';
 
 function openDirectory(args: string[]): void {
-  // 目标至多一个：`dir open logs extra` 此前静默忽略 extra
   assertPositionalCount(args, 1, 2, 'mihomo-cli dir open [root|subs|logs|data|runtime|kernel]');
   const target = args[2];
 
   // 路径无条件打印：openUrl 是 detached spawn，检不出失败（见 open.ts），
   // 打出来用户即便没弹出 Finder 也能自己点开。
-  // 只有未传参才默认 root：空串（`dir open ""`，变量展开为空的笔误）此前也打开根目录
+  // 只有未传参才默认 root：空串（`dir open ""`，变量展开为空的笔误）按非法目标报错
   if (target === undefined || target === 'root') {
     console.log(`正在打开: 根目录 (${USER_DATA_DIR})`);
     openUrl(USER_DATA_DIR);

@@ -9,7 +9,7 @@ import { getMihomoPids } from '../process-probe.js';
 import { cleanupAll, MANUAL_PKILL_HINT, printResidueWarning, warnResidueCleanup } from '../process-stop.js';
 import { stopService, uninstallService } from '../service.js';
 import { updateSettings } from '../settings.js';
-import { recordServiceStopped } from '../stop-epoch.js';
+import { bumpStopEpoch } from '../stop-epoch.js';
 import type { CleanupResult, ResetTarget, Settings } from '../types.js';
 import { confirmOrThrow } from './shared.js';
 
@@ -68,9 +68,8 @@ function resolveResetTargets(names: string[]): ResetTarget[] {
 export async function cmdReset(args: string[]): Promise<void> {
   assertKnownFlags(args, ['--full', '--yes', '-y'], 'reset [目标...] [--full] [-y]');
   const names = args.slice(1).filter(a => !a.startsWith('-'));
-  // 目标与 --full 互斥：此前 `reset subs --full` 静默忽略 subs、扩成全量重置——
-  // 用户给具体目标再补 --full，本意多半是「彻底删这个目标」，静默放大到删设置/
-  // 内核/服务远超预期。矛盾输入显式报错，与全仓同姿态
+  // 目标与 --full 互斥：给具体目标再补 --full 的本意多半是「彻底删这个目标」，
+  // 静默放大成全量重置远超预期，矛盾输入显式报错
   if (names.length > 0 && args.includes('--full')) {
     throw new CliError('不能同时指定重置目标与 --full', {
       hint: [`只删指定目标: mihomo-cli reset ${names.join(' ')}`, '重置全部: mihomo-cli reset --full'],
@@ -121,7 +120,7 @@ export async function cmdReset(args: string[]): Promise<void> {
   // 服务状态在交互确认之后、停止/卸载判定之前重读：确认的等待期间，另一终端
   // install+start 都可能把服务装上。按确认前快照判定 serviceActive=false 会既不停
   // 也不卸载，直接删 config/kernel 目录——已 bootstrap 的服务不受下方
-  // recordServiceStopped 的 epoch 防线保护（它只拦
+  // bumpStopEpoch 的 epoch 防线保护（它只拦
   // 「enable/bootstrap 之前」的并发 start），KeepAlive 会对着已删文件落入崩溃循环。
   // 与 start.ts 的「快照 + 现值」双读同姿态（D2/D4 的并发防线精神）
   const current = getServiceStatus();
@@ -145,10 +144,8 @@ export async function cmdReset(args: string[]): Promise<void> {
         hint: [MANUAL_PKILL_HINT],
       });
     }
-    // remaining 已空但有收尾错误（classifyResidueCleanup 的 warn 档）：服务分支已由
-    // 服务层打印，无服务分支在此补同一出口的渲染——scriptError 优先于 pidError 的归因
-    // 已在 buildRootResidueCleanupError 内，这里不再自组第二份文案
-    if (!serviceActive && (cleanup.scriptError !== null || cleanup.pidError !== null)) {
+    // remaining 已空但收尾没走完：服务分支已由服务层打印，无服务分支在此补同一出口的渲染
+    if (!serviceActive && cleanup.incomplete !== null) {
       warnResidueCleanup(cleanup, { mainOutcome: '重置继续执行', retryCommand: 'mihomo-cli stop' });
     }
     // 与 cmdStop 的提前返回同族：serviceActive 为假时上面的 stopService/uninstallService
@@ -160,14 +157,11 @@ export async function cmdReset(args: string[]): Promise<void> {
     // 必须在上面的 remaining 抛错之后——失败的清理不该中止并发的 start。
     // serviceActive 为真时会与 stopService/uninstallService 锁内的递增重复，无害：
     // 判据只问值变没变
-    recordServiceStopped();
+    bumpStopEpoch();
   }
 
-  // 纯 `reset service`（needsStop=false）此前把 uninstallService 透传的 remaining 整个
-  // 丢弃：同一份残留态在 cmdStop 抛「部分进程未终止」、cmdUninstall 黄字列 PID，唯独
-  // 这里无声通过——「已重置: 服务」成了谎报。卸载已完成，「重置中止」同样不成立，
-  // 与 cmdUninstall 共用 printResidueWarning（classifyResidueCleanup 的 throw 档已在
-  // 那层拦过，走到这里的只剩用户态残留）
+  // 纯 `reset service`（needsStop=false）：卸载已完成，root 清理失败已在服务层拦过，这里只剩
+  // 用户态残留——与 cmdUninstall 同样黄字列出（不说「重置中止」，也不能无声通过）
   if (!needsStop && serviceTargeted && cleanup !== null && cleanup.remaining.length > 0) {
     printResidueWarning(cleanup.remaining);
   }

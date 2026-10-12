@@ -5,10 +5,6 @@
  * start 的重启透传集合（`extractStartOptions`）与带值选项三种形式的判定
  * （`matchValueFlagToken`，`assertKnownFlags` / `parseIntArg` / `extractStartOptions` 共用）都从这里派生。
  *
- * 此前这几张表分别硬编码在 utils.ts 里，新增选项要记得多处同步登记，
- * 漏登记不报错但行为静默不对（`sub use foo -s` 丢选项、`logs -n 200` 的 200 被当位置参数）。
- * 单表派生后这类漂移在结构上不可能发生。
- *
  * 只登记**带值**选项与 **start 的选项**：
  * - 布尔选项（`-f`/`-y` 等）以 `-` 开头，`getNonFlagArg` 本就跳过，无需登记
  * - `'optional'` 的可选值选项（`--mirror`）同样登记：消费值时以下一 token 不是

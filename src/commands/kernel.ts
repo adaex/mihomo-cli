@@ -29,7 +29,7 @@ export function channelLabel(channel: DownloadChannel, isExplicitProxy: boolean)
 }
 
 /** 打印一行通道信息；isExplicitProxy 区分「代理」与「本机代理」措辞。
- * direct 无通道信息可报（旧版口径），也不打尾部空行——否则输出里多一个孤立空行 */
+ * direct 无通道信息可报，也不打尾部空行——否则输出里多一个孤立空行 */
 export function printChannelLine(channel: DownloadChannel, isExplicitProxy: boolean): void {
   if (channel.kind === 'direct') return;
   if (channel.kind === 'gh') {
@@ -87,7 +87,7 @@ export function buildDownloadFailureError(attempts: { channel: DownloadChannel; 
 export async function cmdKernel(args: string[]): Promise<void> {
   const mirrorInfo = parseMirrorArg(args);
   const proxyInfo = parseProxyArg(args);
-  // 不接受位置参数：`kernel garbage` 此前被静默忽略；校验放在两个 flag 解析之后
+  // 不接受位置参数；校验放在两个 flag 解析之后
   // （flag 侧的错误优先报出）、checkUpdate 之前（不碰网络）
   assertPositionalCount(args, 0, 1, 'mihomo-cli kernel [--mirror [镜像]] [--proxy <端口|地址>]');
 
@@ -159,36 +159,17 @@ export async function cmdKernel(args: string[]): Promise<void> {
       if (useGh) {
         hint.push('', '本次已先尝试 gh 认证通道、失败后才回退直连，可检查 gh 登录状态: gh auth status');
       }
-    } else if (!mirrorInfo.mirror) {
-      if (apiProxy) {
-        hint.push('', '提示: 经代理查询 GitHub 失败，可检查代理是否可用，或 mihomo-cli kernel --mirror direct 重试直连');
-      } else {
-        // 平时不打扰；仅直连失败时提示镜像/代理用法
-        hint.push(
-          '',
-          '提示: 直连失败或下载过慢时可使用镜像或代理:',
-          '  mihomo-cli kernel --mirror [镜像]   # 强制走镜像（裸 --mirror 固定裸域，可用 v6/v4/cdn 等别名）',
-          `  可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`,
-          '  mihomo-cli kernel --proxy <端口>    # 经本机其他代理工具出网',
-        );
-      }
     } else if (apiProxy) {
-      // 显式镜像 + 版本查询经代理失败：镜像按设计绝不碰 API，失败与镜像无关，
-      // 只提示检查代理本身
       hint.push('', '提示: 版本查询（GitHub API）经代理失败，可检查代理是否可用；镜像只作用于内核下载，与查询无关');
-    } else if (useGh) {
-      // useGh 意味着 gh 认证通道已先试过、失败才回退直连——两边都不通
-      hint.push('', '提示: gh 认证通道与直连都失败了，可检查 gh 登录状态: gh auth status');
     } else {
-      // 显式镜像、无代理可用：正是「直连 API 不通才需要镜像」的网络形态，
-      // 而版本查询按设计直连 GitHub API、绝不经过镜像——不给指引就只剩裸「更新失败」
-      hint.push(
-        '',
-        '提示: 镜像只作用于内核下载，版本查询仍需直连 GitHub API（当前不通）。出路:',
-        '  安装并登录 GitHub CLI（认证配额 5000 次/时）:',
-        '    brew install gh && gh auth login',
-        '  或经本机代理工具查询: mihomo-cli kernel --proxy <端口>',
-      );
+      // 直连（含 gh 认证先试过再回退）不通：给出能绕过直连的出路
+      hint.push('', `提示: 版本查询（GitHub API）${useGh ? 'gh 认证通道与直连都' : '直连'}失败。出路:`);
+      if (useGh) hint.push('  检查 gh 登录状态: gh auth status');
+      else hint.push('  安装并登录 GitHub CLI（认证配额 5000 次/时）: brew install gh && gh auth login');
+      hint.push('  经本机其他代理工具查询: mihomo-cli kernel --proxy <端口>');
+      if (!mirrorInfo.mirror) {
+        hint.push(`  下载过慢可加镜像: mihomo-cli kernel --mirror [镜像]（可用: ${AVAILABLE_MIRRORS.join(', ')}；镜像不作用于版本查询）`);
+      }
     }
     throw new CliError(err.message, { label: '更新失败', hint });
   }

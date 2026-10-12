@@ -21,7 +21,6 @@ import { getActiveSubscription, noSubscriptionsError } from '../subscription.js'
  */
 export function cmdConfig(args: string[] = []): void {
   assertKnownFlags(args.slice(1), ['-j', '--json', '--reveal'], 'config [--json] [--reveal]');
-  // 不接受位置参数：`config garbage` 此前被静默忽略
   assertPositionalCount(args, 0, 1, 'mihomo-cli config [--json] [--reveal]');
   const asJson = hasFlag(args, '-j', '--json');
   const reveal = hasFlag(args, '--reveal');

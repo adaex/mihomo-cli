@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { shouldAbortStartOnDisable } from '../stop-epoch.js';
+import { epochChanged } from '../stop-epoch.js';
 import { makeFixture, moduleUrl, readEpochIn, runCli, runModule } from '../test-support/cli.js';
 import { isDead, killLeftovers, spawnFakeKernel, writeFakeKernelFiles } from '../test-support/fake-kernel.js';
 import { pollUntil } from '../test-support/poll.js';
@@ -19,7 +19,7 @@ import { pollUntil } from '../test-support/poll.js';
  * !disabled)` 恒为假——**天然就是要测的那条路径**。真实 `launchctl enable/disable` 会往
  * /var/db/com.apple.xpc.launchd/ 给每个 label 留永久记录且无清除动词，故绝不进测试。
  *
- * 断言的是**消费者可见的后果**（`shouldAbortStartOnDisable` 判为「变了」），不是文件内容：
+ * 断言的是**消费者可见的后果**（`epochChanged` 判为「变了」），不是文件内容：
  * 计数存在的唯一理由就是喂给那个判据，只断言文件里是几号会把实现细节焊进测试。
  */
 
@@ -57,14 +57,14 @@ describe('stop 的提前返回路径记录停止计数', () => {
       assert.match(first.stdout, /不在运行/);
 
       const afterFirst = readEpochIn(dataDir);
-      assert.ok(shouldAbortStartOnDisable(before, afterFirst), '一次 stop 之后，以之前的快照为基线必须判为「期间有人 stop 过」');
+      assert.ok(epochChanged(before, afterFirst), '一次 stop 之后，以之前的快照为基线必须判为「期间有人 stop 过」');
 
       // 第二次同样要留下变化：并发判据问的是「与我的基线相比变了没有」，
       // 只递增一次的话，第二个 start 的基线已经是新值，第二次 stop 就又隐形了
       const second = run(['stop']);
       assert.equal(second.status, 0, second.stderr);
       const afterSecond = readEpochIn(dataDir);
-      assert.ok(shouldAbortStartOnDisable(afterFirst, afterSecond), '第二次 stop 也必须可被检出');
+      assert.ok(epochChanged(afterFirst, afterSecond), '第二次 stop 也必须可被检出');
     }));
 
   it('只有游离内核时，杀掉进程后同样记录', () =>
@@ -98,7 +98,7 @@ describe('stop 的提前返回路径记录停止计数', () => {
         // 判活以 ps 状态列为准：kill(pid,0) 对僵尸进程同样返回成功（v4.2.3 的教训）
         assert.ok(isDead(pid), '桩内核应已终止（僵尸也算死，kill -0 会骗人）');
 
-        assert.ok(shouldAbortStartOnDisable(before, readEpochIn(dataDir)), '杀掉游离内核也是一次确定的停止，必须可被并发判据检出');
+        assert.ok(epochChanged(before, readEpochIn(dataDir)), '杀掉游离内核也是一次确定的停止，必须可被并发判据检出');
       } finally {
         killLeftovers(pattern.stdout);
       }
@@ -111,6 +111,6 @@ describe('stop 的提前返回路径记录停止计数', () => {
       const before = readEpochIn(dataDir);
       const result = run(['status', '--no-probe']);
       assert.equal(result.status, 0, result.stderr);
-      assert.equal(shouldAbortStartOnDisable(before, readEpochIn(dataDir)), false, 'status 不是停止操作，不该让并发的 start 中止');
+      assert.equal(epochChanged(before, readEpochIn(dataDir)), false, 'status 不是停止操作，不该让并发的 start 中止');
     }));
 });

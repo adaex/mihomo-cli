@@ -1,11 +1,11 @@
 import fs from 'node:fs';
-import { compareVersions } from 'compare-versions';
+import { satisfies } from 'compare-versions';
 import { assertKnownFlags, assertPositionalCount } from './argv.js';
 import { stderrColors } from './colors.js';
 import { printCommandHelp, printShortHelp } from './commands/help.js';
 import { allCommandTokens, findCommand } from './commands/registry.js';
 import { printStatus } from './commands/status.js';
-import { DEFAULT_MIXED_PORT, isValidPortNumber, MIN_NODE_VERSION } from './constants.js';
+import { DEFAULT_MIXED_PORT, isValidPortNumber, NODE_ENGINES } from './constants.js';
 import { CliError, errorMessage } from './errors.js';
 import { isSilentSigint } from './lifecycle.js';
 import { cleanupStaleTmpFiles, ensureDirs, PATHS } from './paths.js';
@@ -84,19 +84,9 @@ function clearProxyEnv(): void {
 /**
  * root 守卫：以 `sudo mihomo-cli …` 运行会让所有服务操作静默失效，必须挡在最前面。
  *
- * 服务是**用户级 LaunchAgent**，域为 `gui/<uid>`。sudo 下 `process.getuid()` 是 0，
- * 域变成 `gui/0`——一个不存在的域，实测 launchctl 一律返回 **125**（`Bad request`），
- * 而不是「未找到」。后果全线静默：查询把 125 当「未装载」→ loaded/running 恒 false；
- * stop 的脚本吞掉 125 退 0 → CLI 报「已停止」而 KeepAlive 约 10s 后把内核拉回；
- * install 装到错误的域；disable 同样失败，自启也关不掉。
- *
- * 不做「读 SUDO_UID 回落到真实用户域」的自动降级：sudo 下 `HOME` 等环境变量是否保留
- * 取决于 sudoers 配置，静默改域只会让「数据目录用 root 的、服务装用户的」这类错位更难查。
- * 明确报错、让用户去掉 sudo 才是唯一不会出错的路径。
- *
- * TUN 自身豁免：`tun` 内部本就用 `sudo` 起内核（runSudoScript），但那是 CLI 自己按需
- * 提权，与用户在外面套一层 sudo 不同：后者会把整个 CLI 连同服务操作、数据目录写入
- * 一起变成 root 身份。
+ * 服务是用户级 LaunchAgent（域 `gui/<uid>`）；sudo 下域变成不存在的 `gui/0`，launchctl 一律
+ * 返回 125，查询/停止/安装全线静默失效。不做读 SUDO_UID 的自动降级（HOME 是否保留取决于
+ * sudoers，静默改域只会制造更难查的错位，D1）。TUN 所需 root 由 CLI 内部按需 sudo。
  */
 /**
  * 守卫豁免命令：纯信息命令不碰服务、目录与提权，root 与非 macOS 下都安全。
@@ -128,21 +118,15 @@ function assertNotRoot(commandName: string): void {
 }
 
 /**
- * Node 版本守卫。`package.json` 的 `engines` 只让 npm 打一行 warn 就装上了——
- * 之后炸在某个语法或 API 上，报错跟真实原因（Node 太旧）毫无表面关联。
- *
- * 与平台守卫同族：明确失败优于「部分成功」。豁免名单共用——`version` 必须能跑，
- * 否则用户连「我装的是哪个版本」都问不出来；`help` 同理。
- *
- * `MIN_NODE_VERSION` 为 null（engines 写法不是 `>=x.y.z`）时跳过：不能因为声明格式变了
- * 就把所有命令挡死。比较用已有的 compare-versions，不自己写版本比较。
+ * Node 版本守卫：`engines` 只让 npm 打一行 warn，之后炸在语法/API 上、报错与真实原因无关。
+ * 判定与 pretest（scripts/check-node.mjs）同一写法：satisfies(当前, engines.node)。
  */
 function assertSupportedNodeVersion(commandName: string): void {
-  if (!MIN_NODE_VERSION) return;
+  if (!NODE_ENGINES) return;
   if (GUARD_EXEMPT_COMMANDS.has(commandName)) return;
   const current = process.versions.node;
-  if (compareVersions(current, MIN_NODE_VERSION) >= 0) return;
-  throw new CliError(`Node 版本过低（当前 ${current}，需要 >= ${MIN_NODE_VERSION}）`, {
+  if (satisfies(current, NODE_ENGINES)) return;
+  throw new CliError(`Node 版本过低（当前 ${current}，需要 ${NODE_ENGINES}）`, {
     label: 'Node 版本不支持',
     hint: ['升级 Node 后重试，例如:', '  brew upgrade node', '  或用 nvm: nvm install --lts && nvm use --lts', '', `当前解释器: ${process.execPath}`],
   });

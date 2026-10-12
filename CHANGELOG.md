@@ -1,5 +1,19 @@
 # Changelog
 
+## [未发布]
+
+### 变更
+
+- **status 不再执行 JS 覆写脚本**：脚本的 `return true` 命中约定取消，返回值一律忽略；status 把启用中的脚本列为生效，不再为判定「不适用」跑一遍用户脚本（只读诊断不执行用户代码）。现有脚本里的 `return true` 无需删除
+- **`status --json` 去掉 `overwrite.files`**：只保留 `overwrite.applied`（本次真正参与合并的文件）；两字段并存时容易选错。依赖 `files` 的脚本请改读 `applied`
+- **内核版本查询统一走 curl**：无代理时也用 curl 直连（`--noproxy '*'`，与内核下载直连通道同口径），不再有单独的 Node fetch 分支；版本查询失败的提示合并成「经代理失败」「直连失败」两类
+- **覆写校验报错收拢**：`~` / `~?` / `<key>` 的报错合为一条「已移除的操作符」；match 里的 `subscription` 键按未知键报错；`url-domain` 非法值统一提示「只要裸域名、不支持通配」；元数据键近失写法（`enabled!`、`Enabled`）统一报「疑似想写元数据键」
+- **游离内核停止失败时，残留信息不再打印两遍**
+
+### 变更（内部清理，无用户可见变化）
+
+- 删除 `judgeScriptMatches` 旁路与 `ScriptMatch` 类型；残留清理结果的 `scriptError`/`pidError` 与三档判定合并为单个 `incomplete`；Node 版本守卫与 pretest 统一用 `satisfies(engines.node)`；停止计数的 `recordServiceStopped`/`shouldAbortStartOnDisable`/`concludeHotReload` 转手层收为 `bumpStopEpoch`/`epochChanged`。源码注释去掉历史叙事、改指 D 条目；CONCLUSIONS 去掉发布状态行与流程复盘节（发布状态以 tag 为准），release 流程删掉对应的发布后收尾步骤。新增 D14 记录本轮取舍
+
 ## [26.10.112] - 2026-10-12
 
 ### 变更（内部清理，无用户可见变化）

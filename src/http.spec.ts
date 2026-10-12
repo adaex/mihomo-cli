@@ -28,7 +28,7 @@ describe('isHttpsUrl：降级守卫的 scheme 判据（URL 解析，非 startsWi
   });
 });
 
-describe('createHttpError：HTTP 错误的统一形态（直连 fetch 与代理 curl 共用）', () => {
+describe('createHttpError：HTTP 错误的统一形态（fetch 客户端与版本查询 curl 共用）', () => {
   it('message 为 HTTP <status>，JSON 错误体解析进 response.data（命令层据此渲染 原因/文档）', () => {
     const body = JSON.stringify({
       message: 'API rate limit exceeded for 203.0.113.7.',

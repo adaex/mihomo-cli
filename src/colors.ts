@@ -1,6 +1,5 @@
 /**
  * 设色判定（no-color.org 口径）：NO_COLOR 存在**且非空**才关色。
- * 此前用 `!== undefined` 判定，空串 `NO_COLOR=` 也会关色，与规范相悖。
  * isTTY 缺省（管道 / 重定向 / 非 tty 流）按无色处理。
  */
 export function colorEnabled(noColor: string | undefined, isTTY: boolean | undefined): boolean {

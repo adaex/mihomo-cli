@@ -95,10 +95,9 @@ export interface OverwriteFileEntry {
 }
 
 /**
- * JS 覆写脚本的变换函数：**就地修改**传入的 config。返回值约定：`return true`
- * 表示命中当前订阅（脚本没有 match 声明，status 靠它区分生效与不适用），
- * 其余返回值（含无返回值）一律视为未命中、不影响合并。必须同步——
+ * JS 覆写脚本的变换函数：**就地修改**传入的 config，返回值忽略。必须同步——
  * 返回 Promise 报错（buildConfig 是同步管线，纯转换也没有要等网络的场景）。
+ * 作用域写在脚本里（按 ctx.subscription 提前 return），CLI 不判定脚本是否「命中」。
  * 全信任模型：脚本以当前用户身份运行（同 .zshrc），不沙箱、不超时；
  * 但它改不动系统锁定项——脚本执行后 LOCKED_CONFIG_KEYS 照常剥除（见 buildConfig）
  */
@@ -113,7 +112,7 @@ export interface OverwriteScriptContext {
   subscription: { name: string; url: string; host: string };
   /** 本次构建的运行模式 */
   mode: RuntimeMode;
-  /** 发一条告警进 warnings 通道（`start` / `config` / `doctor` 的输出可见；`status` 判定脚本命中时会执行它，但不显示 warn 的内容） */
+  /** 发一条告警进 warnings 通道（`start` / `config` / `doctor` 的输出可见） */
   warn: (message: string) => void;
 }
 
@@ -137,8 +136,8 @@ export interface OverwriteFileInfo {
   /** 该文件自身是否启用（文件内 `enabled` 键）；与 OverwriteListResult.enabled 的全局开关是两层 */
   enabled: boolean;
   /**
-   * match 是否命中调用方给的作用域；**仅在 listOverwriteFile 传了 scope 时存在**。
-   * undefined = 未判定（`ow` 列表不绑定某条订阅，判不了），不等于「没命中」。
+   * YAML 的 match 是否命中调用方给的作用域；**仅在 listOverwriteFile 传了 scope 时存在**。
+   * undefined = 未判定（`ow` 列表不绑定订阅；脚本无 match、恒为 undefined），按生效展示。
    * 展示用，别拿它当合并闸门——那只有 selectActiveOverwriteFiles
    */
   matched?: boolean;
@@ -165,18 +164,10 @@ export interface CleanupResult {
   /** 死亡等待与复核后仍在的主实例 PID——停止是否成功的唯一结论来源 */
   remaining: number[];
   /**
-   * root 清理 sudo 脚本（只 pkill，不删 pid 文件）的提权/脚本错误。SudoAuthError =
-   * 取消或密码错误（调用方按「已取消」包装），其余为脚本失败；null = 未提权或成功。
-   * remaining 为空但本字段非空 = 进程在死亡等待内自行退光、清理未走完——归因是
-   * 「清理未完成」而非 pid 文件残留（那是 pidError 的事），两者不许再混用
+   * 清理没走完的原因：root 清理的 sudo 脚本失败/被取消（SudoAuthError），或 pid 文件
+   * 删不掉（先发生者优先）。null = 清理完整
    */
-  scriptError: Error | null;
-  /**
-   * pid 文件删除（免提权 unlink，见 clearPid）的失败。null = 无文件、已清或清理成功；
-   * scriptError 非空时本字段反映的是 clearPid 照常执行的结果（免提权、无交互代价，
-   * 没有理由跳过）——不设「错误优先级」，两个字段各自如实带出
-   */
-  pidError: Error | null;
+  incomplete: Error | null;
 }
 
 // === Service (launchd 服务) ===
@@ -266,27 +257,10 @@ export interface OverwriteScope {
   subUrl?: string;
 }
 
-/**
- * JS 覆写脚本的命中判定：脚本没有 YAML 的 match 声明，改由变换函数的返回值报告
- * ——`return true` 即命中当前订阅（matched），其余返回值（含提前退出的 undefined）
- * 一律视为未命中。合并本身不受影响，判定经 judgeScriptMatches 供 status 的
- * 生效清单与「不适用」计数。
- */
-export interface ScriptMatch {
-  file: string;
-  matched: boolean;
-}
-
 export interface OverwriteListResult {
   enabled: boolean;
   dir: string;
   files: OverwriteFileInfo[];
-  /**
-   * 加载成功的完整条目（含 transform/config），与 files 同一次读目录的产出：
-   * status 喂 judgeScriptMatches 判脚本命中，复用它避免二次扫目录（typo 警告与
-   * YAML 解析不跑两遍）。ow 列表不消费。不进 status --json（序列化的是 files）
-   */
-  entries: OverwriteFileEntry[];
   /** 加载失败的文件（语法错/元数据键非法）；诊断面据此红字列出，合并路径会硬失败 */
   broken: BrokenOverwriteFile[];
 }
@@ -376,16 +350,12 @@ export interface StatusJson {
   /**
    * `enabled` 是全局开关（settings.overwrite_enabled）。
    *
-   * `files` 是目录里未被 `enabled: false` 停用的覆写文件名——**不等于本次生效的清单**，
-   * 它不按 match 作用域过滤、也不随全局开关变空（旧契约，保持不变）。
-   *
    * `applied` 是本次真正参与合并的文件，三道过滤与 buildConfig 一致：全局开关关闭时
    * 恒为空数组（那时 buildConfig 压根不加载覆写），再滤掉文件级 `enabled: false`，
    * 最后按当前活跃订阅的 match 过滤。无活跃订阅时判不了 match，不额外收窄
    */
   overwrite: {
     enabled: boolean;
-    files: string[];
     applied: string[];
     /** hint 是可执行的迁移/修复指引（如已移除操作符的改写示例），诊断界面与 JSON 都必须带出 */
     errors: { name: string; message: string; hint: string[] }[];

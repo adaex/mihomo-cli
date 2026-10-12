@@ -8,7 +8,7 @@ import { getServiceStatus } from '../launchctl.js';
 import * as runtime from '../runtime.js';
 import { disableServiceAutoStart, tunBlockedByRunningService } from '../service.js';
 import { getPortsOrNull } from '../settings.js';
-import { captureStopEpochBaseline, recordServiceStopped } from '../stop-epoch.js';
+import { bumpStopEpoch, captureStopEpochBaseline } from '../stop-epoch.js';
 import * as subscription from '../subscription.js';
 import { printSystemProxyHint } from '../system-proxy.js';
 import { firstLine } from '../text.js';
@@ -33,8 +33,7 @@ export function resolveStartMode(args: string[]): RuntimeMode {
 
 export async function cmdStart(args: string[]): Promise<void> {
   assertKnownFlags(args, START_FLAGS, 'start [tun|mixed]');
-  // 位置参数至多一个（模式）：`start mixed garbage` 此前忽略 garbage 继续执行。
-  // 放在 hasKernel 等状态检查之前——参数错误应在任何环境副作用之前报出
+  // 位置参数至多一个（模式），放在状态检查之前——参数错误先于任何环境副作用
   assertPositionalCount(args, 1, 1, 'mihomo-cli start [tun|mixed] [-s] [-u ms]');
   const targetMode = resolveStartMode(args);
   // 选项值非法（-u 5s）必须在任何环境状态检查之前报出：参数错误先于副作用，
@@ -82,17 +81,17 @@ export async function cmdStart(args: string[]): Promise<void> {
       console.log('');
     } else {
       // disable 位已在（上次 stop/tun 留下，起 TUN 的最常见前置）或服务根本未装——
-      // 服务此刻「不会自启且未装载」，这是 recordServiceStopped 不变式的第 2 类证据
+      // 服务此刻「不会自启且未装载」，这是 bumpStopEpoch 不变式的第 2 类证据
       // （读到的状态本身）。bump 是给并发 `start`（mixed）的防线：本命令接下来有
       // 订阅更新（约 10s）与 sudo 密码窗口（最长 60s）两个慢速阶段，期间另一终端
       // start 的话，其锁内会读到计数变化而放弃 enable+bootstrap；没有这道 bump，
       // start 起的服务会被 TUN 脚本的 pkill 杀掉、KeepAlive 拉回后与 root TUN 内核
       // 抢同一组端口。mixed 侧防「stop 被 start 覆盖」的防线（D2）管不到这个反方向
-      recordServiceStopped();
+      bumpStopEpoch();
     }
 
     // 两条分支都会递增停止计数（disableServiceAutoStart 在确认 disable 位生效后 bump、
-    // recordServiceStopped 同理）。基线在命令入口捕获（D4），不处理的话，下面慢速阶段
+    // bumpStopEpoch 同理）。基线在命令入口捕获（D4），不处理的话，下面慢速阶段
     // 之后的启动前复核（runtime.assertTunStartNotRaced）会把自己这次的递增误判成并发
     // 停止。重捕获把「本命令造成的世界状态」设为新基线——他人的 bump（并发
     // stop/install/reset）才触发取消，自己的不算（终态与用户最后一条命令一致）

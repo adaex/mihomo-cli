@@ -66,7 +66,7 @@ export async function dispatchSubcommand(
 
 /**
  * 未知 token 出现在子命令位置时的统一报错（sub / ow / dir 的 onUnknown 共用，
- * 此前三处逐字重复）：选项形态（`-x`）按「裸命令不接受选项」报错，其余走
+ * ）：选项形态（`-x`）按「裸命令不接受选项」报错，其余走
  * did-you-mean + 场景提示。守卫与拼装收口在此，文案由调用方传入（含空行排版）。
  */
 export function unknownSubcommandError(

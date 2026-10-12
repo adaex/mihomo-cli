@@ -126,19 +126,19 @@ describe('已移除的操作符形态：显式报错给迁移指引，不当字�
   // ~（按 name 合并）与 <x>（尖括号转义）已随 DSL 裁剪移除。内核对未知顶层键宽容，
   // 没有专属报错的话老写法会被当字面键静默写进运行配置——零反馈的语义消失
   for (const key of ['~proxies', '~?proxy-groups', '~<weird>', '+~rules']) {
-    it(`"${key}" → 报已移除的 ~ 操作符并指向 JS 脚本`, () => {
+    it(`"${key}" → 报已移除的操作符并指向 JS 脚本`, () => {
       assert.throws(
         () => mergeOnce({}, { [key]: [{ name: 'x' }] }),
-        e => e instanceof CliError && /已移除的 ~ 操作符/.test(e.message) && /JS 覆写脚本/.test((e as CliError).hint.join('\n')),
+        e => e instanceof CliError && /已移除的操作符/.test(e.message) && /JS 覆写脚本/.test((e as CliError).hint.join('\n')),
       );
     });
   }
 
   for (const key of ['<rules>', '<+dns>', '+<+dns>']) {
-    it(`"${key}" → 报已移除的尖括号转义`, () => {
+    it(`"${key}" → 报已移除的操作符`, () => {
       assert.throws(
         () => mergeOnce({}, { [key]: ['x'] }),
-        e => e instanceof CliError && /已移除的尖括号转义/.test(e.message),
+        e => e instanceof CliError && /已移除的操作符/.test(e.message),
       );
     });
   }
@@ -146,7 +146,7 @@ describe('已移除的操作符形态：显式报错给迁移指引，不当字�
   it('裸 ~ / ~? 同样被拦（不再走空键名分支）', () => {
     assert.throws(
       () => mergeOnce({}, { '~': 'x' }),
-      e => e instanceof CliError && /已移除的 ~ 操作符/.test(e.message),
+      e => e instanceof CliError && /已移除的操作符/.test(e.message),
     );
   });
 });
@@ -362,17 +362,8 @@ describe('normalizeMatch（match 块 fail-closed）', () => {
     assert.deepEqual(match, { name: ['work'], 'url-domain': ['corp.com', 'github.com'] });
   });
 
-  it('subscription 键已收掉：报错指明改写 name，不静默当未知键', () => {
-    // 同义双键留一套；当未知键报错会让人摸不着头脑，文案直接给改法
-    assert.throws(
-      () => normalizeMatch({ subscription: 'edu1' }, 'overwrite.yaml'),
-      (e: unknown) => {
-        assert.ok(e instanceof CliError);
-        assert.match((e as Error).message, /用了 subscription 键/);
-        assert.match((e as CliError).hint.join('\n'), /name: edu\*/);
-        return true;
-      },
-    );
+  it('subscription（旧同义键）按未知键报错', () => {
+    assert.throws(() => normalizeMatch({ subscription: 'edu1' }, 'overwrite.yaml'), /未知键 "subscription"/);
   });
 
   it('键名打错（subscripton）抛错而非静默全局生效', () => {
@@ -469,21 +460,6 @@ describe('match name 通配：尾部 *（前缀）与头部 *（后缀），其�
     }
   });
 
-  it('精确值带非法字符（不可能命中任何订阅）加载时报错，不静默全不生效', () => {
-    // 订阅名字符集为 SAFE_NAME_RE；`edu1/`、`~x` 这类值与通配无关、恒不命中
-    for (const bad of ['edu1/', '~x', 'edu 1', 'a.b']) {
-      assert.throws(
-        () => normalizeMatch({ name: bad }, 'overwrite.yaml'),
-        (e: unknown) => {
-          assert.ok(e instanceof CliError);
-          assert.match((e as Error).message, /不可能匹配任何订阅/);
-          return true;
-        },
-        `name: ${bad} 应被拒绝`,
-      );
-    }
-  });
-
   it('首尾空白被 trim：name: " edu1 " 等价于 edu1', () => {
     const entry = fromYaml({ name: ' edu1 ' });
     assert.equal(hits(entry, 'edu1'), true);
@@ -524,11 +500,11 @@ describe('文件级操作符校验：诊断路径与合并路径看到同一份�
   }
 
   it('已移除的 ~ 操作符在 ow/status 即标为加载失败，不被列成生效文件', () => {
-    assertBrokenOnBothPaths('overwrite.tilde.yaml', '~dns: {}\n', /已移除的 ~ 操作符/);
+    assertBrokenOnBothPaths('overwrite.tilde.yaml', '~dns: {}\n', /已移除的操作符/);
   });
 
   it('尖括号转义在文件加载阶段拦截', () => {
-    assertBrokenOnBothPaths('overwrite.angle.yaml', '<dns>: {}\n', /已移除的尖括号转义/);
+    assertBrokenOnBothPaths('overwrite.angle.yaml', '<dns>: {}\n', /已移除的操作符/);
   });
 
   it('__proto__ 键在加载阶段即判坏（含 __proto__! 形态），诊断与合并路径结论一致', () => {
@@ -824,7 +800,7 @@ describe('覆写文件 enabled 开关', () => {
         keys: ['enabled!', 'match!', '+enabled', 'match+'],
         fileName: 'overwrite.op.yaml',
         quoted: false,
-        messageRe: /不支持操作符/,
+        messageRe: /疑似想写元数据键/,
         label: '覆写配置错误',
       },
       {
@@ -950,7 +926,7 @@ describe('match 的 url-domain 非法值拦截', () => {
   // 回归：url-domain 只做字面后缀比对，值含通配符或非裸域名形态时恒不命中——
   // 文件静默对任何订阅都不生效且零提示。从浏览器地址栏复制完整 URL 是自然误写方向
   it('url-domain 值含 * 或 ? → 报错并说明只做字面后缀比对', () => {
-    assert.throws(() => normalizeMatch({ 'url-domain': '*.example.com' }, 'overwrite.yaml'), /url-domain 不支持通配符/);
+    assert.throws(() => normalizeMatch({ 'url-domain': '*.example.com' }, 'overwrite.yaml'), /不支持通配/);
     assert.throws(() => normalizeMatch({ 'url-domain': ['corp.com', 'gh?.com'] }, 'overwrite.yaml'), /gh\?\.com/);
   });
 
@@ -966,7 +942,7 @@ describe('match 的 url-domain 非法值拦截', () => {
 
   it('值内外层空白被 trim、内部空格报错', () => {
     assert.deepEqual(normalizeMatch({ 'url-domain': ' corp.com ' }, 'overwrite.yaml'), { 'url-domain': ['corp.com'] });
-    assert.throws(() => normalizeMatch({ 'url-domain': 'corp .com' }, 'overwrite.yaml'), /不能含空格/);
+    assert.throws(() => normalizeMatch({ 'url-domain': 'corp .com' }, 'overwrite.yaml'), /只要裸域名/);
   });
 
   it('纯字面 url-domain 不受影响', () => {
@@ -1174,40 +1150,6 @@ describe('JS 覆写脚本', () => {
       );
     } finally {
       cleanup('overwrite.lock.js');
-    }
-  });
-
-  it('return true → scriptMatches 记命中；提前退出与 truthy 非真 → 未命中（严格 === true）', () => {
-    // 脚本没有 match 声明，命中与否只能靠返回值报告——只有显式 return true 算命中，
-    // 「顺手 return 了 config / 字符串」不得被误读为命中
-    write('overwrite.hit.js', 'export default function (config) { config.a = 1; return true; }\n');
-    write('overwrite.miss.js', 'export default function () { return; }\n');
-    write('overwrite.truthy.js', 'export default function () { return "yes"; }\n');
-    try {
-      const r = applyOverwrite({}, loadOverwriteFile(), { mode: 'mixed' });
-      assert.deepEqual(r.scriptMatches, [
-        { file: 'overwrite.hit.js', matched: true },
-        { file: 'overwrite.miss.js', matched: false },
-        { file: 'overwrite.truthy.js', matched: false },
-      ]);
-      // 命中与否不影响合并本身：命中脚本的变换照常生效、未命中脚本无豁免
-      assert.equal(r.config.a, 1);
-    } finally {
-      cleanup('overwrite.hit.js');
-      cleanup('overwrite.miss.js');
-      cleanup('overwrite.truthy.js');
-    }
-  });
-
-  it('YAML 文件不进 scriptMatches（脚本专属清单，YAML 命中走 match 静态判定）', () => {
-    write('overwrite.plain.js', 'export default function () { return true; }\n');
-    write('overwrite.y.yaml', 'log-level: debug\n');
-    try {
-      const r = applyOverwrite({}, loadOverwriteFile(), { mode: 'mixed' });
-      assert.deepEqual(r.scriptMatches, [{ file: 'overwrite.plain.js', matched: true }]);
-    } finally {
-      cleanup('overwrite.plain.js');
-      cleanup('overwrite.y.yaml');
     }
   });
 

@@ -93,14 +93,13 @@ describe('ow 列表展示文件级开关', () => {
     });
   });
 
-  it('坏覆写文件在 status 人读与 JSON 两形态都可见，且不混进 files/applied', () => {
+  it('坏覆写文件在 status 人读与 JSON 两形态都可见，且不混进 applied', () => {
     withFixture((dataDir, run) => {
       fs.writeFileSync(path.join(dataDir, 'overwrite.good.yaml'), 'log-level: debug\n');
       fs.writeFileSync(path.join(dataDir, 'overwrite.bad.yaml'), 'enabled: nope\nlog-level: debug\n');
       assert.match(run(['status', '--no-probe']).stdout, /overwrite\.bad\.yaml.*解析|enabled 必须是布尔值/);
 
       const json = JSON.parse(run(['status', '--json', '--no-probe']).stdout);
-      assert.deepEqual(json.overwrite.files, ['overwrite.good.yaml']);
       assert.deepEqual(json.overwrite.applied, ['overwrite.good.yaml']);
       assert.equal(json.overwrite.errors.length, 1);
       assert.equal(json.overwrite.errors[0].name, 'overwrite.bad.yaml');
@@ -108,12 +107,13 @@ describe('ow 列表展示文件级开关', () => {
     });
   });
 
-  it('status --json 的 overwrite.files 只含未停用的文件', () => {
+  it('status --json 不再输出 overwrite.files（只有 applied）', () => {
     withFixture((dataDir, run) => {
       fs.writeFileSync(path.join(dataDir, 'overwrite.a.yaml'), 'log-level: debug\n');
       fs.writeFileSync(path.join(dataDir, 'overwrite.b.yaml'), 'enabled: false\nlog-level: info\n');
       const json = JSON.parse(run(['status', '--json', '--no-probe']).stdout);
-      assert.deepEqual(json.overwrite.files, ['overwrite.a.yaml']);
+      assert.equal('files' in json.overwrite, false);
+      assert.deepEqual(json.overwrite.applied, ['overwrite.a.yaml']);
       assert.equal(json.overwrite.enabled, true, 'enabled 仍是全局开关，不受文件级影响');
     });
   });
@@ -193,13 +193,12 @@ describe('status 覆写行按 match 区分是否适用当前订阅', () => {
     });
   });
 
-  it('status --json 分出 applied：files 保持旧契约，applied 才是本次生效的', () => {
+  it('status --json 的 applied 按文件级 enabled 与 match 过滤', () => {
     withFixture((dataDir, run) => {
       fs.writeFileSync(path.join(dataDir, 'overwrite.a.yaml'), 'log-level: debug\n');
       fs.writeFileSync(path.join(dataDir, 'overwrite.miss.yaml'), 'match:\n  name: mini*\nlog-level: info\n');
       fs.writeFileSync(path.join(dataDir, 'overwrite.off.yaml'), 'enabled: false\nlog-level: warning\n');
       const json = JSON.parse(run(['status', '--json', '--no-probe']).stdout);
-      assert.deepEqual(json.overwrite.files, ['overwrite.a.yaml', 'overwrite.miss.yaml'], 'files 仍只滤文件级 enabled');
       assert.deepEqual(json.overwrite.applied, ['overwrite.a.yaml'], 'applied 再按 match 过滤');
     });
   });
@@ -213,7 +212,6 @@ describe('status 覆写行按 match 区分是否适用当前订阅', () => {
       const json = JSON.parse(run(['status', '--json', '--no-probe']).stdout);
       assert.equal(json.overwrite.enabled, false);
       assert.deepEqual(json.overwrite.applied, [], '全局关闭时没有任何覆写生效');
-      assert.deepEqual(json.overwrite.files, ['overwrite.a.yaml'], 'files 是旧契约，不随全局开关变空');
     });
   });
 
@@ -229,71 +227,30 @@ describe('status 覆写行按 match 区分是否适用当前订阅', () => {
 });
 
 /**
- * 脚本没有 match 声明，status 对脚本是否适用当前订阅的判定来自渲染时的
- * return true 约定（真实构建管线试跑一次，与 start 同一条路）。此前脚本的
- * matched 恒为 true——作用域不中的脚本永远列在「生效」里，正是这组用例要拦的回归。
+ * 脚本没有 match 声明，CLI 不判定脚本是否「命中」：status 一律把启用中的脚本列进生效清单，
+ * 且是只读命令——**不执行用户脚本**（此前为判命中会在 status 里跑一遍脚本）。
  */
-describe('status/config 按脚本返回值区分是否适用当前订阅', () => {
-  it('未返回 true 的脚本移出生效清单，不适用只计数不点名', () => {
+describe('status 对 JS 脚本：恒列入生效、不执行脚本', () => {
+  it('启用中的脚本列进生效清单与 --json applied，不出现「不适用」', () => {
     withFixture((dataDir, run) => {
-      fs.writeFileSync(
-        path.join(dataDir, 'overwrite.hit.js'),
-        'export default function (config, ctx) { if (ctx.subscription.name !== "edu1") return; config["log-level"] = "debug"; return true; }\n',
-      );
-      fs.writeFileSync(path.join(dataDir, 'overwrite.miss.js'), 'export default function () { return; }\n');
-      const out = run(['status', '--no-probe']).stdout;
-      assert.match(out, /覆写:.*已启用 \(hit，1 个不适用\)/);
-      assert.ok(!out.includes('miss'), '不适用文件除计数外不得点名（锁名字，与措辞解耦）');
-      assert.ok(!out.includes('未返回 true'), 'status 文本不得暴露脚本 API 术语');
-      assert.ok(!/\(hit, miss/.test(out), '未命中的脚本不得出现在生效清单里');
-    });
-  });
-
-  it('status --json 的 applied 不含未命中脚本（与 YAML match 不命中同款口径）', () => {
-    withFixture((dataDir, run) => {
-      fs.writeFileSync(path.join(dataDir, 'overwrite.hit.js'), 'export default function () { return true; }\n');
-      fs.writeFileSync(path.join(dataDir, 'overwrite.miss.js'), 'export default function () { return; }\n');
-      const json = JSON.parse(run(['status', '--json', '--no-probe']).stdout);
-      assert.deepEqual(json.overwrite.applied, ['overwrite.hit.js']);
-    });
-  });
-
-  it('config 提示段不列未返回 true 的脚本（分歧行为是常态，可见性归 status 计数）', () => {
-    withFixture((dataDir, run) => {
-      fs.writeFileSync(path.join(dataDir, 'overwrite.miss.js'), 'export default function () { return; }\n');
-      const out = run(['config']).stdout;
-      assert.ok(!out.includes('未返回 true'), 'config 提示段不得复述未命中（会与 status 计数重复）');
-    });
-  });
-
-  it('全部脚本都命中时无提示行（常态不加噪音）', () => {
-    withFixture((dataDir, run) => {
-      fs.writeFileSync(path.join(dataDir, 'overwrite.a.js'), 'export default function () { return true; }\n');
+      fs.writeFileSync(path.join(dataDir, 'overwrite.a.js'), 'export default function (config, ctx) { if (ctx.subscription.name !== "nope") return; }\n');
       const out = run(['status', '--no-probe']).stdout;
       assert.match(out, /覆写:.*已启用 \(a\)$/m);
-      assert.ok(!out.includes('不适用'), '没有落选脚本时不该出现该措辞');
+      assert.ok(!out.includes('不适用'));
+      const json = JSON.parse(run(['status', '--json', '--no-probe']).stdout);
+      assert.deepEqual(json.overwrite.applied, ['overwrite.a.js']);
     });
   });
 
-  it('坏 YAML 在场时判定不降级：未命中脚本仍列「不适用」', () => {
-    // 判定若走 buildConfig 的硬失败门（loadOverwriteFile），一个坏 YAML 会把全部
-    // 脚本打回「未判定＝生效」——坏文件在场时正是最需要判定的时刻
+  it('status 不执行脚本（顶层副作用不发生）', () => {
     withFixture((dataDir, run) => {
-      fs.writeFileSync(path.join(dataDir, 'overwrite.bad.yaml'), 'match: [broken\n');
-      fs.writeFileSync(path.join(dataDir, 'overwrite.miss.js'), 'export default function () { return; }\n');
-      const out = run(['status', '--no-probe']).stdout;
-      assert.match(out, /覆写:.*无生效文件，1 个不适用/);
-      assert.match(out, /加载失败|解析失败/, '坏文件本身仍要红字可见');
-    });
-  });
-
-  it('近失文件名的 stderr 警告只打一次（判定复用列表的同一次读目录）', () => {
-    withFixture((dataDir, run) => {
-      fs.writeFileSync(path.join(dataDir, 'overwrite.yml'), 'log-level: debug\n');
-      fs.writeFileSync(path.join(dataDir, 'overwrite.a.js'), 'export default function () { return true; }\n');
-      const r = run(['status', '--no-probe']);
-      const count = (r.stderr.match(/不会被当作覆写文件加载/g) || []).length;
-      assert.equal(count, 1, `警告应只打一次（列表与判定共用一次读目录），实际 ${count} 次`);
+      const marker = path.join(dataDir, 'ran.marker');
+      fs.writeFileSync(
+        path.join(dataDir, 'overwrite.side.cjs'),
+        `module.exports = function () { require('node:fs').writeFileSync(${JSON.stringify(marker)}, '1'); };\n`,
+      );
+      run(['status', '--no-probe']);
+      assert.equal(fs.existsSync(marker), false, 'status 是只读诊断，不得执行用户覆写脚本的变换函数');
     });
   });
 });

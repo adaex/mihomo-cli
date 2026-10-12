@@ -14,20 +14,8 @@ export const YAML_MAX_ALIASES = 200;
 export const VERSION: string = pkg.version;
 export const PKG_NAME: string = pkg.name;
 
-/**
- * 支持的最低 Node 版本，取自 package.json 的 `engines.node`（单一来源，不另写一份常量）。
- *
- * 只剥掉 `>=` 前缀：本仓的 engines 一直是 `>=x.y.z` 这一种形态，不实现完整的 semver
- * range 解析——真要改成复杂 range，运行时守卫也该跟着改，而不是在这里猜。
- * 解析不出版本号时返回 null，守卫据此跳过检查（宁可不拦，也不能因为 engines 写法变了
- * 就把所有命令挡死）。
- */
-export const MIN_NODE_VERSION: string | null = (() => {
-  const raw: unknown = pkg.engines?.node;
-  if (typeof raw !== 'string') return null;
-  const m = raw.trim().match(/^>=\s*(\d+\.\d+\.\d+)$/);
-  return m ? m[1] : null;
-})();
+/** package.json 的 `engines.node` 原文（入口守卫与 pretest 共用同一来源，均用 satisfies 判定） */
+export const NODE_ENGINES: string | null = typeof pkg.engines?.node === 'string' ? pkg.engines.node : null;
 
 /**
  * 镜像的**单一真相源**：短别名 → 完整地址。`--mirror <别名>` 经 `MIRROR_ALIASES` 展开，
@@ -91,8 +79,6 @@ export function isValidServiceLabel(label: string): boolean {
 }
 
 const RAW_SERVICE_LABEL = process.env.MIHOMO_CLI_DAEMON_LABEL;
-/** 环境变量提供的原始 label（可能非法），仅在下方校验与报错时引用 */
-const RAW_SERVICE_LABEL_INPUT: string | undefined = RAW_SERVICE_LABEL;
 export const SERVICE_LABEL: string = RAW_SERVICE_LABEL && isValidServiceLabel(RAW_SERVICE_LABEL) ? RAW_SERVICE_LABEL : DEFAULT_SERVICE_LABEL;
 
 /** 服务二进制符号链名。见 paths.ts 的 serviceBinary 与 service.ts 的 ensureServiceSymlink。 */
@@ -238,8 +224,8 @@ export const DEFAULT_AUTO_UPDATE_TIMEOUT = 10_000;
  * ~/Library/LaunchAgents（路径穿越），不校验即任意位置的 plist 写/删。
  * constants 已把非法值回退为默认标签，此处在执行写/删前拒绝并告知用户。 */
 export function assertServiceLabelSafe(): void {
-  if (RAW_SERVICE_LABEL_INPUT !== undefined && !isValidServiceLabel(RAW_SERVICE_LABEL_INPUT)) {
-    throw new CliError(`MIHOMO_CLI_DAEMON_LABEL 无效: "${RAW_SERVICE_LABEL_INPUT}"`, {
+  if (RAW_SERVICE_LABEL !== undefined && !isValidServiceLabel(RAW_SERVICE_LABEL)) {
+    throw new CliError(`MIHOMO_CLI_DAEMON_LABEL 无效: "${RAW_SERVICE_LABEL}"`, {
       label: '配置错误',
       hint: ['只允许字母、数字、点、下划线、短横线，且不能含 ".."。', '该值会成为 launchd plist 的文件名，参与 plist 写入与删除路径。'],
     });

@@ -1,10 +1,6 @@
 # 现行结论与边界
 
-规则见 CLAUDE.md，架构决策论证见 docs/decisions.md，版本历史见 CHANGELOG。与 decisions.md 的分界：跨模块、稳定、回答「仓为什么长这样」的架构级决定记在那边（D 条目，含其拒绝的替代方案）；本文记审查产出的处置与边界——某条 finding 为什么不修（「记录不修」「已评估未采纳」）。本文只保留**现行有效**的三样东西：实测结论、未覆盖风险、流程教训。历轮审查的逐项验证流水不在此堆放——看当轮 CHANGELOG 条目与 git 历史；每轮审查收尾时，把仍然成立的结论合并进对应节，过时的删掉。改相关代码时同步更新对应节。头部只保留**最近一轮**的摘要（给下轮审查当上下文），更早轮次删除——第十七轮清理时这里堆过 12 条流水，「只保留现行有效」的原则没拦住逐轮追加。状态行单独一类且始终存在：有未发布轮次时标「未发布（将进 vX.Y.Z）」、发布收尾改为「已发布 vX.Y.Z」（release.md 第 9 步消费）——发布状态只写这一处，不散进最近审查摘要行、也不随轮次重写消失。
-
-状态：已发布 v26.10.112。
-
-最近审查：2026-10-12，第二十五轮（过度设计收缩）。修复：applyOverwrite 头注释把执行序写反（实际脚本先、YAML 后，D13）；`noConfusingVoidType` 两处 warning（OverwriteTransform 返回类型改 `unknown`，契约仍是 `=== true` 才算命中）。删除：downloadKernel 的可选 releaseInfo 与兜底版本查询（唯一调用方恒传，`resolveFallbackQueryOptions` 及其「正推/反推刻意分歧」不变量随之消失，release 改必传由 typecheck 守住）；service.ts 对 launchctl/stop-epoch/hot-reload 的 re-export 层（CLI 无外部消费方，调用方改为直接从源模块导入；测试内嵌脚本里经 service.ts 取 readStopEpoch 等的 8 处同步改指 stop-epoch.ts——typecheck 看不到，靠全量测试转红发现）。新增：`.node-version` 与 pretest 版本守卫（Node 低于 engines 时 CLI 入口守卫会拒跑，测试只见 151 例「输出为空」断言失败、看不出原因，现一行报错）。复核轮追加：删无人读取的 CleanupResult.killed/failed（停止结论只看 remaining，反向验证去掉发信号 4 例转红）、KernelUpdateInfo.assets 与 GitHubRelease.name/html_url；pretest 改用 compare-versions.satisfies。全量 952 例全绿（删去的 6 例全部只测被删的反推函数与分歧锁定，补 1 例正推形态）；Biome 剩 1 个既存 noProto warning。
+规则见 CLAUDE.md，架构决策见 docs/decisions.md，版本历史见 CHANGELOG 与 git tag（发布状态以 tag 为准，本文不记）。本文只保留**现行有效**的结论：实测结论、未覆盖风险、已评估未采纳、测试边界与平台备忘；当轮验证过程留在提交信息里，过时条目直接删除。改相关代码时同步更新对应节。
 
 ## 已有验证仍支持的结论
 
@@ -18,7 +14,7 @@
 - launchd 的 terminating signal 与 last exit code 两字段互斥；需要 describeExitCause 同时覆盖
 - disabled label 的 bootstrap 硬失败，enable 必须在前；bootstrap 返回 0 不表示内核已健康，TUN 的 kill -0 也不能排除僵尸进程
 - 内核各下载通道曾各自下载真实产物；kernel.spec 覆盖通道选择、标准资产选择、curl/gh 参数纯函数。资产形态按上游 v1.19.30 实测只有单文件 `.gz`（gzip 解压，maxBuffer 256MB 即体积上限），tar 设施已移除；非 `.gz` 资产显式报错
-- gh 回退通道的代理注入是实测结论、不是假设：v26.10.98 初版只写注释假设「gh 继承同一代理」，实际被入口 clearProxyEnv（D9）打掉、gh 直连（真 gh + 拒绝端口实证报 `proxyconnect`），回退定位与全失败诊断双双失准；现由通道决策给 gh 候选挂代理、buildGhDownloadEnv per-spawn 注入（kernel.spec 锁定）。gh（Go）只认 HTTPS_PROXY/https_proxy，无命令行代理选项
+- gh 回退通道的代理注入是实测结论：入口 clearProxyEnv（D9）会清掉自指 env，不注入时 gh 实际直连（真 gh + 拒绝端口实证报 `proxyconnect`）；现由通道决策给 gh 候选挂代理、buildGhDownloadEnv per-spawn 注入（kernel.spec 锁定）。gh（Go）只认 HTTPS_PROXY/https_proxy，无命令行代理选项
 - 上游面板自升级（update_core.go）的 meta-backup 是有意永久保留的旧内核副本：成功路径只 defer 清理 meta-update、从不清 meta-backup（每次升级覆盖写，已核对上游源码）——doctor 只把 meta-update 当真残留告警，meta-backup 按信息项给独立删除口径，绝不与暂存共用一条 rm -rf（合并告警会让面板成功升级一次后 doctor 永久误报，修复命令还会连回滚备份一起删）
 - npm（update 的 view/install 与 doctor 的版本检查）的 env 代理恢复机制与判据见 D9（recordClearedProxyEnv 登记原值 + 每 spawn 前 TCP 探活决定注回，不凭空注入）；此处只记验证结论：桩 npm 透传 + 真实本地监听三态用例锁定，反向验证删掉注回即「端口在监听」用例转红、两个反例保持绿
 - 上游 mihomo v1.19.30 的已查资产未提供 checksums；来源约束、大小比对和执行自检应保留，不能写成已验证哈希
@@ -27,13 +23,13 @@
 - readLogTail 必须按 fs.readSync 的实际字节数解码：stat 与 read 之间日志被并发截断/轮转重建成更小文件（copy-truncate、双终端 start/restart）时会短读，按原 size 解码零填充 buffer 会把 NUL 字节打进「内核启动失败」的日志尾部；0 字节返回空（log-files.spec 桩 readSync 钉住 bytesRead 契约）
 - 手改缓存的脏值硬化同一口径：参与运算前先 Number 化、非有限值不参与——formatTraffic/formatTimestamp（展示面）、subscriptionUrgency（紧急度与「代理不通」归因）、status 流量行着色（≥90% 黄警）四处同源；upload/download 裸相加遇到字符串会拼接成 `"1234"` 误判流量用尽，数字字符串仍按数值判（settings.spec 与 commands/status.spec 锁定，反向验证转红）
 - 覆写文件级校验（已移除操作符/互斥/空键 + 数组操作符命中 BASE_CONFIG 非数组键）在 readOverwriteFiles 加载阶段执行：诊断旁路（ow/status）与合并闸门（start/config/doctor）看到同一份 broken 列表，坏文件的 hint 在三处文本与 status --json 都带出；依赖订阅当前值的冲突仍只在合并期报错（ow 不绑定订阅）
-- 残留内核清理唯一入口是 cleanupAll（process-stop.ts）：stop/start/uninstall/reset 四个路径共用，root 残留走一次 sudo 脚本 buildKernelCleanupScript（只 pkill、不删 pid 文件），发信号后统一 5s 死亡等待再复核 pgrep——服务路径曾在发信号后立即复核、收割稍慢时误报「部分进程未终止」，随统一消除；sudo 取消/脚本失败经 CleanupResult 的 scriptError（pkill 脚本）与 pidError（pid 文件删除）两字段独立带出——进程死光但脚本没走完与仅 pid 文件残留是两种归因，合并成一个字段会让调用方提示说错事。**pid 文件清理免提权**：文件在 runtime/（用户属主目录、无 sticky bit），目录可写即可 unlink 其中任意文件、与文件属主无关，root 属主的 TUN 残留也直接删——走 sudo rm 是误把「文件属主」当成删除权限判据，白弹管理员密码；但 cleanupAll 路径**仅在复核 remaining 为空时才删 pid**：pid 文件是 isRunning/status 的真相源，sudo 被取消、root TUN 仍在路由时删文件会让 status 对活着的内核报「未运行」。该路径的提权脚本 buildKernelCleanupScript **只 pkill、不碰 pid**——旧实现在脚本里无条件 `rm pid`，仅靠「sudo 取消脚本不执行 + pkill 失败 exit 2」两道时序间接保证不删活进程，是该不变量在 cleanupAll 路径的字面例外，现已移除；root 属主文件由末尾免提权 unlink 收走（stop() 零进程分支也直接 clearPid）。buildTunLaunchScript（TUN 启动）的 `rm pid` 是 pkill 旧实例后立即写新 pid 的自管流程，不在此列。服务层的处置判据唯一收口在 classifyResidueCleanup（service.spec 锁定三档及各字段组合）：root 清理失败且进程仍在（remaining + scriptError）→抛；无残留进程但有收尾错误→警告不拦命令（无进程读它、下次自愈）；用户态残留（remaining 非空、无 scriptError，含仅 pidError）→本层不抛，cmdStop 抛「部分进程未终止」、cmdUninstall 黄色提示退出 0、start 由健康确认兜底——pidError 是免提权 unlink 的小错，不参与 throw 分档。root 文案由 buildRootResidueCleanupError 按字段归因：remaining 的属主断言只跟随 scriptError（root 脚本没走通才说 root 残留）；remaining 为空时 scriptError 优先于 pidError——两字段并存（脚本没走完且文件也没删）时主归因随脚本、pid 错误仅附带，手动命令给 pkill 而非 rm（防漏掉潜在存活进程）；pidError 文案只说「未能清理」+具体错误、不断言属主；sudo 失败短语全仓共用 describeSudoFailure（非鉴权错误保留原始 message），pid 文件短语共用 describePidCleanupFailure——各写一份会漂移出多种说法。**cleanupKernelsOrThrow/stopService/uninstallService 返回 CleanupResult（第十九轮）**：cmdStop 与 cmdUninstall 消费透传的 remaining，不再在清理复核之后重发 pgrep；reset 服务活跃路径直接消费结果、不再跑第二次 cleanupAll（旧实现两次之间无状态变化，却多一次 pgrep+5s 死亡等待、root 脚本失败时再要一次密码，并把 warn 打印成「进程目前已不在」与「可能仍有残留进程」两份矛盾文案）；warn 档渲染唯一出口 warnResidueCleanup（buildRoot builder 的 warn 通道），reset 无服务分支也走它。cmdUninstall 未走卸载路径（无服务、只有游离内核）时仍重新 pgrep——那是终态观察，不是复查自己刚做的清理。**探测合面与等待快路径（第二十轮）**：cleanupAll 对 pid 集合只跑一轮 probeProcess（每 pid 一次 `ps -ww -o pid,uid,rss,command`），root 判定与逐 pid kill 前的命令行复核读同一份 ProbedProcess——旧实现先逐 pid 查 uid、再查存活、再对两条 needle 各查一次 command，每 pid 最多 4 次串行 ps；死亡等待 waitUntilNoMihomo(pids) 在有列表时按 process.kill(pid,0) 轮询（无 spawn，等待窗 SIGINT 可达），僵尸/复用 pid 只让它多等几轮，终态 pgrep 仍是唯一结论来源（新拉起的实例是新 pid，kill 探测看不到）
+- 残留内核清理唯一入口是 cleanupAll（process-stop.ts）：stop/start/uninstall/reset 四个路径共用，root 残留走一次 sudo 脚本 buildKernelCleanupScript（只 pkill、不删 pid 文件），发信号后统一 5s 死亡等待再复核 pgrep。清理没走完（sudo 取消/脚本失败或 pid 文件删不掉）经 CleanupResult.incomplete 带出：进程仍在则服务层抛错，已清空只警告。**pid 文件清理免提权**：runtime/ 归用户所有，unlink 只看目录权限，root 属主的 TUN 残留也直接删；但**仅在复核 remaining 为空时才删**——pid 文件是 status 的真相源，活进程在时删会让 status 报「未运行」。buildTunLaunchScript 的 `rm pid` 是 pkill 旧实例后立即写新 pid 的自管流程，不在此列
 - waitServiceHealthy 轮询用 getServiceStatus({withDisabled:false})：健康判定不读 disabled，每轮只发一个 launchctl print（最坏约 30 轮不再白跑 print-disabled）；循环外无首次快照（第一轮 sleep 后必覆盖）
 - withFileLock 强夺唯一判据是锁龄：deadline 等待上限分支是零行为残留（同谓词在循环顶部微秒前刚算过），已删；uninstallService 只在锁内 disable 一次（锁外第二次必成功，是冗余且双 bump）
 - 自动更新整体超时（abort）的订阅按「跳过（使用本地缓存）」灰字渲染、不计 failed；真实网络失败仍是红叉（subscription.spec 锁三档）
 - kernel/.tmp-* 下载临时目录与 *.tmp 原子写文件同受 cleanupStaleTmpFiles 按 1h 龄清扫（下载硬超时 180s，4 倍余量）
 - proxy 连通性探测**不做进程内缓存**：CLI 是单命令短进程，status 与 doctor 从不在同一进程同时发生，每进程至多一次调用，缓存没有第二个读端（与 D10 同前提）。曾有一版 3s 端口缓存，「连敲第二次免等」的设想不成立（跨进程不共享模块状态），第二十轮删除；--no-probe 在调用方跳过
-- 覆写 DSL 已裁边：`~`/`~?`/`<x>` 转义与 match 的 `subscription` 同义键移除，按 name 合并数组元素这类带条件的变换改由 JS 脚本承担（全信任模型同 `.zshrc`，同步函数、锁定键在脚本后剥除并告警）；移除形态显式报错给迁移指引。不在 CLI 复制一份分组必填字段校验（字段集随内核漂移），残缺元素仍由 `-t` 拒绝
+- 覆写 DSL 已裁边：`~`/`~?`/`<x>` 转义与 match 的 `subscription` 同义键移除（前者报「已移除的操作符」，后者按未知键报错），按 name 合并数组元素这类带条件的变换改由 JS 脚本承担（全信任模型同 `.zshrc`，同步函数、锁定键在脚本后剥除并告警）；移除形态显式报错给迁移指引。不在 CLI 复制一份分组必填字段校验（字段集随内核漂移），残缺元素仍由 `-t` 拒绝
 - 原生 `-t` 只验证配置解析，不能证明节点可达、端口可绑定或真实 TUN 路由正常；服务健康与代理连通性检查仍有独立价值
 - `sudo pkill -f <PATTERN>` 不会匹配 sudo 脚本自身的命令行：`escapeRegExp` 把点转义后，进程命令行里出现的是带反斜杠的正则源码、正则却要匹配字面点，恰好坏掉自匹配（对照实验：把 `\.` 换回 `.` 立即自匹配）。三个 root 脚本同此结论，不加行首锚；未来若改用未转义拼接必须重验
 - doctor 耗时大头是 `npm view` 纯网络往返（隔离实测 782ms / 全程 839ms，其余检查合计 74ms），已改为开头发起、末尾 await 并行等待；未装内核时并行收益趋零是 npm 查询本身的固有下界，不是实现问题。第十九轮把代理连通性探测（curl gstatic，不通固定等满 2s）同样提前到配置原生校验（mihomo -t）之前发起、连通性段 await——两者无数据依赖，push 顺序不变故展示顺序不变；probeProxyConnectivity 全 try/catch 永不 reject，提前发起无 unhandled rejection 风险；每进程仅一处 await 该探测，无重复请求问题（第二十轮已删其零命中进程内缓存）
@@ -65,8 +61,6 @@
 - 锁定告警只对覆写文件：覆写经操作符设置锁定键（如 `+secret`）已覆盖，但覆写文件内 `match:` 块之后、且文件解析失败被 warn 跳过时不会有告警（文件整体没生效，合理）
 - 订阅名匹配**不引入通用匹配器**（历史教训：glob「转义成正则再 test」的实现实测 `*a`×20 配 64 字符订阅名跑 70 秒——长度上限内的合法输入就能挂死 CLI；换双指针贪心回溯后同一输入 0ms，30 万组差分与正则版一致）。本轮进一步裁边：只保留尾部 `*`（前缀）与头部 `*`（后缀）两种字面比对形态（`startsWith`/`endsWith`，无回溯结构），其余通配（多 `*`、中间 `*`、`?`、单独 `*` 恒真）加载时报错，复杂匹配走 JS 脚本。教训仍在：输入面受控不能替代实测，通用匹配器复活前先想 70 秒这次事故
 - 裸 `-` 在 argv 层按未知选项拦截、不豁免：本 CLI 没有「- 表示 stdin」的约定，静默吞掉它会让 `sub update -` 落成无参形态批量更新、`start -` 静默起默认代理；它也建不出 remove/use 能指定的订阅名（getNonFlagArg 把 `-` 开头 token 当选项跳过）。`-` 前缀 token（`-my-sub`）同由未知选项拦截——handler 层不再需要第二道名称守卫（positional-args.spec 锁口径）
-- 单个覆写文件的 `enabled` 写错会让 `mihomo-cli status`、`ow` 整体失败（经 `listOverwriteFile` → `loadOverwriteFile` 抛 CliError）。与 `match` 写错的现有行为一致、不是新退化，可接受的前提是错误消息带文件名（已有用例锁住）
-- 元数据键的操作符拦截覆盖 `parseOverrideKey` 能识别的全部形态，**含尖括号转义**：`<enabled>` 同样报错（实测）。代价是失去了「写一个真名为 `enabled` 的配置键」的逃生口——mihomo 顶层目前没有这个键，故暂无影响；若上游将来新增，需要在 `assertNoMetadataKeyLookalikes` 里为尖括号形态开一个口子
 - `kickstart -k` 超时 60s 远超锁的 10s 强夺阈值，必须留在锁外，故它与并发 bootout 的交错无法用锁串行化；现在只保证「不再 re-enable/re-bootstrap」与「不再把用户的 stop 报成内核故障」，不是把这个交错消掉了
 - startTun 的日志轮转已挪到存在性校验之后，但 sudo 取消路径仍有一个同类窗口：轮转（rename 归档）到 pkill 实际执行之间用户取消的话，仍在运行的旧 TUN 内核会继续往归档文件写。rename 进不了 root 脚本（归档命名/清理在 TS 层），接受——下次成功启动自愈，logs 列表短暂缺当前日志
 - TUN 方向的并发防线也有同族残余：startTun 复核点到 sudo 脚本内 pkill 实际执行之间隔着密码窗口，pkill 在 root 脚本内进不了锁。两道防线合起来覆盖了「B 在 A bump 之前/之后进锁」两种交错，但「B 恰在 A 复核后、pkill 前完成 bootstrap」的毫秒级窗口仍在——B 出锁前锁内 epoch 检查读的是 bump 后的值会放弃，故该窗口要求 B 的整个 enable+bootstrap 压进 A 复核到 pkill 之间，实际可达性极低，与 kickstart 锁外交错同级接受
@@ -90,10 +84,9 @@
 - **全局 `--verbose`**：输出散在二十余个模块、数百处直接 `console.*`（具体计数随轮次漂移，量级才是论据），无中心化日志层；且选项按命令白名单校验（`assertKnownFlags`，14 处），全局开关要么加满 14 个白名单、要么在 index 集中剥离——横切改动大而收益不明。排查已有三条路径：`doctor`（体检加修复指引）、`logs`、`status --json`。真要做，先建日志层再谈开关
 - **名为 help 的订阅 `use` 撞车**：频率极低、`sub use help` 可用、动 argv 拦截的风险大于收益
 - **lsof 多 pid 取第一个**：误判方向是回退 kickstart，保守侧
-- **process-stop 的 stop() warn 分档与 classifyResidueCleanup 语义等价但不合并**：合并需动行为语义；拆分后 classifyResidueCleanup 已是唯一判据出口，漂移面已缩小，收益不抵风险（第八轮判定，流水清理时打捞）
 - **stopService/uninstallService 的同形锁体不抽公共函数**：两处各四行、注释各带不可拆理由，抽取收益低（第八轮判定，流水清理时打捞）
 - **README 不逐一罗列裸 `-v`/`-h` 与 logs 的 `--follow`/`--open` 长形式**：与各命令帮助行同口径（短形式优先），逐一罗列反成冗余；`-p`/`status -j` 因「长短对应表漏第三条」「同屏写法不一致」已补（第十七轮判定）
-- **curl `-x` 与控制器 base URL 不并入 loopbackHttpUrl**：第十九轮跳过项，结论仍有效；stop() 游离路径的 warn 分档保留现状见上条
+- **curl `-x` 与控制器 base URL 不并入 loopbackHttpUrl**：拼接语义不同（curl 代理地址 / 控制器 base URL），共用只会制造耦合
 - **README 镜像 registry 帮助文案、不建 README↔registry 文本同步 spec**：README 命令表与 registry usage 是有意的双份形态（registry 是 CLI 帮助的唯一真相，README 是承诺文档）；文本同步 spec 需跨格式模糊匹配（backticks、README 独有增补如「支持模糊匹配」），脆性比它防的漂移更糟。registry 内部口径一致由 help.spec 锁（第二十三轮判定）
 - **「ports 配置非法」三处降级措辞不抽共享常量**：status（静默省略控制器后缀）、ui（整行换说法）、doctor（专项检查带具体修复指引）是三个展示语境的刻意分档；共享片段仅十字级别，抽常量冻结一种措辞反不适配任何一方（第二十三轮判定）
 
@@ -116,37 +109,3 @@ doctor 的内核版本项与 npm 查询项取值依赖网络（GitHub 可达性�
 - disabled 位独立于 plist 持久化，enable 也留记录；手工移除需 sudo plutil，keypath 的点须转义，磁盘修改要重启后才与 launchd 内存一致，不能做进 CLI 自动清理
 - BSD ps command 列需 -ww，stat 用 -f%z；open 是异步桌面操作，返回后才可能失败，调用方保留手动路径
 - 未装内核的开发机是正常环境，不能为了检查自动安装用户服务或提权；真机结论可能来自其他测试机器
-
-## 文档与流程复盘
-
-稳定约束集中在 CLAUDE，历史保留在 CHANGELOG/git
-
-v4.9.2 的教训是关于本文自身：**「已核对」的记述会被后人当成已核对，从而关掉这条线索**。v4.9.1 写下「键名逐个回上游 General 段核对」时并未真正遍历 `Inbound` 字段集，而这句话此后成了不必重查的理由。此类声明要落到可复现的对表方法（照哪个结构体、哪个函数的入参），不写「逐个核对过」这种无法复核的完成态；写完再回头验一遍声明本身是否属实
-
-发布后也要回头改状态：v4.9.1 发布后本文仍留着「待发布」和旧的测试数（596，`d4eb38b` 补 3 条后没同步）。release 流程第 9 项（发布后收尾）要求同步本文档，实际漏的是**发布动作完成之后**那次状态更新。v4.12.0 又漏了同一处——发布八步全走完、还从 registry 拉回产物验过六项行为，唯独本文头部仍写着「未发布」。同一条教训两次栽在同一个位置，说明「记在复盘里」不够：它不在发布清单上，就不会被执行。写在这里的教训，如果对应一个具体动作，就该同时落进清单
-
-v4.10.0 的教训是**测法本身也要验**：用 `mihomo config tun` 去测 TUN 模式下元数据是否泄漏，但 `config` 不接受模式参数——命令其实报了参数错误，「0 条泄漏」只是因为压根没输出配置。同一轮里还拿订阅自带的节点名 `TW Fixed IP` 当 e2e 探针（真实订阅里出现 5 次，断言恒真）。两次都是**假阳性**：测试跑绿了，但绿的原因不是被测功能。手工验证一个「没发现问题」的结论时，先确认该测法在功能坏掉时会红——与本仓对自动化用例的反向验证要求同一条纪律，手工验证不该豁免
-
-类型检查曾漏掉测试字符串内对已删除导出的引用，已修正并把全仓搜索要求写入 CLAUDE；发布流程的注册表示例也同步去掉了失效字段
-
-v4.12.0 的教训是**「待定」不是中间状态，在实现上等于放行**：`listeners`/`tunnels` 从 v4.9.0 起被记为「未定的产品决策，两者须一起评估」，此后三轮补漏每轮都逐个核对入站面，却因为这两个键**已经有归档结论**而跳过——「待评估」的标签让它们看起来是被处理过的，实际是三个版本里订阅想写就写。config.spec 那条「待定入站面」用例更强化了这种错觉：它锁的是「原样保留」，跑绿只说明现状没漂移，不说明现状是对的。教训有二：① 安全边界上不留「待定」，要么锁要么写明「刻意放行 + 理由」（`iptables` 就是后者）；② **锁住现状的用例不等于验证过现状**——写这类用例时要在注释里说清它锁的是决策还是正确性
-
-同一轮另两处（status 把主文件显示成 `yaml`、提示指向不存在的 `kernel --help`）都是**只读一遍代码看不出、跑一次就现形**的问题，且都落在刚被重点打磨过的区域。复审时除了读代码，把主要命令在隔离数据目录里实跑一遍，成本极低
-
-v4.13.0 的教训是「反向验证的预测错了，比预测对更有价值」：计划里写「把 `allow-lan` 塞回 `BASE_CONFIG` 应转红」，实测 700 条全绿。原因是 `systemConfig` 的赋值无条件，BASE_CONFIG 里那份直接成了**死配置**——既不报错，也无任何行为差异。如果当初只按计划「确认它红」就收工，这个静默的死配置会留在表里。教训有二：① **反向验证要真跑，不能因为「理应会红」就跳过**——预测落空处往往正是认知与实现的偏差点；② 死配置比缺陷更难发现（缺陷会报错，死配置什么都不说），发现后应补不变量用例把它挡在结构层，而不只是改掉当前这一处。现由 `config-inbound-snapshot.spec.ts` 断言两表无交集
-
-同一轮还有一处「五轮漏键」的新形态：`allow-lan`/`bind-address` 早在 v4.9.2 就被写进注释和测试名（「别拿 allow-lan 当兜底」），却从没人问过「那它自己锁了吗」。**被写进防线说明里的键，看起来就像已经被防线覆盖了**——与上一轮「待定标签让人以为处理过」是同构的错觉，只是载体从归档结论换成了注释。核对锁定表时，注释里出现过的键名不能当作已覆盖的证据，唯一证据是它在不在 `LOCKED_CONFIG_KEYS` 里
-
-**删测试时数用例不能 grep 源码，要跑删除前的基线。** 核对「700 删了多少条」时，静态数 `it(` 模板得到的总数对不上实跑的 643——用例在 `for (const shell of …)` 循环里展开，21 个模板运行时是 25 条。最终用临时 worktree checkout 基线逐个 spec 跑 `ℹ tests` 才核准拆账。与发布流程核对测试数同一条纪律：计数只认真实运行结果
-
-**隔离不是只隔离 `MIHOMO_CLI_DIR`。** 落盘位置经 `os.homedir()` 推导的东西（LaunchAgent plist 在 `~/Library/LaunchAgents`），数据目录变量挡不住，还需把 **`HOME`** 指向临时目录——service-concurrency.spec 的热重载场景就是三层隔离（`MIHOMO_CLI_DIR` + 一次性 label + 临时 HOME）。手工验证涉及 plist 的路径时同样要做，别只设数据目录变量
-
-**计时断言别用墙钟阈值，先问能不能直接观测交叠。** 并发结构的用例先写的墙钟版（桩各睡 N 秒、断言总耗时 < 1.75N）连调两次阈值仍在套件变大后误红——墙钟同时受机器负载、`node --test` 的 suite 并发与 tsx 转译影响，而误红的表现是「并发结构坏了」这种指向完全错误的失败。改为让两个桩各自记录进入/退出时刻、直接断言**两段区间有交集**：与被测性质一一对应，对机器快慢免疫。时序对负载敏感的地方同思路：时序断言只兜「预算内的慢不破阈值」（桩 sleep 留足余量），「调大单次预算 / 往锁内加调用」改由常量关系断言承担（调用次数 × 单次预算 < 强夺阈值），并行 build+test 压测三轮确认
-
-**fire-and-forget 的行为别靠桩文件断言。** spawnSync 子进程退出过快时，其 detached 的孙进程（如 `open`）可能来不及执行，PATH 桩收不到调用——「没收到调用」测不出任何东西。这类断言要抽纯函数测
-
-**测「与 locale 无关」的用例，数据必须选在任意目标 locale 下都分出两种序的组合。** 覆写排序用例第一版取 ['dns','工作','机场']——在 zh 开发机上能咬住 localeCompare 旧实现，但在 en 的 CI 上 localeCompare 与码点序恰好同序，对旧实现**恒绿**：用例锁的是「当前机器的 locale」而不是「码点序」。改为 ['overwrite.B.yaml','overwrite.a.yaml']（任何 ICU locale 的字母序都 a 先、码点序 B(0x42) 先）后才与 LANG 无关。写这类用例前，先在 en/zh/ja 下实跑一遍测试数据，确认它真的分出两种序
-
-**修一条红线要回查它的全部路径，同族漏网按「路径」不按「模块」分布。** 修了覆写**合并层**的 `__proto__`，下一轮在**展示层**（redact）抓到同族；修了 isLoopbackHost 的裸 localhost，下一轮在同一函数抓到 0.0.0.0/::。漏网都不在「没改过的模块」里，而在「改过的判据的另一半消费路径」里。修法：修红线（裸异常按 bug 渲染、自代理死锁）时列出该判据/红线的全部消费路径（合并、展示、下载、诊断），逐条确认，而不是只回看本次动过的文件
-
-**文档条目里的事实性数字，写入时当场对源核一遍。** 两次同族：b629614 的 CHANGELOG 条目以半句「别名 21 命令仅 5 个有」收尾（句子没写完），26.10.100 发布后收尾复核才暴露；第十七轮的 CODE_REVIEW 条目把「快速开始 6 条命令与详节全量重复」写成「5 条命令 4 条原样重复」，下一轮终检对照 diff 才发现。两处都是写时凭印象、没对着源（命令清单/diff）数一遍——文档里的数字与代码断言同一姿态：要么当场核实，要么别写具体数

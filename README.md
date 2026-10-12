@@ -425,7 +425,7 @@ YAML 覆写支持以下操作符，**只在覆写文件的顶层生效**：
 
 普通键（无操作符）对映射做逐键深度合并、对数组整体替换。带条件的修改（按 `name` 找元素、改部分字段、找不到时跳过或追加之类）不设操作符——那是有逻辑的变换，写 JS 脚本表达（见下文），意图直接写在代码里。
 
-> 历史版本曾有 `~key` / `~?key`（按 name 合并数组元素）与 `<key>` 尖括号转义，已移除：现在写这些形态会直接报错并提示改用 JS 脚本，不会被静默当成字面键名。
+> `~key` / `~?key`（按 name 合并数组元素）与 `<key>` 转义已移除：写这些形态会直接报错并提示改用 JS 脚本。
 
 **嵌套层（映射里的映射）的键一律按字面名合并**，`+` / `!` 在那里不是操作符——mihomo 原生配置的键名本来就可能带这些符号（如 `nameserver-policy`、`hosts` 里的 `+.域名` 通配键），直接照写即可：
 
@@ -443,7 +443,7 @@ hosts:
 
 ### JS 覆写脚本
 
-YAML 操作符只保留最简单的三种，其余一律写脚本自由处理。脚本是一个默认导出的函数，**就地修改**传入的 `config`（订阅解析后的配置）；脚本没有 `match` 声明，靠**返回值报告命中**——走到最后 `return true` 表示「适用于当前订阅、已生效」，其余情况（提前 `return`、不写返回值）都视为不适用。YAML 覆写在全部脚本之后才声明式合并：
+YAML 操作符只保留最简单的三种，其余一律写脚本自由处理。脚本是一个默认导出的函数，**就地修改**传入的 `config`（订阅解析后的配置），返回值忽略；脚本没有 `match` 声明，作用域判断写在代码里（不适用就提前 `return`）。YAML 覆写在全部脚本之后才声明式合并：
 
 ```js
 // ~/.mihomo-cli/overwrite.custom.js
@@ -451,7 +451,7 @@ YAML 操作符只保留最简单的三种，其余一律写脚本自由处理。
 // 且订阅主机在 glados-config.com 域下时生效，两个判据都中才继续
 export default function (config, ctx) {
   const { name, host } = ctx.subscription;
-  if (!name.startsWith('edu')) return; // 作用域判据不中：提前退出（= 未命中，status 会把它列进「不适用」）
+  if (!name.startsWith('edu')) return; // 作用域判据不中：提前退出
   if (host !== 'glados-config.com' && !host.endsWith('.glados-config.com')) return;
   // 把订阅下发的 Developer 分组默认选中改为 TW Fixed IP；
   // 该分组不存在时提示并跳过（不追加残缺分组，也不必为它改作用域）
@@ -461,7 +461,6 @@ export default function (config, ctx) {
   } else {
     ctx.warn('当前订阅无 Developer 分组，跳过 default-selected 注入');
   }
-  return true; // 命中当前订阅（status 据此区分生效与不适用）
 }
 ```
 
@@ -475,17 +474,17 @@ export default function (config, ctx) {
 | `ctx.subscription.url` | 订阅原始 URL |
 | `ctx.subscription.host` | 预解析的 URL hostname（解析失败为空串），按域名限定作用域时用它 |
 | `ctx.mode` | 本次构建的运行模式：`'mixed'` 或 `'tun'` |
-| `ctx.warn(message)` | 发一条提示进 warnings 通道，`config` / `doctor` / `start` 的输出可见（`status` 不显示 `ctx.warn` 的内容） |
+| `ctx.warn(message)` | 发一条提示进 warnings 通道，`config` / `doctor` / `start` 的输出可见 |
 
 约定与边界：
 
 - **必须同步**：返回 Promise 会报错。脚本是纯数据变换，没有要等网络的场景
-- **`return true` = 命中当前订阅**：脚本没有 `match` 声明，`status` 靠返回值区分「生效中」与「不适用于当前订阅」——判据过了就在最后 `return true`，不中就提前退出。判定严格认 `true`（返回别的 truthy 值不算），也不影响合并本身
+- **status 不判定脚本是否适用**：脚本没有 `match` 声明，启用中的脚本在 `status` 里一律列为生效（作用域由脚本自己判断）；`status` 是只读诊断，不执行脚本的变换函数
 - **全信任**：脚本以你的用户身份运行（和 `.zshrc` 一个待遇），不做沙箱与超时——别装来路不明的覆写脚本
 - **改不动系统锁定项**：`mixed-port`、`external-controller`、`allow-lan` 等入站与控制面键由 CLI 管理，脚本设置了会被剥除并提示（与 YAML 覆写同一条边界）
 - **脚本先于 YAML 执行**：脚本看到的是订阅原始配置，读不到 YAML 覆写注入的内容；需要脚本处理 YAML 注入项时，把那段逻辑也写进脚本
-- **只读命令也会加载脚本**：`ow` / `status` 扫描文件时会加载脚本，模块顶层代码随之执行（顶层只定义函数，变换都在导出函数里做）；导出的变换函数在 `config` / `doctor` / `start` 构建时调用；`status` 有活跃订阅时也会执行一次判定构建（独立副本，坏覆写文件不影响判定），但不显示 `ctx.warn` 的内容
-- 加载失败（语法错误、缺少导出、顶层抛错）与坏 YAML 同款姿态：`ow` / `status` 里「加载失败」可见，`config` / `start` / `doctor` 硬失败并带文件名；变换函数执行中抛错只在后三者报出（`status` 的判定构建会执行函数体，但把执行失败按「未判定」降级、不显示错误）
+- **只读命令也会加载脚本**：`ow` / `status` 扫描文件时会加载脚本，模块顶层代码随之执行（顶层只定义函数，变换都在导出函数里做）；导出的变换函数只在 `config` / `doctor` / `start` 构建时调用
+- 加载失败（语法错误、缺少导出、顶层抛错）与坏 YAML 同款姿态：`ow` / `status` 里「加载失败」可见，`config` / `start` / `doctor` 硬失败并带文件名；变换函数执行中抛错在后三者报出
 - 脚本受 `mihomo-cli ow off` 全局开关管理；想临时停用单个脚本，改个扩展名（如 `.bak`）即可
 
 ### 作用域限定（match）
@@ -507,19 +506,19 @@ export default function (config, ctx) {
 
 > **以 `*` 开头的值必须加引号**：YAML 里 `*` 开头是别名语法，`name: *edu` 会解析失败、整个文件被跳过（CLI 会提示加引号）。写成 `name: "*edu"` 即可。结尾的 `*`（`edu*`）不受影响
 
-`match` 块**写错会直接报错**（键名拼错、值为空、空块、写已移除的 `subscription` 键），而不是静默忽略后对所有订阅生效——写了 `match` 显然是想限定作用域，悄悄放宽比报错危险得多。历史写法 `subscription` 与 `name` 同义、已收掉，写它直接报错指明改写 `name`。
+`match` 块**写错会直接报错**（键名拼错、值为空、空块），而不是静默忽略后对所有订阅生效——写了 `match` 显然是想限定作用域，悄悄放宽比报错危险得多。
 
-> `url-domain` 命中该域名下的**所有**订阅。同一机场的多条订阅（如 `edu1`、`mini1`）URL 往往同域名，用 `url-domain` 会一并生效；要在同机场内按套餐区分，用 `name: edu*`。若只是担心某条订阅没有要改的分组，在 JS 脚本里判（找不到就 `ctx.warn` 跳过），不必为此改作用域；`match` 应当按「这份覆写在语义上属于哪些订阅」来写。JS 脚本没有 match 机制——作用域判断写在脚本开头（`if (!ctx.subscription.name.startsWith('edu')) return;`），判据过了在函数末尾 `return true`，`status` 便能把命中的脚本列进「生效」、未命中的计入「不适用」。
+> `url-domain` 命中该域名下的**所有**订阅。同一机场的多条订阅（如 `edu1`、`mini1`）URL 往往同域名，用 `url-domain` 会一并生效；要在同机场内按套餐区分，用 `name: edu*`。若只是担心某条订阅没有要改的分组，在 JS 脚本里判（找不到就 `ctx.warn` 跳过），不必为此改作用域；`match` 应当按「这份覆写在语义上属于哪些订阅」来写。JS 脚本没有 match 机制——作用域判断写在脚本开头（`if (!ctx.subscription.name.startsWith('edu')) return;`）。
 
-`mihomo-cli status` 会按当前活跃订阅区分「生效」与「不适用」，括号里只列本次真正参与合并的文件：
+`mihomo-cli status` 会按当前活跃订阅区分 YAML 覆写的「生效」与「不适用」，括号里只列本次参与合并的文件：
 
 ```text
 覆写: 已启用 (seal，1 个不适用，1 个已禁用)
 ```
 
-「不适用」指文件本身是启用的，只是 `match` 没命中当前订阅（JS 脚本则是没走到 `return true`）——切到命中的订阅（`sub use`）、改 `match` 或脚本判据才会生效，与 `enabled: false` 的「已禁用」是两回事。不适用与已禁用都只计数、不逐行点名：想知道是哪个文件，对照 `mihomo-cli ow` 列表的作用域一栏（它说明该文件管哪些订阅）。`--json` 形态下 `overwrite.applied` 是生效清单（`ow off` 全局关闭时为空数组），`overwrite.files` 仍是「未被 `enabled: false` 停用」的全部文件；语法或元数据键写错的文件进 `overwrite.errors`（不混进 files/applied）。
+「不适用」指文件本身是启用的，只是 `match` 没命中当前订阅——切到命中的订阅（`sub use`）或改 `match` 才会生效，与 `enabled: false` 的「已禁用」是两回事。不适用与已禁用都只计数、不逐行点名：想知道是哪个文件，对照 `mihomo-cli ow` 列表的作用域一栏（它说明该文件管哪些订阅）。`--json` 形态下 `overwrite.applied` 是生效清单（`ow off` 全局关闭时为空数组）；语法或元数据键写错的文件进 `overwrite.errors`（不混进 applied）。
 
-**坏文件不阻断诊断、但阻断启动**：YAML 语法错误（含 `enabled: no` 这类元数据键错误）的文件在 `mihomo-cli ow` 与 `status` 中以「加载失败」红字标出，诊断命令永远可用；但该文件不参与合并，`mihomo-cli start`/`doctor` 会硬失败并给出原因——曾经语法错只警告一行就跳过、退出码 0，启动成功但覆写根本没生效。
+**坏文件不阻断诊断、但阻断启动**：YAML 语法错误（含 `enabled: no` 这类元数据键错误）的文件在 `mihomo-cli ow` 与 `status` 中以「加载失败」红字标出，诊断命令永远可用；但该文件不参与合并，`mihomo-cli start`/`doctor` 会硬失败并给出原因。
 
 ### 单个文件的开关（enabled）
 

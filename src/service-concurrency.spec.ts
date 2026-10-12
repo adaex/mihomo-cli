@@ -13,7 +13,7 @@ import { sleep } from './utils.js';
  * 服务层两条并发防线的消费点验证。
  *
  * 为什么用「PATH 前置桩 launchctl + 子进程跑真实模块」而不是单测判据：
- * 这两条防线的缺陷都不在判据本身（shouldAbortStartOnDisable 有整组用例），而在
+ * 这两条防线的缺陷都不在判据本身（epochChanged 有整组用例），而在
  * **消费点漏铺**——热重载成功路径不查计数、stop 锁体持锁超过强夺阈值。判据纯函数
  * 测不出来，只有把真实 restartService/stopService 跑起来才能咬住。而真实 launchctl
  * 写操作不进自动化测试（enable/disable 会在 /var/db/com.apple.xpc.launchd/ 留永久
@@ -161,7 +161,7 @@ exit 0
 /**
  * 热重载场景脚本：起一个桩 external-controller（/version 自报 mihomo-cli、PUT /configs
  * 返回 204），让真实 launchOrRestart 走完「running 且未 disabled → restartService →
- * tryHotReload」全链路。BUMP=1 时在 PUT 到达的那一刻用真实 recordServiceStopped
+ * tryHotReload」全链路。BUMP=1 时在 PUT 到达的那一刻用真实 bumpStopEpoch
  * 递增停止计数——复现「热重载刚被内核接受、并发的 stop 随即完成」这一交错。
  */
 function hotReloadScript(): string {
@@ -169,7 +169,7 @@ function hotReloadScript(): string {
 import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from ${MODULES.paths};
-import { captureStopEpochBaseline, recordServiceStopped } from ${MODULES.stopEpoch};
+import { captureStopEpochBaseline, bumpStopEpoch } from ${MODULES.stopEpoch};
 import { launchOrRestart } from ${MODULES.runtime};
 
 const server = http.createServer((req, res) => {
@@ -177,7 +177,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end('{"version":"stub-kernel"}');
   } else if (req.method === 'PUT' && req.url !== undefined && req.url.startsWith('/configs')) {
-    if (process.env.BUMP === '1') recordServiceStopped();
+    if (process.env.BUMP === '1') bumpStopEpoch();
     res.writeHead(204);
     res.end();
   } else {
@@ -249,7 +249,7 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
   }
 
   // 缺陷本体：热重载期间并发 stop 完成了 bootout+disable+递增（epoch 5→6，由
-  // PUT 处理器用真实 recordServiceStopped 落地）。修复前 restartService 热重载成功
+  // PUT 处理器用真实 bumpStopEpoch 落地）。修复前 restartService 热重载成功
   // 即返回 started=true，launchOrRestart 照常报 pid；修复后必须走既有的
   // 「启动已取消」出口——这是用户可见的后果，不是实现细节
   it('热重载成功后计数已变 → 报「启动已取消」，不报已启动', async () => {
@@ -445,7 +445,7 @@ esac
  * ——mixed 侧的六条防线全在防「stop 被 start 覆盖」，这个反方向此前没有任何防线。
  *
  * 两道补防线各自验证：
- * 1. TUN 分支过守卫后 bump 停止计数（服务已 disabled/未装时走 recordServiceStopped，
+ * 1. TUN 分支过守卫后 bump 停止计数（服务已 disabled/未装时走 bumpStopEpoch，
  *    disable 路径本来就会 bump）——并发的 start 在锁内读到变化即放弃
  * 2. startTun 在执行含 pkill 的 sudo 脚本前复核服务装载状态，检出即中止
  */
@@ -769,7 +769,7 @@ describe('并发基线是命令入口的进程状态（restartToApply 慢速阶�
 import path from 'node:path';
 import { PATHS } from ${MODULES.paths};
 import { startService } from ${MODULES.service};
-import { captureStopEpochBaseline, recordServiceStopped } from ${MODULES.stopEpoch};
+import { captureStopEpochBaseline, bumpStopEpoch } from ${MODULES.stopEpoch};
 
 fs.mkdirSync(path.dirname(PATHS.mihomoBinary), { recursive: true });
 fs.writeFileSync(PATHS.mihomoBinary, 'stub-kernel');
@@ -781,7 +781,7 @@ fs.writeFileSync(PATHS.configFile, 'mixed-port: 17890\\n');
 // 命令入口（main() 的等价位置）：早于订阅下载等慢速阶段
 captureStopEpochBaseline();
 // 慢速阶段期间另一终端跑完 stop（stop 锁内 bump 后才 waitUntilUnloaded，此处直接 bump 即等价）
-recordServiceStopped();
+bumpStopEpoch();
 
 const r = await startService();
 console.log('RESULT:started=' + r.started);

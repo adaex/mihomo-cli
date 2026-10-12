@@ -105,10 +105,8 @@ export function restartModeOnChange(): RuntimeMode | null {
  * （详见 waitServiceHealthy）。热重载路径无需确认：它没有重启进程，且配置被拒时会
  * 回退到 kickstart（走确认分支）。
  *
- * 并发基线是命令入口捕获的进程基线（service.ts 的 captureStopEpochBaseline，D4）：
- * `startService` / `restartService` 内部与下方健康确认后的复读都读同一份，
- * 无需透传。TUN 分支在命令层 bump 自启后已重捕获基线（见 cmdStart），此处的复核
- * 消费的正是重捕获后的同一份——判据走 startAbortedByConcurrentStop 唯一读法（D2）。
+ * 并发判据统一走 startAbortedByConcurrentStop（命令入口基线，D4）；TUN 分支在 cmdStart
+ * bump 自启后已重捕获基线，此处复核消费的是重捕获后的值。
  */
 export async function launchOrRestart(mode: RuntimeMode): Promise<number | null> {
   if (mode === 'tun') {

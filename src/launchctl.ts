@@ -162,14 +162,10 @@ export function isServiceDisabledInLaunchd(timeoutMs: number = LAUNCHCTL_TIMEOUT
  *
  * **plist 不存在时也必须查 launchctl**，不能直接返回「未安装」就完事：用户手动
  * `rm` 掉 plist 后任务仍处 bootstrapped 状态，KeepAlive 会继续把内核拉起。
- * 只看文件的话 status 谎报「未安装」、uninstall 直接返回不执行 bootout，
- * 用户陷入「代理停不掉且 CLI 说没装」的死胡同（实测可复现）。
+ * 只看文件的话 status 谎报「未安装」、uninstall 不执行 bootout，代理停不掉。
  *
- * @param options.withDisabled 是否查 print-disabled。健康轮询（waitServiceHealthy）
- *   每 100ms 调一次、只消费 state/pid/死因，从不读 disabled，关掉它每轮少一个
- *   spawnSync（最坏 31 轮 = 31 次白跑的整张 disabled 表 dump，且 spawnSync 阻塞
- *   事件循环，launchctl 卡顿时轮询期间 Ctrl-C 无响应）。默认 true：状态快照的
- *   其余消费点（status/doctor/命令分支）都要 disabled 字段
+ * @param options.withDisabled 是否查 print-disabled（默认 true）。只消费 state/pid 的轮询与
+ *   热重载探测传 false，省掉每轮一次阻塞的 spawnSync
  */
 export function getServiceStatus(options: { withDisabled?: boolean } = {}): ServiceStatus {
   const withDisabled = options.withDisabled !== false;
@@ -254,7 +250,7 @@ export function runLaunchctlOrThrow(args: string[], what: string, timeoutMs: num
   });
 }
 
-/** 轮询上限与节奏（与旧 bash 实现一致：最多 5s） */
+/** 轮询上限与节奏：最多 5s */
 const UNLOADED_POLL_ATTEMPTS = 25;
 
 const UNLOADED_POLL_INTERVAL_MS = 200;

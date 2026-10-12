@@ -4,7 +4,6 @@ import { getServiceStatus } from './launchctl.js';
 import { PATHS } from './paths.js';
 import { lsofListenPids } from './proxy-probe.js';
 import { getControllerEndpoint } from './settings.js';
-import { shouldAbortStartOnDisable } from './stop-epoch.js';
 import type { ServiceStatus } from './types.js';
 
 /**
@@ -39,37 +38,23 @@ export function logOversized(): boolean {
  * 见 restartService 的返回值与 launchOrRestart。
  */
 export async function tryHotReload(prefetched?: ServiceStatus): Promise<boolean> {
-  // 先确认 controller 端口上确实是我们托管的服务内核，再把配置变更托付给它。
-  // 只看「服务已装」+ PUT 返回 2xx 是不够的：该端口被其他服务占用（另一个 Clash、
-  // 开发服务器）且对该 PUT 返回 2xx 时，CLI 会打印「已启动」而服务内核仍跑旧配置——
-  // 配置变更静默未生效，是最难排查的一类失败。
+  // 必须先确认 controller 端口上确实是我们托管的服务内核：端口被其他程序占用且对 PUT
+  // 返回 2xx 时，CLI 会报「已启动」而内核仍跑旧配置。任何探测失败（含状态查询抛错）都
+  // 按「热重载不可用」回退 kickstart——launchd 病态时恰恰最需要 kickstart 自愈
   const controller = new AbortController();
   try {
-    // 状态查询同样可能抛错（launchctl 超时/112/125、settings 端口非法）：探测类失败
-    // 必须按「热重载不可用」处理并回退 kickstart，不能让一次读状态失败直接废掉整个
-    // restartService——launchd 病态时恰恰最需要 kickstart 自愈。契约见函数头注释。
-    // 调用方（restartService←launchOrRestart）在同一同步拍已查过完整状态时经
-    // prefetched 透传，免再发一次 launchctl print；缺省自查保留直接调用与测试路径。
-    // withDisabled:false——热重载只消费 running/pid，print-disabled 是白多一次的阻塞
-    // 查询；abort 预算也不该被它分食（见下方 timer 起表位置的注释）
+    // prefetched：调用方同一同步拍已查过的状态，免再发一次 launchctl print
     const status = prefetched ?? getServiceStatus({ withDisabled: false });
     if (!status.running || status.pid === null) return false;
 
-    // 端口经 settings.ports 解析（默认 9090），与 buildConfig 写进配置的值同源；
-    // 端口与 secret 由 getControllerEndpoint 取同一份快照（D10）——两次独立读盘之间
-    // settings 被原子替换时，PUT 可能发往新控制器端口却带旧 secret（或反之），
-    // 本可成功的热重载无谓回退重启。端口非法按「热重载不可用」回退 kickstart
-    // （原 getPorts 抛错由外层 catch 归同一路径，此处显化）
+    // 端口与 secret 取同一份 settings 快照（D10）；端口非法按「热重载不可用」回退
     const endpoint = getControllerEndpoint();
     if (endpoint.port === null) return false;
     const baseUrl = `http://127.0.0.1:${endpoint.port}`;
     // 配置了 controller_secret 时必须带 Bearer，否则内核返回 401 → 热重载恒失败回退重启
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (endpoint.secret) headers.Authorization = `Bearer ${endpoint.secret}`;
-    // timer 起表在状态查询之后、第一个 fetch 之前：abort 预算覆盖 /version 探测、
-    // lsof（自带 5s 超时的同步调用，夹在两个 fetch 之间）与 PUT，唯独不被前置的
-    // launchctl 查询分食——launchctl 病态慢（print 各 2-3s）时 timer 在 fetch 前已
-    // 到点会令热重载恒不可用，每次 restart 都退化为完整重启（代理瞬断）
+    // timer 起表在状态查询之后：abort 预算只覆盖 /version、lsof 与 PUT，不被慢 launchctl 分食
     const timer = setTimeout(() => controller.abort(), HOT_RELOAD_TIMEOUT_MS);
     try {
       // /version 是 mihomo 特有端点，返回体带 version 字段；用它确认应答方是 mihomo
@@ -98,24 +83,4 @@ export async function tryHotReload(prefetched?: ServiceStatus): Promise<boolean>
   } catch {
     return false;
   }
-}
-
-/**
- * 热重载成功后给 restartService 的返回值下结论：复读停止计数，变了就按并发停止处理。
- *
- * 热重载是唯一没有健康确认的「生效」路径（内核没重启，PUT 204 即接受），而 tryHotReload
- * 从状态探测到 PUT 返回有真实耗时窗口，期间的并发 stop 已完成 bootout + disable + 递增——
- * 不查就报「已启动」，终态与用户最后一条命令相反。
- *
- * `hotReloaded` 恒为 true（配置确实被内核接受，如实反映）；要不要报成功由 `started`
- * 说了算——它与 kickstart 回退分支的 `started` 同名同义，started=false 经
- * launchOrRestart 既有的「启动已取消」出口报错，文案不另起一份。
- * 判据复用 shouldAbortStartOnDisable，这里只是消费点，不写第二套比较。
- *
- * 抽成纯函数是为了可测：热重载路径依赖真实 launchd 状态与 external-controller，
- * 自动化测试起不了真服务（真实 launchctl 写操作不进测试），决策逻辑单独锁定；
- * 消费点另有端到端用例（fake launchctl + 桩 controller）。
- */
-export function concludeHotReload(stopEpochBefore: number, stopEpochNow: number): { hotReloaded: boolean; started: boolean } {
-  return { hotReloaded: true, started: !shouldAbortStartOnDisable(stopEpochBefore, stopEpochNow) };
 }

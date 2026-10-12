@@ -6,17 +6,14 @@ import { ensureDirs, USER_DATA_DIR } from './paths.js';
 
 /**
  * sudo 脚本执行超时：交互输密码 + 多步 root 操作的统一上限。
- * spawnSync 超时会把密码提示连同整个 sudo 子进程一起杀掉，别处自抄一个更短的数字，
- * 就是在给「密码输得慢的用户」埋「操作失败」的假象。
- * 导出供 runSudoScript 自身与 process-stop.spec 的「交互式 spawnSync 不得自抄超时」
- * 哨兵断言引用同一常量。
+ * 超时会连同密码提示一起杀掉 sudo，别处不得自抄更短的值（process-stop.spec 有哨兵断言）。
  */
 export const SUDO_TIMEOUT_MS = 60_000;
 
 /**
  * sudo 鉴权取消/密码错误（退出码 1）。独立类型而非裸 Error：调用方的包装层要区分
  * 「用户主动取消」（常规操作，label 用「已取消」）与「脚本内部失败」（≥2，真错误）。
- * 按消息文本匹配太脆——sudo.ts 里消息一改，判定就静默失效。
+
  */
 export class SudoAuthError extends Error {
   constructor() {
@@ -29,7 +26,6 @@ export class SudoAuthError extends Error {
  * sudo 失败的用户可见短语：取消/密码错误归一说法，其余失败**保留原始 message**——
  * runSudoScript 的非鉴权错误自带具体原因（如非交互环境无法输密码），笼统说
  * 「sudo 执行失败」会把修复方式（换交互终端重跑）藏掉。
- * 各命令的警告文案共用这一份——各写一份会漂移出两三种说法
  */
 export function describeSudoFailure(e: Error): string {
   return e instanceof SudoAuthError ? 'sudo 已取消或密码错误' : e.message;

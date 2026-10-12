@@ -81,4 +81,12 @@ Breaking 面：脚本看到的始终是订阅配置，读不到 YAML 注入项�
 
 安全边界不随段序移动：剥 LOCKED_CONFIG_KEYS 在**全部**覆写之后、systemConfig 最后注入，两类覆写都改不掉入站与控制面；脚本锁定键检测是执行前后浅快照（before 是订阅配置，本就含机场下发的端口键），不依赖 YAML 先合并；YAML 侧锁定键检测作用于最终合并配置，与文件顺序无关。
 
-脚本的命中报告走返回值（`return true`）：脚本没有 match 声明，`selectActiveOverwriteFiles` 恒放行，status 的「生效/不适用」此前对脚本永远报生效——作用域不中的脚本混在生效清单里，与「match 不命中的 YAML」同一种误读。约定刻意最简：判据过了在函数末尾 `return true`，其余（提前退出、无返回值）一律未命中；严格 `=== true`，返回 config 等对象不算（防「顺手 return」被误读）。判定不参与合并闸门（selectActiveOverwriteFiles 不看它），只供展示：buildConfig 透传 `scriptMatches`，config 的提示段对未命中脚本给一行事实性提示（不断言「没改配置」——漏写 return true 的脚本可能已改了配置，提示只报告约定信号）。status 的判定走**独立旁路** judgeScriptMatches 而非 buildConfig：后者吃 loadOverwriteFile 的硬失败门，一个坏 YAML 就把全部脚本判定打回「未判定＝生效」——恰是判定要消灭的误读；旁路复用 listOverwriteFile 同一次读目录的 entries（typo 警告与 YAML 解析不跑两遍）、无脚本的目录直接跳过，坏订阅按未判定降级（诊断面不崩，D7 同款姿态）。
+脚本的命中报告（`return true` 约定）**已废弃**，见 D14。
+
+## D14 收缩：CLI 不判定脚本是否命中，诊断面不执行用户脚本
+
+D13 尾段的 `return true` 命中报告为了让 status 区分脚本「生效/不适用」，引入了 ScriptMatch 类型、applyOverwrite 的额外返回值、`OverwriteListResult.entries` 与独立旁路 judgeScriptMatches——代价是只读的 `status` 每次都要执行用户脚本，而得到的只是一行展示信息。判据与 D12 相同：设施规模与真实使用面不匹配。
+
+决策：脚本返回值忽略；status 把启用中的脚本一律列为生效（作用域由脚本自判），`status` 不调用变换函数（加载模块仍会执行顶层代码，契约照旧：顶层只定义函数）。拒绝的替代：保留判定但缓存结果——缓存需要失效协议，问题不在耗时而在诊断面执行用户代码本身。
+
+同轮收缩（同一判据）：status JSON 去掉 `overwrite.files`（「未停用但不按 match 过滤」的旧契约，与 `applied` 并存只会让消费方选错字段）；版本查询统一走 curl（有代理 `-x`、无代理 `--noproxy '*'`），删除直连 fetch 分支，只留一条 HTTP 实现；残留清理的 scriptError/pidError 双字段与三档判定合并为单个 `incomplete` 原因；覆写已移除操作符的两条专属报错合为一条，match 的 `subscription` 同义键按未知键报错，name 精确值的「不可能命中」预检删除（不命中即不生效，与写错订阅名同级）。

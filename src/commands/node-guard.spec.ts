@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { MIN_NODE_VERSION } from '../constants.js';
+import { NODE_ENGINES } from '../constants.js';
 import { setupGuardFixture } from '../test-support/guard.js';
 
 /**
@@ -37,10 +37,8 @@ function runAsNodeVersion(version: string, args: string[]) {
 }
 
 describe('Node 版本守卫', () => {
-  // engines 的写法若从 `>=x.y.z` 变成别的 range，守卫会整体跳过（宁可不拦也不能挡死所有命令）。
-  // 这条断言让那种变化立刻可见，而不是让守卫静默失效
-  it('最低版本取自 package.json 的 engines', () => {
-    assert.equal(MIN_NODE_VERSION, '24.20.0');
+  it('版本范围取自 package.json 的 engines', () => {
+    assert.equal(NODE_ENGINES, '>=24.20.0');
   });
 
   for (const cmd of ['status', 'stop', 'start', 'install']) {
@@ -68,7 +66,7 @@ describe('Node 版本守卫', () => {
   });
 
   it('满足下限时放行（不误伤当前支持的版本）', () => {
-    const { status, output } = runAsNodeVersion(MIN_NODE_VERSION ?? '24.20.0', ['version']);
+    const { status, output } = runAsNodeVersion('24.20.0', ['version']);
     assert.equal(status, 0, output);
   });
 });

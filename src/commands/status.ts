@@ -1,15 +1,14 @@
 import { assertKnownFlags, assertPositionalCount, hasFlag } from '../argv.js';
 import { colors } from '../colors.js';
-import { deriveRuntimeMode, getConfigInfo, getKernelVersion, hasKernel, judgeScriptMatches, runtimeModeLabel } from '../config.js';
+import { deriveRuntimeMode, getConfigInfo, getKernelVersion, hasKernel, runtimeModeLabel } from '../config.js';
 import { VERSION } from '../constants.js';
-import { CliError } from '../errors.js';
 import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic } from '../format.js';
 import { getServiceStatus } from '../launchctl.js';
 import { listOverwriteFile, shortOverwriteName } from '../overwrite.js';
 import { probeProxyConnectivity } from '../proxy-probe.js';
 import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit } from '../service.js';
-import { getPortsOrNull, getSubscriptionsWithCache, readSubscriptionRawConfig, subscriptionUrgency } from '../settings.js';
+import { getPortsOrNull, getSubscriptionsWithCache, subscriptionUrgency } from '../settings.js';
 import { formatProxySummary, getActiveSubscription, isSubscriptionStale, resolveUpdateInterval } from '../subscription.js';
 import type { OverwriteFileInfo, ProxyProbeResult, StatusJson, SubscriptionUrgency } from '../types.js';
 
@@ -98,11 +97,10 @@ function buildStatusJson(args: {
       : null,
     overwrite: {
       enabled: args.overwriteEnabled,
-      files: args.overwriteFiles.filter(f => f.enabled).map(f => f.name),
       // 全局关闭时 buildConfig 不加载任何覆写，applied 必须空——只滤 enabled/match
       // 会列出「生效文件」，与同一份 JSON 里的 enabled:false 自相矛盾
       applied: args.overwriteEnabled ? args.overwriteFiles.filter(isActiveOverwrite).map(f => f.name) : [],
-      // 加载失败的文件不属于 files/applied（既没合并也无法判 enabled/match），单列 errors。
+      // 加载失败的文件不属于 applied（既没合并也无法判 enabled/match），单列 errors。
       // hint 必须带出：最有用的迁移指引（已移除操作符改 JS、*edu 加引号等）都在里面，
       // 只给 message 等于把可执行的修复步骤扔在启动硬失败那一条路径上
       errors: args.overwriteBroken.map(b => ({ name: b.name, message: b.message, hint: b.hint })),
@@ -121,7 +119,6 @@ function buildStatusJson(args: {
 /** 全程免 sudo：launchctl print / print-disabled 均可读，pgrep/ps 亦然。 */
 export async function printStatus(args: string[] = []): Promise<void> {
   assertKnownFlags(args, ['-j', '--json', '--no-probe'], 'status [--json] [--no-probe]');
-  // 不接受位置参数：`status garbage` 此前被静默忽略
   assertPositionalCount(args, 0, 1, 'mihomo-cli status [-j|--json] [--no-probe]');
   const asJson = hasFlag(args, '-j', '--json');
   const skipProbe = hasFlag(args, '--no-probe');
@@ -136,33 +133,8 @@ export async function printStatus(args: string[] = []): Promise<void> {
   const {
     enabled: overwriteEnabled,
     files: overwriteFiles,
-    entries: overwriteEntries,
     broken: overwriteBroken,
   } = listOverwriteFile(activeSub ? { subName: activeSub.name, subUrl: activeSub.url } : undefined);
-  // 脚本没有 match 声明，静态判不了命中；有活跃订阅且目录里有脚本时，用订阅缓存
-  // 正文跑一遍判定（judgeScriptMatches：复用上面同一次读目录的 entries、坏文件
-  // 不抛——D7 判定旁路；无脚本时跳过，不为空判定白跑一次订阅解析）。无缓存/
-  // 解析失败按「未判定」处理（matched 留 undefined，与无订阅时的语义一致）。
-  // 手改 settings.json 写入非法订阅名时 readSubscriptionRawConfig 的路径防御会抛
-  // CliError——富化是展示附加信息，不能让它击穿整个 status（doctor 同款姿态，
-  // 坏状态留给专门的检查项去报），按「未判定」跳过
-  if (activeSub && overwriteEnabled && overwriteFiles.some(f => f.kind === 'script')) {
-    try {
-      const rawContent = readSubscriptionRawConfig(activeSub.name);
-      if (rawContent) {
-        const { matches } = judgeScriptMatches(rawContent, deriveRuntimeMode(info), { subName: activeSub.name, subUrl: activeSub.url }, overwriteEntries);
-        const matchedByName = new Map(matches.map(m => [m.file, m.matched]));
-        for (const f of overwriteFiles) {
-          if (f.kind === 'script' && matchedByName.has(f.name)) f.matched = matchedByName.get(f.name);
-        }
-      }
-    } catch (e) {
-      // 富化降级只针对预期错误（手改 settings.json 写入非法订阅名时路径防御的 CliError）；
-      // 程序缺陷（TypeError 之类）不属于「未判定」，原样上抛——吞掉只会让 status 永远
-      // 安静地少一列而无人知道为什么
-      if (!(e instanceof CliError)) throw e;
-    }
-  }
   const cached = activeSub ? getSubscriptionsWithCache().find(s => s.name === activeSub.name) : undefined;
   // 控制器端口在 settings 非法时不应让整个 status 崩掉（doctor 另有一项专查非法 ports）
   const controllerPort = getPortsOrNull()?.controller ?? null;
@@ -189,8 +161,6 @@ export async function printStatus(args: string[] = []): Promise<void> {
           activeSub,
           cached,
           overwriteEnabled,
-          // 两个数组在 buildStatusJson 里分出来：files 仍是旧契约（只滤文件级 enabled，
-          // 不按 match、不随全局开关变空），applied 才是本次真正参与合并的
           overwriteFiles,
           overwriteBroken,
           service,
@@ -306,19 +276,9 @@ export async function printStatus(args: string[] = []): Promise<void> {
 }
 
 /**
- * 覆写展示：主行只列**本次真正生效**的文件，未生效的分两类各折一句计数。
- *
- * 分两类而不是一句「已启用 (a, b)」：文件躺在目录里、没被 enabled:false 停用、
- * 却因 match 不命中当前订阅而完全没参与合并——这种文件混在主行里，看起来和生效的
- * 一模一样，用户会拿它解释自己看到的行为（「我明明覆写了」），排查方向整个跑偏。
- * 两类失效原因不同、操作也不同（停用的要改文件里的 enabled，未命中的要看作用域或
- * 切订阅），故不合并成一个计数。
- *
- * 两类都只计数、不逐行点名：不命中/停用是常态而非故障，逐行展开每次刷屏；
- * 想知道是哪个文件、作用域是什么，`ow` 列表有完整信息（含改法提示）。
- *
- * matched 为 undefined（无活跃订阅、没法判 match）时按「未被排除」处理：此时
- * 连订阅都没有，覆写本就无从谈起，不值得再分一类。
+ * 覆写展示：主行只列**本次真正生效**的文件；未生效的分「不适用」（YAML match 不命中当前订阅）
+ * 与「已禁用」（文件内 enabled:false）两类各折一句计数——原因与改法不同，且都不逐行点名
+ * （常态而非故障，详情看 `ow` 列表）。matched 为 undefined（无活跃订阅/脚本）按生效处理。
  */
 function printOverwriteLines(enabled: boolean, files: OverwriteFileInfo[], broken: ReturnType<typeof listOverwriteFile>['broken']): void {
   if (!enabled) {

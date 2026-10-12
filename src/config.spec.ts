@@ -699,9 +699,7 @@ describe('buildConfig 带出本次生效的覆写清单', () => {
     }
   });
 
-  it('未返回 true 的脚本不进 warnings（分歧行为是设计内常态，非「配置没按预期生效」）', () => {
-    // 此前未命中会在 start 顶部打黄色「配置提示」且与 status 计数重复；
-    // 「未命中仍可见」由 overwrite.spec 的 status 计数用例端到端锁住（走 judgeScriptMatches）
+  it('脚本提前 return（作用域不中）不产生 warnings', () => {
     const OW_SCRIPT = 'overwrite.miss.js';
     fs.writeFileSync(path.join(tmpDir, OW_SCRIPT), 'export default function () { return; }\n');
     try {

@@ -6,7 +6,7 @@ import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './pa
 import type { Settings, Subscription, SubscriptionCache, SubscriptionCacheEntry, SubscriptionUrgency, SubscriptionWithCache } from './types.js';
 
 /**
- * 备份损坏的数据文件并告警（settings.json / 订阅缓存同款语义，此前两份内联文案已漂移）。
+ * 备份损坏的数据文件并告警（settings.json / 订阅缓存同款语义）。
  *
  * 备份只保留第一份：之后回退默认并写回，若文件再次损坏（外部反复覆写），
  * 覆盖 `.bak` 会用默认内容/新损坏盖掉唯一的用户原件。备份失败不阻塞读取。
@@ -215,18 +215,9 @@ function writeSubscriptionCache(cache: SubscriptionCache): void {
 }
 
 /**
- * 更新单个订阅的缓存条目（读全量→合并该条→写全量），**持跨进程锁**。
- *
- * 单进程内的并行更新（autoUpdateStaleSubscription 的 Promise.all）靠「全程同步、
- * 读写之间无 await」即可安全，但那只在进程内成立：cache.json 与 settings.json 一样
- * 会被多个 CLI 进程同时写（一个终端 `sub update` 并行下载各自回写，另一个终端
- * `start` 又触发自动更新），裸读-改-写下后写者会整块覆盖先写者的条目
- * （实测 2 进程各写 30 条丢 1 条、4 进程各写 30 条丢 7 条；丢的是 `updated_at` →
- * needsAutoUpdate 恒 true → 该订阅每次 start 都重新下载）。故与 settings.json 同构，
- * 把整个读-改-写圈进锁里。
- *
- * 锁文件在 USER_DATA_DIR 根下，**不能放在 `subscriptions/` 里**：`reset subs` 会
- * `rmrf` 整个目录，把别人正持着的锁一起带走（见 paths.ts 锁常量的注释）。
+ * 更新单个订阅的缓存条目（读全量→合并该条→写全量），**持跨进程锁**：多个 CLI 进程会并发写
+ * cache.json（如 `sub update` 与另一终端的 start 自动更新），裸读-改-写会丢掉 `updated_at`
+ * 致该订阅每次 start 都重新下载。锁文件在数据根而非 subscriptions/（reset subs 会整删该目录）。
  */
 export function saveSubscriptionCache(subName: string, data: Partial<SubscriptionCacheEntry>): void {
   ensureDirs();

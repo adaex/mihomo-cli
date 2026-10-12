@@ -99,8 +99,7 @@ function readUrlFromClipboard(): string | null {
 }
 
 async function subAdd(args: string[]): Promise<void> {
-  // url 与可选 name 至多两个：`sub add <url> <name> extra` 此前静默忽略 extra；
-  // 校验先于入库/下载，避免半成品副作用
+  // url 与可选 name 至多两个；校验先于入库/下载，避免半成品副作用
   assertPositionalCount(args, 2, 2, 'mihomo-cli sub add <url> [name]');
   let url = args[2]?.trim();
   // 空串按显式提供处理并报错，而非静默落到 'default'——同仓其他命令（ui/dir open/
@@ -158,7 +157,6 @@ async function subAdd(args: string[]): Promise<void> {
 }
 
 async function subUpdate(args: string[]): Promise<void> {
-  // 名称至多一个：`sub update foo bar` 此前静默忽略 bar
   assertPositionalCount(args, 1, 2, 'mihomo-cli sub update [name]');
   const nameArg = getNonFlagArg(args, 2);
   const subs = getSubscriptions();
@@ -167,8 +165,7 @@ async function subUpdate(args: string[]): Promise<void> {
     throw subscription.noSubscriptionsError();
   }
 
-  // 区分「无参数」（更新所有）与「空串参数」（`sub update ""`，变量展开为空的常见笔误），
-  // 后者此前静默更新所有订阅
+  // 区分「无参数」（更新所有）与「空串参数」（`sub update ""`，变量展开为空的常见笔误）
   if (nameArg === '') {
     throw new CliError('请指定订阅名称', { hint: ['更新所有订阅直接执行: mihomo-cli sub update', `更新指定订阅: mihomo-cli sub update <名称>`] });
   }
@@ -188,7 +185,7 @@ async function subUpdate(args: string[]): Promise<void> {
     }
     printRestartHintIfRunning();
     printSubscriptionList();
-    // 部分失败也要非零退出：此前 2/3 成功时退出 0，脚本与「更新过了」的用户都发现不了
+    // 部分失败也要非零退出：否则脚本与用户都发现不了
     // 那条失败；逐条原因已在上面打印，hint 只给逐条重试命令
     if (failedResults.length > 0) {
       const allFailed = failedResults.length === results.length;
@@ -213,7 +210,7 @@ async function subUpdate(args: string[]): Promise<void> {
 }
 
 async function subUse(args: string[]): Promise<void> {
-  // 名称至多一个：`sub use foo bar` 此前静默忽略 bar；带值选项的值（-u 5000）不算位置参数
+  // 名称至多一个；带值选项的值（-u 5000）不算位置参数
   assertPositionalCount(args, 1, 2, 'mihomo-cli sub use <name>');
   // 即使未在运行、不触发重启，-u 缺值/非法值也在此刻报错，不静默吞掉
   assertRestartOptionValues(args);
@@ -256,7 +253,6 @@ async function subUse(args: string[]): Promise<void> {
 }
 
 async function subRemove(args: string[]): Promise<void> {
-  // 名称至多一个：`sub remove foo bar` 此前静默忽略 bar
   assertPositionalCount(args, 1, 2, 'mihomo-cli sub remove <name>');
   // 用 getNonFlagArg 而非 args[2]：允许 -y 出现在名称之前（`sub remove -y foo`）
   const name = getNonFlagArg(args, 2);

@@ -21,7 +21,7 @@ const { SERVICE_LABEL } = await import('./constants.js');
 const { PATHS, DIRS } = await import('./paths.js');
 const { isRunning, MAIN_INSTANCE_PATTERN } = await import('./process-probe.js');
 const { assertTunStartNotRaced, restartModeFor, restartModeOnChange } = await import('./runtime.js');
-const { captureStopEpochBaseline, recordServiceStopped } = await import('./stop-epoch.js');
+const { captureStopEpochBaseline, bumpStopEpoch } = await import('./stop-epoch.js');
 const { tunBlockedByConcurrentStart } = await import('./service.js');
 const { CliError } = await import('./errors.js');
 
@@ -145,7 +145,7 @@ exit 0
 
   it('未装载 + 基线重捕获后无他人 bump → 通过（C1 面 a 的正常路径）', () => {
     withStub('unloaded', () => {
-      recordServiceStopped(); // 模拟本命令 TUN 分支自己的 bump
+      bumpStopEpoch(); // 模拟本命令 TUN 分支自己的 bump
       captureStopEpochBaseline(); // 命令层 bump 后的重捕获：自己的递增不计
       assert.doesNotThrow(() => assertTunStartNotRaced());
     });
@@ -153,9 +153,9 @@ exit 0
 
   it('未装载 + 重捕获后他人再 bump（并发 stop）→ 取消，终态听最后一条命令', () => {
     withStub('unloaded', () => {
-      recordServiceStopped();
+      bumpStopEpoch();
       captureStopEpochBaseline();
-      recordServiceStopped(); // 并发 stop 的 bump
+      bumpStopEpoch(); // 并发 stop 的 bump
       const err = (() => {
         try {
           assertTunStartNotRaced();
@@ -172,7 +172,7 @@ exit 0
   it('不重捕获则自己的 bump 会自触发取消（重捕获必要性的对照）', () => {
     withStub('unloaded', () => {
       captureStopEpochBaseline();
-      recordServiceStopped(); // 自己的 bump，但没有重捕获
+      bumpStopEpoch(); // 自己的 bump，但没有重捕获
       assert.throws(() => assertTunStartNotRaced(), /启动已取消/);
     });
   });

@@ -14,15 +14,12 @@ import type { ProcessStatus } from './types.js';
 const PS_TIMEOUT_MS = 5000;
 
 /**
- * 一次 ps 取一个 pid 的存活、属主、RSS 与命令行四个事实——存活/属主/命令行匹配/
- * 内存展示与逐 pid 清理都从这同一份结果派生，不再各发一次 ps（一次清理对每个 pid
- * 曾最多连发四次：uid 一次、存活一次、两条 needle 各一次）。
+ * 一次 ps 取一个 pid 的存活、属主、RSS 与命令行四个事实，所有派生判定共用这一份结果。
  *
  * 必须带 `-ww`：BSD/macOS 的 ps 即使 stdout 不是终端也会把 command 列截断到 79 列。
  * needle 是 binary 路径（偏移 0，截不掉），但命令行其余部分越过 79 列就会被截断，
  * `-ww` 不能去掉。
- * ps 失败或查不到统一为 NOT_RUNNING：存活、属主与命令行匹配的所有派生判定在查询
- * 失败时都取保守默认，与旧的四个独立函数一致。
+ * ps 失败或查不到统一为 NOT_RUNNING：所有派生判定在查询失败时取保守默认。
  */
 export interface ProbedProcess {
   alive: boolean;
@@ -98,8 +95,7 @@ export function isRunning(): boolean {
 /**
  * 判定某 pid 是否仍是我们的内核进程（活着 + 命令行含任一二进制路径）。
  * kill 前的最后一道复核：探测（pgrep）到发信号之间隔着逐 pid 的 ps 查询，目标
- * 自行退出且 pid 被复用时，盲目 SIGKILL 会误杀无关进程——批量 pkill 分支在发信号
- * 前由 pkill 自身重估 pattern，逐 pid 分支此前没有等价防线（两侧安全性倒挂）。
+ * 自行退出且 pid 被复用时，盲目 SIGKILL 会误杀无关进程（批量 pkill 分支由 pkill 自身重估 pattern）。
  */
 export function isMihomoProcess(pid: number): boolean {
   return isProbedMihomo(probeProcess(pid));
@@ -161,9 +157,7 @@ export function getStatus(): ProcessStatus {
   const pid = getPid();
   if (!pid) return { running: false, pid: null, memory: null };
 
-  // 存活判定与内存/属主同源一次 ps：旧实现先 isMihomoProcess（最多三次 ps）再
-  // getProcessInfo（又一次），同一拍四个查询；probe 不匹配（PID 被复用/已退出）
-  // 即未运行，不附带信息
+  // 存活判定与内存同源一次 ps；probe 不匹配（PID 被复用/已退出）即未运行
   const p = probeProcess(pid);
   if (!isProbedMihomo(p)) return { running: false, pid: null, memory: null };
 

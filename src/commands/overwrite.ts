@@ -36,7 +36,7 @@ function printOverwriteList(): void {
         console.log(`    ${colors.gray('作用域: ')}${f.scope}`);
       }
       if (f.kind === 'script') {
-        console.log(`    ${colors.gray('类型: ')}JS 脚本（在全部 YAML 覆写之前执行；适用于当前订阅时末尾 return true，status 据此区分生效与不适用）`);
+        console.log(`    ${colors.gray('类型: ')}JS 脚本（在全部 YAML 覆写之前执行；作用域由脚本自行判断）`);
       } else if (f.keys.length > 0) {
         console.log(`    ${colors.gray('字段: ')}${f.keys.join(', ')}`);
       }
@@ -64,7 +64,6 @@ function printOverwriteList(): void {
 
 /** 切换覆写开关：已是目标状态则仅提示；否则写入并（运行中）重启生效。 */
 async function setOverwrite(enabled: boolean, args: string[]): Promise<void> {
-  // on/off 是唯一的位置 token：`ow on garbage` 此前静默忽略 garbage
   assertPositionalCount(args, 0, 2, 'mihomo-cli ow [on|off]');
   // 即使未在运行、不触发重启，-u 缺值/非法值也在此刻报错，不静默吞掉
   assertRestartOptionValues(args);

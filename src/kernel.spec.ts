@@ -401,6 +401,14 @@ describe('buildReleaseApiCurlArgs（代理路径的 release API 查询）', () =
   it('-x 原样透传代理地址（显式 --proxy 与本机混合端口同一路径）', () => {
     const args = buildReleaseApiCurlArgs('http://192.168.1.2:7897', url);
     assert.equal(args[args.indexOf('-x') + 1], 'http://192.168.1.2:7897');
+    assert.ok(!args.includes('--noproxy'), '--noproxy 优先级高于 -x，与代理并存会废掉代理');
+  });
+
+  it('无代理即直连：--noproxy * 且不带 -x（不被 env 代理带偏，与下载直连通道同口径）', () => {
+    const args = buildReleaseApiCurlArgs(null, url);
+    assert.equal(args[args.indexOf('--noproxy') + 1], '*');
+    assert.ok(!args.includes('-x'));
+    assert.equal(args[args.length - 1], url);
   });
 });
 

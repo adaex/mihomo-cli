@@ -35,7 +35,7 @@ function copyToClipboard(text: string): boolean {
 
 export function cmdUI(args: string[]): void {
   assertKnownFlags(args.slice(1), ['-c', '--copy-secret'], 'ui [zash|dash|yacd] [-c]');
-  // 名称至多一个：`ui zash extra` 此前静默忽略 extra；校验先于打开浏览器等副作用
+  // 校验先于打开浏览器等副作用
   assertPositionalCount(args, 1, 1, 'mihomo-cli ui [zash|dash|yacd] [-c]');
   const uiName = resolveUiName(args);
   const copySecret = hasFlag(args, '-c', '--copy-secret');

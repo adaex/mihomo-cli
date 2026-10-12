@@ -7,7 +7,7 @@ import { compareVersions } from 'compare-versions';
 import { getKernelVersion, probeKernelVersion } from './config.js';
 import { VERSION } from './constants.js';
 import { buildCurlSpawnEnv } from './curl-spawn.js';
-import { createHttpClient, createHttpError } from './http.js';
+import { createHttpError } from './http.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
 import { escapeRegExp, lastCurlErrorLine } from './text.js';
 import type { GitHubAsset, GitHubRelease, KernelUpdateInfo } from './types.js';
@@ -17,8 +17,6 @@ const KERNEL_HTTP_TIMEOUT = 120_000;
 const KERNEL_DOWNLOAD_TIMEOUT = 180_000;
 /** gh 通道下载超时：gh 无内置下载超时，正常 3～30s；100s 封顶让劣质节点快速失败，给回退通道让路 */
 const GH_DOWNLOAD_TIMEOUT = 100_000;
-
-const HTTP_CLIENT = createHttpClient({ timeout: KERNEL_HTTP_TIMEOUT });
 
 const execFileAsync = promisify(execFile);
 
@@ -223,21 +221,18 @@ export function pickLatestRelease(releases: GitHubRelease[]): GitHubRelease {
 }
 
 /**
- * 构造代理路径查询 release API 的 curl 参数。纯函数，参数数组单测锁死（口径同 buildKernelCurlArgs）：
+ * 构造 release API 查询的 curl 参数（经代理与直连共用一条实现）。纯函数，单测锁死：
  * - URL 直指 api.github.com 且居末位——API 绝不经过镜像（镜像可伪造 browser_download_url，D8）
- * - `-x <proxy>`：curl 的代理传输层（本机混合端口或显式 --proxy），TLS 端到端，响应仍来自 GitHub。
- *   no_proxy 例外表会绕过 -x，由调用处经 buildCurlSpawnEnv（curl-spawn.ts）置空兜住
- * - `--proto '=https'` / `--proto-redir '=https'`：全链路强制 https，与下载通道同防线
- * - `--fail-with-body` + `-w '\n%{http_code}'`：4xx（未认证限流 60 次/时，403 常见）时 curl
- *   退出码仍为 0，JSON 错误对象会一路流到 pickLatestRelease 才抛笼统的「无法获取版本信息」；
- *   非 2xx 必须在 curl 层就失败（退出码 22），错误体与状态码随 stdout 带回，
- *   由 translateReleaseApiCurlError 组装成与直连路径同形态的 HTTP 错误
+ * - 有代理：`-x <proxy>`（TLS 端到端，响应仍来自 GitHub；no_proxy 由 buildCurlSpawnEnv 置空兜住）；
+ *   无代理：`--noproxy '*'`，与内核下载的直连通道同口径——真直连，不被 env 代理带偏
+ * - `--proto '=https'` / `--proto-redir '=https'`：全链路强制 https
+ * - `--fail-with-body` + `-w '\n%{http_code}'`：4xx（未认证限流 60 次/时）在 curl 层失败（退出码 22），
+ *   错误体与状态码随 stdout 带回，由 translateReleaseApiCurlError 组装成 HTTP 错误
  */
-export function buildReleaseApiCurlArgs(proxy: string, url: string): string[] {
+export function buildReleaseApiCurlArgs(proxy: string | null, url: string): string[] {
   return [
     '-s',
-    '-x',
-    proxy,
+    ...(proxy ? ['-x', proxy] : ['--noproxy', '*']),
     '--proto',
     '=https',
     '--proto-redir',
@@ -269,10 +264,9 @@ export function parseCurlStatusOutput(stdout: string): { body: string; statusCod
 /**
  * 把 release API 查询的 curl 子进程失败翻译为用户可读错误。纯函数
  * （execFile 的 rejection 形态由调用方/测试构造，见 getLatestRelease）：
- * - 退出码 22（`--fail-with-body` 的 HTTP 错误）且 stdout 带回状态码 ≥400：组装成与
- *   直连路径（http.ts 的 createHttpError）完全同形的错误——message `HTTP <status>` +
- *   response.data（GitHub 错误体的 message/documentation_url），命令层据此渲染
- *   「原因/文档」，两条路径的诊断等价
+ * - 退出码 22（`--fail-with-body` 的 HTTP 错误）且 stdout 带回状态码 ≥400：经 createHttpError
+ *   组装成 message `HTTP <status>` + response.data（GitHub 错误体的 message/documentation_url），
+ *   命令层据此渲染「原因/文档」
  * - 进程级失败（ENOENT / 超时被终止 / 网络错误退出码）沿用既有口径
  */
 export function translateReleaseApiCurlError(e: unknown): Error {
@@ -299,7 +293,7 @@ export function translateReleaseApiCurlError(e: unknown): Error {
 
 /** 版本查询的出网方式。两个调用点（kernel 命令 / doctor）按当前环境构造 */
 export interface ReleaseQueryOptions {
-  /** curl -x 代理地址（本机混合端口或显式 --proxy）；null = 不经代理 */
+  /** curl -x 代理地址（本机混合端口或显式 --proxy）；null = curl 直连 */
   proxy: string | null;
   /** 无代理可用时才走 gh api 查询（见 getLatestRelease）；代理可用（显式 --proxy 或本机在跑）时应为 false */
   useGh: boolean;
@@ -309,7 +303,7 @@ export interface ReleaseQueryOptions {
    * 才退。abort 经 execFile 的 signal 把子进程一并杀掉，管道即刻释放
    */
   signal?: AbortSignal;
-  /** gh 首选查询失败、改走回退路径（代理 curl / 直连 fetch）时回调一次 */
+  /** gh 首选查询失败、改走 curl 回退时回调一次 */
   onGhFallback?: () => void;
   /**
    * 调用方已探测过的当前版本（doctor 一次体检内同一份 probe 结果复用，免二次 spawn）；
@@ -343,68 +337,56 @@ async function getLatestReleaseViaGh(repo: string, signal?: AbortSignal): Promis
 }
 
 /**
- * 拉取 release 列表。**绝不经过镜像**：API 若走镜像，`browser_download_url` 就完全由
- * 镜像说了算（见 assertTrustedAssetUrl / D8）。gh 与代理由调用方按环境二选一为首选
- * （代理可用直接走代理；无代理才 gh 认证——限流 5000 次/时 vs 未认证 60 次/时），
- * 失败静默回退到代理/直连。代理路径经 curl 转发（fetch 不支持 HTTP 代理的 CONNECT），
- * 本地代理只是传输层，TLS 端到端，响应仍来自 GitHub。
+ * 拉取 release 列表。**绝不经过镜像**（见 assertTrustedAssetUrl / D8）。无代理可用时调用方
+ * 置 useGh 先走 gh 认证（5000 次/时 vs 未认证 60 次/时），失败静默回退 curl；curl 按 proxy
+ * 经代理或直连（fetch 不支持 HTTP 代理的 CONNECT，统一走 curl 只留一条 HTTP 实现）。
  */
 async function getLatestRelease(repo: string, opts: ReleaseQueryOptions): Promise<GitHubRelease> {
-  const url = `https://api.github.com/repos/${repo}/releases`;
-
   if (opts.useGh) {
     try {
       return await getLatestReleaseViaGh(repo, opts.signal);
     } catch (e) {
-      // 调用方主动中止不是「gh 不可用」：带着已 abort 的信号去回退 curl/直连只会
-      // 再吃一次同样的中止（或更糟——curl 路径对 AbortError 的翻译不认识），
-      // 直接把中止往上抛，让调用方的 catch 降级
+      // 调用方主动中止不是「gh 不可用」：直接上抛，不带着已 abort 的信号去回退
       if (opts.signal?.aborted) throw e;
-      // gh 没走通（未登录/被墙/超时），回退代理或直连；通知调用方实际响应来源，
-      // spinner 文案与回退后的路径不能悄悄不一致
+      // gh 没走通（未登录/被墙/超时），回退 curl；通知调用方实际响应来源
       opts.onGhFallback?.();
     }
   }
 
-  if (opts.proxy) {
-    // 异步执行（execFile 而非 spawnSync）：本查询在 withSpinner 内进行，同步等待最长
-    // 130s 会冻结 spinner 动画与计时，SIGINT 也得不到处理
-    let stdout: string;
-    try {
-      const result = await execFileAsync('curl', buildReleaseApiCurlArgs(opts.proxy, url), {
-        encoding: 'utf8',
-        maxBuffer: 50 * 1024 * 1024,
-        timeout: KERNEL_HTTP_TIMEOUT + 10_000,
-        signal: opts.signal,
-        // no_proxy 例外表会绕过显式 -x——统一出口置空，保 -x 权威（curl-spawn.ts）
-        env: buildCurlSpawnEnv(),
-      });
-      stdout = result.stdout;
-    } catch (e) {
-      throw translateReleaseApiCurlError(e);
-    }
-    // --fail-with-body 使 4xx/5xx 走上面的错误分支；退出码 0 时仍按 -w 带回的状态码
-    // 复核（3xx 不跟随重定向时 curl 退出码也是 0），非 2xx 与直连路径的 !response.ok 同判
-    const { body, statusCode } = parseCurlStatusOutput(stdout);
-    if (statusCode !== null && (statusCode < 200 || statusCode >= 300)) {
-      throw createHttpError(statusCode, body);
-    }
-    let releases: GitHubRelease[];
-    try {
-      releases = JSON.parse(body) as GitHubRelease[];
-    } catch {
-      throw new Error('版本查询失败: 响应不是合法 JSON（代理可能返回了错误页面）');
-    }
-    return pickLatestRelease(releases);
+  const url = `https://api.github.com/repos/${repo}/releases`;
+  // 异步执行（execFile 而非 spawnSync）：本查询在 withSpinner 内进行，同步等待会冻结
+  // spinner 与 SIGINT 处理
+  let stdout: string;
+  try {
+    const result = await execFileAsync('curl', buildReleaseApiCurlArgs(opts.proxy, url), {
+      encoding: 'utf8',
+      maxBuffer: 50 * 1024 * 1024,
+      timeout: KERNEL_HTTP_TIMEOUT + 10_000,
+      signal: opts.signal,
+      // no_proxy 例外表会绕过显式 -x——统一出口置空，保 -x 权威（curl-spawn.ts）
+      env: buildCurlSpawnEnv(),
+    });
+    stdout = result.stdout;
+  } catch (e) {
+    throw translateReleaseApiCurlError(e);
   }
-
-  const response = await HTTP_CLIENT.get<GitHubRelease[]>(url, { responseType: 'json', signal: opts.signal });
-  return pickLatestRelease(response.data);
+  // 退出码 0 时仍按 -w 状态码复核（3xx 不跟随重定向时 curl 也退出 0）
+  const { body, statusCode } = parseCurlStatusOutput(stdout);
+  if (statusCode !== null && (statusCode < 200 || statusCode >= 300)) {
+    throw createHttpError(statusCode, body);
+  }
+  let releases: GitHubRelease[];
+  try {
+    releases = JSON.parse(body) as GitHubRelease[];
+  } catch {
+    throw new Error('版本查询失败: 响应不是合法 JSON（代理可能返回了错误页面）');
+  }
+  return pickLatestRelease(releases);
 }
 
 export async function checkUpdate(opts: ReleaseQueryOptions): Promise<KernelUpdateInfo> {
   const currentVersion = opts.currentVersion !== undefined ? opts.currentVersion : getKernelVersion();
-  // gh 首选但失败回退直连时（无代理可用才会首选 gh；回退目标即直连 fetch），
+  // gh 首选但失败回退直连时（无代理可用才会首选 gh；回退目标即 curl 直连），
   // 让命令层知道实际响应没走 gh，补一行说明
   let ghFallbackToDirect = false;
   const optsWithFallbackNote: ReleaseQueryOptions = {
@@ -473,9 +455,7 @@ export function buildKernelCurlArgs(args: { url: string; proxy: string | null; m
   } else {
     // 无显式代理的通道（direct / 无 proxy 的 mirror）必须显式禁用 env 代理：curl 默认
     // 读 https_proxy 等环境变量，通道决策（resolveDownloadChannels）却从不把 env 代理
-    // 当输入——版本查询走 Node fetch（undici 不认 env 代理、真直连）而产物走 curl 经
-    // env 代理出网，同一命令两条出网路径分叉；`--mirror direct` 的「强制直连」名存实亡，
-    // env 代理故障时报错还把原因误导成直连被墙/节点带宽。
+    // 当输入——不禁用的话 `--mirror direct` 的「强制直连」名存实亡（版本查询同口径）。
     // 这是 args 层防线，与 env 层（buildCurlSpawnEnv 置空 no_proxy）分工见 curl-spawn.ts
     argv.push('--noproxy', '*');
   }

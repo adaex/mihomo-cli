@@ -6,7 +6,7 @@ import * as yaml from 'js-yaml';
 import { BASE_CONFIG, EFFECTIVELY_LOCKED_KEYS, YAML_MAX_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
 import { USER_DATA_DIR } from './paths.js';
-import { readSettings, SAFE_NAME_RE, writeSettings } from './settings.js';
+import { readSettings, writeSettings } from './settings.js';
 import { firstLine } from './text.js';
 import type {
   BrokenOverwriteFile,
@@ -18,7 +18,6 @@ import type {
   OverwriteTransform,
   ParsedOverrideKey,
   RuntimeMode,
-  ScriptMatch,
 } from './types.js';
 
 export function parseOverrideKey(key: string): ParsedOverrideKey {
@@ -66,21 +65,13 @@ export function lockedKeysReferencedBy(rawKeys: readonly string[]): string[] {
  * 校验解析结果：操作符修饰互斥、键名非空、已移除的操作符形态显式报错。
  * 互斥组合（`+rules+`）解析器不报错、静默按分支处理，用户无法预期结果——矛盾输入一律显式报错。
  * 裸 `+:` / `!:` 解析出空键名，不能产出空字符串顶层键（内核静默忽略，笔误零反馈）。
- * `~`（按 name 合并）与 `<x>`（尖括号转义）已随 DSL 裁剪移除：没有专属报错的话，
- * 这两种老写法会被当**字面键名**静默落进配置（内核对未知顶层键宽容），老用户无从得知要迁移。
+ * 已移除的 `~`/`~?`/`<x>`（mihomo 顶层键不含这些字符）不报错的话会被当字面键静默落进配置。
  */
 function assertValidParsedKey(rawKey: string, parsed: ParsedOverrideKey): void {
-  // 不只看 rawKey 开头：`+~rules` 的 ~ 被前缀 + 遮挡，剥完操作符后 parsed.key 仍是 ~rules
-  if (rawKey.startsWith('~') || parsed.key.includes('~')) {
-    throw new CliError(`覆写键 "${rawKey}" 用了已移除的 ~ 操作符`, {
+  if (/[~<>]/.test(rawKey)) {
+    throw new CliError(`覆写键 "${rawKey}" 用了已移除的操作符（~ / ~? / <key>）`, {
       label: '覆写配置错误',
-      hint: ['按 name 合并/追加数组元素的 ~ 与 ~? 已移除，改用 JS 覆写脚本（README「覆写配置」章节的脚本一节）。'],
-    });
-  }
-  if (rawKey.includes('<') || rawKey.includes('>')) {
-    throw new CliError(`覆写键 "${rawKey}" 用了已移除的尖括号转义`, {
-      label: '覆写配置错误',
-      hint: ['<key> 转义已随 ~ 操作符移除——mihomo-cli 顶层键不含尖括号，直接写键名即可。'],
+      hint: ['按 name 合并数组元素改用 JS 覆写脚本（README「覆写配置」章节）；<key> 转义不再需要，直接写键名。'],
     });
   }
   if (parsed.key === '') {
@@ -270,7 +261,7 @@ function isScriptOverwriteFilename(filename: string): boolean {
 /**
  * 覆写文件名去掉 `overwrite.` 前缀与扩展名，主文件（去完为空）显示「主文件」。
  * 扩展名知识与 isYamlOverwriteFilename / SCRIPT_EXTENSIONS 同源——新增脚本扩展名时
- * 展示侧自动生效（26.9.93 引入 JS 脚本时此处漏改、`.js` 残后缀的事故不再可能）。
+ * 展示侧自动生效。
  *
  * **先剥扩展名再剥前缀，顺序不能换**：反过来时 `overwrite.yaml` 的前缀正则
  * `^overwrite\.?` 会把那个点一起吃掉，剩下的 `yaml` 非空、`|| '主文件'` 永不触发——
@@ -318,10 +309,7 @@ export function listTypoOverwriteFiles(): string[] {
   }
 }
 
-/**
- * match 块支持的匹配键（作用域限定）。历史写法 `subscription` 已收掉（与 name 同义、
- * 两套写法留一套），写它直接报错指明改名。
- */
+/** match 块支持的匹配键（作用域限定） */
 const MATCH_KEYS = new Set(['name', 'url-domain']);
 
 /**
@@ -351,12 +339,6 @@ export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch |
   }
 
   const rawEntries = raw as Record<string, unknown>;
-  if ('subscription' in rawEntries) {
-    throw new CliError(`覆写文件 "${fileName}" 的 match 用了 subscription 键`, {
-      label: '覆写配置错误',
-      hint: ['subscription 键已收掉（与 name 同义但两套写法），请改写 name，匹配语义不变:', '  match:', '    name: edu*'],
-    });
-  }
 
   const result: OverwriteMatch = {};
   const problems: string[] = [];
@@ -390,17 +372,6 @@ export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch |
           hint: [
             '订阅名匹配只支持两种通配：尾部 *（前缀，edu* 命中 edu1、不命中 xedu1）与头部 *（后缀，*edu）。',
             '单独一个 * 等于不限订阅（恒真），请删掉 match；更复杂的匹配写 JS 覆写脚本（README「覆写配置」章节）。',
-          ],
-        });
-      }
-      // 无通配的精确值按订阅名字符集预检：`edu1/`、`~x` 不可能命中任何订阅
-      const impossible = arr.find(v => !v.includes('*') && !SAFE_NAME_RE.test(v));
-      if (impossible !== undefined) {
-        throw new CliError(`覆写文件 "${fileName}" 的 name 值不可能匹配任何订阅: "${impossible}"`, {
-          label: '覆写配置错误',
-          hint: [
-            '订阅名只能含字母数字、下划线、连字符与中文（1-64 字符），请检查是否误带了 /、~、空格、点号等字符。',
-            '更复杂的匹配写 JS 覆写脚本（README「覆写配置」章节）。',
           ],
         });
       }
@@ -444,20 +415,12 @@ function isValidNamePattern(value: string): boolean {
 }
 
 /**
- * 校验 url-domain 的单个值是否可能命中。返回 undefined 即合法。
- * 匹配是 hostname 对裸域名的字面后缀比对，故凡 hostname 中不可能出现、或根本不是
- * 裸域名的形态（从浏览器地址栏复制的完整 URL、尾斜杠、端口、内部空格）一律在加载
- * 期报错，不能让文件静默永不生效
+ * url-domain 的单个值是否可能命中（undefined 即合法）。匹配是 hostname 对裸域名的字面后缀
+ * 比对，通配符、协议/路径/端口、空格都会让值恒不命中，加载期报错而非静默永不生效
  */
 function urlDomainValueProblem(value: string): string | undefined {
-  if (value.includes('*') || value.includes('?')) {
-    return `url-domain 不支持通配符（当前值 "${value}"），只做字面后缀比对`;
-  }
-  if (/[:/]/.test(value)) {
-    return `url-domain 只要裸域名（当前值 "${value}"）：不要带协议、路径或端口，请去掉 https://、尾斜杠与端口`;
-  }
-  if (/\s/.test(value)) {
-    return `url-domain 只要裸域名（当前值 "${value}"）：值中不能含空格`;
+  if (/[*?:/\s]/.test(value)) {
+    return `url-domain 只要裸域名、不支持通配（当前值 "${value}"），去掉 https://、路径、端口、* 与空格`;
   }
   return undefined;
 }
@@ -563,38 +526,17 @@ export function selectActiveOverwriteFiles(files: OverwriteFileEntry[], scope?: 
 const METADATA_KEYS = new Set(['match', 'enabled']);
 
 /**
- * 元数据键不接受操作符修饰，也不接受大小写/空白变体。两类都会造成同一种静默失效——
- * 文件没被停用、键被当普通配置写进运行配置，而内核对未知顶层键宽松、`-t` 不会拦下：
- *
- * - **操作符**：剥离发生在解构（早于 mergeConfigLevel 的操作符解析），`enabled!: false`
- *   会被 parseOverrideKey 规范成键 `enabled` 落进最终配置。代价是没有「写真名为
- *   enabled 的配置键」的逃生口，但 mihomo-cli 顶层没有这个键，暂无实际影响
- *   （尖括号转义已随 DSL 裁剪移除，`<enabled>` 在合并层报「已移除的尖括号转义」）。
- * - **大小写/空白**：YAML 键大小写敏感，`Enabled: false` 既不是元数据键（不停用文件）
- *   又不是任何 mihomo-cli 原生键（纯噪音）。判据是「小写去空白后等于元数据键、但原样不等于」——
- *   与 isOverwriteFilenameTypo 同一思路（只认整体近失，不做模糊猜测）。
+ * 元数据键（match/enabled）的近失写法：带操作符（`enabled!`）或大小写/空白变体（`Enabled`）。
+ * 剥离按精确键名进行，近失写法既不停用文件/限定作用域，又被当普通键写进运行配置
+ * （内核对未知顶层键不报错）——静默失效，故一律报错。
  */
 function assertNoMetadataKeyLookalikes(config: Record<string, unknown>, fileName: string): void {
   for (const rawKey of Object.keys(config)) {
-    const parsed = parseOverrideKey(rawKey).key;
-    if (parsed !== rawKey && METADATA_KEYS.has(parsed)) {
-      throw new CliError(`覆写文件 "${fileName}" 的元数据键 "${rawKey}" 不支持操作符`, {
-        label: '覆写配置错误',
-        hint: [
-          `match 与 enabled 是本 CLI 的元数据键，在合并前就被剥离，带操作符写法（如 ${rawKey}）不会生效，反而会把 ${parsed} 当普通配置键写进运行配置。`,
-          `请直接写 ${parsed}: <值>。`,
-        ],
-      });
-    }
-    // 大小写/空白近失：剥离用的是精确键名，`Enabled:` 既不停用文件也不是 mihomo 原生键
-    const normalized = rawKey.trim().toLowerCase();
+    const normalized = parseOverrideKey(rawKey.trim().toLowerCase()).key;
     if (normalized !== rawKey && METADATA_KEYS.has(normalized)) {
       throw new CliError(`覆写文件 "${fileName}" 的 "${rawKey}" 疑似想写元数据键 ${normalized}`, {
         label: '覆写配置错误',
-        hint: [
-          `YAML 键区分大小写与空白，"${rawKey}" 不会被识别为 ${normalized}——文件不会被停用/限定作用域，该键反而会当普通配置写进运行配置（内核对未知顶层键不报错，不会有任何提示）。`,
-          `请写成 ${normalized}: <值>。`,
-        ],
+        hint: [`元数据键只认精确写法（区分大小写、不带操作符），"${rawKey}" 不会生效，反而会当普通键写进运行配置。`, `请写成 ${normalized}: <值>。`],
       });
     }
   }
@@ -695,7 +637,7 @@ function loadOverwriteScript(filePath: string, fileName: string): OverwriteTrans
     throw new CliError(`覆写脚本 "${fileName}" 缺少变换函数`, {
       label: '覆写配置错误',
       hint: [
-        '写法（就地修改传入的 config；return true 表示命中当前订阅，其余返回值忽略）:',
+        '写法（就地修改传入的 config，返回值忽略）:',
         '  export default function (config, ctx) { ... }',
         'CommonJS 写法 module.exports = function (config, ctx) { ... } 同样认。',
       ],
@@ -751,7 +693,7 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
       // 返回 null（js-yaml 4 的行为，下方 parsed === null 分支的注释即按它写的），
       // 落入 catch 会让 start/config/doctor 硬失败——先建空骨架文件再编辑是自然操作顺序
       if (isBlankYamlDocument(content)) continue;
-      // 别名上限防 YAML 炸弹 DoS（同 config.ts SAFE_YAML_LOAD_OPTIONS，此处内联避免与 config 循环依赖）
+      // 别名上限防 YAML 炸弹 DoS（同 config.ts loadYamlSafe，此处内联避免与 config 循环依赖）
       const parsed = yaml.load(content, { maxAliases: YAML_MAX_ALIASES }) as Record<string, unknown> | null;
       // 顶层数组/标量不是合法覆写文件，与语法错同族的静默失效，统一收进 broken
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -850,25 +792,19 @@ interface ScriptLockedHit {
 /**
  * 应用已按开关与作用域筛选的覆写：JS 脚本先按序执行，YAML 文件随后按序深度合并（D13）
  * （顺序由 readOverwriteFiles 的排序保证，两类混在同一 files 数组里按 transform 分派）。
- * 不额外读取设置或改变节点池。
  *
- * 脚本契约（README 同步承诺）：就地修改传入的 config、必须同步（返回 Promise 报错
- * ——buildConfig 是同步管线）。返回值约定：`return true` 表示命中当前订阅（脚本没有
- * YAML 的 match 声明，靠返回值向 CLI 报告「这次变换是否适用」，status/config 的
- * 生效提示据此显示）；其余返回值（undefined/其他）一律视为未命中，不影响合并本身。
- * 脚本抛错按坏文件同款姿态：CLI 包装为带文件名的 CliError，合并路径硬失败。
- * 脚本设置的锁定键经前后快照检出，由调用方渲染告警——剥除照常发生（安全边界不破），
- * 但不静默。
+ * 脚本契约（README 同步承诺）：就地修改传入的 config、必须同步、返回值忽略。
+ * 脚本抛错按坏文件同款姿态包装为带文件名的 CliError（合并路径硬失败）。
+ * 脚本设置的锁定键经前后快照检出、由调用方渲染告警——剥除照常发生，但不静默。
  */
 export function applyOverwrite(
   baseConfig: Record<string, unknown>,
   files: OverwriteFileEntry[],
   opts: ApplyOverwriteOptions,
-): { config: Record<string, unknown>; scriptWarnings: string[]; scriptLockedHits: ScriptLockedHit[]; scriptMatches: ScriptMatch[] } {
+): { config: Record<string, unknown>; scriptWarnings: string[]; scriptLockedHits: ScriptLockedHit[] } {
   let result = { ...baseConfig };
   const scriptWarnings: string[] = [];
   const scriptLockedHits: ScriptLockedHit[] = [];
-  const scriptMatches: ScriptMatch[] = [];
 
   // 非法 URL 给空串：脚本侧自己判（与 matchesScope 的 fail-closed 姿态不同，各自保留）
   const host = hostFromSubUrl(opts.scope?.subUrl) ?? '';
@@ -895,33 +831,21 @@ export function applyOverwrite(
         });
       }
       scriptWarnings.push(...notes.map(message => `${message}（脚本 ${file.name}）`));
-      // 命中判据严格 === true：脚本返回 truthy 的其他值（如对象/字符串）不算——
-      // 约定只有显式 return true 才宣告命中，避免「顺手 return 了 config」被误读
-      scriptMatches.push({ file: file.name, matched: returned === true });
       const keys = diffLockedKeys(before, result);
       if (keys.length > 0) scriptLockedHits.push({ file: file.name, keys });
       continue;
     }
     result = mergeConfigLevel(result, file.config ?? {}, true);
   }
-  return { config: result, scriptWarnings, scriptLockedHits, scriptMatches };
+  return { config: result, scriptWarnings, scriptLockedHits };
 }
 
 /**
  * 列出目录里的全部覆写文件（含被停用的、**含加载失败的 broken 条目**），供 `ow` 列表
- * 与 status 展示。这是刻意的旁路：诊断面绝不因坏文件抛错（合并闸门是 loadOverwriteFile，
- * start/doctor 在那里硬失败）。
+ * 与 status 展示。刻意的旁路：诊断面绝不因坏文件抛错（合并闸门是 loadOverwriteFile，D7）。
  *
- * 传 `scope` 时每个正常条目附带 `matched`：该文件的 match 是否命中这个作用域。判据仍是
- * matchesScope 本身（与 selectActiveOverwriteFiles 同一个函数），**这里只是展示**——
- * 合并闸门始终是 selectActiveOverwriteFiles，不要拿 matched 去筛要合并的文件。
- * 不传 scope 则 matched 恒为 undefined（= 未判定），`ow` 列表走这条路径：它不绑定
- * 某条订阅，判不了也不该判。broken 条目不判 match（文件根本没解析出来）。
- *
- * entries 同时返回 ok 的完整条目（含 transform/config）：status 拿它喂
- * judgeScriptMatches 判脚本命中——**判定复用这同一次读目录**（独立再读会打两遍
- * typo 警告、解析两遍 YAML），且不走 loadOverwriteFile 的硬失败门（一个坏 YAML
- * 不把判定打回「未判定＝生效」——恰是判定要消灭的误读）。ow 列表不消费它。
+ * 传 `scope` 时 YAML 条目附带 `matched`（判据同 selectActiveOverwriteFiles 的 matchesScope，
+ * **只是展示**，别拿它筛要合并的文件）。脚本无 match，matched 恒缺省。
  */
 export function listOverwriteFile(scope?: OverwriteScope): OverwriteListResult {
   const { ok, broken } = readOverwriteFiles();
@@ -930,14 +854,13 @@ export function listOverwriteFile(scope?: OverwriteScope): OverwriteListResult {
   return {
     enabled,
     dir: USER_DATA_DIR,
-    entries: ok,
     files: ok.map(f => ({
       name: f.name,
       kind: f.transform ? ('script' as const) : ('yaml' as const),
       keys: f.transform ? [] : Object.keys(f.config || {}),
       scope: summarizeMatch(f.match),
       enabled: f.enabled !== false,
-      ...(scope ? { matched: matchesScope(f.match, scope) } : {}),
+      ...(scope && !f.transform ? { matched: matchesScope(f.match, scope) } : {}),
     })),
     broken,
   };

@@ -33,10 +33,9 @@ export function isHttpsUrl(url: string): boolean {
 }
 
 /**
- * 构造带响应载荷的 HTTP 错误。直连 fetch 与代理 curl（GitHub API 版本查询）两条
- * 路径共用同一形态：message 为 `HTTP <status>`，`response.data` 为限量摘录后
- * 尽力解析的错误体——命令层据此提取「原因/文档」（GitHub 错误体的 message /
- * documentation_url 字段），保证两条路径的诊断等价。
+ * 构造带响应载荷的 HTTP 错误（本模块的 fetch 客户端与 kernel 版本查询的 curl 共用）：
+ * message 为 `HTTP <status>`，`response.data` 为限量摘录后尽力解析的错误体——命令层据此
+ * 提取「原因/文档」（GitHub 错误体的 message / documentation_url 字段）。
  */
 export function createHttpError(status: number, bodyText: string): Error & { response: { status: number; data?: Record<string, unknown> } } {
   const error = new Error(`HTTP ${status}`) as Error & { response: { status: number; data?: Record<string, unknown> } };

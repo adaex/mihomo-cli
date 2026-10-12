@@ -12,7 +12,6 @@ const INVALID_INDEX_HINT = '用法: mihomo-cli logs <编号>（0=当前，1+=归
 
 export function cmdLogs(args: string[]): void {
   assertKnownFlags(args, ['-f', '--follow', '-n', '--lines', '-o', '--open'], 'logs [-f] [-n N] [编号] [-o]');
-  // 编号至多一个：`logs 1 2` 此前静默忽略 2
   assertPositionalCount(args, 1, 1, 'mihomo-cli logs [-f] [-n N] [编号] [-o]');
   const lines = parseIntArg(args, '-n', '--lines', 100);
   const openInViewer = hasFlag(args, '-o', '--open');

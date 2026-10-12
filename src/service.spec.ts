@@ -6,10 +6,9 @@ import { describe, it } from 'node:test';
 
 import { isValidServiceLabel } from './constants.js';
 import type { CliError } from './errors.js';
-import { concludeHotReload } from './hot-reload.js';
 import { buildPlist, parseDisabledList, parseServicePrint, waitUntilUnloaded } from './launchctl.js';
 import { describeAbnormalExit, describeExitCause } from './service.js';
-import { shouldAbortStartOnDisable } from './stop-epoch.js';
+import { epochChanged } from './stop-epoch.js';
 import { moduleUrl, readEpochIn, runModule } from './test-support/cli.js';
 import { writeStubExecutable } from './test-support/stub-bin.js';
 import type { ServiceStatus } from './types.js';
@@ -349,63 +348,31 @@ describe('parseDisabledList：区分 disabled/enabled，不在表中视为启用
  * 完全解耦。第 3 条（「上次 stop 过 + 本次又有人 stop」）就是 v4.7.6 漏掉的那个组合，
  * 也是这一版真正修的东西。
  */
-describe('shouldAbortStartOnDisable：判据是停止计数的变化，不是 disable 位的值', () => {
+describe('epochChanged：判据是停止计数的变化，不是 disable 位的值', () => {
   it('计数未变 → 无人 stop，照常启动', () => {
-    assert.equal(shouldAbortStartOnDisable(5, 5), false);
+    assert.equal(epochChanged(5, 5), false);
   });
 
   // v4.7.5 缺陷的回归：上次 stop 留下的持久位不该拦住本次显式 start。
   // 计数判据下它天然成立——位再怎么持久，没人新 stop 计数就不动
   it('计数未变（哪怕当前 disabled 位是开着的）→ 照常启动', () => {
-    assert.equal(shouldAbortStartOnDisable(0, 0), false);
+    assert.equal(epochChanged(0, 0), false);
   });
 
   it('计数变了 → 期间有人 stop 过，放弃启动', () => {
-    assert.equal(shouldAbortStartOnDisable(5, 6), true);
+    assert.equal(epochChanged(5, 6), true);
   });
 
   // **v4.7.6 漏掉的组合**：上次 stop 过（基线非 0）且本次期间又有人 stop。
   // 旧的位快照判据在这里两边都是 true → 判为「非并发」→ 把并发 stop 覆盖掉
   it('基线非 0 且期间又 stop → 仍能检出（v4.7.6 在此失效）', () => {
-    assert.equal(shouldAbortStartOnDisable(3, 4), true);
+    assert.equal(epochChanged(3, 4), true);
   });
 
   // 计数只增不减，但判据用「不等于」而非「大于」：epoch 文件被 reset 删掉后重置为 0，
   // 若基线是 7、现值是 0，那也意味着期间发生过状态变更，保守起见同样中止
   it('计数回退（文件被删后重置为 0）→ 同样视为发生过变更', () => {
-    assert.equal(shouldAbortStartOnDisable(7, 0), true);
-  });
-});
-
-/**
- * 热重载成功后的收口决策（restartService 的热重载出口唯一经过这里）。
- * v4.8.0 给 kickstart 路径补「健康确认失败后复读计数」时漏了这条成功路径：
- * tryHotReload 最坏二十多秒，期间并发的 stop 已 bootout+disable+递增，
- * 不复读就照常报「已启动」，终态与用户最后一条命令相反。
- *
- * 判据本体 shouldAbortStartOnDisable 已有整组用例，这里锁的是消费语义：
- * 「热重载成功了」≠「可以报已启动」，且 hotReloaded 如实反映内核确实接受了配置。
- * 消费点的端到端行为（fake launchctl + 桩 controller）在 service-concurrency.spec。
- */
-describe('concludeHotReload：热重载成功后复读计数再下结论', () => {
-  it('计数未变 → 照常报成功', () => {
-    assert.deepEqual(concludeHotReload(5, 5), { hotReloaded: true, started: true });
-  });
-
-  // 上次也 stop 过（基线非 0）+ 期间又有人 stop：v4.7.6 的位快照判据在此隐形，
-  // 计数判据必须检出——热重载路径此前完全没有这道防线
-  it('热重载期间有人 stop（基线非 0）→ started=false，不报已启动', () => {
-    assert.deepEqual(concludeHotReload(3, 4), { hotReloaded: true, started: false });
-  });
-
-  it('计数回退（epoch 文件被删后重置为 0）→ 同样视为有人 stop', () => {
-    assert.deepEqual(concludeHotReload(7, 0), { hotReloaded: true, started: false });
-  });
-
-  // started=false 时 hotReloaded 仍为 true：内核确实吃进了新配置，这是事实不是谎报；
-  // 调用方契约是先判 started（restartService 的 docstring），但值本身不该被抹掉
-  it('被取消时 hotReloaded 仍如实为 true（started 才是调用方先判的）', () => {
-    assert.equal(concludeHotReload(1, 2).hotReloaded, true);
+    assert.equal(epochChanged(7, 0), true);
   });
 });
 
@@ -428,7 +395,7 @@ describe('停止计数的读取（并发判定的物理基础）', () => {
     try {
       assert.equal(readEpochIn(dir), 0);
       // 与 0 比对 → 判为「无并发」→ start 照常进行。首次运行必须能启动
-      assert.equal(shouldAbortStartOnDisable(0, readEpochIn(dir)), false);
+      assert.equal(epochChanged(0, readEpochIn(dir)), false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -458,7 +425,7 @@ describe('停止计数的读取（并发判定的物理基础）', () => {
 
       fs.writeFileSync(file, '4'); // 另一进程 stop
 
-      assert.equal(shouldAbortStartOnDisable(before, readEpochIn(dir)), true, '基线非 0 时也必须检出并发 stop');
+      assert.equal(epochChanged(before, readEpochIn(dir)), true, '基线非 0 时也必须检出并发 stop');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

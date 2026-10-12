@@ -90,19 +90,10 @@ const MAX_ARCHIVE_SEQ = 1000;
 /**
  * 分配一个归档路径并**原子占名**：`mihomo.<时间戳>.log`，名字被占则追加序号。
  *
- * 返回时该名字已被本进程以空占位文件占住：`openSync` 的 `wx`（O_EXCL）标志让
- * 「名字可用」与「名字归我」在同一次系统调用内判定（与 withFileLock 的锁同一范式）。
- * existsSync 判否后返回是 TOCTOU：两个 CLI 进程同秒轮转（双终端 start、start + tun）
- * 都判否并选中同一归档名，后到的 renameSync/copyFileSync 在 POSIX 上静默覆盖先到者——
- * 一份历史日志无提示丢失。序号后缀只防同进程先后两次同秒轮转，防不了跨进程；占位才防得住。
- *
- * 调用方随后的 renameSync/copyFileSync 对已存在目标是原子替换/覆写，直接盖掉占位
- * 即可——service.ts 的 copy-truncate（restartService）与本文件的 rotateLog 都无需
- * 感知此语义。若覆写失败，占位残留为空归档文件：仍被 isArchiveLogFilename 认得、
- * 随保留期清理，也不影响后续分配（占名只烧掉一个名字，不存在等锁问题）。
- *
- * 导出供 service.ts 的 copy-truncate 轮转复用（运行中不能 rename，见 restartService）——
- * 归档命名规则只此一份，两处各写一份就会在漂移后互相覆盖或列不出来。
+ * 返回时该名字已被本进程以空占位文件占住（`openSync` 的 `wx`/O_EXCL）：两个进程同秒轮转时
+ * existsSync 判否是 TOCTOU，后到者会静默覆盖先到者的归档。调用方随后的 rename/copy 直接
+ * 盖掉占位即可；覆写失败残留的空归档随保留期清理。
+ * 归档命名规则只此一份（rotateLog 与 restartService 的 copy-truncate 共用）。
  */
 export function allocateArchivePath(): string {
   const timestamp = formatLocalTimestamp();
