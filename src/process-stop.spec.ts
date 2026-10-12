@@ -154,10 +154,20 @@ describe('buildRootResidueCleanupError', () => {
     assert.equal(err.message, '终止残留内核失败（pkill 退出码异常）');
   });
 
-  it('进程已清空但清理未走完 → 说「进程目前已不在」，不列 PID', () => {
+  it('进程已清空但清理未走完 → 说「进程目前已不在」，不列 PID，手动兜底指向删 pid 文件', () => {
     const err = buildRootResidueCleanupError({ remaining: [], incomplete: new Error('EACCES: permission denied') }, ctx);
     assert.ok(err.hint.includes('进程目前已不在，但清理未走完'));
     assert.ok(!err.hint.some(l => l.includes('PID')));
+    assert.ok(
+      err.hint.some(l => l.startsWith('手动清理: rm -f ') && l.endsWith('/runtime/pid')),
+      '进程已不在时兜底是删文件而非 pkill',
+    );
+  });
+
+  it('sudo 取消但进程已自行退光 → 消息说「清理未完成」，不说「残留未被清理」', () => {
+    const err = buildRootResidueCleanupError({ remaining: [], incomplete: new SudoAuthError() }, ctx);
+    assert.equal(err.label, '已取消');
+    assert.equal(err.message, 'sudo 已取消或密码错误，清理未完成');
   });
 });
 

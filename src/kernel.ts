@@ -368,6 +368,8 @@ async function getLatestRelease(repo: string, opts: ReleaseQueryOptions): Promis
     });
     stdout = result.stdout;
   } catch (e) {
+    // 调用方主动中止（doctor 限时）原样上抛：调用方按 AbortError 识别「超时 = 不可达」
+    if (opts.signal?.aborted) throw e;
     throw translateReleaseApiCurlError(e);
   }
   // 退出码 0 时仍按 -w 状态码复核（3xx 不跟随重定向时 curl 也退出 0）

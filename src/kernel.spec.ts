@@ -11,6 +11,7 @@ import {
   buildGhReleaseDownloadArgs,
   buildKernelCurlArgs,
   buildReleaseApiCurlArgs,
+  checkUpdate,
   describeCurlDownloadError,
   findMatchingAsset,
   ghProbeNeeded,
@@ -429,6 +430,18 @@ describe('checkUpdate 代理路径（curl spawn env 出口端到端）', () => {
     assert.match(r.stdout, /LATEST:v1\.0\.0/);
     assert.equal(r.env.noProxy, '');
     assert.equal(r.env.noProxyUpper, '');
+  });
+});
+
+describe('checkUpdate 的中止语义（doctor 限时）', () => {
+  it('调用方 abort 时原样抛 AbortError，不翻译成「版本查询失败」', async () => {
+    // doctor 按 name === 'AbortError' 判「超时 = 不可达」；翻译成普通 Error 会在体检里多出一句原因
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      () => checkUpdate({ proxy: 'http://127.0.0.1:1', useGh: false, signal: controller.signal, currentVersion: 'v0.0.1' }),
+      (e: unknown) => e instanceof Error && e.name === 'AbortError',
+    );
   });
 });
 

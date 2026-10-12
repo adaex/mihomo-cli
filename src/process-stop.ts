@@ -213,13 +213,18 @@ export interface RootResidueCleanupContext {
 
 /**
  * 把未走完的清理包成 CliError（纯函数，供测试）：主体动作到了哪一步、仍在的 PID、
- * 重试入口与手动兜底（pkill 幂等，覆盖「其实还有进程」）。sudo 取消按「已取消」渲染
+ * 重试入口与手动兜底。sudo 取消按「已取消」渲染
  */
 export function buildRootResidueCleanupError(result: CleanupResult, ctx: RootResidueCleanupContext): CliError {
-  const state = result.remaining.length > 0 ? `残留内核仍在运行（PID ${result.remaining.join(', ')}）` : '进程目前已不在，但清理未走完';
-  const hint = [ctx.mainOutcome, state, `重新运行可再次尝试清理: ${ctx.retryCommand}`, MANUAL_PKILL_HINT];
+  const alive = result.remaining.length > 0;
+  const state = alive ? `残留内核仍在运行（PID ${result.remaining.join(', ')}）` : '进程目前已不在，但清理未走完';
+  // 进程已清空时，唯一可能剩下的是 pid 文件（sudo 脚本只 pkill，不碰文件）：手动兜底指向 rm；
+  // 进程仍在时 pkill 幂等兜底
+  const manual = alive ? MANUAL_PKILL_HINT : `手动清理: rm -f ${PATHS.pidFile}`;
+  const hint = [ctx.mainOutcome, state, `重新运行可再次尝试清理: ${ctx.retryCommand}`, manual];
   if (result.incomplete instanceof SudoAuthError) {
-    return new CliError(`${describeSudoFailure(result.incomplete)}，残留未被清理`, { label: '已取消', hint });
+    const message = `${describeSudoFailure(result.incomplete)}，${alive ? '残留未被清理' : '清理未完成'}`;
+    return new CliError(message, { label: '已取消', hint });
   }
   return new CliError(result.incomplete?.message ?? '残留未清理干净', { label: '清理残留进程失败', hint });
 }
