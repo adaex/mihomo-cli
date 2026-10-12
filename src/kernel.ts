@@ -144,8 +144,6 @@ export function resolveDownloadChannels(input: ChannelResolutionInput): Download
  * - --mirror direct：连 API 一起直连绕过（「强制直连」含 API）
  * - 显式镜像（非 direct）不改变出网决策：代理在跑仍经代理、无代理仍走 gh——镜像
  *   绝不作用于 API，但本机代理与 gh 与镜像无关，照常参与
- * 注意：resolveFallbackQueryOptions 是从 DownloadChannel 的**反推**，输入域不同
- * （channel 不带「显式镜像」这一信息），两处 mirror 无代理的答案刻意不同，见该函数注释
  */
 export function resolveReleaseQuery(input: ChannelResolutionInput): { proxy: string | null; useGh: boolean } {
   // forceDirect 仅指 --mirror direct；显式镜像（有 mirror 值）不在此列
@@ -529,39 +527,18 @@ export function buildGhDownloadEnv(proxy: string | null): NodeJS.ProcessEnv {
 }
 
 /**
- * downloadKernel 兜底版本查询（未传 releaseInfo 时）的出网方式，与下载通道对齐：
- * - gh 通道无代理 → gh api（能构造出 gh 候选即已过 hasGh 探测）；带本机代理的回退
- *   候选 → curl -x 该代理（gh api 无命令行代理选项）
- * - proxy / mirror+proxy → curl -x 该代理
- * - direct 与无代理 mirror → 直连 fetch——这两条通道的语义是「不经 gh」，查询也绝不经 gh
- *
- * 这是从 DownloadChannel 的**反推**，与正推出口 resolveReleaseQuery 的输入域不同：
- * channel 不带「显式 --mirror」这一信息（显式镜像的单候选是 mirror 通道），故 mirror
- * 无代理在此答 useGh:false（直连），而正推对同一形态答 useGh:true（gh 认证）。
- * 两条路径不会被同一用户输入同时命中（cmdKernel 总带 releaseInfo），分歧是刻意的，
- * 由 kernel.spec 锁定——别把其中一个「修」成另一个
+ * 下载并原子换入内核。release 由调用方先经 checkUpdate 查好传入（版本查询出网方式见
+ * resolveReleaseQuery）——本函数不自查版本，只负责按选定通道取产物。
  */
-export function resolveFallbackQueryOptions(channel: DownloadChannel): ReleaseQueryOptions {
-  if (channel.kind === 'gh') {
-    return channel.proxy ? { proxy: channel.proxy, useGh: false } : { proxy: null, useGh: true };
-  }
-  if (channel.kind === 'proxy') return { proxy: channel.proxy, useGh: false };
-  if (channel.kind === 'mirror') return { proxy: channel.proxy ?? null, useGh: false };
-  return { proxy: null, useGh: false };
-}
-
 export async function downloadKernel(
   progressCallback: ((msg: string) => void) | null,
   channel: DownloadChannel,
-  releaseInfo?: GitHubRelease,
+  latest: GitHubRelease,
 ): Promise<{ version: string; path: string }> {
   ensureDirs();
 
-  // fallback 查询（cmdKernel 总是传入 releaseInfo，此路径仅在直接调用时走到）的出网
-  // 方式见 resolveFallbackQueryOptions。apiProxy 单独取值：它同时是下面 curl 下载的
-  // 传输层代理（mirror/gh 通道不带 proxy 时为 null；direct 恒 null）
-  const apiProxy: string | null = channel.kind === 'direct' ? null : (channel.proxy ?? null);
-  const latest = releaseInfo || (await getLatestRelease(GITHUB_REPO, resolveFallbackQueryOptions(channel)));
+  // curl 下载的传输层代理（mirror/gh 通道不带 proxy 时为 null；direct 恒 null）
+  const downloadProxy: string | null = channel.kind === 'direct' ? null : (channel.proxy ?? null);
   const arch = getArch();
   const platform = process.platform;
 
@@ -640,7 +617,7 @@ export async function downloadKernel(
         'curl',
         buildKernelCurlArgs({
           url: downloadUrl,
-          proxy: apiProxy,
+          proxy: downloadProxy,
           maxBytes,
           outputPath: tempPath,
         }),

@@ -17,7 +17,6 @@ import {
   parseCurlStatusOutput,
   pickLatestRelease,
   resolveDownloadChannels,
-  resolveFallbackQueryOptions,
   resolveReleaseQuery,
   translateReleaseApiCurlError,
 } from './kernel.js';
@@ -188,34 +187,6 @@ describe('ghProbeNeeded（gh 探测只在参与决策时做）', () => {
   });
 });
 
-describe('resolveFallbackQueryOptions（兜底版本查询与下载通道对齐）', () => {
-  it('无代理 gh 通道用 gh api 查', () => {
-    assert.deepEqual(resolveFallbackQueryOptions({ kind: 'gh' }), { proxy: null, useGh: true });
-  });
-
-  it('带本机代理的 gh 回退候选经该代理查（gh api 无命令行代理选项）', () => {
-    assert.deepEqual(resolveFallbackQueryOptions({ kind: 'gh', proxy: 'http://127.0.0.1:7890' }), { proxy: 'http://127.0.0.1:7890', useGh: false });
-  });
-
-  it('proxy 通道经代理查', () => {
-    assert.deepEqual(resolveFallbackQueryOptions({ kind: 'proxy', proxy: 'http://127.0.0.1:7897' }), { proxy: 'http://127.0.0.1:7897', useGh: false });
-  });
-
-  it('mirror 通道：带的代理只做传输层，无代理直连查', () => {
-    assert.deepEqual(resolveFallbackQueryOptions({ kind: 'mirror', mirror: 'https://cdn.gh-proxy.org/' }), { proxy: null, useGh: false });
-    assert.deepEqual(resolveFallbackQueryOptions({ kind: 'mirror', mirror: 'https://cdn.gh-proxy.org/', proxy: 'http://127.0.0.1:7897' }), {
-      proxy: 'http://127.0.0.1:7897',
-      useGh: false,
-    });
-  });
-
-  it('direct 通道绝不经 gh（「强制直连」含 API），直连 fetch 查询', () => {
-    // 回归：旧判据 useGh = apiProxy === null 使 direct（与无代理 mirror）的兜底查询
-    // 先试 gh api——gh 未装白吃 ENOENT、gh 已装则绕过「不经 gh」的通道语义
-    assert.deepEqual(resolveFallbackQueryOptions({ kind: 'direct' }), { proxy: null, useGh: false });
-  });
-});
-
 describe('resolveReleaseQuery（版本查询出网的正推唯一出口，cmdKernel/doctor 共用）', () => {
   const base = { mirror: null, isOverride: false, ghAvailable: false, proxyRunning: false, proxyPort: null, proxyOverride: null };
 
@@ -269,11 +240,8 @@ describe('resolveReleaseQuery（版本查询出网的正推唯一出口，cmdKer
     });
   });
 
-  it('分歧锁定：显式镜像无代理时正推走 gh 认证，反推（mirror 通道）答直连——两者输入域不同，别「修」成一致', () => {
-    const forward = resolveReleaseQuery({ ...base, mirror: 'https://cdn.gh-proxy.org/', isOverride: true, ghAvailable: true });
-    assert.deepEqual(forward, { proxy: null, useGh: true });
-    const backward = resolveFallbackQueryOptions({ kind: 'mirror', mirror: 'https://cdn.gh-proxy.org/' });
-    assert.deepEqual(backward, { proxy: null, useGh: false });
+  it('显式镜像（非 direct）无代理：gh 认证查询（镜像绝不作用于 API）', () => {
+    assert.deepEqual(resolveReleaseQuery({ ...base, mirror: 'https://cdn.gh-proxy.org/', isOverride: true, ghAvailable: true }), { proxy: null, useGh: true });
   });
 });
 

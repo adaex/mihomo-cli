@@ -46,7 +46,7 @@ YAML 1.2 是 JSON 的超集，标准 JSON 全部由 yaml.load 正常解析。曾
 
 ## D8 镜像只作用于产物下载，不作用于 GitHub API；镜像选择不持久化
 
-API 若也走镜像，`browser_download_url` 就完全由镜像说了算，而内核产物随后 chmod 755 并以 root 运行（TUN/系统级服务）——上游不提供 checksums，把来源钉死（assertTrustedAssetUrl 校验原始地址）是主要防线，不能让镜像自己指定下载地址。镜像选择不持久化：每次调用按当前环境独立决策（gh/代理是否可用），记住偏好在换环境后会用到错误的镜像。版本查询在代理可用时直接经代理（出网路径已定，先试 gh 直连再回退会把「直连被墙」的等待叠加在可用代理前面）；无代理可用才走 gh api 认证通道（免 60 次/时未认证限流）。正推决策唯一出口是 kernel.ts 的 resolveReleaseQuery（cmdKernel 与 doctor 共用，与下载通道决策同源输入）；downloadKernel 兜底路径的 resolveFallbackQueryOptions 是从已选定 DownloadChannel 的反推，输入域不含「显式镜像」信息，故显式镜像无代理时正推答 gh 认证、反推答直连——两份答案刻意不同，由 kernel.spec 成对锁定，别合并。
+API 若也走镜像，`browser_download_url` 就完全由镜像说了算，而内核产物随后 chmod 755 并以 root 运行（TUN/系统级服务）——上游不提供 checksums，把来源钉死（assertTrustedAssetUrl 校验原始地址）是主要防线，不能让镜像自己指定下载地址。镜像选择不持久化：每次调用按当前环境独立决策（gh/代理是否可用），记住偏好在换环境后会用到错误的镜像。版本查询在代理可用时直接经代理（出网路径已定，先试 gh 直连再回退会把「直连被墙」的等待叠加在可用代理前面）；无代理可用才走 gh api 认证通道（免 60 次/时未认证限流）。版本查询出网决策唯一出口是 kernel.ts 的 resolveReleaseQuery（cmdKernel 与 doctor 共用，与下载通道决策同源输入）；downloadKernel 只取产物、release 由调用方必传，不再有从下载通道反推查询方式的兜底路径。
 
 ## D9 启动时只清除指向本机 Mixed 端口的 env 代理
 
