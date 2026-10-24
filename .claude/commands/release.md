@@ -25,12 +25,13 @@ argument-hint: [版本号]
 
 ```bash
 npx tsx -e "
-import { COMMANDS } from './src/commands/registry.ts';
-for (const c of COMMANDS) console.log([c.name, ...c.aliases].join(', ').padEnd(46), c.usage.length ? '(有 usage)' : '(无 usage)');
+import { allCommandTokens, findCommand } from './src/commands/registry.ts';
+const commands = [...new Set(allCommandTokens().map(token => findCommand(token)))];
+for (const c of commands) if (c) console.log([c.name, ...c.aliases].join(', ').padEnd(46), c.usage.length ? '(有 usage)' : '(无 usage)');
 "
 ```
 
-注册表只包含当前支持的命令与别名；「无 usage」的快捷命令（tun、use）由主命令的用法行覆盖。本轮未改注册表时可跳过这项
+注册表只包含当前支持的命令与别名；「无 usage」的快捷命令（tun）由主命令的用法行覆盖。本轮未改注册表时可跳过这项
 
 ## 步骤
 
