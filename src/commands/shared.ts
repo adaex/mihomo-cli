@@ -94,10 +94,11 @@ export function unknownSubcommandError(
 /**
  * 交互确认（破坏性操作前的 y/N 询问）。非 TTY（管道/CI）下 stdin 无人应答，
  * 视为未确认（返回 false），由调用方给出「加 -y」的提示，避免脚本里静默挂住。
+ * 提示走 stderr：stdout 被重定向时，终端上仍看得见需要回答的问题。
  */
 export async function confirmPrompt(question: string): Promise<boolean> {
   if (!process.stdin.isTTY) return false;
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   const answer = await new Promise<string>(resolve => {
     rl.question(`${question} (y/N) `, a => {
       rl.close();

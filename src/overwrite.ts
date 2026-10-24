@@ -1,8 +1,10 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import * as yaml from 'js-yaml';
+import { assertConfigGraphSafe } from './config-graph.js';
 import { BASE_CONFIG, EFFECTIVELY_LOCKED_KEYS, YAML_MAX_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
 import { USER_DATA_DIR } from './paths.js';
@@ -695,6 +697,7 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
       if (isBlankYamlDocument(content)) continue;
       // 别名上限防 YAML 炸弹 DoS（同 config.ts loadYamlSafe，此处内联避免与 config 循环依赖）
       const parsed = yaml.load(content, { maxAliases: YAML_MAX_ALIASES }) as Record<string, unknown> | null;
+      assertConfigGraphSafe(parsed, `覆写文件 "${file}"`);
       // 顶层数组/标量不是合法覆写文件，与语法错同族的静默失效，统一收进 broken
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         // match / enabled 是元数据键：抽成结构化字段并从 config 剥离，确保它们永不进入
@@ -758,22 +761,22 @@ export function loadOverwriteFile(): OverwriteFileEntry[] {
   return ok;
 }
 
-/** 脚本执行前的锁定键浅快照：只记存在性与值，与 YAML 侧的键级检测同粒度。
- * 探针集就是剥除执行集 EFFECTIVELY_LOCKED_KEYS（含表外 tls），不再单抄一份 */
+/** 脚本执行前的锁定键深快照：原地修改嵌套字段或 push 数组也必须能与执行后状态比较。
+ * 单次 structuredClone 保留跨键共享图；探针集就是剥除执行集 EFFECTIVELY_LOCKED_KEYS（含表外 tls）。 */
 function snapshotLockedKeys(config: Record<string, unknown>): Record<string, unknown> {
   const snap: Record<string, unknown> = {};
   for (const k of EFFECTIVELY_LOCKED_KEYS) {
     if (k in config) snap[k] = config[k];
   }
-  return snap;
+  return structuredClone(snap);
 }
 
-/** 检出脚本新设置或改值的锁定键；嵌套内部的改动检不出（浅层对比，与 YAML 侧同粒度） */
+/** 检出脚本新设置、替换或原地修改的锁定键；删除不算命中（结果本来就要剥除）。 */
 function diffLockedKeys(before: Record<string, unknown>, after: Record<string, unknown>): string[] {
   return EFFECTIVELY_LOCKED_KEYS.filter(k => {
     const had = k in before;
     const has = k in after;
-    return had !== has ? has : had && before[k] !== after[k];
+    return had !== has ? has : had && !isDeepStrictEqual(before[k], after[k]);
   });
 }
 
@@ -812,12 +815,15 @@ export function applyOverwrite(
 
   for (const file of files) {
     if (file.transform) {
-      const before = snapshotLockedKeys(result);
       const notes: string[] = [];
       const ctx: OverwriteScriptContext = { subscription, mode: opts.mode, warn: message => notes.push(message) };
+      let before: Record<string, unknown>;
       let returned: unknown;
       try {
+        before = snapshotLockedKeys(result);
         returned = file.transform(result, ctx);
+        // 后续 YAML 深合并、脱敏与 JSON 出口都不能接受循环或无界展开的脚本产出。
+        assertConfigGraphSafe(result);
       } catch (e) {
         throw new CliError(`覆写脚本 "${file.name}" 执行失败: ${firstLine((e as Error).message ?? String(e))}`, {
           label: '覆写配置错误',

@@ -56,7 +56,7 @@ export async function probeProxyConnectivity(port: number): Promise<ProxyProbeRe
   try {
     const { stdout } = await execFileAsync(
       'curl',
-      ['-x', `http://127.0.0.1:${port}`, '-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', String(Math.ceil(PROBE_TIMEOUT_MS / 1000)), PROBE_URL],
+      ['-x', `http://127.0.0.1:${port}`, '-sS', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', String(Math.ceil(PROBE_TIMEOUT_MS / 1000)), PROBE_URL],
       {
         timeout: PROBE_TIMEOUT_MS + 2_000,
         // 例外表会绕过显式 -x、让探测考成直连（绿灯作废），置空兜住统一走 curl-spawn.ts 出口

@@ -1,3 +1,4 @@
+import { assertConfigGraphExpansionSafe } from './config-graph.js';
 import { maskUrl } from './text.js';
 
 /**
@@ -71,6 +72,8 @@ function walk(node: unknown, withinProvider: boolean, state: { changed: boolean 
  * 输入是 YAML/JSON 解析出的纯数据，无函数/Symbol，普通递归复制即可。
  */
 export function redactConfigSecrets(config: unknown): RedactResult {
+  // 预检通过后，下面的既有递归展开有明确的深度与节点上界；小配置仍保持原有展示形态。
+  assertConfigGraphExpansionSafe(config);
   const state = { changed: false };
   return { config: walk(config, false, state), changed: state.changed };
 }

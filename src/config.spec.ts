@@ -4,9 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
 
+import { CONFIG_GRAPH_MAX_EXPANDED_NODES } from './config-graph.js';
+
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-config-build-'));
 process.env.MIHOMO_CLI_DIR = tmpDir;
-const { assertConfigShape, buildConfig, buildKernelRejectHint, dumpYaml, parseConfigContent } = await import('./config.js');
+const { assertConfigShape, buildConfig, buildKernelRejectHint, dumpYaml, parseConfigContent, validateConfigWithKernel } = await import('./config.js');
 const { CliError } = await import('./errors.js');
 after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
@@ -27,6 +29,19 @@ describe('parseConfigContent：订阅内容解析（YAML 覆盖 JSON，无独立
   it('常规 YAML 正常解析', () => {
     const r = parseConfigContent('proxies:\n  - name: hk\nrules:\n  - MATCH,DIRECT\n');
     assert.deepEqual(r.rules, ['MATCH,DIRECT']);
+  });
+
+  it('普通共享别名合法且保留共享关系，不一刀切禁止 alias', () => {
+    const r = parseConfigContent('base: &base {password: x}\nfirst: *base\nsecond: *base\n');
+    assert.equal(r.first, r.second);
+    assert.deepEqual(r.first, { password: 'x' });
+  });
+
+  it('循环 YAML 别名在后续合并/脱敏前报可读 CliError', () => {
+    assert.throws(
+      () => parseConfigContent('loop: &loop\n  self: *loop\n', '订阅内容'),
+      (e: unknown) => e instanceof CliError && /订阅内容包含循环引用/.test((e as Error).message),
+    );
   });
 
   it('重复键报错，不静默取最后一个值', () => {
@@ -90,6 +105,16 @@ describe('assertConfigShape 形态校验（YAML 笔误转 CliError）', () => {
 });
 
 describe('配置构建保留用户的节点和分流语义', () => {
+  it('超过展示展开预算的合法共享 DAG 仍可构建供下载和 start 使用', () => {
+    // 只构造 O(log预算) 行；构建保留共享图，不经过 config 展示/JSON 的展开预算
+    const levels = Math.ceil(Math.log2(CONFIG_GRAPH_MAX_EXPANDED_NODES));
+    const lines = ['level0: &level0 leaf'];
+    for (let i = 1; i <= levels; i++) lines.push(`level${i}: &level${i} [*level${i - 1}, *level${i - 1}]`);
+    lines.push(`root: *level${levels}`, '');
+    const { config } = buildConfig(lines.join('\n'), 'mixed');
+    assert.equal(config.root, config[`level${levels}`], '构建应保留共享关系而非展开或拒绝大型合法图');
+  });
+
   it('不去重节点、不级联删除分组或分流规则，交给内核决定合法性', () => {
     const input = {
       proxies: [{ name: 'p' }, { name: 'p' }],
@@ -508,6 +533,46 @@ describe('系统锁定项：订阅自带的端口与控制面字段不进运行�
     } finally {
       fs.rmSync(path.join(tmpDir, 'settings.json'));
     }
+  });
+});
+
+describe('validateConfigWithKernel：执行失败与配置拒绝分开诊断', () => {
+  const binary = path.join(tmpDir, 'kernel', 'mihomo');
+  const writeFakeKernel = (content: string, mode: number): void => {
+    fs.mkdirSync(path.dirname(binary), { recursive: true });
+    fs.writeFileSync(binary, content);
+    fs.chmodSync(binary, mode);
+  };
+
+  it('不可执行假内核报权限/重装提示，不误导为订阅或覆写被拒绝', async () => {
+    writeFakeKernel('not executable\n', 0o644);
+    await assert.rejects(validateConfigWithKernel({}, ['overwrite.x.yaml (全局)']), (e: unknown) => {
+      if (!(e instanceof CliError)) return false;
+      const text = [e.message, ...e.hint].join('\n');
+      return (
+        /内核未执行或异常终止/.test(e.message) &&
+        e.label === '内核错误' &&
+        /权限/.test(text) &&
+        /mihomo-cli kernel/.test(text) &&
+        !text.includes('修正订阅或覆写') &&
+        !text.includes('overwrite.x.yaml')
+      );
+    });
+  });
+
+  it('假内核真实退出 1 仍按配置拒绝处理，保留内核输出与覆写清单', async () => {
+    writeFakeKernel("#!/bin/sh\necho 'bad config' >&2\nexit 1\n", 0o755);
+    await assert.rejects(validateConfigWithKernel({}, ['overwrite.x.yaml (全局)']), (e: unknown) => {
+      if (!(e instanceof CliError)) return false;
+      const text = [e.message, ...e.hint].join('\n');
+      return (
+        e.message === '内核拒绝加载配置' &&
+        e.label === '配置错误' &&
+        text.includes('bad config') &&
+        text.includes('overwrite.x.yaml') &&
+        text.includes('修正订阅或覆写')
+      );
+    });
   });
 });
 

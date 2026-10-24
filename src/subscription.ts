@@ -3,10 +3,12 @@ import { buildConfig, countConfigNodes, parseConfigContent, validateConfigWithKe
 import { DEFAULT_AUTO_UPDATE_TIMEOUT, DEFAULT_UPDATE_INTERVAL_HOURS } from './constants.js';
 import { CliError, TimeoutError, withTimeout } from './errors.js';
 import { createHttpClient } from './http.js';
+import { PATHS, withFileLock } from './paths.js';
 import {
   getSubscriptions,
   getSubscriptionsWithCache,
   readSettings,
+  readSubscriptionRawConfig,
   removeSubscriptionRawConfig,
   requireSubscriptionRawConfig,
   saveSubscriptionCache,
@@ -188,6 +190,16 @@ export function resolveSubscription<T extends Subscription>(subs: T[], pattern: 
     }
   }
 
+  if (exact.length > 1) {
+    throw new CliError(`订阅名称 "${pattern}" 有多个精确匹配（名称不区分大小写）`, {
+      hint: [
+        '请手工编辑 settings.json，删除多余条目，或将名称与对应 YAML 文件一起改名，确保忽略大小写后仍唯一',
+        '冲突的订阅:',
+        ...exact.map(s => `  ${s.name}`),
+      ],
+    });
+  }
+
   const matched = exact.length > 0 ? exact : prefix.length > 0 ? prefix : includes;
   if (matched.length === 0) {
     throw new CliError(`未找到匹配 "${pattern}" 的订阅`);
@@ -232,9 +244,9 @@ function assertLooksLikeSubscription(parsed: Record<string, unknown>, maskedUrl:
 }
 
 export async function downloadSubscription(url: string, subName: string, signal?: AbortSignal): Promise<ConfigSummary> {
-  let response: HttpResponse<string>;
+  let response: HttpResponse;
   try {
-    response = await HTTP_CLIENT.get<string>(url, { responseType: 'text', signal });
+    response = await HTTP_CLIENT.get(url, { signal });
   } catch (e) {
     const maskedUrl = maskUrl(url);
     let errorMsg = `获取订阅失败: ${(e as Error).message}`;
@@ -255,27 +267,38 @@ export async function downloadSubscription(url: string, subName: string, signal?
 
   assertLooksLikeSubscription(parsed, maskUrl(url));
 
-  saveSubscriptionRawConfig(subName, content);
-
   const meta = extractSubscriptionMeta(response.headers);
-  try {
-    saveSubscriptionMeta(subName, meta);
-  } catch (e) {
-    // 订阅文件与缓存是两个写操作，任何一步失败都该回到起点：留着刚写的新 yaml，
-    // 「更新失败」的回执与「配置已变」的终态矛盾（下次 start 实际会用这次失败的
-    // 配置）。回滚删除后，缓存里 updated_at 未推进、下次 start 的自动更新会重下。
+  withFileLock(PATHS.subscriptionCommitLock, () => {
+    // YAML 与缓存是一个提交区间：并发下载不能在前者写入后、后者提交前交错，
+    // 否则较慢一方的回滚会把另一进程已成功提交的新 YAML 覆盖回旧内容。
+    const previousContent = readSubscriptionRawConfig(subName);
+    saveSubscriptionRawConfig(subName, content);
+
     try {
-      removeSubscriptionRawConfig(subName);
-    } catch {
-      /* 回滚失败不掩盖原始错误 */
+      saveSubscriptionMeta(subName, meta);
+    } catch (e) {
+      // 缓存失败须回到写前状态：已有文件恢复旧内容，只有原本不存在的文件才删除。
+      // 回滚结果必须进入提示，回滚异常不替换缓存写入主错误。
+      let rollbackHint: string;
+      try {
+        if (previousContent === null) {
+          removeSubscriptionRawConfig(subName);
+          rollbackHint = '订阅文件已随失败回滚删除';
+        } else {
+          saveSubscriptionRawConfig(subName, previousContent);
+          rollbackHint = '订阅文件已恢复为更新前内容';
+        }
+      } catch (rollbackError) {
+        rollbackHint = `订阅文件回滚失败（${(rollbackError as Error).message}），当前内容未确认，请手工检查`;
+      }
+      throw new CliError(`订阅缓存写入失败: ${(e as Error).message}`, {
+        label: '更新失败',
+        // 不给命令级指引：add 与 update 两个消费方都会走到这里，而 add 失败后条目已
+        // 回滚删除，照「sub update」执行只会得到「没有订阅」——hint 只陈述已做的事
+        hint: [rollbackHint, '若 cache.json 被手工改动，修复后重试'],
+      });
     }
-    throw new CliError(`订阅缓存写入失败: ${(e as Error).message}`, {
-      label: '更新失败',
-      // 不给命令级指引：add 与 update 两个消费方都会走到这里，而 add 失败后条目已
-      // 回滚删除，照「sub update」执行只会得到「没有订阅」——hint 只陈述已做的事
-      hint: ['订阅文件已随失败回滚删除', '若 cache.json 被手工改动，修复后重试'],
-    });
-  }
+  });
 
   const { proxies, proxyGroups } = countConfigNodes(parsed);
 

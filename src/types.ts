@@ -394,13 +394,13 @@ export interface HttpClientOptions {
   timeout?: number;
 }
 
-export interface HttpResponse<T = string> {
-  data: T;
+export interface HttpResponse {
+  data: string;
   headers: Headers;
 }
 
 export interface HttpClient {
-  get<T = string>(url: string, config?: { responseType?: 'text' | 'json'; signal?: AbortSignal }): Promise<HttpResponse<T>>;
+  get(url: string, config?: { signal?: AbortSignal }): Promise<HttpResponse>;
 }
 
 // === Update Result ===

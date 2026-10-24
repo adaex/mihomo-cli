@@ -5,6 +5,7 @@ import { readLogTail } from './log-files.js';
 import { PATHS } from './paths.js';
 import { getStatus } from './process-probe.js';
 import { startTun } from './process-start.js';
+import { MANUAL_PKILL_HINT, stop as stopProcesses } from './process-stop.js';
 import { describeExitCause, restartService, startService, tunBlockedByConcurrentStart, waitServiceHealthy } from './service.js';
 import { startAbortedByConcurrentStop } from './stop-epoch.js';
 import type { RuntimeMode, ServiceStatus } from './types.js';
@@ -112,7 +113,25 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
   if (mode === 'tun') {
     // 复核与 startTun 的 pkill 前复核共用同一份装载态：两次查询在同一同步拍，
     // 透传进去免 startTun 再发一次 launchctl print
-    return startTun(assertTunStartNotRaced());
+    const prefetched = assertTunStartNotRaced();
+    let pid: number;
+    try {
+      pid = await startTun(prefetched);
+    } catch (e) {
+      // sudo 等待或启动后的观察窗内发生 stop：报错归属取消，并确认没有留下刚起的进程
+      if (startAbortedByConcurrentStop()) {
+        await stopTunAfterConcurrentStop();
+        throw cancelledByConcurrentStop();
+      }
+      throw e;
+    }
+    // sudo 返回后的进程健康只证明「有进程」，不证明「后执行的 stop 仍应被覆盖」。
+    // 终态必须以最后一条命令为准，清理成功后才可报告取消
+    if (startAbortedByConcurrentStop()) {
+      await stopTunAfterConcurrentStop();
+      throw cancelledByConcurrentStop();
+    }
+    return pid;
   }
 
   const status = getServiceStatus();
@@ -153,6 +172,17 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
     // 绝不改写健康的结果，也绝不在计数未变时吞掉真实死因
     if (startAbortedByConcurrentStop()) throw cancelledByConcurrentStop();
     throw e;
+  }
+}
+
+/** 并发 stop 已发生后，撤销在途 TUN 的启动结果；清不干净时不得再报「已取消并保持停止」 */
+async function stopTunAfterConcurrentStop(): Promise<void> {
+  const result = await stopProcesses();
+  if (result.remaining && result.remaining.length > 0) {
+    throw new CliError(`检测到停止操作，但 TUN 进程未能终止（PID ${result.remaining.join(', ')}）`, {
+      label: '停止失败',
+      hint: [MANUAL_PKILL_HINT],
+    });
   }
 }
 

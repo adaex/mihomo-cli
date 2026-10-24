@@ -54,7 +54,7 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
   const { timeout = 60_000 } = options;
 
   return {
-    async get<T = string>(url: string, config?: { responseType?: 'text' | 'json'; signal?: AbortSignal }): Promise<HttpResponse<T>> {
+    async get(url: string, config?: { signal?: AbortSignal }): Promise<HttpResponse> {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeout);
       const signal = config?.signal ? AbortSignal.any([controller.signal, config.signal]) : controller.signal;
@@ -104,8 +104,7 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
           throw new Error(`响应体过大（${formatBytes(declaredLen)}，上限 ${formatBytes(MAX_RESPONSE_BYTES)}）`);
         }
         const text = await readBodyWithLimit(response, controller, MAX_RESPONSE_BYTES);
-        const data = config?.responseType === 'json' ? JSON.parse(text) : text;
-        return { data: data as T, headers: response.headers };
+        return { data: text, headers: response.headers };
       } catch (e) {
         // 定时器到点的 abort（controller 是本客户端自己建的）翻译成超时语义——
         // 直连被墙正是最常见场景，干等 60s 后收到一句与原因无关的

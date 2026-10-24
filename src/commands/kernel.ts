@@ -52,8 +52,8 @@ export function printChannelLine(channel: DownloadChannel, isExplicitProxy: bool
 /** 切换候选通道时的提示行：带上失败原因首行——中途切换后该原因不再出现在任何输出里
  * （失败明细只在全失败分支打印），不带上用户就不知道首条通道是 HTTP 错误还是低速/超时
  * （决定要不要换节点） */
-export function formatChannelSwitchLine(previousError: Error | null): string {
-  const reason = previousError ? firstLine(previousError.message) : '';
+export function formatChannelSwitchLine(previousError: Error): string {
+  const reason = firstLine(previousError.message);
   return reason ? `上一通道失败（${reason}），切换为:` : '上一通道失败，切换为:';
 }
 
@@ -195,7 +195,7 @@ export async function cmdKernel(args: string[]): Promise<void> {
     const attempts: { channel: DownloadChannel; error: Error }[] = [];
     for (let attempt = 0; attempt < channels.length; attempt++) {
       if (attempt > 0) {
-        console.log(formatChannelSwitchLine(attempts[attempt - 1]?.error ?? null));
+        console.log(formatChannelSwitchLine(attempts[attempt - 1].error));
         printChannelLine(channels[attempt], proxyInfo.proxy !== null);
       }
       try {

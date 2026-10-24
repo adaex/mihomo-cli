@@ -67,9 +67,11 @@ export const PATHS = {
    * 各锁的可达竞态路径：
    * - serviceLock：慢速 start（订阅更新约 10s）持锁期间另一终端 stop
    * - subscriptionCacheLock：慢速 `sub update`（并行下载、逐条回写缓存）期间另一终端 `reset`
+   * - subscriptionCommitLock：同一订阅的 YAML 与缓存提交、缓存失败回滚必须作为一个串行区间
    */
   settingsLock: path.join(USER_DATA_DIR, 'settings.lock'),
   subscriptionCacheLock: path.join(USER_DATA_DIR, 'subscription-cache.lock'),
+  subscriptionCommitLock: path.join(USER_DATA_DIR, 'subscription-commit.lock'),
   serviceLock: path.join(USER_DATA_DIR, 'service.lock'),
   /**
    * 「服务被要求停止」的单调计数（`stop-epoch.ts` 的 `bumpStopEpoch`/`readStopEpoch`，
@@ -160,17 +162,24 @@ export function rmrf(dir: string): void {
  * 清扫崩溃遗留的临时产物（main 每次执行顺带跑一次，幂等、容错，失败不影响命令本身）：
  * - 原子写临时文件 `<目标>.<pid>.<n>.tmp`：进程在写与 rename 之间被杀时残留，
  *   `dir open root` 会把垃圾展示给用户
- * - 内核下载临时目录 `kernel/.tmp-*`（mkdtempSync）：下载/解压中被 kill -9 或断电时
+ * - 内核下载临时目录 `kernel/.tmp-XXXXXX`（mkdtempSync）：下载/解压中被 kill -9 或断电时
  *   整个目录残留（可能含几十 MB 的 .gz），旧内核完好时用户没有理由 reset kernel，
  *   没有任何别的清理路径
  *
- * 只删修改时间超过 1 小时的——正在进行的原子写/下载（别的进程刚创建的）绝不能碰。
+ * 只删修改时间超过 1 小时、且名称与类型都符合 CLI 实际产物的条目——正在进行的
+ * 原子写/下载（别的进程刚创建的）与形态不符的用户文件绝不能碰。
  */
 export function cleanupStaleTmpFiles(): void {
   // atomicWriteFileSync 的目标分布在根目录（settings/cache/epoch）、subscriptions/
   // （原始订阅）与 runtime/（config.yaml）；kernel/ 是下载临时目录。四处都扫，
   // runtime 另有 stop/reset 整删兜底，其余三处的残留没有别的清理路径
   const cutoff = Date.now() - 60 * 60 * 1000;
+  const isCliMkdtempEntry = (entry: string, prefix: string): boolean => {
+    const suffix = entry.startsWith(prefix) ? entry.slice(prefix.length) : '';
+    // 全小写六字母与 check-backup/.tmp-backup 这类手工目录不可区分。清扫宁可漏掉
+    // mkdtemp 理论上也偶发生成的全小写名，也不拿用户数据换这点覆盖率。
+    return /^[A-Za-z0-9]{6}$/.test(suffix) && /[A-Z0-9]/.test(suffix);
+  };
   for (const dir of [USER_DATA_DIR, DIRS.subscriptions, DIRS.runtime, DIRS.kernel]) {
     let entries: string[];
     try {
@@ -179,20 +188,20 @@ export function cleanupStaleTmpFiles(): void {
       continue; // 目录不存在/不可读时无事可做
     }
     for (const entry of entries) {
-      // 原子写临时文件认 .tmp 后缀（四个目录都可能有）；.tmp- 前缀目录**只认
-      // kernel/**——mkdtemp 的下载临时目录只建在那里，前缀不能在全数据目录通用，
-      // 否则根目录将来出现别的 .tmp- 设施会被误扫。
-      // check- 前缀目录只认根目录（config 校验的 mkdtemp，仅 finally 清理，SIGKILL
-      // 即残留；曾放 runtime/，因整目录会被 rmrf 而迁出，见 validateConfigWithKernel）；
-      // service.plist.stage 是 install 的 lint 载体（同样仅 finally 清理）
-      const isAtomicTmpFile = entry.endsWith('.tmp');
-      const isKernelTmpDir = dir === DIRS.kernel && entry.startsWith('.tmp-');
-      const isConfigCheckTmpDir = dir === USER_DATA_DIR && entry.startsWith('check-');
+      // 原子写只认完整的 <目标>.<pid>.<序号>.tmp 文件名，且必须是文件；
+      // mkdtemp 只认保守的六位随机后缀目录，位置仍分别限定在 kernel/ 与数据根。
+      // service.plist.stage 是文件；lstat 让符号链接也不会被当成 CLI 产物删除。
+      const isAtomicTmpFile = /^.+\.\d+\.\d+\.tmp$/.test(entry);
+      const isKernelTmpDir = dir === DIRS.kernel && isCliMkdtempEntry(entry, '.tmp-');
+      const isConfigCheckTmpDir = dir === USER_DATA_DIR && isCliMkdtempEntry(entry, 'check-');
       const isPlistStage = dir === USER_DATA_DIR && entry === 'service.plist.stage';
       if (!isAtomicTmpFile && !isKernelTmpDir && !isConfigCheckTmpDir && !isPlistStage) continue;
       const full = path.join(dir, entry);
       try {
-        if (fs.statSync(full).mtimeMs >= cutoff) continue;
+        const stat = fs.lstatSync(full);
+        if ((isAtomicTmpFile || isPlistStage) && !stat.isFile()) continue;
+        if ((isKernelTmpDir || isConfigCheckTmpDir) && !stat.isDirectory()) continue;
+        if (stat.mtimeMs >= cutoff) continue;
         fs.rmSync(full, { recursive: true, force: true });
       } catch {
         /* 单个条目失败跳过 */

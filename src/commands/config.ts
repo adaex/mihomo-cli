@@ -1,6 +1,7 @@
 import { assertKnownFlags, assertPositionalCount, hasFlag } from '../argv.js';
 import { colors } from '../colors.js';
 import { buildConfig, deriveRuntimeMode, dumpYaml, getConfigInfo } from '../config.js';
+import { assertConfigGraphExpansionSafe } from '../config-graph.js';
 import { redactConfigSecrets } from '../redact.js';
 import { requireSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription, noSubscriptionsError } from '../subscription.js';
@@ -33,6 +34,9 @@ export function cmdConfig(args: string[] = []): void {
   // 与 status/doctor 一致：当前是 TUN 就按 TUN 推导，否则 Mixed
   const mode = deriveRuntimeMode(getConfigInfo());
   const { config, warnings } = buildConfig(rawContent, mode, { subName: active.name, subUrl: active.url });
+
+  // reveal 绕过脱敏副本，JSON 出口必须单独执行同一展开预算；YAML reveal 保留共享图，无需展开
+  if (asJson && reveal) assertConfigGraphExpansionSafe(config);
 
   // 默认凭据脱敏：顶层 secret 之外，节点的 password/uuid/private-key/auth-str 与
   // provider 订阅 URL 里的 token 同样是凭据，明文铺满整屏（录屏、| pbcopy 求助）即泄漏。

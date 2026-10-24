@@ -8,6 +8,7 @@
 
 - 原子写临时名带 pid 与进程内序号；锁释放校验所有权，陈旧锁可恢复，根目录锁不会被 runtime/subscriptions 重置带走（paths.spec）
 - YAML 解析保留共享引用与锚点，JSON 无需第二套解析；match 为空或键名错误时拒绝加载（config/overwrite 测试）
+- config-graph 用带完成缓存的 DFS + active/completed 分离检查循环与 200 层深度，完成节点缓存展开成本与子树高度，共享 DAG 不按展开体量遍历，深处复用浅处缓存也不会漏掉实际路径深度。100000 展开节点预算只服务 config 脱敏与 JSON（含 --reveal 的单独预检）；下载、start、内核校验只查循环与深度，不套展示预算（config/redact/commands/config 测试）
 - process-probe.spec 调真实 pgrep 验证 POSIX ERE；process-stop.spec 用路径隔离的桩进程跑真实 pkill，覆盖批量清理与 PID 复用
 - service-exitcode.spec 只读调用真实 launchctl，确认 113 未装载、112/125 查询失败；service.spec 验证顶层字段、信号死亡与停止计数判据
 - root-guard.spec 验证入口在创建数据目录前拒绝 root；用户态 LaunchAgent 无权创建 TUN
@@ -25,9 +26,12 @@
 - 覆写文件级校验（已移除操作符/互斥/空键 + 数组操作符命中 BASE_CONFIG 非数组键）在 readOverwriteFiles 加载阶段执行：诊断旁路（ow/status）与合并闸门（start/config/doctor）看到同一份 broken 列表，坏文件的 hint 在三处文本与 status --json 都带出；依赖订阅当前值的冲突仍只在合并期报错（ow 不绑定订阅）
 - 残留内核清理唯一入口是 cleanupAll（process-stop.ts）：stop/start/uninstall/reset 四个路径共用，root 残留走一次 sudo 脚本 buildKernelCleanupScript（只 pkill、不删 pid 文件），发信号后统一 5s 死亡等待再复核 pgrep。清理没走完（sudo 取消/脚本失败或 pid 文件删不掉）经 CleanupResult.incomplete 带出：进程仍在则服务层抛错，已清空只警告。**pid 文件清理免提权**：runtime/ 归用户所有，unlink 只看目录权限，root 属主的 TUN 残留也直接删；但**仅在复核 remaining 为空时才删**——pid 文件是 status 的真相源，活进程在时删会让 status 报「未运行」。buildTunLaunchScript 的 `rm pid` 是 pkill 旧实例后立即写新 pid 的自管流程，不在此列
 - waitServiceHealthy 轮询用 getServiceStatus({withDisabled:false})：健康判定不读 disabled，每轮只发一个 launchctl print（最坏约 30 轮不再白跑 print-disabled）；循环外无首次快照（第一轮 sleep 后必覆盖）
+- kickstart 失败后的回退只在本次 bootstrap 确实成功时进入健康确认；bootstrap 的「已装载」幂等吸收只属于启动与安装恢复路径，不能充当本次重启证据（service-restart-fallback.spec 桩 launchctl 正反两路）
+- TUN 在 sudo 返回与启动失败后都复读停止计数；发现并发 stop 时先清理已启动内核，remaining 非空则报停止失败，清理完成后才报启动取消（runtime-tun-concurrency.spec 用假 sudo 在窗口内递增计数并复核进程终态）
 - withFileLock 强夺唯一判据是锁龄；uninstallService 只在锁内 disable 一次，不做锁外重复 disable（冗余且会多 bump epoch）
 - 自动更新整体超时（abort）的订阅按「跳过（使用本地缓存）」灰字渲染、不计 failed；真实网络失败仍是红叉（subscription.spec 锁三档）
-- kernel/.tmp-* 下载临时目录与 *.tmp 原子写文件同受 cleanupStaleTmpFiles 按 1h 龄清扫（下载硬超时 180s，4 倍余量）
+- downloadSubscription 的缓存写失败回滚以写前内容为准：原有 YAML 逐字恢复，仅原本不存在文件时删除本次产物；回滚异常进入提示，不得假报已恢复或已删除。YAML 写入、缓存提交与失败回滚同在 subscriptionCommitLock 内串行，较慢下载的回滚不能覆盖另一进程已提交的新配置（subscription.spec 的本地服务、缓存目录故障与跨进程锁用例）
+- cleanupStaleTmpFiles 按 1h 龄清扫原子写 `<目标>.<pid>.<序号>.tmp`、kernel/.tmp-XXXXXX、根目录 check-XXXXXX 与 service.plist.stage；lstat 核对文件/目录类型，名称或类型不符一律保留。全小写六位后缀与 check-backup 等手工目录无法区分，宁可漏扫也不误删（下载硬超时 180s，清扫 1h 有 20 倍余量；paths.spec）
 - proxy 连通性探测**不做进程内缓存**：CLI 是单命令短进程，status 与 doctor 从不在同一进程同时发生，每进程至多一次调用，缓存没有第二个读端（与 D10 同前提）；--no-probe 在调用方跳过
 - 覆写 DSL 已裁边：`~`/`~?`/`<x>` 转义与 match 的 `subscription` 同义键移除（前者报「已移除的操作符」，后者按未知键报错），按 name 合并数组元素这类带条件的变换改由 JS 脚本承担（全信任模型同 `.zshrc`，同步函数、锁定键在脚本后剥除并告警）；移除形态显式报错给迁移指引。不在 CLI 复制一份分组必填字段校验（字段集随内核漂移），残缺元素仍由 `-t` 拒绝
 - 原生 `-t` 只验证配置解析，不能证明节点可达、端口可绑定或真实 TUN 路由正常；服务健康与代理连通性检查仍有独立价值

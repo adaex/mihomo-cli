@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
+import os from 'node:os';
 
-import { setSilentSigint } from './lifecycle.js';
+import { setSilentSigint, trackChildProcess } from './lifecycle.js';
 
 /**
  * 打开 URL 或文件（macOS `open`）。ui/dir/log 三处共用的薄封装。
@@ -14,12 +15,23 @@ import { setSilentSigint } from './lifecycle.js';
 export function openUrl(url: string): void {
   try {
     // `--` 终止选项解析：url 可能来自订阅响应头 web_page_url（服务器可控），以 `-` 开头会被 open 当选项
+    // detached 进程的生命周期独立于 CLI，不纳入受管子进程跟踪
     const child = spawn('open', ['--', url], { stdio: 'ignore', detached: true });
     child.unref();
     child.on('error', () => {});
   } catch {
     /* spawn 同步阶段的异常（参数非法等）：地址已由调用方打印，用户可自行打开 */
   }
+}
+
+/** close 的 code 与 signal 互斥；两者都未知时按失败处理，不能把未知结果当成功。 */
+function tailExitCode(code: number | null, signal: NodeJS.Signals | null): number {
+  if (code !== null) return code;
+  if (signal !== null) {
+    const signalNumber = os.constants.signals[signal];
+    if (typeof signalNumber === 'number') return 128 + signalNumber;
+  }
+  return 1;
 }
 
 export function viewLogWithTail(logPath: string, options?: { follow?: boolean; lines?: number }): void {
@@ -39,16 +51,21 @@ export function viewLogWithTail(logPath: string, options?: { follow?: boolean; l
   tailArgs.push(logPath);
 
   const tail = spawn('tail', tailArgs, { stdio: 'inherit' });
+  const untrackTail = trackChildProcess(tail);
 
   // follow 模式下 Ctrl+C 是常规退出：抑制全局 SIGINT 处理器的"正在退出..."提示
   if (follow) setSilentSigint(true);
 
   // 透传 tail 的退出码：日志文件不存在时 tail 退 1 并往 stderr 报错，
   // 若恒退 0，脚本里 `mihomo-cli logs 0 > out` 会把「文件不存在的空结果」当成功。
-  // Ctrl+C 走不到这里：index.ts 的全局 SIGINT 处理器同步 process.exit(130)，
-  // 永远先于 tail 的 close 事件（follow 模式实测退出码恒 130，符合 Unix 惯例，刻意如此）。
-  tail.on('close', code => process.exit(code ?? 0));
+  // 信号退出按 128 + signal number 折算；Ctrl+C 由 index.ts 先终止受管 tail，
+  // 再同步退出 130，保持 Unix 信号退出惯例。
+  tail.on('close', (code, signal) => {
+    untrackTail();
+    process.exit(tailExitCode(code, signal));
+  });
   tail.on('error', e => {
+    untrackTail();
     console.error(`无法读取日志: ${e.message}`);
     process.exit(1);
   });

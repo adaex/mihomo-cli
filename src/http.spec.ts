@@ -91,7 +91,7 @@ describe('createHttpClient：4xx 诊断与降级守卫行为', () => {
       res.end(JSON.stringify({ message: 'API rate limit exceeded for 203.0.113.7.', documentation_url: 'https://docs.github.com/rest/rate-limit' }));
     });
     const client = createHttpClient({ timeout: 10_000 });
-    await assert.rejects(client.get(`${base}/repos/MetaCubeX/mihomo/releases`, { responseType: 'json' }), e => {
+    await assert.rejects(client.get(`${base}/repos/MetaCubeX/mihomo/releases`), e => {
       const err = e as Error & { response?: { status?: number; data?: { message?: string; documentation_url?: string } } };
       assert.equal(err.message, 'HTTP 403');
       assert.equal(err.response?.status, 403);
@@ -112,8 +112,8 @@ describe('createHttpClient：4xx 诊断与降级守卫行为', () => {
       res.end('{"ok":true}');
     });
     const client = createHttpClient({ timeout: 10_000 });
-    const response = await client.get<{ ok: boolean }>(`${base}/redirect`, { responseType: 'json' });
-    assert.deepEqual(response.data, { ok: true });
+    const response = await client.get(`${base}/redirect`);
+    assert.equal(response.data, '{"ok":true}');
   });
 
   // 本地无证书无法端到端构造 https→http 重定向，用桩 fetch 固定守卫分支的输入。

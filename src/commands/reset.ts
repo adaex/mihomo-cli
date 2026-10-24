@@ -80,8 +80,13 @@ export async function cmdReset(args: string[]): Promise<void> {
   const ids = new Set(targets.map(t => t.id));
   const needsStop = targets.some(t => t.needsStop);
   const serviceTargeted = ids.has('service');
-  const service = getServiceStatus();
-  let serviceActive = service.installed || service.loaded;
+  const needsServiceState = needsStop || serviceTargeted;
+  const readServiceActive = (): boolean => {
+    if (!needsServiceState) return false;
+    const service = getServiceStatus();
+    return service.installed || service.loaded;
+  };
+  let serviceActive = readServiceActive();
 
   if (targets.length === 1) {
     if (serviceTargeted && !serviceActive) {
@@ -122,9 +127,9 @@ export async function cmdReset(args: string[]): Promise<void> {
   // 也不卸载，直接删 config/kernel 目录——已 bootstrap 的服务不受下方
   // bumpStopEpoch 的 epoch 防线保护（它只拦
   // 「enable/bootstrap 之前」的并发 start），KeepAlive 会对着已删文件落入崩溃循环。
-  // 与 start.ts 的「快照 + 现值」双读同姿态（D2/D4 的并发防线精神）
-  const current = getServiceStatus();
-  serviceActive = current.installed || current.loaded;
+  // 与 start.ts 的「快照 + 现值」双读同姿态（D2/D4 的并发防线精神）。
+  // 纯设置/覆写重置不读服务：状态既不参与删除判定，也不能让 launchctl 故障阻断它们
+  serviceActive = readServiceActive();
 
   // 服务路径的 cleanupAll 已在 stopService/uninstallService 内跑过（warn/throw 也已在
   // 那一层统一渲染），结果直接透传——不再跑第二次：两次之间没有任何状态变化，第二遍只

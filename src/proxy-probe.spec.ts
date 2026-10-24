@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { isProbeSuccessStatus } from './proxy-probe.js';
+import { isProbeSuccessStatus, probeProxyConnectivity } from './proxy-probe.js';
 import { runWithEnvRecordingStubCurl } from './test-support/stub-curl-env.js';
 
 describe('isProbeSuccessStatus', () => {
@@ -35,5 +35,13 @@ describe('probeProxyConnectivity（curl spawn env 出口端到端）', () => {
     assert.match(r.stdout, /CODE:204/);
     assert.equal(r.env.noProxy, '');
     assert.equal(r.env.noProxyUpper, '');
+  });
+
+  it('连接拒绝时保留 curl 的具体 stderr，而不是只报 Command failed', async () => {
+    // 代理地址固定为本机未监听端口，连接在本地即被拒绝，不访问探测目标或外网
+    const r = await probeProxyConnectivity(1);
+    assert.equal(r.ok, false);
+    assert.match(r.error ?? '', /Failed to connect|Connection refused/);
+    assert.doesNotMatch(r.error ?? '', /Command failed/);
   });
 });

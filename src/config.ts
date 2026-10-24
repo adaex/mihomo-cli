@@ -4,6 +4,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import * as yaml from 'js-yaml';
+import { assertConfigGraphSafe } from './config-graph.js';
 import { BASE_CONFIG, EFFECTIVELY_LOCKED_KEYS, TUN_CONFIG, YAML_MAX_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
 import { applyOverwrite, describeOverwriteScope, loadOverwriteFile, lockedKeysReferencedBy, selectActiveOverwriteFiles } from './overwrite.js';
@@ -42,6 +43,7 @@ export function parseConfigContent(content: string, errorMsg?: string): Record<s
   if (result == null || typeof result !== 'object' || Array.isArray(result)) {
     throw new CliError(`${label}不是有效的配置对象（顶层需为映射，当前是${Array.isArray(result) ? '列表' : typeof result}）`, { label: '配置错误' });
   }
+  assertConfigGraphSafe(result, label);
   return result as Record<string, unknown>;
 }
 
@@ -249,6 +251,8 @@ export function buildConfig(subRawContent: string, mode: RuntimeMode, scope?: Ov
     };
   }
 
+  // 无生效覆写时只做根层浅拷贝并合并静态系统字段，不会增加已检查订阅子图的深度。
+  if (overwriteFiles.length > 0) assertConfigGraphSafe(merged, '合并后的配置');
   assertConfigShape(merged);
   return { config: merged, warnings: lockedWarnings, overwriteSummaries };
 }
@@ -352,7 +356,7 @@ export async function validateConfigWithKernel(config: Record<string, unknown>, 
         maxBuffer: 1024 * 1024,
       });
     } catch (e) {
-      const error = e as Error & { stdout?: string; stderr?: string; killed?: boolean };
+      const error = e as Error & { stdout?: string; stderr?: string; killed?: boolean; code?: string | number | null };
       const detail = sanitizeTerminal(`${error.stdout || ''}\n${error.stderr || ''}`).trim();
       // 超时与配置内容无关（内核没在 30s 内给出结论）：不列覆写、不引内核输出，
       // 尾行排查方向也单独给（buildKernelRejectHint 的 timedOut 分支）
@@ -362,9 +366,17 @@ export async function validateConfigWithKernel(config: Record<string, unknown>, 
           hint: buildKernelRejectHint('', [], { timedOut: true }),
         });
       }
+      // 只有进程真实退出时 code 才是数字退出码。ENOENT/EACCES 等字符串错误、
+      // 信号终止的 null 都没有“内核拒绝配置”这个结论，排查方向不能指向订阅/覆写。
+      if (typeof error.code !== 'number') {
+        const reason = detail || sanitizeTerminal(error.message);
+        const hint = ['', ...reason.split('\n').map(line => (line.trim() ? `${HINT_INDENT}${line}` : ''))];
+        hint.push('', `${HINT_INDENT}请检查内核文件是否可执行（权限与系统架构），或运行 mihomo-cli kernel 重新安装；当前运行时配置未改动。`);
+        throw new CliError('内核未执行或异常终止，配置校验未完成', { label: '内核错误', hint });
+      }
       throw new CliError('内核拒绝加载配置', {
         label: '配置错误',
-        hint: buildKernelRejectHint(detail || error.message, overwriteSummaries),
+        hint: buildKernelRejectHint(detail || sanitizeTerminal(error.message), overwriteSummaries),
       });
     }
   } finally {

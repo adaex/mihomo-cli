@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { isSubscriptionStale, isValidHttpUrl, needsAutoUpdate, parseUserInfo, printUpdateResult, tryUpdateOne } from './subscription.js';
+import { isSubscriptionStale, isValidHttpUrl, needsAutoUpdate, parseUserInfo, printUpdateResult, resolveSubscription, tryUpdateOne } from './subscription.js';
 import { makeFixture, moduleUrl, runModule } from './test-support/cli.js';
+import { pollUntil } from './test-support/poll.js';
+import { spawnEval } from './test-support/spawn-eval.js';
 
 describe('parseUserInfo：只收有限非负数，其余按缺失处理', () => {
   it('正常头全字段解析', () => {
@@ -164,14 +168,33 @@ describe('自动更新结果分档：整体超时（abort）是「跳过」不�
   });
 });
 
+describe('resolveSubscription：历史大小写重复的修复指引', () => {
+  it('多个精确匹配时列出冲突条目，并明确指引手工整理 settings.json', () => {
+    const subs = [
+      { name: 'Foo', url: 'https://example.com/one' },
+      { name: 'foo', url: 'https://example.com/two' },
+    ];
+    assert.throws(
+      () => resolveSubscription(subs, 'FOO'),
+      (error: unknown) => {
+        const e = error as Error & { hint?: string[] };
+        assert.match(e.message, /名称不区分大小写/);
+        const hint = e.hint ?? [];
+        assert.ok(hint.some(line => line.includes('settings.json') && line.includes('删除多余条目')));
+        assert.ok(hint.includes('  Foo'));
+        assert.ok(hint.includes('  foo'));
+        return true;
+      },
+    );
+  });
+});
+
 describe('downloadSubscription：缓存写失败的回滚与错误包装', () => {
-  it('cache.json 不可写时抛 CliError、回滚已写的订阅文件（子进程端到端）', () => {
-    // 端到端回归：订阅文件与缓存是两个写操作，缓存写失败（典型：cache.json 被手改
-    // 成目录 → EISDIR）时旧实现留着刚写的新 yaml 报「更新失败」——回执与终态矛盾，
-    // 下次 start 实际会用这次失败的配置；且错误是裸 Node errno 无标签无指引。
-    // 子进程隔离数据目录：父进程静态 import 的模块已绑定默认 MIHOMO_CLI_DIR
+  const subscriptionUrl = moduleUrl('src/subscription.ts');
+
+  function runCacheWriteFailure(oldContent: string | null): string {
+    // cache.json 被手改成目录会让缓存提交得到 EISDIR；数据目录与本地服务均只活在用例内
     const fixture = makeFixture('mihomo-dl-rollback-');
-    const subscriptionUrl = moduleUrl('src/subscription.ts');
     const script = [
       "import http from 'node:http';",
       "import fs from 'node:fs';",
@@ -183,25 +206,122 @@ describe('downloadSubscription：缓存写失败的回滚与错误包装', () =>
       'const port = server.address().port;',
       'const dir = process.env.MIHOMO_CLI_DIR;',
       "fs.mkdirSync(dir + '/subscriptions/cache.json', { recursive: true });",
+      oldContent === null ? '' : `fs.writeFileSync(dir + '/subscriptions/probe.yaml', ${JSON.stringify(oldContent)});`,
       `const { downloadSubscription } = await import(${JSON.stringify(subscriptionUrl)});`,
       'try {',
       "  await downloadSubscription(`http://127.0.0.1:${port}/sub`, 'probe');",
       "  console.log('RESULT:NO-THROW');",
       '} catch (e) {',
-      "  console.log('RESULT:' + JSON.stringify({ name: e.name, message: e.message }));",
+      "  console.log('RESULT:' + JSON.stringify({ name: e.name, message: e.message, hint: e.hint }));",
       '} finally { server.close(); }',
-      "console.log('YAML_EXISTS:' + fs.existsSync(dir + '/subscriptions/probe.yaml'));",
+      "const yamlPath = dir + '/subscriptions/probe.yaml';",
+      "console.log('YAML_EXISTS:' + fs.existsSync(yamlPath));",
+      "console.log('YAML_NOW:' + JSON.stringify(fs.existsSync(yamlPath) ? fs.readFileSync(yamlPath, 'utf8') : null));",
     ].join('\n');
     try {
       const r = runModule(script, fixture.dataDir, { timeout: 30_000 });
       assert.equal(r.status, 0, r.stderr);
-      const resultLine = r.stdout.split('\n').find(l => l.startsWith('RESULT:'));
-      assert.ok(resultLine, `应有 RESULT 行，stdout: ${r.stdout}`);
-      assert.ok(!resultLine.includes('NO-THROW'), '缓存写失败必须抛错，不能静默成功');
-      assert.match(resultLine, /"name":"CliError"/, '错误须包装成 CliError（旧实现裸 Node errno）');
-      assert.match(resultLine, /订阅缓存写入失败/);
-      assert.match(r.stdout, /YAML_EXISTS:false/, '刚写的订阅文件必须随失败回滚');
+      return r.stdout;
     } finally {
+      fixture.cleanup();
+    }
+  }
+
+  it('cache.json 不可写时抛 CliError、回滚本次新增的订阅文件（子进程端到端）', () => {
+    const stdout = runCacheWriteFailure(null);
+    const resultLine = stdout.split('\n').find(l => l.startsWith('RESULT:'));
+    assert.ok(resultLine, `应有 RESULT 行，stdout: ${stdout}`);
+    assert.ok(!resultLine.includes('NO-THROW'), '缓存写失败必须抛错，不能静默成功');
+    assert.match(resultLine, /"name":"CliError"/, '错误须包装成 CliError（旧实现裸 Node errno）');
+    assert.match(resultLine, /订阅缓存写入失败/);
+    assert.match(stdout, /YAML_EXISTS:false/, '刚写的订阅文件必须随失败回滚');
+  });
+
+  it('已有订阅缓存写失败时逐字恢复旧 YAML，而不是删除文件', () => {
+    const oldContent = '# old config\nproxies:\n  - {name: old, type: ss, server: 1.1.1.1, port: 8388, cipher: aes-256-gcm, password: old}\n\n';
+    const stdout = runCacheWriteFailure(oldContent);
+    const resultLine = stdout.split('\n').find(l => l.startsWith('RESULT:'));
+    assert.ok(resultLine && !resultLine.includes('NO-THROW'), '缓存写失败必须抛错');
+    assert.match(resultLine, /"name":"CliError"/);
+    assert.match(resultLine, /订阅缓存写入失败/);
+    assert.match(resultLine, /订阅文件已恢复为更新前内容/);
+    const yamlLine = stdout.split('\n').find(l => l.startsWith('YAML_NOW:'));
+    assert.ok(yamlLine, `应有 YAML_NOW 行，stdout: ${stdout}`);
+    assert.equal(JSON.parse(yamlLine.slice('YAML_NOW:'.length)), oldContent, '旧 YAML 含注释与末尾换行都必须逐字恢复');
+  });
+});
+
+describe('downloadSubscription：跨进程提交互斥', () => {
+  it('另一进程持有提交锁时，已下载内容不会提前写入 YAML', async () => {
+    const fixture = makeFixture('mihomo-download-commit-lock');
+    const ready = path.join(fixture.dataDir, 'lock-ready');
+    const release = path.join(fixture.dataDir, 'lock-release');
+    const startDownload = path.join(fixture.dataDir, 'start-download');
+    const served = path.join(fixture.dataDir, 'served');
+    const portFile = path.join(fixture.dataDir, 'port');
+    const yamlPath = path.join(fixture.dataDir, 'subscriptions', 'probe.yaml');
+    const env = { MIHOMO_CLI_DIR: fixture.dataDir };
+    const lockHolder = spawnEval(
+      `
+import fs from 'node:fs';
+import { ensureDirs, PATHS, withFileLock } from ${JSON.stringify(moduleUrl('src/paths.ts'))};
+ensureDirs();
+withFileLock(PATHS.subscriptionCommitLock, () => {
+  fs.writeFileSync(${JSON.stringify(ready)}, '1');
+  while (!fs.existsSync(${JSON.stringify(release)})) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
+});
+`,
+      { env },
+    );
+    const downloader = spawnEval(
+      `
+import fs from 'node:fs';
+import http from 'node:http';
+while (!fs.existsSync(${JSON.stringify(startDownload)})) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+}
+const server = http.createServer((req, res) => {
+  fs.writeFileSync(${JSON.stringify(served)}, '1');
+  res.end('proxies:\\n  - {name: n1, type: ss, server: 1.2.3.4, port: 8388, cipher: aes-256-gcm, password: x}\\n');
+});
+await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+fs.writeFileSync(${JSON.stringify(portFile)}, String(server.address().port));
+const { downloadSubscription } = await import(${JSON.stringify(moduleUrl('src/subscription.ts'))});
+try {
+  await downloadSubscription(\`http://127.0.0.1:\${server.address().port}/sub\`, 'probe');
+} finally {
+  server.close();
+}
+`,
+      { env, stdio: 'inherit' },
+    );
+
+    try {
+      assert.ok(
+        pollUntil(() => fs.existsSync(ready), 10_000),
+        '提交锁必须已由另一进程持有',
+      );
+      fs.writeFileSync(startDownload, '1');
+      assert.ok(
+        pollUntil(() => fs.existsSync(portFile), 10_000),
+        '下载服务必须就绪',
+      );
+      assert.ok(
+        pollUntil(() => fs.existsSync(served), 5000),
+        '订阅响应必须已返回',
+      );
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+      assert.equal(fs.existsSync(yamlPath), false, '提交锁未释放前不得写入订阅 YAML');
+      fs.writeFileSync(release, '1');
+      assert.equal(await downloader.done, 0, '锁释放后下载提交必须成功');
+      assert.equal(await lockHolder.done, 0);
+      assert.match(fs.readFileSync(yamlPath, 'utf8'), /name: n1/);
+    } finally {
+      if (!fs.existsSync(release)) fs.writeFileSync(release, '1');
+      lockHolder.child.kill();
+      downloader.child.kill();
       fixture.cleanup();
     }
   });

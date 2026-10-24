@@ -340,6 +340,37 @@ describe('settings.json 为非对象时同样备份并告警', () => {
   });
 });
 
+describe('addSubscription：名称不区分大小写地唯一', () => {
+  it('第二条仅大小写不同的名称添加失败，错误指向现有名称且 settings.json 不变', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-add-case-'));
+    try {
+      const code = `
+        const assert = (await import('node:assert/strict')).default;
+        const fs = await import('node:fs');
+        const m = await import(${JSON.stringify(moduleUrl('src/settings.ts'))});
+        const { PATHS } = await import(${JSON.stringify(moduleUrl('src/paths.ts'))});
+        m.addSubscription('https://example.com/Foo', 'Foo');
+        const before = fs.readFileSync(PATHS.settingsFile, 'utf8');
+        assert.throws(
+          () => m.addSubscription('https://example.com/foo', 'foo'),
+          e => {
+            assert.equal(e.name, 'CliError');
+            assert.match(e.message, /现有订阅 "Foo"/);
+            assert.match(e.message, /名称不区分大小写/);
+            assert.match(e.message, /mihomo-cli sub remove Foo/);
+            return true;
+          },
+        );
+        assert.equal(fs.readFileSync(PATHS.settingsFile, 'utf8'), before);
+      `;
+      const r = runModule(code, dir);
+      assert.equal(r.status, 0, r.stderr || r.stdout);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('removeSubscription：数据最终状态（子进程真实模块）', () => {
   const settingsModuleUrl = moduleUrl('src/settings.ts');
   const pathsModuleUrl = moduleUrl('src/paths.ts');

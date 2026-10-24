@@ -1,4 +1,4 @@
-import { execFile, spawnSync } from 'node:child_process';
+import { type ChildProcess, execFile, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -8,6 +8,7 @@ import { getKernelVersion, probeKernelVersion } from './config.js';
 import { VERSION } from './constants.js';
 import { buildCurlSpawnEnv } from './curl-spawn.js';
 import { createHttpError } from './http.js';
+import { trackChildProcess } from './lifecycle.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
 import { escapeRegExp, lastCurlErrorLine } from './text.js';
 import type { GitHubAsset, GitHubRelease, KernelUpdateInfo } from './types.js';
@@ -231,7 +232,7 @@ export function pickLatestRelease(releases: GitHubRelease[]): GitHubRelease {
  */
 export function buildReleaseApiCurlArgs(proxy: string | null, url: string): string[] {
   return [
-    '-s',
+    '-sS',
     ...(proxy ? ['-x', proxy] : ['--noproxy', '*']),
     '--proto',
     '=https',
@@ -507,6 +508,85 @@ export function buildGhDownloadEnv(proxy: string | null): NodeJS.ProcessEnv {
   return env;
 }
 
+interface InheritedChildResult {
+  error: NodeJS.ErrnoException | null;
+  status: number | null;
+}
+
+const CHILD_FORCE_KILL_GRACE_MS = 1_000;
+const GZIP_TIMEOUT_MS = 60_000;
+
+/** 给只响应 SIGKILL 的子进程补上硬超时；返回取消函数，正常 close 时必须调用。 */
+function scheduleChildForceKill(child: ChildProcess, delayMs: number): () => void {
+  const timer = setTimeout(() => {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // 进程已退出时 close 会完成主流程
+    }
+  }, delayMs);
+  timer.unref();
+  return () => clearTimeout(timer);
+}
+
+/** stdio 继承终端的异步子进程；timeout 到时先 SIGTERM，宽限后 SIGKILL 并归 ETIMEDOUT。 */
+export function runInheritedChild(command: string, args: string[], options: { env?: NodeJS.ProcessEnv; timeout?: number }): Promise<InheritedChildResult> {
+  return new Promise(resolve => {
+    const child = spawn(command, args, { stdio: 'inherit', env: options.env });
+    const untrack = trackChildProcess(child);
+    let childError: NodeJS.ErrnoException | null = null;
+    let timedOut = false;
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    let cancelForceKill: () => void = () => {};
+
+    const finish = (status: number | null) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      cancelForceKill();
+      untrack();
+      if (timedOut && childError === null) {
+        childError = Object.assign(new Error(`${command} timed out`), { code: 'ETIMEDOUT' });
+      }
+      resolve({ error: childError, status });
+    };
+
+    child.on('error', (error: Error) => {
+      childError = error as NodeJS.ErrnoException;
+      // 启动失败没有可等待的进程；其他 error（如发信号失败）仍等 close 再注销
+      if (child.pid === undefined) finish(null);
+    });
+    child.on('close', status => finish(status));
+
+    if (options.timeout !== undefined) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        child.kill();
+        cancelForceKill = scheduleChildForceKill(child, CHILD_FORCE_KILL_GRACE_MS);
+      }, options.timeout);
+      timer.unref();
+    }
+  });
+}
+
+/** gzip -dc 的 stdout 以 Buffer 收集；maxBuffer 同时限制解压后体积。 */
+function decompressGzip(tempPath: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    let untrack: () => void = () => {};
+    let cancelForceKill: () => void = () => {};
+    const child = execFile('gzip', ['-dc', tempPath], { encoding: 'buffer', maxBuffer: 256 * 1024 * 1024, timeout: GZIP_TIMEOUT_MS }, (error, stdout) => {
+      cancelForceKill();
+      untrack();
+      if (error) reject(error);
+      else resolve(stdout);
+    });
+    untrack = trackChildProcess(child);
+    // execFile 的 timeout 只发 SIGTERM；不响应该信号的进程仍需硬超时上界。
+    cancelForceKill = scheduleChildForceKill(child, GZIP_TIMEOUT_MS + CHILD_FORCE_KILL_GRACE_MS);
+  });
+}
+
 /**
  * 下载并原子换入内核。release 由调用方先经 checkUpdate 查好传入（版本查询出网方式见
  * resolveReleaseQuery）——本函数不自查版本，只负责按选定通道取产物。
@@ -515,7 +595,7 @@ export async function downloadKernel(
   progressCallback: ((msg: string) => void) | null,
   channel: DownloadChannel,
   latest: GitHubRelease,
-): Promise<{ version: string; path: string }> {
+): Promise<{ version: string }> {
   ensureDirs();
 
   // curl 下载的传输层代理（mirror/gh 通道不带 proxy 时为 null；direct 恒 null）
@@ -570,8 +650,7 @@ export async function downloadKernel(
       if (/[*?[\]]/.test(asset.name) || asset.name !== path.basename(asset.name)) {
         throw new Error(`内核资产名含非法字符: ${asset.name}`);
       }
-      const ghResult = spawnSync('gh', buildGhReleaseDownloadArgs(latest.tag_name, asset.name, tempDir), {
-        stdio: 'inherit',
+      const ghResult = await runInheritedChild('gh', buildGhReleaseDownloadArgs(latest.tag_name, asset.name, tempDir), {
         timeout: GH_DOWNLOAD_TIMEOUT,
         // gh 回退候选带本机代理：per-spawn 注入（buildGhDownloadEnv 注释述其与 D9 的关系）
         env: buildGhDownloadEnv(channel.proxy ?? null),
@@ -594,7 +673,7 @@ export async function downloadKernel(
       // 实测会跟着 302 降级到明文 http 并把响应落盘。产物随后以 root 运行,
       // 故全链路(含重定向)强制 https。--max-filesize 防止被喂超大文件撑爆磁盘。
       const maxBytes = Number.isFinite(asset.size) && asset.size > 0 ? Math.floor(asset.size * 2 + 1024 * 1024) : 512 * 1024 * 1024;
-      const curlResult = spawnSync(
+      const curlResult = await runInheritedChild(
         'curl',
         buildKernelCurlArgs({
           url: downloadUrl,
@@ -603,7 +682,7 @@ export async function downloadKernel(
           outputPath: tempPath,
         }),
         // no_proxy 例外表会绕过显式 -x——统一出口置空，保 -x 权威（curl-spawn.ts）
-        { stdio: 'inherit', env: buildCurlSpawnEnv() },
+        { env: buildCurlSpawnEnv() },
       );
 
       if (curlResult.error) {
@@ -641,18 +720,18 @@ export async function downloadKernel(
     }
 
     // 上游 darwin 资产统一是单文件 gzip（mihomo-darwin-<arch>-vX.Y.Z.gz，findMatchingAsset
-    // 已按此前缀与 .gz 后缀过滤），直接 gzip 解压；出现其他形态说明上游打包方式变了，
-    // 报错而不是猜解压方式。
-    if (!tempPath.endsWith('.gz')) {
-      throw new Error(`不支持的内核资产格式: ${asset.name}（期望单文件 .gz）`);
-    }
+    // 已按此前缀与 .gz 后缀过滤），直接 gzip 解压。
     const foundBinary = path.join(tempDir, path.basename(tempPath, '.gz'));
-    // gzip -dc 输出到 stdout，捕获为 buffer 后写文件，避免 shell 重定向（注入风险）；
-    // maxBuffer 256MB 同时是解压后体积上限
-    const gzipResult = spawnSync('gzip', ['-dc', tempPath], { maxBuffer: 256 * 1024 * 1024, timeout: 60_000 });
-    if (gzipResult.error) throw gzipResult.error;
-    if (gzipResult.status !== 0) throw new Error(`gzip 退出码 ${gzipResult.status}`);
-    fs.writeFileSync(foundBinary, gzipResult.stdout, { mode: 0o755 });
+    // gzip -dc 输出到 stdout，捕获为 buffer 后写文件，避免 shell 重定向（注入风险）
+    let gzipStdout: Buffer;
+    try {
+      gzipStdout = await decompressGzip(tempPath);
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      if (typeof code === 'number') throw new Error(`gzip 退出码 ${code}`);
+      throw error;
+    }
+    fs.writeFileSync(foundBinary, gzipStdout, { mode: 0o755 });
 
     // 自检在临时位置进行（旧内核尚未被触碰）：跑一次 -v 确认二进制可执行且未损坏/架构匹配
     // （上游 release 不提供 checksums，无法哈希校验）。通过后才原子替换。
@@ -678,9 +757,8 @@ export async function downloadKernel(
     // 原子替换：同文件系统内 rename 是原子的，旧内核要么完全是旧版、要么完全是新版
     const targetPath = PATHS.mihomoBinary;
     fs.renameSync(foundBinary, targetPath);
-    fs.chmodSync(targetPath, 0o755);
 
-    return { version: latest.tag_name, path: targetPath };
+    return { version: latest.tag_name };
   } finally {
     // 清理临时目录（无论成功失败）；旧内核不受影响
     try {

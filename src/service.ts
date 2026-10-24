@@ -259,11 +259,14 @@ function ensureServiceSymlink(): void {
  * 锁内 bootstrap（三处启动路径共用，别处不得散写）。并发同向启动时后到者报 exit 5，与
  * 「bootstrap disabled 标签」同形，故复读 print：已装载 = 并发者已完成，按幂等成功；
  * 未装载 = 真失败。其他退出码原样抛。最坏两次调用计入锁内预算（D3）。
+ *
+ * 返回值区分「本次 bootstrap 成功」与「服务原本已装载」：启动与安装恢复路径可忽略，
+ * kickstart 失败后的重启回退必须拒绝把后者当成本次重启的证据。
  */
-function bootstrapServiceIdempotentOrThrow(what: string): void {
+function bootstrapServiceIdempotentOrThrow(what: string): boolean {
   const result = runLaunchctl(['bootstrap', bootstrapDomain(), PATHS.userAgentPlist], SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS);
-  if (result.status === 0) return;
-  if (result.status === 5 && runLaunchctl(['print', serviceTarget()], SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS).status === 0) return;
+  if (result.status === 0) return true;
+  if (result.status === 5 && runLaunchctl(['print', serviceTarget()], SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS).status === 0) return false;
   const detail = result.stderr.trim();
   throw new CliError(`${what}失败（launchctl 退出码 ${result.status ?? '执行失败'}）`, {
     hint: [detail, `手动确认: launchctl print ${serviceTarget()}`].filter(Boolean),
@@ -576,21 +579,23 @@ export async function restartService(prefetched?: ServiceStatus): Promise<{ hotR
   // 随后并发 stop」这一交错仍在锁外——那一支由 launchOrRestart 在健康确认失败后
   // 复读计数兜住，不在这里重复设防。
   const kick = runLaunchctl(['kickstart', '-k', serviceTarget()], 60_000);
-  let started = true;
   if (kick.status !== 0) {
     // 回退路径与 startService 同族：enable + bootstrap 会把并发 stop 的成果覆盖掉，
     // 终态与用户最后一条命令相反。判据共用 epochChanged——
     // **别在这里散写别的判据**
-    withFileLock(PATHS.serviceLock, () => {
-      if (startAbortedByConcurrentStop()) {
-        started = false;
-        return;
-      }
+    const bootstrapped = withFileLock(PATHS.serviceLock, () => {
+      if (startAbortedByConcurrentStop()) return null;
       runLaunchctl(['enable', serviceTarget()], SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS); // 容忍失败：bootstrap 会再判一次
-      bootstrapServiceIdempotentOrThrow('重启服务');
+      return bootstrapServiceIdempotentOrThrow('重启服务');
     });
     // 被取消：直接返回，不清理归档也不做别的收尾
-    if (!started) return { hotReloaded: false, started: false };
+    if (bootstrapped === null) return { hotReloaded: false, started: false };
+    if (!bootstrapped) {
+      const detail = kick.stderr.trim();
+      throw new CliError(`重启服务失败（kickstart 退出码 ${kick.status ?? '执行失败'}）：服务仍已装载，本次未重新装载`, {
+        hint: [detail, '旧进程可能仍在运行，新配置未确认生效；请重试: mihomo-cli start', `手动确认: launchctl print ${serviceTarget()}`].filter(Boolean),
+      });
+    }
   }
 
   // 顺手清理过期归档：归档可能为 root 属主，但 logs/ 目录归用户所有，unlink 只看目录权限

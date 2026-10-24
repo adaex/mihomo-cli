@@ -547,6 +547,34 @@ describe('文件级操作符校验：诊断路径与合并路径看到同一份�
   });
 });
 
+describe('YAML 覆写配置图安全', () => {
+  it('循环别名在诊断旁路标坏、合并路径硬失败', () => {
+    const filePath = path.join(tmpDir, 'overwrite.cycle.yaml');
+    fs.writeFileSync(filePath, 'loop: &loop\n  self: *loop\n');
+    try {
+      assert.ok(listOverwriteFile().broken.some(b => b.name === 'overwrite.cycle.yaml' && /循环引用/.test(b.message)));
+      assert.throws(
+        () => loadOverwriteFile(),
+        (e: unknown) => e instanceof CliError && /overwrite\.cycle\.yaml/.test((e as Error).message) && /循环引用/.test((e as Error).message),
+      );
+    } finally {
+      fs.rmSync(filePath);
+    }
+  });
+
+  it('普通共享别名仍正常加载并保留共享关系', () => {
+    write('overwrite.shared.yaml', 'base: &base {enable: true}\nfirst: *base\nsecond: *base\n');
+    try {
+      assert.equal(listOverwriteFile().broken.length, 0);
+      const files = loadOverwriteFile();
+      assert.equal(files.length, 1);
+      assert.equal(files[0].config?.first, files[0].config?.second);
+    } finally {
+      cleanup('overwrite.shared.yaml');
+    }
+  });
+});
+
 describe('空文档：无内容可合并，不计入任何一边', () => {
   /**
    * 回归背景：js-yaml 5 对空/纯注释文档抛「expected a document」而非返回 null
@@ -1153,13 +1181,12 @@ describe('JS 覆写脚本', () => {
     }
   });
 
-  it('脚本改非锁定键不产生命中；嵌套内部的锁定键改动检不出（浅层快照，与 YAML 侧键级检测同粒度）', () => {
+  it('脚本改非锁定键不产生命中；顶层新增锁定键仍检出', () => {
     write(
       'overwrite.nolock.js',
       'export default function (config) { config.dns = { ...(config.dns || {}), enable: true }; config["listeners"] = [{ type: "x" }]; }',
     );
     try {
-      // listeners 是顶层锁定键（新设置会被检出）——把它拆出来：先验证顶层新设置检出
       const r = applyOverwrite({}, loadOverwriteFile(), { mode: 'mixed' });
       assert.deepEqual(
         r.scriptLockedHits.map(h => h.keys),
@@ -1168,6 +1195,76 @@ describe('JS 覆写脚本', () => {
     } finally {
       cleanup('overwrite.nolock.js');
     }
+  });
+
+  it('脚本原地修改 config.tls.certificate 能检出锁定键', () => {
+    const file: OverwriteFileEntry = {
+      name: 'overwrite.tls-nested.js',
+      transform(config) {
+        (config.tls as Record<string, unknown>).certificate = '/new-cert.pem';
+      },
+    };
+    const r = applyOverwrite({ tls: { certificate: '/old-cert.pem', 'private-key': '/key.pem' } }, [file], { mode: 'mixed' });
+    assert.deepEqual(
+      r.scriptLockedHits.map(h => ({ file: h.file, keys: h.keys })),
+      [{ file: 'overwrite.tls-nested.js', keys: ['tls'] }],
+    );
+  });
+
+  it('脚本对 config.listeners 原地 push 能检出锁定键', () => {
+    const file: OverwriteFileEntry = {
+      name: 'overwrite.listeners-push.js',
+      transform(config) {
+        (config.listeners as unknown[]).push({ name: 'new', type: 'socks' });
+      },
+    };
+    const r = applyOverwrite({ listeners: [{ name: 'old', type: 'socks' }] }, [file], { mode: 'mixed' });
+    assert.deepEqual(
+      r.scriptLockedHits.map(h => ({ file: h.file, keys: h.keys })),
+      [{ file: 'overwrite.listeners-push.js', keys: ['listeners'] }],
+    );
+  });
+
+  it('脚本未触碰嵌套锁定值时不误报', () => {
+    const file: OverwriteFileEntry = {
+      name: 'overwrite.untouched.js',
+      transform(config) {
+        config.dns = { enable: true };
+      },
+    };
+    const base = { tls: { certificate: '/cert.pem' }, listeners: [{ name: 'old' }] };
+    const r = applyOverwrite(base, [file], { mode: 'mixed' });
+    assert.deepEqual(r.scriptLockedHits, []);
+  });
+
+  it('锁定值含不可克隆成员时，后续脚本快照失败也包装成可读 CliError', () => {
+    const files: OverwriteFileEntry[] = [
+      {
+        name: 'overwrite.function.js',
+        transform(config) {
+          config.tls = { certificate: '/cert.pem', invalid: () => true };
+        },
+      },
+      { name: 'overwrite.next.js', transform() {} },
+    ];
+
+    assert.throws(
+      () => applyOverwrite({}, files, { mode: 'mixed' }),
+      (e: unknown) => e instanceof CliError && /overwrite\.next\.js/.test((e as Error).message) && /could not be cloned/.test((e as Error).message),
+    );
+  });
+
+  it('脚本产生循环引用时给出带文件名的可读诊断', () => {
+    const file: OverwriteFileEntry = {
+      name: 'overwrite.cycle.js',
+      transform(config) {
+        config.self = config;
+      },
+    };
+    assert.throws(
+      () => applyOverwrite({}, [file], { mode: 'mixed' }),
+      (e: unknown) => e instanceof CliError && /overwrite\.cycle\.js/.test((e as Error).message) && /循环引用/.test((e as Error).message),
+    );
   });
 
   it('脚本先于 YAML 执行（YAML 在脚本产出上声明式合并：覆盖标量、前插数组）', () => {

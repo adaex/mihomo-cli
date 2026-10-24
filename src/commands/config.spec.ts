@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
+import { CONFIG_GRAPH_MAX_EXPANDED_NODES } from '../config-graph.js';
 import { makeFixture, runCli } from '../test-support/cli.js';
 
 /**
@@ -73,6 +74,70 @@ describe('config：凭据默认脱敏', () => {
       const revealed = JSON.parse(run(['config', '--json', '--reveal']).stdout);
       assert.equal(revealed.redacted, false);
       assert.equal(revealed.config.proxies[0].password, 'realpassword');
+    });
+  });
+
+  it('普通共享别名在 YAML/JSON 与 --reveal 下都可展示', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(
+        path.join(dataDir, 'subscriptions', 'demo.yaml'),
+        ['common: &common', '  password: shared-real-password', '  server: 127.0.0.1', 'first: *common', 'second: *common', 'proxies: []', ''].join('\n'),
+      );
+
+      const maskedYaml = run(['config']);
+      assert.equal(maskedYaml.status, 0, maskedYaml.stderr);
+      assert.ok(!maskedYaml.stdout.includes('shared-real-password'));
+      assert.match(maskedYaml.stdout, /password: '\*\*\*'/);
+
+      const revealedYaml = run(['config', '--reveal']);
+      assert.equal(revealedYaml.status, 0, revealedYaml.stderr);
+      assert.match(revealedYaml.stdout, /common: &ref_\d+/);
+      assert.match(revealedYaml.stdout, /first: \*ref_\d+/);
+      assert.match(revealedYaml.stdout, /password: shared-real-password/);
+
+      const maskedJson = JSON.parse(run(['config', '--json']).stdout);
+      assert.equal(maskedJson.config.first.password, '***');
+      assert.equal(maskedJson.config.second.password, '***');
+      assert.equal(maskedJson.redacted, true);
+
+      const revealedJsonResult = run(['config', '--json', '--reveal']);
+      assert.equal(revealedJsonResult.status, 0, revealedJsonResult.stderr);
+      const revealedJson = JSON.parse(revealedJsonResult.stdout);
+      assert.equal(revealedJson.config.first.password, 'shared-real-password');
+      assert.equal(revealedJson.config.second.password, 'shared-real-password');
+      assert.equal(revealedJson.redacted, false);
+    });
+  });
+
+  it('循环 YAML 在默认、JSON 与 reveal 组合下都报可读配置错误', () => {
+    withFixture((dataDir, run) => {
+      fs.writeFileSync(path.join(dataDir, 'subscriptions', 'demo.yaml'), 'loop: &loop\n  self: *loop\n');
+      for (const args of [[], ['--json'], ['--reveal'], ['--json', '--reveal']]) {
+        const r = run(['config', ...args]);
+        const output = `${r.stdout}${r.stderr}`;
+        assert.notEqual(r.status, 0, `config ${args.join(' ')} 不应成功`);
+        assert.match(output, /配置错误/);
+        assert.match(output, /循环引用/);
+        assert.ok(!/Maximum call stack|Converting circular structure|未预期错误/.test(output), output);
+      }
+    });
+  });
+
+  it('共享 DAG 超展开预算时 JSON reveal 快速报可读错误', () => {
+    withFixture((dataDir, run) => {
+      // 输入只有 O(log预算) 行，不在测试里生成展开后的 JSON；每个别名层共享前一层两次。
+      const levels = Math.ceil(Math.log2(CONFIG_GRAPH_MAX_EXPANDED_NODES));
+      const lines = ['level0: &level0 leaf'];
+      for (let i = 1; i <= levels; i++) lines.push(`level${i}: &level${i} [*level${i - 1}, *level${i - 1}]`);
+      lines.push(`root: *level${levels}`, '');
+      fs.writeFileSync(path.join(dataDir, 'subscriptions', 'demo.yaml'), lines.join('\n'));
+
+      const r = run(['config', '--json', '--reveal']);
+      const output = `${r.stdout}${r.stderr}`;
+      assert.notEqual(r.status, 0);
+      assert.match(output, /节点数超过/);
+      assert.match(output, /配置错误/);
+      assert.ok(!/Maximum call stack|Converting circular structure|未预期错误/.test(output), output);
     });
   });
 

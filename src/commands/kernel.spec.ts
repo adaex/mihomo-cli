@@ -25,6 +25,7 @@ describe('kernel 命令：版本查询失败的提示分档', () => {
 
     assert.notEqual(r.status, 0, '查询失败应非 0 退出');
     assert.match(r.stderr, /版本查询（GitHub API）经代理失败/, `应给出可执行指引而非裸报错，stderr: ${r.stderr}`);
+    assert.match(r.stderr, /Failed to connect|Connection refused/, `-sS 必须保留 curl 的具体连接错误，stderr: ${r.stderr}`);
     assert.match(r.stderr, /镜像只作用于内核下载，与查询无关/);
   });
 });
@@ -87,10 +88,6 @@ describe('formatChannelSwitchLine（切换通道时带上失败原因）', () =>
 
   it('多行错误只取首行（失败明细由全失败分支完整给出）', () => {
     assert.equal(formatChannelSwitchLine(new Error('第一行\n第二行')), '上一通道失败（第一行），切换为:');
-  });
-
-  it('无错误对象时退回无原因形态', () => {
-    assert.equal(formatChannelSwitchLine(null), '上一通道失败，切换为:');
   });
 });
 

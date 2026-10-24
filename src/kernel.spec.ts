@@ -381,6 +381,12 @@ describe('buildGhApiReleaseArgs（gh 认证路径的 release 查询）', () => {
 describe('buildReleaseApiCurlArgs（代理路径的 release API 查询）', () => {
   const url = 'https://api.github.com/repos/MetaCubeX/mihomo/releases';
 
+  it('以 -sS 保留连接错误等具体 stderr（静默模式仍显示错误）', () => {
+    const args = buildReleaseApiCurlArgs('http://127.0.0.1:7890', url);
+    assert.ok(args.includes('-sS'));
+    assert.ok(!args.includes('-s'));
+  });
+
   it('恒含 --proto =https / --proto-redir =https（API 全链路 https）', () => {
     const args = buildReleaseApiCurlArgs('http://127.0.0.1:7890', url);
     assert.equal(args[args.indexOf('--proto') + 1], '=https');

@@ -316,8 +316,12 @@ export function addSubscription(url: string, name: string): void {
   validateSubscriptionName(name);
   updateSettings(settings => {
     const subs = getSubscriptions(settings);
-    if (subs.some(s => s.name === name)) {
-      throw new CliError(`订阅 "${name}" 已存在，请换个名称（mihomo-cli sub add <url> <名称>），或先删除（mihomo-cli sub remove ${name}）`);
+    const normalizedName = name.toLowerCase();
+    const existing = subs.find(s => s.name.toLowerCase() === normalizedName);
+    if (existing) {
+      throw new CliError(
+        `订阅名称 "${name}" 与现有订阅 "${existing.name}" 冲突（名称不区分大小写），请换个名称（mihomo-cli sub add <url> <名称>），或先删除（mihomo-cli sub remove ${existing.name}）`,
+      );
     }
     subs.push({ name, url });
     const updates: Partial<Settings> = { subscriptions: subs };

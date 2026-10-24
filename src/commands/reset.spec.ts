@@ -6,6 +6,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { makeFixture, readEpochIn, runCli } from '../test-support/cli.js';
+import { writeStubExecutable } from '../test-support/stub-bin.js';
 
 function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSyncReturns<string>) => void): void {
   const fixture = makeFixture('mihomo-reset');
@@ -219,6 +220,33 @@ esac
       assert.equal(result.status, 0, result.stderr);
       assert.match(result.stdout, /没有需要重置的内容/);
       assert.doesNotMatch(result.stdout, /已重置/);
+    } finally {
+      fixture.cleanup();
+      fs.rmSync(fakeHome, { recursive: true, force: true });
+      fs.rmSync(fakeBin, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('纯数据重置的服务探测', () => {
+  it('settings/overwrites 不调用 launchctl，服务故障也不会阻断删除', () => {
+    const fixture = makeFixture('mihomo-reset-no-service');
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-reset-no-service-home-'));
+    const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-reset-no-service-bin-'));
+    const calls = path.join(fakeBin, 'calls');
+    assert.ok(fixture.dataDir.startsWith(os.tmpdir()), 'reset 测试必须使用临时数据目录');
+    assert.match(fixture.label, /^com\.mihomo-cli\.test\./, 'reset 测试必须使用一次性 label');
+    try {
+      fs.writeFileSync(path.join(fixture.dataDir, 'settings.json'), '{"overwrite_enabled":false}\n');
+      fs.writeFileSync(path.join(fixture.dataDir, 'overwrite.yaml'), 'log-level: debug\n');
+      writeStubExecutable(path.join(fakeBin, 'launchctl'), `printf '%s\\n' "$1" >> '${calls}'\nexit 125`);
+      const result = runCli(['reset', 'settings', 'overwrites', '-y'], fixture, {
+        env: { HOME: fakeHome, PATH: `${fakeBin}:${process.env.PATH}` },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(fs.existsSync(path.join(fixture.dataDir, 'settings.json')), false);
+      assert.equal(fs.existsSync(path.join(fixture.dataDir, 'overwrite.yaml')), false);
+      assert.equal(fs.existsSync(calls), false, '纯数据重置不得查询服务状态');
     } finally {
       fixture.cleanup();
       fs.rmSync(fakeHome, { recursive: true, force: true });

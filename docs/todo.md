@@ -7,7 +7,7 @@
 - **hot-reload.ts 合并回 service.ts**：全仓唯一消费方是 service.ts，合并不成环（它多出的 proxy-probe/settings 两条边本就是 service 的依赖面）。触发：下次改 service 拆分布局时
 - **process-start.ts 归位到 runtime 域**：唯一消费方是 runtime.ts，且它反向 import service——名字与 process-probe/process-stop 同族但域属「TUN 启动」而非通用进程。改名或并入 runtime 旁。触发：下次动 TUN 启动链路时
 - **settings.ts 两段同构读取共享**：readSettings 与 readSubscriptionCache 都是「读 JSON + 形态校验 + ENOENT 特判 + 损坏备份」，靠注释互指对齐。抽共享骨架（校验谓词参数化），消除注释对齐。触发：下次给 settings 或 cache 加第三种持久化文件时
-- **spawnSync 捕获分类习语收口**：各调用点分别做 error/status null 分类与退出码判读。可提共享 runCapture，但各处退出码语义不同（pgrep 0/1、launchctl 113/112/125、pkill 0/1/2/3），抽象层必须让语义留在调用点。触发：下次新增 spawn 调用点时先建 helper 再用
+- **spawnSync 捕获分类习语收口**：各调用点分别做 error/status null 分类与退出码判读。可提共享 runCapture，但各处退出码语义不同（pgrep 0/1、launchctl 113/112/125、pkill 0/1/2/3），抽象层必须让语义留在调用点。触发：下次新增 spawnSync 调用点时先建 helper 再用
 - **utils.ts（只剩 sleep）撤编**：sleep 并入最高频消费方后删模块。触发：上面任一重构顺路时
 - **service.ts 三处锁内临界区同构收口**：installService/startService/restartService 各有一段「epoch 判定 → enable → bootstrap」锁内块，仅标志变量名、what 文案、enable 容错三处差异。抽 helper 返回「是否被并发 stop 取消」；这是 D3 锁预算的关键执行体，改动时先同步 service-concurrency.spec 的预算断言。触发：下次动 service 锁内调用链时
 - **token 查重守卫单点化**：registry.ts 的 COMMAND_INDEX 构建与 shared.ts 的 assertUniqueTokens 是同一判据两份实现。参数化后 registry 复用 shared。触发：下次改命令注册表或子命令表时

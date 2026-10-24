@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { CONFIG_GRAPH_MAX_EXPANDED_NODES } from './config-graph.js';
+import { CliError } from './errors.js';
 import { redactConfigSecrets } from './redact.js';
 
 describe('redactConfigSecrets：配置凭据脱敏', () => {
@@ -71,6 +73,58 @@ describe('redactConfigSecrets：配置凭据脱敏', () => {
     assert.deepEqual(redactConfigSecrets(42).config, 42);
     assert.deepEqual(redactConfigSecrets(null).config, null);
     assert.deepEqual(redactConfigSecrets([{ password: 'x' }, 1]).config, [{ password: '***' }, 1]);
+  });
+
+  it('循环引用在递归脱敏前转为可读 CliError', () => {
+    const input: Record<string, unknown> = { password: 'x' };
+    input.self = input;
+    assert.throws(
+      () => redactConfigSecrets(input),
+      (e: unknown) => e instanceof CliError && /循环引用/.test((e as Error).message),
+    );
+  });
+
+  it('普通共享子图仍可脱敏展示，输入的共享关系不被改写', () => {
+    const shared = { password: 'x', server: '127.0.0.1' };
+    const input = { first: shared, second: shared };
+    const { config, changed } = redactConfigSecrets(input);
+    assert.deepEqual(config, { first: { password: '***', server: '127.0.0.1' }, second: { password: '***', server: '127.0.0.1' } });
+    assert.equal(changed, true);
+    assert.equal(input.first, input.second, '预检与脱敏都不能修改订阅解析出的图');
+    assert.equal(shared.password, 'x');
+  });
+
+  it('共享 DAG 的展开成本超预算时快速报错，不实际指数展开', () => {
+    // 只构造 O(log预算) 个真实数组；每个数组共享前一个两次。
+    // 预检必须只访问真实节点，并用缓存成本在实际复制前发现超预算。
+    const levels = Math.ceil(Math.log2(CONFIG_GRAPH_MAX_EXPANDED_NODES));
+    let shared: unknown = 'leaf';
+    for (let i = 0; i < levels; i++) shared = [shared, shared];
+    assert.throws(
+      () => redactConfigSecrets(shared),
+      (e: unknown) => e instanceof CliError && /节点数超过/.test((e as Error).message),
+    );
+  });
+
+  it('无循环的超深对象也有深度上界，不依赖调用栈耗尽报错', () => {
+    let input: Record<string, unknown> = { value: 'leaf' };
+    for (let i = 0; i < 201; i++) input = { child: input };
+    assert.throws(
+      () => redactConfigSecrets(input),
+      (e: unknown) => e instanceof CliError && /嵌套深度/.test((e as Error).message),
+    );
+  });
+
+  it('共享子图先在浅处缓存、后在深处引用时仍按实际路径拒绝超深配置', () => {
+    let shared: Record<string, unknown> = { value: 'leaf' };
+    for (let i = 0; i < 150; i++) shared = { child: shared };
+    let deep: Record<string, unknown> = shared;
+    for (let i = 0; i < 100; i++) deep = { child: deep };
+
+    assert.throws(
+      () => redactConfigSecrets({ shallow: shared, deep }),
+      (e: unknown) => e instanceof CliError && /嵌套深度/.test((e as Error).message),
+    );
   });
 
   it('own __proto__ 键：副本保留键与内容，原型不被替换（可正常 dump）', () => {

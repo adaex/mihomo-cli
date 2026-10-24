@@ -1,4 +1,4 @@
-import { type SpawnSyncOptions, type SpawnSyncReturns, spawnSync } from 'node:child_process';
+import { type ChildProcess, type SpawnSyncOptions, type SpawnSyncReturns, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -47,30 +47,67 @@ export interface RunCliOptions {
   input?: string;
 }
 
-/** 在 fixture 的隔离环境里跑一次真实 CLI，返回 spawnSync 结果（encoding 固定 utf8） */
-export function runCli(args: string[], fixture: CliFixture, options: RunCliOptions = {}): SpawnSyncReturns<string> {
+function buildCliEnv(fixture: CliFixture, overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env = {
     ...process.env,
     MIHOMO_CLI_DIR: fixture.dataDir,
     MIHOMO_CLI_DAEMON_LABEL: fixture.label,
     NO_COLOR: '1',
-    ...options.env,
+    ...overrides,
   };
-  // options.env 在最后展开也不能覆盖隔离键；刻意不设 DIR 的守卫用例走 guard.ts，
+  // overrides 在最后展开也不能覆盖隔离键；刻意不设 DIR 的守卫用例走 guard.ts，
   // 非法 label 负例必须另配临时 HOME 与 PATH 桩，而不是松开这里的防线
   if (env.MIHOMO_CLI_DIR !== fixture.dataDir || env.MIHOMO_CLI_DAEMON_LABEL !== fixture.label) {
-    throw new Error('runCli 的 options.env 不得覆盖 fixture 的 MIHOMO_CLI_DIR / MIHOMO_CLI_DAEMON_LABEL');
+    throw new Error('runCli/spawnCli 的 options.env 不得覆盖 fixture 的 MIHOMO_CLI_DIR / MIHOMO_CLI_DAEMON_LABEL');
   }
+  return env;
+}
+
+/** 在 fixture 的隔离环境里跑一次真实 CLI，返回 spawnSync 结果（encoding 固定 utf8） */
+export function runCli(args: string[], fixture: CliFixture, options: RunCliOptions = {}): SpawnSyncReturns<string> {
   const spawnOptions: SpawnSyncOptions = {
     encoding: 'utf8',
     timeout: options.timeout ?? DEFAULT_TEST_PROCESS_TIMEOUT_MS,
-    env,
+    env: buildCliEnv(fixture, options.env),
   };
   if (options.cwd !== undefined) spawnOptions.cwd = options.cwd;
   if (options.input !== undefined) spawnOptions.input = options.input;
   // encoding 固定 utf8，stdio 结果必为 string；spawnSync 的字符串重载只对字面量 options
   // 生效，动态构造的 SpawnSyncOptions 推断成 string|Buffer，这里收窄回事实类型
   return spawnSync(process.execPath, ['--import', 'tsx', ENTRY, ...args], spawnOptions) as SpawnSyncReturns<string>;
+}
+
+export interface CliProcessResult {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+}
+
+/** 异步运行真实 CLI，保留 stdout/stderr；信号与并发用例可只向返回的 CLI PID 发信号。 */
+export function spawnCli(
+  args: string[],
+  fixture: CliFixture,
+  options: Pick<RunCliOptions, 'env'> = {},
+): {
+  child: ChildProcess;
+  done: Promise<CliProcessResult>;
+} {
+  const child = spawn(process.execPath, ['--import', 'tsx', ENTRY, ...args], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: buildCliEnv(fixture, options.env),
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout?.setEncoding('utf8');
+  child.stderr?.setEncoding('utf8');
+  child.stdout?.on('data', chunk => (stdout += chunk));
+  child.stderr?.on('data', chunk => (stderr += chunk));
+  const done = new Promise<CliProcessResult>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (status, signal) => resolve({ status, signal, stdout, stderr }));
+  });
+  return { child, done };
 }
 
 /**

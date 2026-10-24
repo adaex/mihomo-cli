@@ -356,47 +356,56 @@ describe('有生命周期的瞬态文件位置约定', () => {
  * 隔离（同「订阅缓存锁」用例范式）。
  */
 describe('cleanupStaleTmpFiles：崩溃残留清扫', () => {
-  it('删超龄的 .tmp 文件与 kernel/.tmp-* 目录，保留新鲜的与无关条目', async () => {
+  it('只删超龄且名称与类型都匹配的 CLI 产物，保留新鲜条目和用户文件', async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-tmpsweep-'));
     try {
       const script = [
         `import assert from 'node:assert/strict';`,
         `import fs from 'node:fs';`,
-        `import { cleanupStaleTmpFiles, DIRS, ensureDirs } from ${JSON.stringify(path.resolve('src/paths.ts'))};`,
+        `import { cleanupStaleTmpFiles, DIRS, USER_DATA_DIR, ensureDirs } from ${JSON.stringify(path.resolve('src/paths.ts'))};`,
         `ensureDirs();`,
+        `const root = USER_DATA_DIR;`,
         `const oldT = Date.now() - 2 * 60 * 60 * 1000;`,
-        // 根目录：超龄 .tmp 删、新鲜 .tmp 留、无关文件留
-        `fs.writeFileSync(DIRS.kernel + '/../settings.1.0.tmp', 'x');`,
-        `fs.utimesSync(DIRS.kernel + '/../settings.1.0.tmp', new Date(oldT), new Date(oldT));`,
-        `fs.writeFileSync(DIRS.kernel + '/../settings.2.0.tmp', 'y');`,
-        `fs.writeFileSync(DIRS.kernel + '/../settings.json', '{}');`,
-        // kernel：超龄 .tmp- 目录（含下载产物）整个删；新鲜 .tmp- 目录留；无关目录留
-        `fs.mkdirSync(DIRS.kernel + '/.tmp-old', { recursive: true });`,
-        `fs.writeFileSync(DIRS.kernel + '/.tmp-old/mihomo.gz', 'z');`,
-        `fs.utimesSync(DIRS.kernel + '/.tmp-old', new Date(oldT), new Date(oldT));`,
-        `fs.mkdirSync(DIRS.kernel + '/.tmp-new', { recursive: true });`,
+        `const oldFile = p => { fs.writeFileSync(p, 'x'); fs.utimesSync(p, new Date(oldT), new Date(oldT)); };`,
+        `const oldDir = p => { fs.mkdirSync(p, { recursive: true }); fs.writeFileSync(p + '/payload', 'x'); fs.utimesSync(p, new Date(oldT), new Date(oldT)); };`,
+        // 真实原子写形态删；新鲜文件、泛 .tmp 文件与名称匹配但类型不符的目录都保留。
+        `oldFile(root + '/settings.123.0.tmp');`,
+        `fs.writeFileSync(root + '/settings.124.0.tmp', 'y');`,
+        `oldFile(root + '/notes.tmp');`,
+        `oldDir(root + '/manual.123.0.tmp');`,
+        `fs.writeFileSync(root + '/settings.json', '{}');`,
+        // mkdtemp 的六位后缀目录删；旧式宽匹配、新鲜目录与错误位置都保留。
+        `oldDir(DIRS.kernel + '/.tmp-Ab12Cd');`,
+        `fs.mkdirSync(DIRS.kernel + '/.tmp-Ne12Ww', { recursive: true });`,
+        `oldDir(DIRS.kernel + '/.tmp-old');`,
+        `oldDir(DIRS.kernel + '/.tmp-backup');`,
+        `oldDir(root + '/.tmp-Ab12Cd');`,
         `fs.writeFileSync(DIRS.kernel + '/mihomo', 'bin');`,
-        // .tmp- 前缀目录只在 kernel/ 下清扫：根目录即便有超龄同名目录也必须保留
-        `fs.mkdirSync(DIRS.kernel + '/../.tmp-other', { recursive: true });`,
-        `fs.utimesSync(DIRS.kernel + '/../.tmp-other', new Date(oldT), new Date(oldT));`,
-        // 根目录的 check-*（config 校验的 mkdtemp，仅 finally 清理，曾放 runtime/
-        // 因整目录 rmrf 而迁出）与 service.plist.stage（install 的 lint 载体）同属
-        // 崩溃残留，超龄应扫；runtime/ 里的同名目录不归 check- 规则管
-        `fs.mkdirSync(DIRS.kernel + '/../check-old', { recursive: true });`,
-        `fs.writeFileSync(DIRS.kernel + '/../check-old/config.yaml', 'x');`,
-        `fs.utimesSync(DIRS.kernel + '/../check-old', new Date(oldT), new Date(oldT));`,
-        `fs.writeFileSync(DIRS.kernel + '/../service.plist.stage', 'plist');`,
-        `fs.utimesSync(DIRS.kernel + '/../service.plist.stage', new Date(oldT), new Date(oldT));`,
+        // config check 只认根目录下的 check-XXXXXX 目录。
+        `oldDir(root + '/check-Ab12Cd');`,
+        `fs.mkdirSync(root + '/check-Ne12Ww', { recursive: true });`,
+        `oldDir(root + '/check-backup');`,
+        `oldFile(root + '/check-Fi12Le');`,
+        `oldDir(DIRS.runtime + '/check-Ab12Cd');`,
+        `oldFile(root + '/service.plist.stage');`,
         `cleanupStaleTmpFiles();`,
-        `assert.equal(fs.existsSync(DIRS.kernel + '/../settings.1.0.tmp'), false, '超龄原子写临时文件应删');`,
-        `assert.equal(fs.existsSync(DIRS.kernel + '/../settings.2.0.tmp'), true, '新鲜临时文件必须保留');`,
-        `assert.equal(fs.existsSync(DIRS.kernel + '/../settings.json'), true, '无关文件不得误删');`,
-        `assert.equal(fs.existsSync(DIRS.kernel + '/../.tmp-other'), true, '非 kernel 目录的 .tmp- 目录不得误扫');`,
-        `assert.equal(fs.existsSync(DIRS.kernel + '/.tmp-old'), false, '超龄内核下载临时目录应递归删除');`,
-        `assert.equal(fs.existsSync(DIRS.kernel + '/.tmp-new'), true, '新鲜下载目录（进行中的下载）必须保留');`,
+        `assert.equal(fs.existsSync(root + '/settings.123.0.tmp'), false, '超龄原子写临时文件应删');`,
+        `assert.equal(fs.existsSync(root + '/settings.124.0.tmp'), true, '新鲜临时文件必须保留');`,
+        `assert.equal(fs.existsSync(root + '/notes.tmp'), true, '无关 .tmp 文件不得误删');`,
+        `assert.equal(fs.existsSync(root + '/manual.123.0.tmp'), true, '名称匹配但为目录的原子写近失项不得误删');`,
+        `assert.equal(fs.existsSync(root + '/settings.json'), true, '无关文件不得误删');`,
+        `assert.equal(fs.existsSync(DIRS.kernel + '/.tmp-Ab12Cd'), false, '超龄内核下载临时目录应递归删除');`,
+        `assert.equal(fs.existsSync(DIRS.kernel + '/.tmp-Ne12Ww'), true, '新鲜下载目录必须保留');`,
+        `assert.equal(fs.existsSync(DIRS.kernel + '/.tmp-old'), true, '不符合 mkdtemp 六位后缀的目录不得误删');`,
+        `assert.equal(fs.existsSync(DIRS.kernel + '/.tmp-backup'), true, '全小写 backup 目录不得误删');`,
+        `assert.equal(fs.existsSync(root + '/.tmp-Ab12Cd'), true, '非 kernel 目录的下载 stage 近失项不得误扫');`,
         `assert.equal(fs.existsSync(DIRS.kernel + '/mihomo'), true, '现有内核不得误删');`,
-        `assert.equal(fs.existsSync(DIRS.kernel + '/../check-old'), false, '超龄 config 校验临时目录应删');`,
-        `assert.equal(fs.existsSync(DIRS.kernel + '/../service.plist.stage'), false, '超龄 install stage 残留应删');`,
+        `assert.equal(fs.existsSync(root + '/check-Ab12Cd'), false, '超龄 config 校验临时目录应删');`,
+        `assert.equal(fs.existsSync(root + '/check-Ne12Ww'), true, '新鲜 config 校验目录必须保留');`,
+        `assert.equal(fs.existsSync(root + '/check-backup'), true, 'check-backup 等用户目录不得误删');`,
+        `assert.equal(fs.existsSync(root + '/check-Fi12Le'), true, 'check-XXXXXX 文件不是 CLI stage 目录，不得误删');`,
+        `assert.equal(fs.existsSync(DIRS.runtime + '/check-Ab12Cd'), true, 'runtime 里的同名目录不归根目录 check 规则管');`,
+        `assert.equal(fs.existsSync(root + '/service.plist.stage'), false, '超龄 install stage 残留应删');`,
       ].join('\n');
       const { child, done } = spawnEval(script, { env: { MIHOMO_CLI_DIR: dataDir }, stdio: 'inherit' });
       try {

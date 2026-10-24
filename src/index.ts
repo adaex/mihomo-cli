@@ -7,13 +7,14 @@ import { allCommandTokens, findCommand } from './commands/registry.js';
 import { printStatus } from './commands/status.js';
 import { DEFAULT_MIXED_PORT, isValidPortNumber, NODE_ENGINES } from './constants.js';
 import { CliError, errorMessage } from './errors.js';
-import { isSilentSigint } from './lifecycle.js';
+import { isSilentSigint, terminateActiveChildren } from './lifecycle.js';
 import { cleanupStaleTmpFiles, ensureDirs, PATHS } from './paths.js';
 import { captureStopEpochBaseline } from './stop-epoch.js';
 import { suggestSimilar } from './suggest.js';
 import { proxyEnvPointsAtSelf, recordClearedProxyEnv } from './system-proxy.js';
 
 process.on('SIGINT', () => {
+  terminateActiveChildren('SIGINT');
   // 走 stderr：status --json / config --json 探测期间按 Ctrl+C 时，stdout 必须保持
   // 可被 JSON 消费者整体解析，提示行不能混进正文
   if (!isSilentSigint()) {
@@ -23,6 +24,7 @@ process.on('SIGINT', () => {
 });
 
 process.on('SIGTERM', () => {
+  terminateActiveChildren('SIGTERM');
   process.exit(143);
 });
 

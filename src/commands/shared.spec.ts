@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
+import readline from 'node:readline';
 import { beforeEach, describe, it } from 'node:test';
 
-import { dispatchSubcommand, type SubCommand } from './shared.js';
+import { confirmPrompt, dispatchSubcommand, type SubCommand } from './shared.js';
 
 /** 记录命中的 handler（协议约定 handler 返回 void，用副作用观察分发结果） */
 let called: string[] = [];
@@ -114,5 +115,28 @@ describe('dispatchSubcommand：子命令名大小写不敏感（与顶层入口�
   it('大小写混合同样命中', async () => {
     await dispatchSubcommand(['x', 'OfF'], TABLE, OPTIONS);
     assert.deepEqual(called, ['off']);
+  });
+});
+
+describe('confirmPrompt：交互提示输出通道', () => {
+  it('stdout 被重定向时提示仍走 stderr', async t => {
+    const tty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+    t.after(() => {
+      if (tty) Object.defineProperty(process.stdin, 'isTTY', tty);
+      else delete (process.stdin as { isTTY?: boolean }).isTTY;
+    });
+
+    let output: NodeJS.WritableStream | undefined;
+    t.mock.method(readline, 'createInterface', (options: readline.ReadLineOptions) => {
+      output = options.output;
+      return {
+        question: (_question: string, answer: (value: string) => void) => answer('y'),
+        close: () => {},
+      } as readline.Interface;
+    });
+
+    assert.equal(await confirmPrompt('确认?'), true);
+    assert.equal(output, process.stderr);
   });
 });
