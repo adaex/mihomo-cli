@@ -45,7 +45,7 @@ export async function cmdStart(args: string[]): Promise<void> {
 
   assertKernelInstalled();
 
-  // 并发判定的基线由 main() 在命令入口捕获（service.ts captureStopEpochBaseline），
+  // 并发判定的基线由 main() 在命令入口捕获（stop-epoch.ts captureStopEpochBaseline），
   // 不在这里取：它必须早于订阅自动更新等慢速阶段、且不晚于本命令第一次状态观察，
   // main() 的入口位置天然满足。restartToApply（sub use / ow on|off 触发的重启）
   // 会带着原命令的基线重入这里——下载订阅期间发生的并发 stop 因此会被检出并取消
@@ -162,10 +162,9 @@ export async function cmdStart(args: string[]): Promise<void> {
     console.log(colors.yellow(`状态展示失败（不影响已完成的启动）: ${firstLine((e as Error).message)}`));
   }
 
-  // Mixed 模式需手动配置系统代理：进程活着 ≠ 流量走代理，这是 Mixed 最大的日常摩擦。
-  // TUN 模式由虚拟网卡接管全局流量，无需此步。start 是低频命令（重启/首次），提示不烦。
-  // 提示按实际系统代理状态分档（已指向/指向别处/检测不可用），见 system-proxy.ts；
-  // 端口取实际配置（settings.ports 可覆盖默认 7890）——提示错了端口用户会直接连不上。
+  // Mixed 只提供端口，不自动修改 macOS 系统代理：进程活着 ≠ 应用流量走代理。
+  // 主路径由具体浏览器或应用按需配置（D15）；TUN 接管系统流量，无需此步。
+  // 系统代理检测只读，提示按环境分档；端口取实际配置（settings.ports 可覆盖默认 7890）。
   // 用 getPortsOrNull：这是「已启动」之后的附加提示（同上方 printStatus 的容错），
   // 启动多秒窗口内 settings.ports 被改坏时不能把成功命令翻成 exit 1；坏值由
   // doctor 的端口配置检查项专门报

@@ -5,6 +5,6 @@ import { satisfies } from 'compare-versions';
 
 const { engines } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 if (engines?.node && !satisfies(process.versions.node, engines.node)) {
-  console.error(`Node 版本过低：当前 ${process.versions.node}，需要 ${engines.node}（见 .node-version；fnm/nvm 进目录会自动切换）`);
+  console.error(`Node 版本过低：当前 ${process.versions.node}，需要 ${engines.node}；请用版本管理器切换到 .node-version 指定的版本`);
   process.exit(1);
 }

@@ -296,7 +296,7 @@ const HINT_INDENT = '  ';
  * 那类判据收口的用法）——留在 catch 块里就只能靠跑真实/桩内核间接验证。
  *
  * 覆写清单只在**非空**时附加：没有覆写文件、`ow off`、本次订阅没命中任何 match，
- * 三种情况下问题都必在订阅本身，多打一段「当前生效的覆写文件: 无」是纯噪音，
+ * 三种情况下问题都必在订阅本身，多打一段「本次参与构建的覆写文件: 无」是纯噪音，
  * 还会把排查方向引偏。反之也不做「未命中即告警」：ssh -D 那类靠 `+proxies`
  * 追加节点的正常用法每次 start 都会刷屏，而它并没有出错。
  */
@@ -309,7 +309,7 @@ export function buildKernelRejectHint(detail: string, overwriteSummaries: string
   const hint = ['', ...detail.split('\n').map(line => (line.trim() ? `${HINT_INDENT}${line}` : ''))];
 
   if (overwriteSummaries.length > 0) {
-    hint.push('', `${HINT_INDENT}当前生效的覆写文件:`);
+    hint.push('', `${HINT_INDENT}本次参与构建的覆写文件:`);
     // 文件名与 match 值都来自用户文件，同内核输出一样消毒，防 ESC 序列污染终端
     for (const summary of overwriteSummaries) hint.push(sanitizeTerminal(`${HINT_INDENT.repeat(2)}${summary}`));
     hint.push(`${HINT_INDENT}若报错的元素来自覆写（YAML 追加或 JS 脚本注入），检查对应的覆写文件与脚本。`);

@@ -6,16 +6,14 @@ import { requireSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription, noSubscriptionsError } from '../subscription.js';
 
 /**
- * 展示当前生效的运行配置。只读，不写盘、不校验、不重启。
+ * 展示按当前订阅缓存、覆写与设置重新推导的配置预览。不写盘、不校验、不重启。
  *
- * **重新推导而非读 runtime/config.yaml**：那个文件在 stop 时会被 `clearRuntime()` 整个删掉
- * （`reset runtime` 同样），停止状态下读盘只能得到「不存在」——而「停着的时候看看配置对不对」
- * 恰是最需要它的时候。改配置（切订阅、调覆写）后想确认结果，也不必先把服务跑起来。
+ * 不直接读 runtime/config.yaml：stop/reset runtime 会删除它，停止时也需要预览；
+ * 修改订阅或覆写后，预览展示的是候选配置，不代表运行中的内核已经应用。
  *
- * 推导走 `buildConfig`（订阅 + 覆写 + 系统锁定项的纯合并），与 `start` 用的是同一条路径，
- * 故这里看到的就是启动会写进去的内容。**刻意不调 `prepareConfigForStart`**：它会执行内核
- * 原生校验（需要装了内核、要起子进程、还要建临时目录），而这是个只读展示命令——
- * 校验归 `doctor` 和 `start`，各自职责不混。
+ * buildConfig 与 start 共用合并路径，但 start 可能先自动更新订阅，JS 脚本也可非确定，
+ * 故不承诺预览等于下一次 start 的写入结果。刻意不调 prepareConfigForStart：
+ * 内核原生校验归 doctor/start，预览不要求安装内核。
  *
  * mode 与 status/doctor 同判据：看当前落盘配置里有没有 tun，没有就按 mixed 推导。
  */
@@ -43,15 +41,15 @@ export function cmdConfig(args: string[] = []): void {
   const shown = redacted.config as Record<string, unknown>;
 
   if (asJson) {
-    // 配置与 CLI 提示分两个键：warnings 若铺在顶层会顶替配置自身的同名键，
-    // 也破坏「config 内容 = start 写入内容」。信封形态与 YAML 出口的「正文 + # 提示段」同构。
+    // 配置与 CLI 提示分两个键：warnings 若铺在顶层会顶替配置自身的同名键。
+    // 信封形态与 YAML 出口的「正文 + # 提示段」同构
     // stdout 始终是单个可整体解析的 JSON；无警告时输出空数组，字段形状稳定
     console.log(JSON.stringify({ config: shown, warnings, redacted: !reveal && redacted.changed }, null, 2));
     return;
   }
 
   console.log(colors.gray(`# 订阅: ${active.name}  模式: ${mode}`));
-  console.log(colors.gray('# 由订阅与覆写推导，与 start 写入 runtime/config.yaml 的内容一致'));
+  console.log(colors.gray('# 配置预览：未写盘、未校验、未应用'));
   if (!reveal && redacted.changed) {
     console.log(colors.gray('# 凭据已脱敏显示，--reveal 可查看原文'));
   }

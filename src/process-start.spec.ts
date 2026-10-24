@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { runModule } from './test-support/cli.js';
+import { moduleUrl, runModule } from './test-support/cli.js';
 
 /**
  * TUN 启动脚本本体的观察窗契约。脚本全部锁在真实 sudo 之后，此前零覆盖——
@@ -15,42 +15,48 @@ import { runModule } from './test-support/cli.js';
  * 临时数据目录，碰不到真实内核。桩内核 = 写在 PATHS.mihomoBinary 的 shell 脚本。
  */
 describe('buildTunLaunchScript：观察窗判定（12×0.1s，窗内死亡即失败）', () => {
-  function runTunScript(stubKernelBody: string): { code: number | null; stdout: string; dataDir: string } {
+  function runTunScript(stubKernelBody: string): { code: number | null; stdout: string } {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-tun-script-'));
-    for (const sub of ['kernel', 'logs', 'runtime', 'data']) fs.mkdirSync(path.join(dataDir, sub), { recursive: true });
-    const kernelStub = path.join(dataDir, 'kernel', 'mihomo');
-    fs.writeFileSync(kernelStub, `#!/bin/sh\n${stubKernelBody}\n`, { mode: 0o755 });
-    fs.chmodSync(kernelStub, 0o755);
-    const srcPath = path.resolve('src/process-start.ts');
-    const script = [
-      "import fs from 'node:fs';",
-      "import os from 'node:os';",
-      "import path from 'node:path';",
-      "import { spawnSync } from 'node:child_process';",
-      `const { buildTunLaunchScript } = await import(${JSON.stringify(srcPath)});`,
-      'const dir = process.env.MIHOMO_CLI_DIR;',
-      'const scriptPath = path.join(os.tmpdir(), `tun-launch-${path.basename(dir)}.sh`);',
-      'fs.writeFileSync(scriptPath, buildTunLaunchScript());',
-      'fs.chmodSync(scriptPath, 0o755);',
-      'const r = spawnSync("bash", [scriptPath], { encoding: "utf8", timeout: 30_000 });',
-      "console.log('CODE:' + r.status);",
-      "console.log('PID_FILE_EXISTS:' + fs.existsSync(dir + '/runtime/pid'));",
-      "const pidContent = fs.existsSync(dir + '/runtime/pid') ? fs.readFileSync(dir + '/runtime/pid', 'utf8').trim() : '';",
-      "console.log('PID:' + pidContent);",
-    ].join('\n');
-    const r = runModule(script, dataDir, { timeout: 60_000 });
-    assert.equal(r.status, 0, r.stderr);
-    const code = Number((r.stdout.match(/CODE:(-?\d+)/) ?? [])[1]);
-    const pid = (r.stdout.match(/PID:(\d+)/) ?? [])[1];
-    // 清理存活的桩内核(由脚本启动、脱离测试进程)
-    if (pid) {
-      try {
-        process.kill(Number(pid), 'SIGKILL');
-      } catch {
-        /* 已退出 */
+    let pid = '';
+    try {
+      for (const sub of ['kernel', 'logs', 'runtime', 'data']) fs.mkdirSync(path.join(dataDir, sub), { recursive: true });
+      const kernelStub = path.join(dataDir, 'kernel', 'mihomo');
+      fs.writeFileSync(kernelStub, `#!/bin/sh\n${stubKernelBody}\n`, { mode: 0o755 });
+      fs.chmodSync(kernelStub, 0o755);
+      const script = [
+        "import fs from 'node:fs';",
+        "import path from 'node:path';",
+        "import { spawnSync } from 'node:child_process';",
+        `const { buildTunLaunchScript } = await import(${JSON.stringify(moduleUrl('src/process-start.ts'))});`,
+        `const { MAIN_INSTANCE_PATTERN } = await import(${JSON.stringify(moduleUrl('src/process-probe.ts'))});`,
+        `const { assertIsolatedCleanupPattern } = await import(${JSON.stringify(moduleUrl('src/test-support/fake-kernel.ts'))});`,
+        'const dir = process.env.MIHOMO_CLI_DIR;',
+        'assertIsolatedCleanupPattern(MAIN_INSTANCE_PATTERN, dir);',
+        "const scriptPath = path.join(dir, 'tun-launch.sh');",
+        'fs.writeFileSync(scriptPath, buildTunLaunchScript());',
+        'fs.chmodSync(scriptPath, 0o755);',
+        'const r = spawnSync("bash", [scriptPath], { encoding: "utf8", timeout: 30_000 });',
+        "console.log('CODE:' + r.status);",
+        "console.log('PID_FILE_EXISTS:' + fs.existsSync(dir + '/runtime/pid'));",
+        "const pidContent = fs.existsSync(dir + '/runtime/pid') ? fs.readFileSync(dir + '/runtime/pid', 'utf8').trim() : '';",
+        "console.log('PID:' + pidContent);",
+      ].join('\n');
+      const r = runModule(script, dataDir, { timeout: 60_000 });
+      pid = (r.stdout.match(/PID:(\d+)/) ?? [])[1] ?? '';
+      assert.equal(r.status, 0, r.stderr);
+      const code = Number((r.stdout.match(/CODE:(-?\d+)/) ?? [])[1]);
+      return { code, stdout: r.stdout };
+    } finally {
+      // 断言失败也必须收掉桩进程；脚本位于 dataDir 内，随目录统一清理
+      if (pid) {
+        try {
+          process.kill(Number(pid), 'SIGKILL');
+        } catch {
+          /* 已退出 */
+        }
       }
+      fs.rmSync(dataDir, { recursive: true, force: true });
     }
-    return { code, stdout: r.stdout, dataDir };
   }
 
   it('桩内核观察窗内死亡（sleep 0.3）→ 退 2 且 pid 文件被清', () => {

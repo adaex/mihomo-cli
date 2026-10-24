@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { DEFAULT_TEST_PROCESS_TIMEOUT_MS } from './spawn-eval.js';
+
 /**
  * 端到端跑真实 CLI 的测试夹具，所有 commands/*.spec.ts 共用这一份。
  *
@@ -18,9 +20,6 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /** CLI 入口（src/index.ts），各 spec 不再各自推导路径 */
 export const ENTRY = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'index.ts');
-
-/** 端到端子进程默认超时：各 spec 曾漂移出 15/20/30/60s 四种，统一 20s（真网络用例自管） */
-const DEFAULT_TIMEOUT_MS = 20_000;
 
 export interface CliFixture {
   dataDir: string;
@@ -50,16 +49,22 @@ export interface RunCliOptions {
 
 /** 在 fixture 的隔离环境里跑一次真实 CLI，返回 spawnSync 结果（encoding 固定 utf8） */
 export function runCli(args: string[], fixture: CliFixture, options: RunCliOptions = {}): SpawnSyncReturns<string> {
+  const env = {
+    ...process.env,
+    MIHOMO_CLI_DIR: fixture.dataDir,
+    MIHOMO_CLI_DAEMON_LABEL: fixture.label,
+    NO_COLOR: '1',
+    ...options.env,
+  };
+  // options.env 在最后展开也不能覆盖隔离键；刻意不设 DIR 的守卫用例走 guard.ts，
+  // 非法 label 负例必须另配临时 HOME 与 PATH 桩，而不是松开这里的防线
+  if (env.MIHOMO_CLI_DIR !== fixture.dataDir || env.MIHOMO_CLI_DAEMON_LABEL !== fixture.label) {
+    throw new Error('runCli 的 options.env 不得覆盖 fixture 的 MIHOMO_CLI_DIR / MIHOMO_CLI_DAEMON_LABEL');
+  }
   const spawnOptions: SpawnSyncOptions = {
     encoding: 'utf8',
-    timeout: options.timeout ?? DEFAULT_TIMEOUT_MS,
-    env: {
-      ...process.env,
-      MIHOMO_CLI_DIR: fixture.dataDir,
-      MIHOMO_CLI_DAEMON_LABEL: fixture.label,
-      NO_COLOR: '1',
-      ...options.env,
-    },
+    timeout: options.timeout ?? DEFAULT_TEST_PROCESS_TIMEOUT_MS,
+    env,
   };
   if (options.cwd !== undefined) spawnOptions.cwd = options.cwd;
   if (options.input !== undefined) spawnOptions.input = options.input;
@@ -70,7 +75,7 @@ export function runCli(args: string[], fixture: CliFixture, options: RunCliOptio
 
 /**
  * 在隔离子进程里读停止计数（PATHS 在模块加载时固化 MIHOMO_CLI_DIR，必须起子进程；
- * 用 service.ts 的真实 readStopEpoch，不在测试里另抄一份解析）。
+ * 用 stop-epoch.ts 的真实 readStopEpoch，不在测试里另抄一份解析）。
  * stop.spec 与 reset.spec 的 epoch 断言共用。
  */
 export function readEpochIn(dataDir: string): number {
@@ -92,16 +97,17 @@ export interface RunModuleOptions {
 }
 
 /**
- * 在隔离子进程里跑一段「import 真实源码模块」的脚本：PATHS 等在模块加载期就固化
- * MIHOMO_CLI_DIR 的模块（settings/paths/service…）必须这样测，同进程内改环境变量无效。
- * 与 runCli 的三件套不同：不经 CLI 入口，label/NO_COLOR 无意义，env 只继承 + 覆盖
- * MIHOMO_CLI_DIR。失败不代为断言——调用方对子进程失败的预期各异（有的断 status、
- * 有的要读 stdout），统一抛错会拦掉「子进程里预期失败」的用例。
+ * 在隔离子进程里跑一段「import 真实源码模块」的脚本：PATHS、SERVICE_LABEL 等在模块
+ * 加载期固化 env，必须这样测，同进程内改环境变量无效。label 与 NO_COLOR 是否有效取决于
+ * 被测模块是否读取，调用方需要时通过 options.env 显式设置；DIR 不允许被覆盖。
+ * 失败不代为断言——调用方对子进程失败的预期各异（有的断 status、有的要读 stdout）。
  */
 export function runModule(code: string, dataDir: string, options: RunModuleOptions = {}): SpawnSyncReturns<string> {
+  const env = { ...process.env, MIHOMO_CLI_DIR: dataDir, ...options.env };
+  if (env.MIHOMO_CLI_DIR !== dataDir) throw new Error('runModule 的 options.env 不得覆盖 MIHOMO_CLI_DIR');
   return spawnSync(process.execPath, ['--import', 'tsx', '-e', code], {
     encoding: 'utf8',
-    timeout: options.timeout ?? DEFAULT_TIMEOUT_MS,
-    env: { ...process.env, MIHOMO_CLI_DIR: dataDir, ...options.env },
+    timeout: options.timeout ?? DEFAULT_TEST_PROCESS_TIMEOUT_MS,
+    env,
   }) as SpawnSyncReturns<string>;
 }

@@ -3,7 +3,7 @@ import type { SpawnSyncReturns } from 'node:child_process';
 import { describe, it } from 'node:test';
 import type { DownloadChannel } from '../kernel.js';
 import { makeFixture, runCli as runCliFixture } from '../test-support/cli.js';
-import { buildDownloadFailureError, channelLabel, formatChannelSwitchLine, printChannelLine } from './kernel.js';
+import { buildDownloadFailureError, channelLabel, formatChannelSwitchLine, kernelRestartCommand, printChannelLine } from './kernel.js';
 
 function runCli(args: string[]): SpawnSyncReturns<string> {
   const fixture = makeFixture('mihomo-kernel-cli');
@@ -26,6 +26,17 @@ describe('kernel 命令：版本查询失败的提示分档', () => {
     assert.notEqual(r.status, 0, '查询失败应非 0 退出');
     assert.match(r.stderr, /版本查询（GitHub API）经代理失败/, `应给出可执行指引而非裸报错，stderr: ${r.stderr}`);
     assert.match(r.stderr, /镜像只作用于内核下载，与查询无关/);
+  });
+});
+
+describe('kernel 更新后的进程重启提示', () => {
+  it('Mixed 与 TUN 都先停止旧进程，再按原模式启动', () => {
+    assert.equal(
+      kernelRestartCommand({ running: true, pid: 1, kind: 'service', memory: null }),
+      'mihomo-cli stop && mihomo-cli start',
+      '单独 start 可能只热重载配置，不能替换运行中的二进制',
+    );
+    assert.equal(kernelRestartCommand({ running: true, pid: 1, kind: 'tun', memory: null }), 'mihomo-cli stop && mihomo-cli start tun');
   });
 });
 

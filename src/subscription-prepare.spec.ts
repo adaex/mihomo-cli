@@ -57,7 +57,7 @@ describe('配置经内核校验后再提交', () => {
         assert.match(hint, /native rejected candidate/);
         // 无覆写生效时不得出现该段——防有人日后把 loadOverwriteFile 塞回校验函数内部，
         // 那会列出本次并未生效的文件
-        assert.ok(!hint.includes('当前生效的覆写文件'), '无覆写生效时不应出现覆写清单');
+        assert.ok(!hint.includes('本次参与构建的覆写文件'), '无覆写生效时不应出现覆写清单');
         return true;
       });
       assert.equal(fs.readFileSync(PATHS.configFile, 'utf8'), previous);
@@ -80,7 +80,7 @@ describe('配置经内核校验后再提交', () => {
         assert.ok(e instanceof CliError);
         const hint = e.hint.join('\n');
         assert.match(hint, /native rejected candidate/);
-        assert.match(hint, /当前生效的覆写文件/);
+        assert.match(hint, /本次参与构建的覆写文件/);
         assert.match(hint, /overwrite\.probe\.yaml \(全局\)/);
         return true;
       });

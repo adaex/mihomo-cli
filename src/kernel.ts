@@ -338,8 +338,8 @@ async function getLatestReleaseViaGh(repo: string, signal?: AbortSignal): Promis
 
 /**
  * 拉取 release 列表。**绝不经过镜像**（见 assertTrustedAssetUrl / D8）。无代理可用时调用方
- * 置 useGh 先走 gh 认证（5000 次/时 vs 未认证 60 次/时），失败静默回退 curl；curl 按 proxy
- * 经代理或直连（fetch 不支持 HTTP 代理的 CONNECT，统一走 curl 只留一条 HTTP 实现）。
+ * 置 useGh 先走 gh 认证（5000 次/时 vs 未认证 60 次/时），失败回退 curl；curl 按 proxy
+ * 经代理或直连。curl 只替代原 Node fetch 的直连分支，gh 认证子进程仍保留。
  */
 async function getLatestRelease(repo: string, opts: ReleaseQueryOptions): Promise<GitHubRelease> {
   if (opts.useGh) {

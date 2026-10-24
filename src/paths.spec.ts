@@ -108,22 +108,24 @@ describe('withFileLock', () => {
            fs.writeFileSync(${JSON.stringify(marker)}, String(Date.now()));
          });`);
 
-    let releasedAt = 0;
-    withFileLock(lockPath, () => {
-      // 持锁 300ms，给子进程充分的尝试时间
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
-      assert.equal(fs.existsSync(marker), false, '持锁期间子进程不得拿到锁');
-      releasedAt = Date.now();
-    });
+    try {
+      let releasedAt = 0;
+      withFileLock(lockPath, () => {
+        // 持锁 300ms，给子进程充分的尝试时间
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+        assert.equal(fs.existsSync(marker), false, '持锁期间子进程不得拿到锁');
+        releasedAt = Date.now();
+      });
 
-    // 等子进程拿到锁。注意不能等 child.exitCode：本用例全程同步阻塞事件循环，
-    // 'exit' 事件永远派发不了，只能轮询文件系统这个跨进程可见的信号
-    // （waitForMoment：存在 ≠ 写完，见其注释）
-    const childAcquiredAt = waitForMoment(marker, Date.now() + 10_000);
-    child.kill();
-
-    assert.ok(childAcquiredAt !== null, '放锁后子进程应能拿到锁');
-    assert.ok(childAcquiredAt >= releasedAt, '子进程必须在主进程放锁之后才拿到锁');
+      // 等子进程拿到锁。注意不能等 child.exitCode：本用例全程同步阻塞事件循环，
+      // 'exit' 事件永远派发不了，只能轮询文件系统这个跨进程可见的信号
+      // （waitForMoment：存在 ≠ 写完，见其注释）
+      const childAcquiredAt = waitForMoment(marker, Date.now() + 10_000);
+      assert.ok(childAcquiredAt !== null, '放锁后子进程应能拿到锁');
+      assert.ok(childAcquiredAt >= releasedAt, '子进程必须在主进程放锁之后才拿到锁');
+    } finally {
+      child.kill('SIGKILL');
+    }
   });
 
   it('等待者绝不强夺新鲜锁：锁龄未到阈值只能睡等持有者释放', () => {
@@ -139,25 +141,27 @@ describe('withFileLock', () => {
            fs.writeFileSync(${JSON.stringify(entered)}, String(Date.now()));
          });`);
 
-    let releasedAt = 0;
-    withFileLock(lockPath, () => {
-      // 等子进程就位（写出 ready 后立刻进 withFileLock），确保它的忙等
-      // 发生在主进程持锁期间，而不是压根还没开始等
-      assert.ok(
-        pollUntil(() => fs.existsSync(ready), 5_000),
-        '子进程未就位',
-      );
-      // 子进程已忙等多个重试轮，而锁对它仍新鲜（默认 staleMs=10s），不得抢进
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 120);
-      assert.equal(fs.existsSync(entered), false, '等待者不得抢进新鲜锁');
-      releasedAt = Date.now();
-    });
+    try {
+      let releasedAt = 0;
+      withFileLock(lockPath, () => {
+        // 等子进程就位（写出 ready 后立刻进 withFileLock），确保它的忙等
+        // 发生在主进程持锁期间，而不是压根还没开始等
+        assert.ok(
+          pollUntil(() => fs.existsSync(ready), 5_000),
+          '子进程未就位',
+        );
+        // 子进程已忙等多个重试轮，而锁对它仍新鲜（默认 staleMs=10s），不得抢进
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 120);
+        assert.equal(fs.existsSync(entered), false, '等待者不得抢进新鲜锁');
+        releasedAt = Date.now();
+      });
 
-    const enteredAt = waitForMoment(entered, Date.now() + 10_000);
-    child.kill();
-
-    assert.ok(enteredAt !== null, '放锁后子进程应能拿到锁');
-    assert.ok(enteredAt >= releasedAt, '子进程必须在主进程放锁之后才拿到锁');
+      const enteredAt = waitForMoment(entered, Date.now() + 10_000);
+      assert.ok(enteredAt !== null, '放锁后子进程应能拿到锁');
+      assert.ok(enteredAt >= releasedAt, '子进程必须在主进程放锁之后才拿到锁');
+    } finally {
+      child.kill('SIGKILL');
+    }
   });
 
   it('双等待者临界区不重叠：只按锁龄排队，绝不删等待者同伴刚建的锁', async () => {
@@ -181,39 +185,26 @@ describe('withFileLock', () => {
            }, { staleMs: ${staleMs} });`);
 
     const waiters = [spawnWaiter('B', 150, 250), spawnWaiter('C', 60, 2000)];
-    const exits = waiters.map(w => w.done);
-
-    // 修复正确时两个子进程 ~600ms 内自行退出；超时说明互相死等（等价于把 CLI
-    // 锁死），杀掉并判失败，避免回归成挂起时拖死整个测试套件。
-    // 20s 是防挂起守护而非时序断言：并行负载下三个 node+tsx 子进程的启动可被
-    // 拖慢一个量级，守护收太紧会把「慢」误判成「死等」
-    let timeoutHandle: NodeJS.Timeout | undefined;
-    const timedOut = new Promise<null>(resolve => {
-      timeoutHandle = setTimeout(() => resolve(null), 20_000);
-    });
-    let codes: (number | null)[] | null;
     try {
-      codes = await Promise.race([Promise.all(exits), timedOut]);
+      // 修复正确时两个子进程约 600ms 内自行退出；spawnEval 的默认超时只兜底挂起，
+      // 外层 finally 负责异常与超时后的清理，不再维护第二套看门狗
+      const codes = await Promise.all(waiters.map(waiter => waiter.done));
+      for (const code of codes) {
+        assert.equal(code, 0, '等待者子进程应正常退出；null 表示超时，可能互相死等或死循环');
+      }
+
+      const readMoment = (tag: 'B' | 'C', phase: 'enter' | 'exit') => Number(fs.readFileSync(path.join(tmpDir, `${tag}-${phase}`), 'utf8'));
+      const bEnter = readMoment('B', 'enter');
+      const bExit = readMoment('B', 'exit');
+      const cEnter = readMoment('C', 'enter');
+      const cExit = readMoment('C', 'exit');
+
+      assert.ok(bEnter < bExit && cEnter < cExit, '进入时刻必须早于退出时刻（标记文件损坏？）');
+      assert.ok(bEnter >= createdA + 250, `B 只能经陈旧强夺进入：最早也得等 A 的锁龄超过 B 的 staleMs(250ms)，实际提前到 ${bEnter - createdA}ms`);
+      assert.ok(bExit <= cEnter || cExit <= bEnter, `两个等待者的临界区重叠：B [${bEnter}, ${bExit}]，C [${cEnter}, ${cExit}]（等待者删掉了同伴刚建的新鲜锁）`);
     } finally {
-      clearTimeout(timeoutHandle);
+      for (const waiter of waiters) waiter.child.kill('SIGKILL');
     }
-    if (codes === null) {
-      for (const w of waiters) w.child.kill();
-      assert.fail('等待者子进程未在 20s 内退出（可能互相死等或死循环）');
-    }
-    for (const code of codes) {
-      assert.equal(code, 0, '等待者子进程应正常退出');
-    }
-
-    const readMoment = (tag: 'B' | 'C', phase: 'enter' | 'exit') => Number(fs.readFileSync(path.join(tmpDir, `${tag}-${phase}`), 'utf8'));
-    const bEnter = readMoment('B', 'enter');
-    const bExit = readMoment('B', 'exit');
-    const cEnter = readMoment('C', 'enter');
-    const cExit = readMoment('C', 'exit');
-
-    assert.ok(bEnter < bExit && cEnter < cExit, '进入时刻必须早于退出时刻（标记文件损坏？）');
-    assert.ok(bEnter >= createdA + 250, `B 只能经陈旧强夺进入：最早也得等 A 的锁龄超过 B 的 staleMs(250ms)，实际提前到 ${bEnter - createdA}ms`);
-    assert.ok(bExit <= cEnter || cExit <= bEnter, `两个等待者的临界区重叠：B [${bEnter}, ${bExit}]，C [${cEnter}, ${cExit}]（等待者删掉了同伴刚建的新鲜锁）`);
   });
 });
 
@@ -334,8 +325,13 @@ describe('锁文件的存放位置', () => {
         `  assert.ok(fs.existsSync(PATHS.subscriptionCacheLock), 'reset subs 的 rmrf 把正被持有的缓存锁一起删掉了：第三方可立刻进入临界区');`,
         `});`,
       ].join('\n');
-      const code = await spawnEval(script, { env: { MIHOMO_CLI_DIR: dataDir } }).done;
-      assert.equal(code, 0, '缓存锁应在 rmrf(subscriptions/) 后幸存（子进程退出码非 0 表示断言失败）');
+      const { child, done } = spawnEval(script, { env: { MIHOMO_CLI_DIR: dataDir } });
+      try {
+        const code = await done;
+        assert.equal(code, 0, '缓存锁应在 rmrf(subscriptions/) 后幸存（子进程退出码非 0 表示断言失败）');
+      } finally {
+        child.kill('SIGKILL');
+      }
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });
     }
@@ -402,8 +398,13 @@ describe('cleanupStaleTmpFiles：崩溃残留清扫', () => {
         `assert.equal(fs.existsSync(DIRS.kernel + '/../check-old'), false, '超龄 config 校验临时目录应删');`,
         `assert.equal(fs.existsSync(DIRS.kernel + '/../service.plist.stage'), false, '超龄 install stage 残留应删');`,
       ].join('\n');
-      const code = await spawnEval(script, { env: { MIHOMO_CLI_DIR: dataDir }, stdio: 'inherit' }).done;
-      assert.equal(code, 0, '子进程退出码非 0 表示清扫断言失败');
+      const { child, done } = spawnEval(script, { env: { MIHOMO_CLI_DIR: dataDir }, stdio: 'inherit' });
+      try {
+        const code = await done;
+        assert.equal(code, 0, '子进程退出码非 0 表示清扫断言失败');
+      } finally {
+        child.kill('SIGKILL');
+      }
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });
     }

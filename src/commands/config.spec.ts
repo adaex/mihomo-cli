@@ -49,6 +49,8 @@ describe('config：凭据默认脱敏', () => {
       assert.match(out, /token=\*\*\*/);
       assert.ok(!out.includes('tokentokentoken1234'), 'provider 订阅 token 不得明文上屏');
       assert.match(out, /凭据已脱敏显示，--reveal/);
+      assert.match(out, /# 配置预览：未写盘、未校验、未应用/);
+      assert.ok(!out.includes('与 start 写入 runtime/config.yaml 的内容一致'), '预览不得承诺等于下一次 start 的结果');
     });
   });
 

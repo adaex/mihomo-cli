@@ -13,8 +13,8 @@ argument-hint: [版本号]
 
 ## 发布前检查清单
 
-- [ ] `npm run typecheck`、`npm test`、`npm run check` 全绿；worktree 下显式 `npx biome check src/`，检查数量不能为 0
-- [ ] 所有新增功能已在 `README.md` 中说明
+- [ ] `npm run typecheck`、`npm test`、`npm run check` 全绿；检查输出确认 `Checked N files` 且 N > 0，warn/info 已逐条审阅
+- [ ] 所有新增功能已在 README 或其链接的用户文档中说明；每类复杂行为只有一个详版，不在多处复制规则
 - [ ] 命令列表与 `src/commands/registry.ts` 实际注册一致
 - [ ] `CHANGELOG.md` 顶部已添加新版本记录，且每条控制在 1–3 句
 - [ ] 若本轮改了 CONCLUSIONS 记录的结论或边界涉及的代码，同步更新该文档对应节
@@ -34,11 +34,11 @@ for (const c of COMMANDS) console.log([c.name, ...c.aliases].join(', ').padEnd(4
 
 ## 步骤
 
-1. 更新 `package.json` 中的 `version`；`npm install --package-lock-only` 让 lock 的 version 跟上（长期漂移过一次：lock 停在 4.7.1 而 package.json 已是 4.7.7）
-2. `CHANGELOG.md` 顶部添加新版本记录（格式参照既有条目：新增/变更/修复/安全 分组），**每条 1–3 句**（规范与内容分发去向见 CLAUDE.md「Git 与流程」）；主文件超过 10 个版本小节时，把最旧的整节原样搬进 `docs/changelog/CHANGELOG-archive.md`
-3. 检查并更新 `README.md`（新增功能、命令变更、示例）
+1. 更新 `package.json` 中的 `version`；`npm install --package-lock-only` 让 lock 的 version 跟上，避免 package 与 lock 版本漂移
+2. `CHANGELOG.md` 顶部添加新版本记录（新增/变更/修复/安全 分组），**每条 1–3 句**：写改了什么、用户会看到什么变化、必要时一句根因；按用户可见变化组织，不按审查轮次组织。当轮实测耗时、差分组数、反向验证与测试计数留在提交信息；长期边界与教训收进 CONCLUSIONS，稳定判据留在 CLAUDE 与代码注释。主文件超过 10 个版本小节时，把最旧整节**原样**搬进 `docs/changelog/CHANGELOG-archive.md`，不改写历史
+3. 检查并更新 README 及其链接的用户文档（新增功能、命令变更、示例）
 4. `npm run build`（`prepublishOnly` 已兜底，此步为提前验证）
-5. 提交：`git add . && git commit -m "chore: 发布 vX.Y.Z"`
+5. 逐文件核对 `git status --short`，只显式暂存已确认的发布相关文件（禁止 `git add .` / `git add -A`）；用 `git diff --cached --stat` 复核后提交：`git commit -m "chore: 发布 vX.Y.Z"`
 6. `npm publish`
 7. **打 tag 并推送**：`git tag -a vX.Y.Z -m "…"`，然后 `git push` + `git push origin vX.Y.Z`
 8. **建 GitHub Release**：正文取 CHANGELOG 对应小节
@@ -57,7 +57,7 @@ EOF
 gh release create vX.Y.Z --title vX.Y.Z --notes-file /tmp/rel.md
 ```
 
-**第 7、8 步不能省。** v4.8.0 之前 78 个 npm 版本一个 tag 都没有——外部无法定位任何版本的源码，`git diff` 做不到，CHANGELOG 的记录指不到代码。补录时才发现「取该版本最后一个提交」这种想当然的规则会让 10 个 tag 指向发布之后才写的代码（当时 main 上已有未发布的重构），只能靠 npm 的 publish 时间戳反推落点。**发布时顺手打 tag 是一秒钟的事，事后补是考古。**
+**第 7、8 步不能省。** tag 与 GitHub Release 让每个 npm 版本能对应到确定源码；发布时立即创建是一步操作，事后再按时间反推落点容易把 tag 指到包含后续改动的提交
 
 ## 发布结果核实
 
@@ -80,8 +80,10 @@ curl -s -o /dev/null -w "%{http_code}\n" https://registry.npmjs.org/mihomo-cli/X
 **build 之后、publish 之前**，至少验证产物自身报的版本号，并看一眼 tarball 装了什么：
 
 ```bash
-node dist/index.js version    # 必须是本次要发的版本，不是看 package.json
-npm pack --dry-run            # 确认 files 字段的产物齐全（dist/README/LICENSE/CHANGELOG/package.json）
+MIHOMO_CLI_DIR="/tmp/mihomo-cli-pack-smoke-$$" \
+MIHOMO_CLI_DAEMON_LABEL="com.mihomo-cli.pack-smoke-$$" \
+node dist/index.js version    # 必须是本次要发的版本，不读取真实数据目录或服务
+npm pack --dry-run            # 确认 dist、README、LICENSE、CHANGELOG、SECURITY、docs/overwrite.md、package.json 齐全
 ```
 
 若本轮改动有用户可见的行为变化，值得在 publish 之后从 registry 把产物拉回来实跑一遍（CDN 落地后）——这是唯一能覆盖「打包漏文件」的检查：
@@ -89,8 +91,8 @@ npm pack --dry-run            # 确认 files 字段的产物齐全（dist/README
 ```bash
 cd /tmp && mkdir vp && cd vp
 npm pack mihomo-cli@X.Y.Z && tar -xzf mihomo-cli-X.Y.Z.tgz
-MIHOMO_CLI_DIR=/tmp/vp/data node package/dist/index.js version
-# 再选本轮改动验证；涉及服务时还须隔离 MIHOMO_CLI_DAEMON_LABEL，避免触碰用户 LaunchAgent
+MIHOMO_CLI_DIR=/tmp/vp/data MIHOMO_CLI_DAEMON_LABEL="com.mihomo-cli.pack-smoke-$$" node package/dist/index.js version
+# 再选本轮改动验证；所有服务操作都必须保持一次性 label 与临时目录隔离，避免触碰用户 LaunchAgent
 ```
 
 完成后清理临时目录、进程与测试 plist

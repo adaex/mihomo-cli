@@ -130,7 +130,7 @@ describe('ow 列表展示文件级开关', () => {
     withFixture((dataDir, run) => {
       fs.writeFileSync(path.join(dataDir, 'overwrite.a.yaml'), 'enabled: false\nlog-level: debug\n');
       const out = run(['status', '--no-probe']).stdout;
-      assert.match(out, /无生效文件，1 个已禁用/);
+      assert.match(out, /无选中文件，1 个已禁用/);
     });
   });
 });
@@ -139,7 +139,7 @@ describe('ow 列表展示文件级开关', () => {
  * status 的覆写行按 match 分列（fixture 的活跃订阅是 edu1）。
  *
  * status 与 `ow` 列表的关键区别：它知道当前活跃订阅是谁，因而判得了 match。不判的话，
- * 只对别的订阅生效的文件会混在「已启用」主行里，和真正生效的文件长得一模一样——用户
+ * 只对别的订阅适用的文件会混在「已启用」主行里，和当前订阅选中的文件长得一样——用户
  * 会拿它解释自己看到的行为，排查方向整个跑偏。断言都走真跑命令：listOverwriteFile
  * 的 scope 参数若日后被漏传，单测层面 matched 恒为 undefined、照样「通过」。
  */
@@ -166,11 +166,11 @@ describe('status 覆写行按 match 区分是否适用当前订阅', () => {
     });
   });
 
-  it('全部文件都不适用时主行说「无生效文件」', () => {
+  it('全部文件都不适用时主行说「无选中文件」', () => {
     withFixture((dataDir, run) => {
       fs.writeFileSync(path.join(dataDir, 'overwrite.miss.yaml'), 'match:\n  name: mini*\nlog-level: info\n');
       const out = run(['status', '--no-probe']).stdout;
-      assert.match(out, /无生效文件，1 个不适用/);
+      assert.match(out, /无选中文件，1 个不适用/);
     });
   });
 
@@ -189,7 +189,7 @@ describe('status 覆写行按 match 区分是否适用当前订阅', () => {
       // fixture 的 edu1 指向 update.glados-config.com，域名条件不命中 → dom 全军覆没
       fs.writeFileSync(path.join(dataDir, 'overwrite.dom.yaml'), 'match:\n  url-domain: other.com\nlog-level: debug\n');
       const out = run(['status', '--no-probe']).stdout;
-      assert.match(out, /覆写:.*无生效文件，1 个不适用/);
+      assert.match(out, /覆写:.*无选中文件，1 个不适用/);
     });
   });
 
@@ -227,11 +227,11 @@ describe('status 覆写行按 match 区分是否适用当前订阅', () => {
 });
 
 /**
- * 脚本没有 match 声明，CLI 不判定脚本是否「命中」：status 一律把启用中的脚本列进生效清单，
- * 且是只读命令——**不执行用户脚本**（此前为判命中会在 status 里跑一遍脚本）。
+ * 脚本没有 match 声明，CLI 不判定脚本是否「命中」：status 把启用中的脚本列入选中清单，
+ * 不调用变换函数；但加载模块本身会执行顶层代码，两条契约必须分别锁定。
  */
-describe('status 对 JS 脚本：恒列入生效、不执行脚本', () => {
-  it('启用中的脚本列进生效清单与 --json applied，不出现「不适用」', () => {
+describe('status 对 JS 脚本：恒列入选中清单、不调用变换函数', () => {
+  it('启用中的脚本列入选中清单与 --json applied，不出现「不适用」', () => {
     withFixture((dataDir, run) => {
       fs.writeFileSync(path.join(dataDir, 'overwrite.a.js'), 'export default function (config, ctx) { if (ctx.subscription.name !== "nope") return; }\n');
       const out = run(['status', '--no-probe']).stdout;
@@ -242,7 +242,7 @@ describe('status 对 JS 脚本：恒列入生效、不执行脚本', () => {
     });
   });
 
-  it('status 不执行脚本（顶层副作用不发生）', () => {
+  it('status 不调用变换函数', () => {
     withFixture((dataDir, run) => {
       const marker = path.join(dataDir, 'ran.marker');
       fs.writeFileSync(
@@ -250,7 +250,20 @@ describe('status 对 JS 脚本：恒列入生效、不执行脚本', () => {
         `module.exports = function () { require('node:fs').writeFileSync(${JSON.stringify(marker)}, '1'); };\n`,
       );
       run(['status', '--no-probe']);
-      assert.equal(fs.existsSync(marker), false, 'status 是只读诊断，不得执行用户覆写脚本的变换函数');
+      assert.equal(fs.existsSync(marker), false, 'status 不得为展示命中状态额外调用变换函数');
+    });
+  });
+
+  it('status 加载模块会执行顶层代码，不能宣称没有用户代码副作用', () => {
+    withFixture((dataDir, run) => {
+      const marker = path.join(dataDir, 'loaded.marker');
+      fs.writeFileSync(
+        path.join(dataDir, 'overwrite.loaded.cjs'),
+        `require('node:fs').writeFileSync(${JSON.stringify(marker)}, '1');\nmodule.exports = function () {};\n`,
+      );
+      const result = run(['status', '--no-probe']);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(fs.existsSync(marker), true, '模块加载阶段的顶层代码会执行');
     });
   });
 });

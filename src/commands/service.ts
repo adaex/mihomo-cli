@@ -38,7 +38,7 @@ export async function cmdInstall(args: string[]): Promise<void> {
   assertPositionalCount(args, 0, 1, 'mihomo-cli install');
   assertKernelInstalled();
 
-  // 并发判定基线由 main() 在命令入口捕获（service.ts captureStopEpochBaseline），
+  // 并发判定基线由 main() 在命令入口捕获（stop-epoch.ts captureStopEpochBaseline），
   // 必须早于任何慢速阶段：installService 内部有 bootout + 等待卸载（最多 5s）；
   // 基线取晚了，这些窗口里发生的 stop 就被算进基线，重装的恢复运行会把它覆盖掉
 
@@ -128,7 +128,7 @@ export async function cmdUninstall(args: string[]): Promise<void> {
   // 卸服务 ≠ 清数据：订阅/内核/日志还在数据目录，npm 包也还在——想彻底移除的用户
   // 需要知道三条路径，否则最常见的结局是「以为卸载了，目录和包都留着」
   console.log(colors.gray('彻底移除 mihomo-cli:'));
-  console.log(colors.gray('  mihomo-cli reset --full      # 删除全部数据（订阅/内核/日志等）'));
+  console.log(colors.gray('  mihomo-cli reset --full      # 删除受管数据（订阅/内核/日志等）'));
   console.log(colors.gray('  npm uninstall -g mihomo-cli'));
   console.log('');
 }

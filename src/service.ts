@@ -31,8 +31,8 @@ import { sleep } from './utils.js';
 /**
  * launchd 服务层：Mixed 模式的唯一运行方式。
  *
- * 装在用户域（`~/Library/LaunchAgents` + `gui/<uid>`），install/start/stop/uninstall 全程免 sudo。
- * 为什么不用 root LaunchDaemon，见 docs/decisions.md D1。
+ * 装在用户域（`~/Library/LaunchAgents` + `gui/<uid>`），正常服务操作免 sudo；
+ * root 属主的 TUN 残留清理是独立的按需提权路径。为什么不用 root LaunchDaemon，见 D1。
  *
  * 相邻模块（调用方直接从各自模块导入）：
  * - launchctl.ts：print 输出解析、退出码语义、查询包装与服务状态读取

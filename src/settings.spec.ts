@@ -110,19 +110,17 @@ describe('saveSubscriptionCache 跨进程并发', () => {
     const WORKERS = ['A', 'B', 'C', 'D'];
     const PER_WORKER = 15;
 
+    const runs = WORKERS.map(who =>
+      spawnEval(
+        `import { saveSubscriptionCache } from ${JSON.stringify(settingsPath)};
+         for (let i = 0; i < ${PER_WORKER}; i++) {
+           saveSubscriptionCache(${JSON.stringify(who)} + '-' + i, { total: i });
+         }`,
+        { env: { MIHOMO_CLI_DIR: tmpDir } },
+      ),
+    );
     try {
-      const codes = await Promise.all(
-        WORKERS.map(
-          who =>
-            spawnEval(
-              `import { saveSubscriptionCache } from ${JSON.stringify(settingsPath)};
-               for (let i = 0; i < ${PER_WORKER}; i++) {
-                 saveSubscriptionCache(${JSON.stringify(who)} + '-' + i, { total: i });
-               }`,
-              { env: { MIHOMO_CLI_DIR: tmpDir } },
-            ).done,
-        ),
-      );
+      const codes = await Promise.all(runs.map(run => run.done));
       for (const code of codes) {
         assert.equal(code, 0, '写入子进程应正常退出');
       }
@@ -136,6 +134,7 @@ describe('saveSubscriptionCache 跨进程并发', () => {
         assert.equal(keys.filter(k => k.startsWith(`${who}-`)).length, PER_WORKER, `worker ${who} 的条目应完整保留`);
       }
     } finally {
+      for (const run of runs) run.child.kill('SIGKILL');
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
@@ -151,20 +150,18 @@ describe('updateSettings 跨进程并发', () => {
     const WORKERS = ['A', 'B', 'C', 'D'];
     const PER_WORKER = 15;
 
+    const runs = WORKERS.map(who =>
+      spawnEval(
+        `import { updateSettings } from ${JSON.stringify(settingsPath)};
+         for (let i = 0; i < ${PER_WORKER}; i++) {
+           const name = ${JSON.stringify(who)} + '-' + i;
+           updateSettings(s => ({ subscriptions: [...(s.subscriptions ?? []), { name, url: 'https://example.com/' + name }] }));
+         }`,
+        { env: { MIHOMO_CLI_DIR: tmpDir } },
+      ),
+    );
     try {
-      const codes = await Promise.all(
-        WORKERS.map(
-          who =>
-            spawnEval(
-              `import { updateSettings } from ${JSON.stringify(settingsPath)};
-               for (let i = 0; i < ${PER_WORKER}; i++) {
-                 const name = ${JSON.stringify(who)} + '-' + i;
-                 updateSettings(s => ({ subscriptions: [...(s.subscriptions ?? []), { name, url: 'https://example.com/' + name }] }));
-               }`,
-              { env: { MIHOMO_CLI_DIR: tmpDir } },
-            ).done,
-        ),
-      );
+      const codes = await Promise.all(runs.map(run => run.done));
       for (const code of codes) {
         assert.equal(code, 0, '写入子进程应正常退出');
       }
@@ -178,6 +175,7 @@ describe('updateSettings 跨进程并发', () => {
         assert.equal(names.filter(n => n.startsWith(`${who}-`)).length, PER_WORKER, `worker ${who} 的条目应完整保留`);
       }
     } finally {
+      for (const run of runs) run.child.kill('SIGKILL');
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
@@ -212,10 +210,12 @@ describe('getPorts：端口覆盖（settings.ports）', () => {
       `assert.throws(() => getPorts(), /需为对象/);`,
     ].join('\n');
 
+    const { child, done } = spawnEval(script, { env: { MIHOMO_CLI_DIR: tmpDir } });
     try {
-      const code = await spawnEval(script, { env: { MIHOMO_CLI_DIR: tmpDir } }).done;
+      const code = await done;
       assert.equal(code, 0, 'getPorts 场景断言应全部通过（子进程退出码非 0）');
     } finally {
+      child.kill('SIGKILL');
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
@@ -244,10 +244,12 @@ describe('getPorts：单侧配置撞另一侧默认端口', () => {
       `assert.deepEqual(getPorts(), { mixed: 17890, controller: 9090 });`,
     ].join('\n');
 
+    const { child, done } = spawnEval(script, { env: { MIHOMO_CLI_DIR: tmpDir } });
     try {
-      const code = await spawnEval(script, { env: { MIHOMO_CLI_DIR: tmpDir } }).done;
+      const code = await done;
       assert.equal(code, 0, '单侧撞默认端口场景断言应全部通过（子进程退出码非 0）');
     } finally {
+      child.kill('SIGKILL');
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });

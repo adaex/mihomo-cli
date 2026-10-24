@@ -459,11 +459,18 @@ describe('buildPlist', () => {
   });
 
   it('路径中的 XML 元字符被转义（数据目录可能含 & < > 等）', () => {
-    // buildPlist 读模块级 PATHS，无法注入路径；此处直接锁定转义函数的行为契约：
-    // 生成物里不得出现未转义的裸 & （所有 & 都应是实体引用的一部分）
-    const xml = buildPlist();
-    const bareAmp = xml.match(/&(?!amp;|lt;|gt;|quot;|apos;)/);
-    assert.equal(bareAmp, null, '不应出现未转义的裸 &');
+    // PATHS 在模块加载期固化，必须在含元字符的临时目录里动态 import；
+    // 只测默认 HOME 没有这些字符，删掉 escapeXml 也会假绿
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-xml-&<>-'));
+    const script = `const { buildPlist } = await import(${JSON.stringify(moduleUrl('src/launchctl.ts'))}); process.stdout.write(buildPlist());`;
+    try {
+      const r = runModule(script, dataDir, { env: { HOME: path.join(dataDir, 'home') } });
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /mihomo-xml-&amp;&lt;&gt;-/, '路径分隔符之外的 & < > 必须变成实体');
+      assert.equal(r.stdout.match(/&(?!amp;|lt;|gt;|quot;|apos;)/), null, '不应出现未转义的裸 &');
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -523,11 +530,14 @@ function runWithStubLaunchctl(options: {
 }): { stdout: string } {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), `${options.prefix}-`));
   const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), `${options.prefix}-bin-`));
+  const fakeHome = path.join(fakeBin, 'home');
+  fs.mkdirSync(fakeHome);
   writeStubExecutable(path.join(fakeBin, 'launchctl'), options.stub);
   try {
     const prepareEnv = options.prepare?.(dataDir);
     const r = runModule(options.script, dataDir, {
       env: {
+        HOME: fakeHome,
         PATH: `${fakeBin}:${process.env.PATH}`,
         ...(options.label !== undefined ? { MIHOMO_CLI_DAEMON_LABEL: options.label } : {}),
         ...prepareEnv,
@@ -744,32 +754,43 @@ esac
 
 describe('服务入口的 label 校验（assertServiceLabelSafe）', () => {
   /**
-   * install/start/stop/restart 四个入口共用 constants.ts 的断言——非法
-   * MIHOMO_CLI_DAEMON_LABEL（路径成分）不得静默作用于默认 label。restart 的
-   * kickstart 与锁内 enable+bootstrap 不经 startService 的断言，入口必须自带；
-   * 此前该防线零测试（终审抓出）。子进程跑：env 变量在模块加载期求值。
+   * 六个写入口逐一验证：非法 label 不得回退到默认生产 label，且任何 launchctl 都不得调用。
+   * runWithStubLaunchctl 提供临时 DIR/HOME/PATH 桩，即使守卫被反向删除也不会触碰真实服务。
    */
-  it('restart 对非法 label 报 CliError，不静默作用于默认 label 的服务', () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-label-guard-'));
-    const script = [
-      `const { restartService } = await import(${JSON.stringify(moduleUrl('src/service.ts'))});`,
-      'try {',
-      '  await restartService();',
-      "  console.log('RESULT:NO-THROW');",
-      '} catch (e) {',
-      "  console.log('RESULT:' + JSON.stringify({ name: e.name, message: e.message }));",
-      '}',
-    ].join('\n');
-    try {
-      const r = runModule(script, dataDir, { env: { MIHOMO_CLI_DAEMON_LABEL: '../evil' }, timeout: 30_000 });
-      assert.equal(r.status, 0, r.stderr);
-      const line = r.stdout.split('\n').find(l => l.startsWith('RESULT:'));
-      assert.ok(line && !line.includes('NO-THROW'), `非法 label 必须在入口报错: ${line}`);
-      assert.match(line, /MIHOMO_CLI_DAEMON_LABEL 无效/);
-    } finally {
-      fs.rmSync(dataDir, { recursive: true, force: true });
-    }
-  });
+  const entries = [
+    ['installService', 'installService(false)'],
+    ['startService', 'startService()'],
+    ['disableServiceAutoStart', 'disableServiceAutoStart()'],
+    ['stopService', 'stopService()'],
+    ['uninstallService', 'uninstallService()'],
+    ['restartService', 'restartService()'],
+  ] as const;
+
+  for (const [name, invocation] of entries) {
+    it(`${name} 对非法 label 报错且零 launchctl 调用`, () => {
+      const script = [
+        "import fs from 'node:fs';",
+        `const { ${name} } = await import(${JSON.stringify(moduleUrl('src/service.ts'))});`,
+        'try {',
+        `  await ${invocation};`,
+        "  console.log('RESULT:NO-THROW');",
+        '} catch (e) {',
+        "  console.log('RESULT:' + JSON.stringify({ name: e.name, message: e.message }));",
+        '}',
+        "console.log('LAUNCHCTL_CALLS:' + fs.existsSync(process.env.MIHOMO_CLI_DIR + '/launchctl.calls'));",
+      ].join('\n');
+      const { stdout } = runWithStubLaunchctl({
+        prefix: `mihomo-label-${name}`,
+        stub: 'echo "$1" >> "$MIHOMO_CLI_DIR/launchctl.calls"\nexit 0\n',
+        script,
+        label: '../evil',
+      });
+      const result = stdout.split('\n').find(l => l.startsWith('RESULT:'));
+      assert.ok(result && !result.includes('NO-THROW'), `${name} 必须拒绝非法 label: ${result}`);
+      assert.match(result, /MIHOMO_CLI_DAEMON_LABEL 无效/);
+      assert.match(stdout, /LAUNCHCTL_CALLS:false/, 'label 守卫必须先于任何 launchctl 调用');
+    });
+  }
 });
 
 describe('getServiceStatus：探测失败 ≠ 未装载（print 只认 113）', () => {

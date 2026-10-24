@@ -350,9 +350,9 @@ export interface StatusJson {
   /**
    * `enabled` 是全局开关（settings.overwrite_enabled）。
    *
-   * `applied` 是本次真正参与合并的文件，三道过滤与 buildConfig 一致：全局开关关闭时
-   * 恒为空数组（那时 buildConfig 压根不加载覆写），再滤掉文件级 `enabled: false`，
-   * 最后按当前活跃订阅的 match 过滤。无活跃订阅时判不了 match，不额外收窄
+   * `applied` 是 status 的选中清单：全局关闭时为空；否则滤掉文件级 `enabled: false`，
+   * 再按当前活跃订阅的 YAML match 过滤。无活跃订阅时判不了 match，不额外收窄；
+   * 启用 JS 脚本全部列入，不调用变换函数判断命中，也不证明脚本实际修改了配置
    */
   overwrite: {
     enabled: boolean;

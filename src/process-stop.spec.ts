@@ -30,11 +30,11 @@ before(() => {
 });
 
 beforeEach(() => {
-  killLeftovers(MAIN_INSTANCE_PATTERN);
+  killLeftovers(MAIN_INSTANCE_PATTERN, tmpDir);
 });
 
 after(() => {
-  killLeftovers(MAIN_INSTANCE_PATTERN);
+  killLeftovers(MAIN_INSTANCE_PATTERN, tmpDir);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -51,6 +51,16 @@ describe('测试隔离前提', () => {
 
   it('未起桩进程时探测为空（确认没串到别的进程）', () => {
     assert.deepEqual(getMihomoPids(), []);
+  });
+
+  it('清理 helper 在任何 pkill 之前拒绝失锚 pattern 与真实数据目录', () => {
+    let calls = 0;
+    const killPattern = () => {
+      calls++;
+    };
+    assert.throws(() => killLeftovers('mihomo', tmpDir, killPattern), /拒绝执行未锚定临时目录/);
+    assert.throws(() => killLeftovers(MAIN_INSTANCE_PATTERN, path.join(os.homedir(), '.mihomo-cli'), killPattern), /os\.tmpdir/);
+    assert.equal(calls, 0, '隔离失败时不得发起任何 pkill');
   });
 });
 

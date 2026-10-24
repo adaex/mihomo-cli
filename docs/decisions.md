@@ -6,7 +6,7 @@
 
 ## D1 服务是用户级 LaunchAgent，不提供 root 安装
 
-v3.0–v4.0 用 root LaunchDaemon（system 域），每次启停都要输密码。改用用户域（`gui/<uid>`）后 install/start/stop/uninstall 全程免密。旧实现选 root 是为绕开 macOS 本地网络隐私对局域网设备的限制，但 Apple DTS 明确豁免条件是「以 root 运行」而非「身为 daemon」——用户域 agent 只意味着走正常授权弹窗，且回环地址（如自建 ssh -D 出口）本就不属于「本地网络」，完全不触发该机制。
+v3.0–v4.0 用 root LaunchDaemon（system 域），每次启停都要输密码。改用用户域（`gui/<uid>`）后，正常 install/start/stop/uninstall 服务操作免密；清理 root 属主的 TUN 残留是独立的按需 sudo 路径。旧实现选 root 是为绕开 macOS 本地网络隐私对局域网设备的限制，但 Apple DTS 明确豁免条件是「以 root 运行」而非「身为 daemon」——用户域 agent 只意味着走正常授权弹窗，且回环地址（如自建 ssh -D 出口）本就不属于「本地网络」，完全不触发该机制。
 
 后果：CLI 全程以普通用户运行，TUN 的 root 需求由 CLI 内部按需 sudo（临时进程）；不做「读 SUDO_UID 回落用户域」的自动降级（sudo 下 HOME 是否保留取决于 sudoers，静默改域只会制造更难查的错位），index.ts 的 root 守卫直接拒绝。遗留 root LaunchDaemon 的识别与清理曾按本条保留（它有 KeepAlive 会抢端口，不认就是幽灵），2026-10 移除：兼容窗口面向 2026-07–08 的 v3.0–v4.0 安装，存量设备已全部升级；极少数仍残留旧安装的机器（症状：代理停不掉、`/Library/LaunchDaemons/com.mihomo-cli.daemon.plist` 存在）手动清理——`sudo launchctl bootout system/com.mihomo-cli.daemon` 后 `sudo rm -f /Library/LaunchDaemons/com.mihomo-cli.daemon.plist`。
 
@@ -26,7 +26,7 @@ withFileLock 要求临界区同步（持锁期间 await 等于按住锁等到强
 
 ## D4 并发基线在命令入口捕获为进程状态，消费点读同一份，不做参数透传
 
-start/install/restart 都依赖「命令开始时的 epoch」做并发判定。危害窗口是「产生 wasRunning 的那次状态读取」到锁内判定之间：stop 在自己的锁内先递增、之后才 waitUntilUnloaded，存在「已递增而 launchctl print 仍报 running」的区间，函数内现取的基线必然已含对方的递增，并发隐形。故基线必须取在命令第一步——如今是 `main()` 在分发前调 `captureStopEpochBaseline()` 存入 service 模块状态，此后锁内判定、热重载后复读、健康确认后复读都读同一份 `stopEpochBaseline()`，不再跨层透传参数（透传时代的教训：可选默认值让新调用方静默退化，5+ 消费点每次都要记得传）。未捕获时（测试直接调 service 函数）退化为当前值，即不判并发。
+start/install/restart 都依赖「命令开始时的 epoch」做并发判定。危害窗口是「产生 wasRunning 的那次状态读取」到锁内判定之间：stop 在自己的锁内先递增、之后才 waitUntilUnloaded，存在「已递增而 launchctl print 仍报 running」的区间，函数内现取的基线必然已含对方的递增，并发隐形。故基线必须取在命令第一步——如今是 `main()` 在分发前调 `captureStopEpochBaseline()` 存入 stop-epoch 模块状态，此后锁内判定、热重载后复读、健康确认后复读都读同一份 `stopEpochBaseline()`，不再跨层透传参数（透传时代的教训：可选默认值让新调用方静默退化，5+ 消费点每次都要记得传）。未捕获时（测试直接调 service 函数）退化为当前值，即不判并发。
 
 两个位置语义要记牢：① restartToApply（sub use / ow on|off 触发的重启）带着**原命令**的基线重入 start 链路，订阅下载期间的并发 stop 会被检出并取消重启——这是防线语义（终态与用户最后一条命令一致），基线若挪进 cmdStart 重入时刻即漏检，结构不变量由 service-concurrency.spec 的「并发基线是命令入口的进程状态」用例锁定；② TUN 分支 bump 之后**重捕获基线**（把「本命令造成的世界状态」设为新基线——自己的递增不算并发），启动前经 assertTunStartNotRaced 消费重捕获后的基线：sudo 密码窗内的并发 stop 会被检出并取消（终态与用户最后一条命令一致），TUN 之后若再走 Mixed 启动也用的是重捕获后的基线、不会自我取消。
 
@@ -46,7 +46,9 @@ YAML 1.2 是 JSON 的超集，标准 JSON 全部由 yaml.load 正常解析。曾
 
 ## D8 镜像只作用于产物下载，不作用于 GitHub API；镜像选择不持久化
 
-API 若也走镜像，`browser_download_url` 就完全由镜像说了算，而内核产物随后 chmod 755 并以 root 运行（TUN/系统级服务）——上游不提供 checksums，把来源钉死（assertTrustedAssetUrl 校验原始地址）是主要防线，不能让镜像自己指定下载地址。镜像选择不持久化：每次调用按当前环境独立决策（gh/代理是否可用），记住偏好在换环境后会用到错误的镜像。版本查询在代理可用时直接经代理（出网路径已定，先试 gh 直连再回退会把「直连被墙」的等待叠加在可用代理前面）；无代理可用才走 gh api 认证通道（免 60 次/时未认证限流），gh 失败回退 curl 直连（`--noproxy '*'`，不读 env 代理；版本查询只此 curl 一条 HTTP 实现，D14）。版本查询出网决策唯一出口是 kernel.ts 的 resolveReleaseQuery（cmdKernel 与 doctor 共用，与下载通道决策同源输入）；downloadKernel 只取产物、release 由调用方必传，不再有从下载通道反推查询方式的兜底路径。
+API 若也走镜像，`browser_download_url` 就完全由镜像说了算，而内核产物随后 chmod 755 并会在 TUN 下以 root 运行——上游不提供 checksums，把来源钉死（assertTrustedAssetUrl 校验原始地址）是主要防线，不能让镜像自己指定下载地址。镜像选择不持久化，也不进入自动下载候选：只有用户显式传 `--mirror` 才启用，显式镜像或代理都只有一个下载候选，不在失败后擅自换道。每次默认调用仍按当前环境独立决策（gh/代理是否可用），避免换环境后沿用过期偏好
+
+版本查询在代理可用时直接经代理；无代理且 gh 可用时先走 gh api 认证通道，失败再回退 curl 直连（`--noproxy '*'`，不读 env 代理）。curl 只替代原 Node fetch 的直连分支，gh 仍是独立的认证子进程通道（D14）。版本查询出网决策唯一出口是 kernel.ts 的 resolveReleaseQuery（cmdKernel 与 doctor 共用，与下载通道决策同源输入）；downloadKernel 只取产物、release 由调用方必传，不再有从下载通道反推查询方式的兜底路径
 
 ## D9 启动时只清除指向本机 Mixed 端口的 env 代理
 
@@ -61,15 +63,19 @@ API 若也走镜像，`browser_download_url` 就完全由镜像说了算，而�
 
 readSettings() 无进程级缓存：CLI 是短进程，缓存省不了多少，却会让「同一操作内读到的设置不一致」这类 bug 无法被发现。需要一致视图时（如一次 start 内多处读端口/订阅），调用方在命令开头取一份快照显式传递——与 D4 的 epoch 快照同一姿态。
 
-## D11 测试纪律：反向验证与隔离断言
+## D11 测试纪律：反向验证与失败安全隔离
 
-修完必做反向验证：把修复还原，确认对应用例真的转红。预测「理应会红」不能代替实跑——预测落空处往往正是认知与实现的偏差点，比预测对更值钱；发现后补不变量用例挡在结构层，别只改当前这一处。进程匹配类测试必须断言隔离前提（临时 MIHOMO_CLI_DIR，涉及服务时再加一次性 MIHOMO_CLI_DAEMON_LABEL）；真实 sudo/TUN 与永久污染 launchd disabled 表的用例不自动执行，理由见 CONCLUSIONS「自动化测试边界」。
+修完必做反向验证：把修复还原，确认对应用例真的转红。预测「理应会红」不能代替实跑——预测落空处往往正是认知与实现的偏差点，比预测对更值钱；发现后补不变量用例挡在结构层，别只改当前这一处
+
+隔离不能只靠测试体里的断言：beforeEach 可能先执行清理，守卫被反向删除时测试也可能先伤害环境再报红。进程清理由 killLeftovers 在任何 pkill 之前验证 pattern 锚定 os.tmpdir 下的本次目录；runCli/runModule 在 spawn 前拒绝 env 覆盖隔离键。服务负例必须同时具备临时 DIR、一次性 label、临时 HOME 与 PATH launchctl 桩，保证守卫失效时下游仍无害
+
+异步子进程默认 20s 超时终止，barrier 与自建子进程在 finally 中清理；超时只是兜底，不是常规收尾。真实 sudo/TUN 与永久污染 launchd disabled 表的用例不自动执行，理由见 CONCLUSIONS「自动化测试边界」
 
 ## D12 覆写 DSL 裁边：声明式只留三个操作符，带条件的变换走 JS 脚本
 
-判据与 v4.13.0 删补全子系统同一条：设施规模与真实使用面不匹配。`~key`/`~?key`（按 name 合并数组元素 + 未命中追加/跳过两态）是唯一「一句话说不清」的操作符，历史上贡献了 v4.8.1 的残缺分组事故；`<x>` 尖括号转义与嵌套形似告警服务的是不存在的键名形态（mihomo 顶层键无 `+`/`~`/`!`/尖括号），零使用记录。保留 `key!`（替换）、`+key`（前插）、`key+`（追加）——纯数据、无逻辑；match 的 `subscription` 同义键一并收掉（同 D11「一套判据」的取向）。
+判据与 v4.13.0 删补全子系统同一条：设施规模与真实使用面不匹配。`~key`/`~?key`（按 name 合并数组元素 + 未命中追加/跳过两态）是唯一「一句话说不清」的操作符，历史上贡献了 v4.8.1 的残缺分组事故；`<x>` 尖括号转义与嵌套形似告警服务的是不存在的键名形态（mihomo 顶层键无 `+`/`~`/`!`/尖括号），零使用记录。保留 `key!`（替换）、`+key`（前插）、`key+`（追加）——纯数据、无逻辑；match 的 `subscription` 同义键一并收掉，同一条件只保留 `name` 入口。
 
-复杂变换由 JS 脚本承担（`overwrite.js` / `overwrite.*.{js,mjs,cjs}`，默认导出函数）：**全信任模型**——脚本以用户身份运行、不沙箱不超时（同 `.zshrc`，README 明示别装来路不明的脚本），但**必须同步**（返回 Promise 报错：buildConfig 是同步管线，require(esm)（Node ≥22.12 即支持，本仓下界 24）同步加载、`await import` 会把整条合并链传染性 async 化，而纯转换没有要等网络的场景）。管线位置是安全关键：脚本执行 → YAML 合并 → 剥 LOCKED_CONFIG_KEYS → 系统配置注入（段序的翻转与论证见 D13）——脚本设置的锁定键被剥除（安全边界对脚本输出一视同仁）但经前后浅快照检出并告警（不静默，脚本作者会困惑「设置了怎么没生效」）；systemConfig 最后注入，脚本改不掉端口与控制面。脚本无 match/enabled 机制（作用域写在脚本里，想停用改扩展名；命中与否由 `return true` 报告，见 D13 尾段），受 `ow` 全局开关与 selectActiveOverwriteFiles 闸门管理；加载失败/执行抛错与坏 YAML 同款双路径姿态（D7）。脚本的锁定键告警文案与 YAML 侧共用一份（renderLockedWarning），清单 LOCKED_CONFIG_KEYS 物理上住 constants.ts（overwrite.ts 要读它做快照、config.ts import overwrite.ts，反向会循环依赖）。
+复杂变换由 JS 脚本承担（`overwrite.js` / `overwrite.*.{js,mjs,cjs}`，默认导出函数）：**全信任模型**——脚本以用户身份运行、不沙箱不超时（同 `.zshrc`，README 明示别装来路不明的脚本），但**必须同步**（返回 Promise 报错：buildConfig 是同步管线，require(esm)（Node ≥22.12 即支持，本仓下界 24）同步加载、`await import` 会把整条合并链传染性 async 化，而纯转换没有要等网络的场景）。管线位置是安全关键：脚本执行 → YAML 合并 → 剥 LOCKED_CONFIG_KEYS → 系统配置注入（段序的翻转与论证见 D13）——脚本设置的锁定键被剥除（安全边界对脚本输出一视同仁）但经前后浅快照检出并告警（不静默，脚本作者会困惑「设置了怎么没生效」）；systemConfig 最后注入，脚本改不掉端口与控制面。脚本无 match/enabled 机制（作用域写在脚本里，想停用改扩展名），受 `ow` 全局开关与 selectActiveOverwriteFiles 闸门管理；返回值忽略，CLI 不判定脚本是否命中（D14）。加载失败/执行抛错与坏 YAML 同款双路径姿态（D7）。脚本的锁定键告警文案与 YAML 侧共用一份（renderLockedWarning），清单 LOCKED_CONFIG_KEYS 物理上住 constants.ts（overwrite.ts 要读它做快照、config.ts import overwrite.ts，反向会循环依赖）。
 
 订阅名匹配同轮裁边：只留尾部 `*`（前缀）与头部 `*`（后缀）两种字面比对（startsWith/endsWith，无回溯结构），其余通配报错——通用 glob 匹配器曾有灾难性回溯事故（70 秒挂死，见 CONCLUSIONS），而真实使用面只有前缀区分一种；复杂匹配脚本里自己写。
 
@@ -83,10 +89,20 @@ Breaking 面：脚本看到的始终是订阅配置，读不到 YAML 注入项�
 
 脚本的命中报告（`return true` 约定）**已废弃**，见 D14。
 
-## D14 收缩：CLI 不判定脚本是否命中，诊断面不执行用户脚本
+## D14 收缩：CLI 不判定脚本是否命中，status 不调用变换函数
 
-D13 尾段的 `return true` 命中报告为了让 status 区分脚本「生效/不适用」，引入了 ScriptMatch 类型、applyOverwrite 的额外返回值、`OverwriteListResult.entries` 与独立旁路 judgeScriptMatches——代价是只读的 `status` 每次都要执行用户脚本，而得到的只是一行展示信息。判据与 D12 相同：设施规模与真实使用面不匹配。
+D13 尾段的 `return true` 命中报告为了让 status 区分脚本「生效/不适用」，引入了 ScriptMatch 类型、applyOverwrite 的额外返回值、`OverwriteListResult.entries` 与独立旁路 judgeScriptMatches——代价是 `status` 为得到一行展示信息而额外调用用户变换函数。判据与 D12 相同：设施规模与真实使用面不匹配
 
-决策：脚本返回值忽略；status 把启用中的脚本一律列为生效（作用域由脚本自判），`status` 不调用变换函数（加载模块仍会执行顶层代码，契约照旧：顶层只定义函数）。拒绝的替代：保留判定但缓存结果——缓存需要失效协议，问题不在耗时而在诊断面执行用户代码本身。
+决策：脚本返回值忽略；status 把启用中的脚本一律列入覆写清单，不调用变换函数。这里的「生效」与 `overwrite.applied` 只表示「按总开关、文件开关和 YAML match 选中，启用脚本全部列入」，不证明脚本适用于当前订阅或实际修改了配置
 
-同轮收缩（同一判据）：status JSON 去掉 `overwrite.files`（「未停用但不按 match 过滤」的旧契约，与 `applied` 并存只会让消费方选错字段）；版本查询统一走 curl（有代理 `-x`、无代理 `--noproxy '*'`），删除直连 fetch 分支，只留一条 HTTP 实现；残留清理的 scriptError/pidError 双字段与三档判定合并为单个 `incomplete` 原因；覆写已移除操作符的两条专属报错合为一条，match 的 `subscription` 同义键按未知键报错，name 精确值的「不可能命中」预检删除（不命中即不生效，与写错订阅名同级）。
+边界必须写全：`ow` / `status` 加载模块时仍会执行顶层代码，`doctor` 构建配置时仍会调用变换函数。本条只取消 status 为命中判定额外执行变换函数，不宣称诊断面不执行任何用户代码。拒绝的替代是保留判定但缓存结果：缓存需要失效协议，而展示收益仍不抵这套状态
+
+`status --json` 同步移除旧的 `overwrite.files`，只保留上述选中口径的 `applied`，避免两个字段并存时让消费者选错
+
+## D15 代理接入按应用配置，CLI 不管理 macOS 全局代理
+
+Mixed 的产品边界是提供回环 HTTP + SOCKS5 端口，不是接管系统网络设置。用户的主路径是在具体浏览器或需要代理的应用中按需配置 `127.0.0.1:<mixed-port>`，不依赖全局 Mac 代理
+
+决策：CLI 不自动设置、切换或清除 macOS 系统代理，不提供全局 `proxy on/off`，快速开始与启动提示也不把 `networksetup` 或全局代理配置作为推荐步骤。`system-proxy.ts` 的 env 自代理判定和系统代理检测都只读，用于避免自指死锁与展示环境信息，不能扩展成写入系统设置
+
+后果：`start` 成功只表示内核与端口可用，不表示所有应用流量已走代理；用户文档必须在 Mixed 主路径说明按应用配置。TUN 是用户显式选择的另一种接管系统流量的模式，不是 CLI 自动修改全局代理的替代后门

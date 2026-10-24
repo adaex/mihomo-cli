@@ -139,7 +139,7 @@ const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdConfig,
     group: 'config',
-    usage: [{ signature: 'config [-j|--json] [--reveal]', description: '查看当前生效的运行配置（由订阅与覆写推导，凭据默认脱敏）' }],
+    usage: [{ signature: 'config [-j|--json] [--reveal]', description: '预览配置（由订阅缓存与覆写推导，凭据默认脱敏）' }],
   },
   {
     name: 'overwrite',
@@ -167,7 +167,7 @@ const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdKernel,
     group: 'system',
-    usage: [{ signature: 'kernel [--mirror [镜像]] [--proxy <端口|地址>]', description: '更新内核（自动选择通道：本机代理 > gh > 直连）' }],
+    usage: [{ signature: 'kernel [--mirror [镜像]] [--proxy <端口|地址>]', description: '更新内核（按环境选择本机代理、gh 或直连）' }],
   },
   {
     name: 'update',
@@ -181,7 +181,9 @@ const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdReset,
     group: 'system',
-    usage: [{ signature: 'reset [目标...] [--full] [-y]', description: '重置: 留空保留设置/内核/覆写/服务，指定目标删对应项，--full 删全部，-y 跳过确认' }],
+    usage: [
+      { signature: 'reset [目标...] [--full] [-y]', description: '重置: 留空保留设置/内核/覆写/服务，指定目标删对应项，--full 删全部受管目标，-y 跳过确认' },
+    ],
   },
   {
     name: 'doctor',

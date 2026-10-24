@@ -42,10 +42,10 @@ function expireColor(line: string, urgency: SubscriptionUrgency): string {
 }
 
 /**
- * 「本次真正生效的覆写文件」的唯一谓词：文件未被停用且 match 命中（matched 不是
- * 显式 false；undefined＝无法判定，按生效算）。JSON 的 applied 与文本主行共用——
- * 同一份命令输出的两个面不许各抄一份过滤式。注意这是**展示判定**，与合并闸门
- * selectActiveOverwriteFiles 的平行是 D7 的刻意设计，不要互相收拢
+ * status 覆写「选中」清单的唯一谓词：文件未停用且 match 未明确不命中。
+ * matched undefined（无活跃订阅或 JS 脚本）按选中算；这不是脚本实际修改配置的证据。
+ * JSON applied 与文本主行共用，与合并闸门 selectActiveOverwriteFiles 平行（D7），
+ * 两边判据一致但职责不同，不为复用而合并展示与构建路径。
  */
 const isActiveOverwrite = (f: OverwriteFileInfo): boolean => f.enabled && f.matched !== false;
 
@@ -97,8 +97,8 @@ function buildStatusJson(args: {
       : null,
     overwrite: {
       enabled: args.overwriteEnabled,
-      // 全局关闭时 buildConfig 不加载任何覆写，applied 必须空——只滤 enabled/match
-      // 会列出「生效文件」，与同一份 JSON 里的 enabled:false 自相矛盾
+      // 全局关闭时 buildConfig 不加载任何覆写，applied 必须为空；只滤文件 enabled/match
+      // 会与同一份 JSON 里的 overwrite.enabled:false 自相矛盾
       applied: args.overwriteEnabled ? args.overwriteFiles.filter(isActiveOverwrite).map(f => f.name) : [],
       // 加载失败的文件不属于 applied（既没合并也无法判 enabled/match），单列 errors。
       // hint 必须带出：最有用的迁移指引（已移除操作符改 JS、*edu 加引号等）都在里面，
@@ -276,9 +276,9 @@ export async function printStatus(args: string[] = []): Promise<void> {
 }
 
 /**
- * 覆写展示：主行只列**本次真正生效**的文件；未生效的分「不适用」（YAML match 不命中当前订阅）
- * 与「已禁用」（文件内 enabled:false）两类各折一句计数——原因与改法不同，且都不逐行点名
- * （常态而非故障，详情看 `ow` 列表）。matched 为 undefined（无活跃订阅/脚本）按生效处理。
+ * 覆写展示：主行只列选中的文件；未选中的分「不适用」（YAML match 不命中当前订阅）
+ * 与「已禁用」（文件内 enabled:false）分别计数。matched undefined（无活跃订阅/脚本）
+ * 按选中处理；启用脚本被列入不代表实际修改了配置。
  */
 function printOverwriteLines(enabled: boolean, files: OverwriteFileInfo[], broken: ReturnType<typeof listOverwriteFile>['broken']): void {
   if (!enabled) {
@@ -290,7 +290,7 @@ function printOverwriteLines(enabled: boolean, files: OverwriteFileInfo[], broke
   const unmatchedCount = files.filter(f => f.enabled && f.matched === false).length;
   const disabledCount = files.filter(f => !f.enabled).length;
 
-  // 两类失效各自成句，都挂在主行的括号里；主行永远只说生效的那些
+  // 两类未选中各自成句，都挂在主行的括号里；主行只列选中的文件
   const suffixes: string[] = [];
   if (unmatchedCount > 0) suffixes.push(`${unmatchedCount} 个不适用`);
   if (disabledCount > 0) suffixes.push(`${disabledCount} 个已禁用`);
@@ -299,7 +299,7 @@ function printOverwriteLines(enabled: boolean, files: OverwriteFileInfo[], broke
   if (active.length > 0) {
     console.log(`${colors.gray('覆写: ')}${colors.green('已启用')} (${active.map(f => shortOverwriteName(f.name)).join(', ')}${suffix})`);
   } else {
-    console.log(`${colors.gray('覆写: ')}${colors.green('已启用')} (${files.length > 0 ? `无生效文件${suffix}` : '无文件'})`);
+    console.log(`${colors.gray('覆写: ')}${colors.green('已启用')} (${files.length > 0 ? `无选中文件${suffix}` : '无文件'})`);
   }
 
   // 加载失败的文件不参与任何分类，红字给出原因、灰字给出修复指引；

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  buildSystemProxyHint,
   detectSystemProxy,
   getClearedProxyEnv,
   parseProxyEndpoint,
@@ -146,6 +147,33 @@ describe('detectSystemProxy（真实 scutil 调用）', () => {
     assert.notEqual(s, null);
     assert.equal(typeof s?.matched, 'boolean');
     assert.ok(Array.isArray(s?.active));
+  });
+});
+
+describe('start 代理提示：系统状态只读，主路径按具体应用配置', () => {
+  const base = { matched: false, active: [], diverged: [], pac: null };
+
+  it('检测不可用时明确不自动修改 macOS，并给出应用级 HTTP/SOCKS5 地址', () => {
+    const hint = buildSystemProxyHint(null, 7890);
+    assert.match(hint.text, /不自动修改 macOS 系统代理/);
+    assert.match(hint.text, /具体应用.*HTTP\/SOCKS5 127\.0\.0\.1:7890/);
+    assert.ok(!hint.text.includes('networksetup'));
+    assert.ok(!hint.text.includes('系统设置配置'));
+  });
+
+  it('PAC/WPAD 只说明环境，不推荐改全局手动代理', () => {
+    const hint = buildSystemProxyHint({ ...base, pac: { source: 'https://example.com/proxy.pac', wpad: false } }, 7890);
+    assert.match(hint.text, /PAC 文件/);
+    assert.match(hint.text, /具体应用/);
+    assert.ok(!hint.text.includes('改用手动代理'));
+    assert.ok(!hint.text.includes('networksetup'));
+  });
+
+  it('系统代理指向别处时不给 networksetup，仍只指引具体应用', () => {
+    const hint = buildSystemProxyHint({ ...base, active: ['127.0.0.1:8888'] }, 7890);
+    assert.equal(hint.warning, true);
+    assert.match(hint.text, /具体应用.*HTTP\/SOCKS5 127\.0\.0\.1:7890/);
+    assert.ok(!hint.text.includes('networksetup'));
   });
 });
 

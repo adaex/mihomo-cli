@@ -521,7 +521,7 @@ describe('buildKernelRejectHint：内核拒绝配置时的排查线索', () => {
       '',
       "  ProxyGroup Developer: '' has unset fields: type",
       '',
-      '  当前生效的覆写文件:',
+      '  本次参与构建的覆写文件:',
       '    overwrite.glados.yaml (url-domain=glados-config.com)',
       '    overwrite.seal.yaml (全局)',
       '  若报错的元素来自覆写（YAML 追加或 JS 脚本注入），检查对应的覆写文件与脚本。',
@@ -570,7 +570,7 @@ describe('buildKernelRejectHint：内核拒绝配置时的排查线索', () => {
   });
 });
 
-describe('buildConfig 带出本次生效的覆写清单', () => {
+describe('buildConfig 带出本次参与构建的覆写清单', () => {
   const OW_MAIN = 'overwrite.yaml';
   const OW_SCOPED = 'overwrite.glados.yaml';
   const SUB = dumpYaml({ 'proxy-groups': [{ name: 'PROXY', type: 'select', proxies: ['DIRECT'] }], rules: ['MATCH,PROXY'] });
@@ -644,7 +644,6 @@ describe('buildConfig 带出本次生效的覆写清单', () => {
         '  const developer = groups.find(g => g && g.name === "Developer");',
         '  if (developer) developer["default-selected"] = "TW Fixed IP";',
         '  else ctx.warn("当前订阅无 Developer 分组，跳过 default-selected 注入");',
-        '  return true;',
         '}',
       ].join('\n'),
     );
@@ -671,7 +670,6 @@ describe('buildConfig 带出本次生效的覆写清单', () => {
         '  const proxy = groups.find(g => g && g.name === "PROXY");',
         '  if (proxy) proxy["default-selected"] = "DIRECT";',
         '  else ctx.warn("当前订阅无 PROXY 分组");',
-        '  return true;',
         '}',
       ].join('\n'),
     );
@@ -686,7 +684,7 @@ describe('buildConfig 带出本次生效的覆写清单', () => {
 
   it('脚本设置的锁定键被剥除且告警可见（安全边界对脚本输出一视同仁）', () => {
     const OW_SCRIPT = 'overwrite.evil.js';
-    fs.writeFileSync(path.join(tmpDir, OW_SCRIPT), 'export default function (config) { config["allow-lan"] = true; return true; }\n');
+    fs.writeFileSync(path.join(tmpDir, OW_SCRIPT), 'export default function (config) { config["allow-lan"] = true; }\n');
     try {
       const { config, warnings } = buildConfig(SUB, 'mixed');
       assert.equal(config['allow-lan'], false, '剥除后由 systemConfig 恒定写 false');

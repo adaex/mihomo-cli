@@ -57,7 +57,7 @@ before(() => {
 });
 
 after(() => {
-  killLeftovers(MAIN_INSTANCE_PATTERN);
+  killLeftovers(MAIN_INSTANCE_PATTERN, tmpDir);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -84,7 +84,7 @@ describe('restartModeOnChange：真实探测下的模式决策', () => {
 
     assert.equal(restartModeOnChange(), 'tun');
 
-    killLeftovers(MAIN_INSTANCE_PATTERN);
+    killLeftovers(MAIN_INSTANCE_PATTERN, tmpDir);
     fs.rmSync(PATHS.pidFile, { force: true });
   });
 });

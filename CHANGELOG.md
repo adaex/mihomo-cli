@@ -2,17 +2,20 @@
 
 ## [未发布]
 
+### 修复
+
+- **内核更新后的提示改为真实重启**：运行中更新后提示先 `stop` 再按原模式 `start` / `start tun`，不再把可能只热重载配置的 `start` 写成会加载新二进制
+
 ### 变更
 
-- **status 不再执行 JS 覆写脚本**：脚本的 `return true` 命中约定取消，返回值一律忽略；status 把启用中的脚本列为生效，不再为判定「不适用」跑一遍用户脚本（只读诊断不执行用户代码）。现有脚本里的 `return true` 无需删除
-- **`status --json` 去掉 `overwrite.files`**：只保留 `overwrite.applied`（本次真正参与合并的文件）；两字段并存时容易选错。依赖 `files` 的脚本请改读 `applied`
-- **内核版本查询统一走 curl**：无代理时也用 curl 直连（`--noproxy '*'`，与内核下载直连通道同口径），不再有单独的 Node fetch 分支——直连查询不再受 env 代理（含 `NODE_USE_ENV_PROXY`）影响，需要走代理请用 `--proxy`；版本查询失败的提示合并成「经代理失败」「直连失败」两类
+- **status 不再调用 JS 覆写变换函数**：脚本的 `return true` 命中约定取消，返回值一律忽略；启用中的脚本仍列入覆写清单，但只表示会被构建流程选中，不表示实际修改了配置。`status` 加载模块时仍会执行顶层代码，现有脚本里的 `return true` 无需删除
+- **`status --json` 去掉 `overwrite.files`**：只保留 `overwrite.applied`，其口径为「按总开关、文件开关和 YAML match 选中的文件；启用脚本全部列入」。依赖 `files` 的脚本请改读 `applied`，不要把它当成实际变更证明
+- **直连内核版本查询改用 curl**：删除独立的 Node fetch 分支，直连回退使用 `--noproxy '*'`，不再受 env 代理（含 `NODE_USE_ENV_PROXY`）影响；无代理且 `gh` 可用时仍先走 `gh api`，失败后才回退 curl 直连
+- **代理接入明确为按应用配置**：README 快速开始只指引在具体浏览器或应用中设置 Mixed 地址，不要求配置全局 Mac 代理；CLI 仍不自动修改 macOS 系统代理。`start` 的提示不再给出全局 `networksetup` 设置命令
+- **用户文档按状态模型重写**：区分配置预览、文件更新、运行配置写入与运行实例应用；修正内核下载候选、日志轮转、reset 范围、在线 Web UI、订阅下载网络边界等表述，并补充凭据展示与在线面板的信任边界
+- **npm 发布包补齐安全与覆写文档**：新增 `SECURITY.md` 和 `docs/overwrite.md`，从 npm 包内 README 进入这两份链接文档时不再缺文件
 - **覆写校验报错收拢**：`~` / `~?` / `<key>` 的报错合为一条「已移除的操作符」；match 里的 `subscription` 键按未知键报错；`url-domain` 非法值统一提示「只要裸域名、不支持通配」；元数据键近失写法（`enabled!`、`Enabled`）统一报「疑似想写元数据键」
 - **游离内核停止失败时，残留信息不再打印两遍**；清理未走完但进程已不在时，手动兜底提示改为删 pid 文件（原来给的是 pkill）
-
-### 变更（内部清理，无用户可见变化）
-
-- 删除 `judgeScriptMatches` 旁路与 `ScriptMatch` 类型；残留清理结果的 `scriptError`/`pidError` 与三档判定合并为单个 `incomplete`；Node 版本守卫与 pretest 统一用 `satisfies(engines.node)`；停止计数的 `recordServiceStopped`/`shouldAbortStartOnDisable`/`concludeHotReload` 转手层收为 `bumpStopEpoch`/`epochChanged`。源码注释去掉历史叙事、改指 D 条目；CONCLUSIONS 去掉发布状态行与流程复盘节（发布状态以 tag 为准），release 流程删掉对应的发布后收尾步骤。新增 D14 记录本轮取舍
 
 ## [26.10.112] - 2026-10-12
 

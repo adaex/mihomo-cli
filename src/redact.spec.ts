@@ -86,7 +86,7 @@ describe('redactConfigSecrets：配置凭据脱敏', () => {
     assert.equal(Object.hasOwn(out, '__proto__'), true, '键必须保留在副本里');
     assert.equal(Object.getPrototypeOf(out), Object.prototype, '副本原型仍是 Object.prototype，没被键内容换掉');
     assert.equal((out as { evil?: boolean }).evil, undefined, '键内容没有漏成实例属性');
-    assert.deepEqual(out.__proto__, { evil: true }, '键内容原样保留（mihomo-cli 按未知顶层键忽略）');
+    assert.deepEqual(Object.getOwnPropertyDescriptor(out, '__proto__')?.value, { evil: true }, 'own 键内容原样保留，不走废弃的原型访问器');
     assert.equal((out.proxies as [{ password: string }])[0].password, '***', '同文档其他键照常脱敏');
   });
 });

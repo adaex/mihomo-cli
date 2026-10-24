@@ -5,11 +5,16 @@ import { CliError } from '../errors.js';
 import type { DownloadChannel } from '../kernel.js';
 import * as kernel from '../kernel.js';
 import { parseMirrorArg, parseProxyArg } from '../kernel-args.js';
-import { getRunningState, startCommandForCurrentMode } from '../runtime.js';
+import { getRunningState, type RunningState, startCommandForCurrentMode } from '../runtime.js';
 import { getPortsOrNull } from '../settings.js';
 import { withSpinner } from '../spinner.js';
 import { firstLine } from '../text.js';
 import type { KernelUpdateInfo } from '../types.js';
+
+/** 替换内核二进制必须结束旧进程；单独 start 在 Mixed 健康时只热重载配置 */
+export function kernelRestartCommand(state: RunningState): string {
+  return `mihomo-cli stop && ${startCommandForCurrentMode(state)}`;
+}
 
 /** 通道的人类可读标签（失败汇总用）；措辞与 printChannelLine 头部行一致 */
 export function channelLabel(channel: DownloadChannel, isExplicitProxy: boolean): string {
@@ -205,13 +210,10 @@ export async function cmdKernel(args: string[]): Promise<void> {
       throw buildDownloadFailureError(attempts, proxyInfo.proxy !== null);
     }
     console.log(`\n已更新到 ${result.version}`);
-    // 运行中的内核仍是旧二进制（进程持有旧 inode），提醒重启生效。
-    // TUN 在跑时裸 start 会静默切回 Mixed（还要一次 sudo），必须给 start tun——
-    // 与 sub update 的重启提示同判据
+    // 运行中的进程仍持有旧二进制；热重载只换配置，必须先停止再按原模式启动
     const state = getRunningState();
     if (state.running) {
-      const restartCommand = startCommandForCurrentMode(state);
-      console.log(colors.yellow(`提示: 运行中的内核仍是旧版本，执行 ${restartCommand} 重启后生效`));
+      console.log(colors.yellow(`提示: 运行中的内核仍是旧版本，执行 ${kernelRestartCommand(state)} 后生效`));
     }
     // ad-hoc 签名的 Go 二进制被替换后，macOS 可能按新可执行文件重新要求本地网络授权；
     // 只影响指向局域网地址的节点，提示一次胜过连不通时翻 README

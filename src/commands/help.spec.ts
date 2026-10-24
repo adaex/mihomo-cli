@@ -130,13 +130,11 @@ describe('帮助文案与实际行为一致', () => {
     });
   });
 
-  it('kernel 用法行的通道顺序与实际决策一致（本机代理优先、gh 回退）', () => {
-    // 回归：通道改为「本机代理 > gh > 直连」后帮助仍写旧顺序「gh > 本机代理 > 直连」，
-    // 用户按 help 排障被反向误导
+  it('kernel 帮助按环境描述通道，不暗示失败后必定走完代理、gh、直连', () => {
     withFixture((_d, run) => {
       const out = run(['help', 'kernel']).stdout;
-      assert.match(out, /本机代理 > gh > 直连/);
-      assert.ok(!out.includes('gh > 本机代理'), '不得残留旧顺序');
+      assert.match(out, /按环境选择本机代理、gh 或直连/);
+      assert.ok(!out.includes('本机代理 > gh > 直连'), '不得把环境选择写成完整失败回退链');
     });
   });
 });

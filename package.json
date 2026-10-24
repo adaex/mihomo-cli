@@ -9,7 +9,9 @@
   },
   "files": [
     "dist",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "docs/overwrite.md"
   ],
   "scripts": {
     "dev": "tsx src/index.ts",
@@ -56,7 +58,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.4",
-    "@types/node": "^26.2.0",
+    "@types/node": "24.19.2",
     "husky": "^9.1.7",
     "lint-staged": "^17.0.8",
     "tsup": "^8.5.1",

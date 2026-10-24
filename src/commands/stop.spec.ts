@@ -100,7 +100,7 @@ describe('stop 的提前返回路径记录停止计数', () => {
 
         assert.ok(epochChanged(before, readEpochIn(dataDir)), '杀掉游离内核也是一次确定的停止，必须可被并发判据检出');
       } finally {
-        killLeftovers(pattern.stdout);
+        killLeftovers(pattern.stdout, dataDir);
       }
     }));
 

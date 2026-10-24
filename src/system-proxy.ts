@@ -10,8 +10,8 @@ import { colors } from './colors.js';
  * 扩集都同时生效。另承载入口 clearProxyEnv 的清除原值登记（record/getClearedProxyEnv）：
  * 只记录不恢复，恢复判据在消费方（commands/update.ts），理由见 docs/decisions.md D9。
  *
- * Mixed 不自动设置系统代理是产品边界，本模块只做「检测 + 告知」：让 start 结束时的
- * 提示变准——已指向 Mixed 端口就一句确认，指向别处或未设置才给出可粘贴的设置命令。
+ * Mixed 不自动设置系统代理是产品边界，本模块只做「检测 + 告知」：start 展示只读环境，
+ * 主路径始终指引在具体应用中配置 Mixed，不推荐 networksetup 或全局代理设置（D15）。
  *
  * 用 `scutil --proxy` 而非逐个 `networksetup -get*proxy`：<dictionary> 是**当前生效
  * 网络集**的聚合视图，一次调用拿到 HTTP/HTTPS/SOCKS/PAC 全部状态；networksetup 按服务
@@ -185,36 +185,36 @@ export function detectSystemProxy(mixedPort: number): SystemProxySummary | null 
 }
 
 /**
- * start（mixed）成功后的系统代理提示：按检测结果分档。
- * - PAC/WPAD 接管：说明接管状态，**不给设置命令**——照敲手动代理命令会把本来可用的
- *   PAC 配置覆盖掉（脚本可能正把流量分给 mihomo-cli），改不改是用户的决定
- * - 已指向 Mixed 端口：一句灰色确认；仍有其他条目指向别处时升级为黄色（部分流量不走 mihomo-cli）
- * - 指向别处/未设置：黄色提醒 + 可粘贴的 networksetup 命令（服务名让用户按实际替换）
- * - 检测不可用：原静态提示原样保留
+ * start 代理提示的纯文本决策：系统代理只读，主路径是在具体应用中配置 Mixed（D15）。
+ * 返回颜色等级与文本，print 只负责检测和输出，测试不依赖本机 scutil 状态。
  */
-export function printSystemProxyHint(mixedPort: number): void {
-  const summary = detectSystemProxy(mixedPort);
+export function buildSystemProxyHint(summary: SystemProxySummary | null, mixedPort: number): { text: string; warning: boolean } {
+  const applicationGuide = `需要代理的具体应用请配置 HTTP/SOCKS5 127.0.0.1:${mixedPort}（TUN 模式无需）`;
   if (summary === null) {
-    console.log(colors.gray(`提示: Mixed 模式需在系统设置配置 HTTP/SOCKS 代理 127.0.0.1:${mixedPort}（TUN 模式无需）`));
-    return;
+    return { text: `提示: Mixed 不自动修改 macOS 系统代理；${applicationGuide}`, warning: false };
   }
   if (summary.pac) {
     const desc = summary.pac.wpad ? 'WPAD 自动发现' : `PAC 文件${summary.pac.source ? `（${summary.pac.source}）` : ''}`;
-    console.log(colors.gray(`系统代理由 ${desc} 接管，是否走 mihomo-cli 由脚本决定；如需固定全量走代理，可在系统设置改用手动代理 127.0.0.1:${mixedPort}`));
-    return;
+    return { text: `系统代理由 ${desc} 接管，本工具不会修改它；${applicationGuide}`, warning: false };
   }
   if (summary.matched) {
     if (summary.diverged.length > 0) {
-      console.log(colors.yellow(`提示: 部分系统代理已指向 127.0.0.1:${mixedPort}，但 ${summary.diverged.join('、')} 仍指向别处——对应流量可能不经 mihomo-cli`));
-    } else {
-      console.log(colors.gray(`系统代理已指向 127.0.0.1:${mixedPort}`));
+      return {
+        text: `提示: 部分系统代理已指向 127.0.0.1:${mixedPort}，但 ${summary.diverged.join('、')} 仍指向别处；本工具不会修改这些设置，具体应用以自身代理配置为准`,
+        warning: true,
+      };
     }
-    return;
+    return { text: `系统代理已指向 127.0.0.1:${mixedPort}（只读检测）；具体应用仍以自身代理配置为准`, warning: false };
   }
   const pointing = summary.active.length > 0 ? `，当前指向 ${summary.active.join('、')}` : '';
-  console.log(colors.yellow(`提示: 系统代理未指向 127.0.0.1:${mixedPort}${pointing}；需要代理的应用请配置后使用（TUN 模式无需）`));
-  console.log(colors.gray('  设置命令（把 Wi-Fi 换成实际网络服务，全部服务见 networksetup -listallnetworkservices）:'));
-  console.log(colors.gray(`  networksetup -setwebproxy "Wi-Fi" 127.0.0.1 ${mixedPort}`));
-  console.log(colors.gray(`  networksetup -setsecurewebproxy "Wi-Fi" 127.0.0.1 ${mixedPort}`));
-  console.log(colors.gray(`  networksetup -setsocksfirewallproxy "Wi-Fi" 127.0.0.1 ${mixedPort}`));
+  return {
+    text: `提示: 系统代理未指向 127.0.0.1:${mixedPort}${pointing}，本工具不会修改它；${applicationGuide}`,
+    warning: true,
+  };
+}
+
+/** start（mixed）成功后的只读环境提示，不输出全局代理设置命令 */
+export function printSystemProxyHint(mixedPort: number): void {
+  const hint = buildSystemProxyHint(detectSystemProxy(mixedPort), mixedPort);
+  console.log(hint.warning ? colors.yellow(hint.text) : colors.gray(hint.text));
 }

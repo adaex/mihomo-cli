@@ -116,19 +116,22 @@ describe('allocateArchivePath：原子占名', () => {
     `;
 
     const runs = ['a', 'b'].map(id => spawnEval(childScript(id), { env: { MIHOMO_CLI_DIR: tmpDir } }));
+    try {
+      waitMarker('alloc-ready-a');
+      waitMarker('alloc-ready-b');
+      fs.writeFileSync(path.join(tmpDir, 'alloc-go'), '');
 
-    waitMarker('alloc-ready-a');
-    waitMarker('alloc-ready-b');
-    fs.writeFileSync(path.join(tmpDir, 'alloc-go'), '');
+      const exitCodes = await Promise.all(runs.map(r => r.done));
+      assert.deepEqual(exitCodes, [0, 0], '两个子进程都不该失败');
 
-    const exitCodes = await Promise.all(runs.map(r => r.done));
-    assert.deepEqual(exitCodes, [0, 0], '两个子进程都不该失败');
-
-    const pathA = fs.readFileSync(path.join(tmpDir, 'alloc-result-a'), 'utf8');
-    const pathB = fs.readFileSync(path.join(tmpDir, 'alloc-result-b'), 'utf8');
-    assert.notEqual(pathA, pathB, '并发分配必须拿到不同归档名——同一个名字会被后写者静默覆盖');
-    assert.equal(fs.readFileSync(pathA, 'utf8'), 'content-a', '先落盘的归档内容被后到进程覆盖');
-    assert.equal(fs.readFileSync(pathB, 'utf8'), 'content-b', '后到进程的归档内容不完整');
+      const pathA = fs.readFileSync(path.join(tmpDir, 'alloc-result-a'), 'utf8');
+      const pathB = fs.readFileSync(path.join(tmpDir, 'alloc-result-b'), 'utf8');
+      assert.notEqual(pathA, pathB, '并发分配必须拿到不同归档名——同一个名字会被后写者静默覆盖');
+      assert.equal(fs.readFileSync(pathA, 'utf8'), 'content-a', '先落盘的归档内容被后到进程覆盖');
+      assert.equal(fs.readFileSync(pathB, 'utf8'), 'content-b', '后到进程的归档内容不完整');
+    } finally {
+      for (const run of runs) run.child.kill('SIGKILL');
+    }
   });
 
   it('并发双进程同时轮转同一份日志：只产生一份归档、内容不丢、双方都不报错', async () => {
@@ -149,21 +152,24 @@ describe('allocateArchivePath：原子占名', () => {
       rotateAndCleanupLogs();
     `;
     const runs = ['a', 'b'].map(id => spawnEval(childScript(id), { env: { MIHOMO_CLI_DIR: tmpDir } }));
+    try {
+      waitMarker('rotate-ready-a');
+      waitMarker('rotate-ready-b');
+      fs.writeFileSync(path.join(tmpDir, 'rotate-go'), '');
 
-    waitMarker('rotate-ready-a');
-    waitMarker('rotate-ready-b');
-    fs.writeFileSync(path.join(tmpDir, 'rotate-go'), '');
+      const exitCodes = await Promise.all(runs.map(r => r.done));
+      assert.deepEqual(exitCodes, [0, 0], '并发轮转的输家也不该抛错（日志已被赢家归档，无事可做）');
 
-    const exitCodes = await Promise.all(runs.map(r => r.done));
-    assert.deepEqual(exitCodes, [0, 0], '并发轮转的输家也不该抛错（日志已被赢家归档，无事可做）');
-
-    const archives = fs
-      .readdirSync(DIRS.logs)
-      .filter(f => isArchiveLogFilename(f))
-      .map(f => path.join(DIRS.logs, f));
-    assert.equal(archives.length, 1, `应恰好产生一份归档（内容一份、无空占位残留），实际: ${archives.map(p => path.basename(p)).join(', ')}`);
-    assert.equal(fs.readFileSync(archives[0], 'utf8'), 'history', '历史日志内容必须完整落到归档里');
-    assert.equal(fs.existsSync(PATHS.logFile), false, 'mihomo.log 应已被 rename 搬走');
+      const archives = fs
+        .readdirSync(DIRS.logs)
+        .filter(f => isArchiveLogFilename(f))
+        .map(f => path.join(DIRS.logs, f));
+      assert.equal(archives.length, 1, `应恰好产生一份归档（内容一份、无空占位残留），实际: ${archives.map(p => path.basename(p)).join(', ')}`);
+      assert.equal(fs.readFileSync(archives[0], 'utf8'), 'history', '历史日志内容必须完整落到归档里');
+      assert.equal(fs.existsSync(PATHS.logFile), false, 'mihomo.log 应已被 rename 搬走');
+    } finally {
+      for (const run of runs) run.child.kill('SIGKILL');
+    }
   });
 
   it('同秒序号耗尽时抛 CliError 而非无限换名', () => {

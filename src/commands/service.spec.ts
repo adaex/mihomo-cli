@@ -12,7 +12,7 @@ import { pollUntil } from '../test-support/poll.js';
  * cmdUninstall 的幂等判据与残留形态。此前是仅有的零覆盖命令 handler——判据
  * 「四条件全空才早退」与「plist 缺失仍装载」分支是实测踩坑换来的不变量（手动删
  * plist 后 KeepAlive 继续拉起，只看文件会陷入「永远停不掉」死胡同）。
- * 隔离：MIHOMO_CLI_DIR + 一次性 label + PATH 桩 launchctl（写动词记录进日志，
+ * 隔离：MIHOMO_CLI_DIR + 一次性 label + 临时 HOME + PATH 桩 launchctl（写动词记录进日志，
  * print/print-disabled 只读应答）；桩记不到的写动词即「未执行」的证据。
  */
 describe('cmdUninstall：幂等判据与残留形态', () => {
@@ -20,19 +20,28 @@ describe('cmdUninstall：幂等判据与残留形态', () => {
     stdout: string;
     stderr: string;
     status: number | null;
+    /** 命令结束后临时 HOME 中的 plist 是否仍存在 */
+    plistExists: boolean;
     /** 桩 launchctl 收到的写动词（bootout/disable/enable/bootstrap），每行一次 */
     writes: string[];
   }
 
-  function runUninstall(opts: { printExit?: number; fakeKernel?: boolean }): RunResult {
+  function runUninstall(opts: { printExit?: number; fakeKernel?: boolean; withPlist?: boolean }): RunResult {
     const fixture = makeFixture('mihomo-uninstall');
     const { dataDir, label } = fixture;
     const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-uninstall-bin-'));
+    const fakeHome = path.join(binDir, 'home');
+    const plistPath = path.join(fakeHome, 'Library/LaunchAgents', `${label}.plist`);
     const writeLog = path.join(binDir, 'writes.log');
     const printExit = opts.printExit ?? 113;
+    let kernelPid: number | null = null;
     try {
-      // 隔离前提
-      assert.equal(fs.existsSync(path.join(os.homedir(), 'Library/LaunchAgents', `${label}.plist`)), false);
+      // 隔离前提：plist 解析必须落在临时 HOME，不能碰真实 LaunchAgents
+      fs.mkdirSync(fakeHome);
+      if (opts.withPlist) {
+        fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+        fs.writeFileSync(plistPath, '<plist />');
+      }
       for (const sub of ['kernel', 'logs', 'runtime', 'data']) fs.mkdirSync(path.join(dataDir, sub), { recursive: true });
       fs.writeFileSync(
         path.join(binDir, 'launchctl'),
@@ -61,7 +70,6 @@ describe('cmdUninstall：幂等判据与残留形态', () => {
         ].join('\n'),
       );
       fs.chmodSync(path.join(binDir, 'launchctl'), 0o755);
-      let kernelPid: number | null = null;
       if (opts.fakeKernel) {
         // node 单进程桩：argv 里带 mihomo 路径让 pgrep pattern 可匹配。不走 fake-kernel.ts
         // 的盘上脚本桩（那套假定桩是 bash 长睡脚本）；node 桩无子进程，收尾 pid-kill 即杀净
@@ -76,7 +84,10 @@ describe('cmdUninstall：幂等判据与残留形态', () => {
         // 等 pgrep 能看到它
         pollUntil(() => spawnSync('pgrep', ['-f', String(kernelPid)], { encoding: 'utf8' }).status === 0);
       }
-      const r = runCli(['uninstall'], fixture, { timeout: 30_000, env: { PATH: `${binDir}:${process.env.PATH}` } });
+      const r = runCli(['uninstall'], fixture, { timeout: 30_000, env: { HOME: fakeHome, PATH: `${binDir}:${process.env.PATH}` } });
+      const writes = fs.existsSync(writeLog) ? fs.readFileSync(writeLog, 'utf8').split('\n').filter(Boolean) : [];
+      return { stdout: r.stdout || '', stderr: r.stderr || '', status: r.status, writes, plistExists: fs.existsSync(plistPath) };
+    } finally {
       if (kernelPid) {
         try {
           process.kill(kernelPid, 'SIGKILL');
@@ -84,9 +95,6 @@ describe('cmdUninstall：幂等判据与残留形态', () => {
           /* 已退出 */
         }
       }
-      const writes = fs.existsSync(writeLog) ? fs.readFileSync(writeLog, 'utf8').split('\n').filter(Boolean) : [];
-      return { stdout: r.stdout || '', stderr: r.stderr || '', status: r.status, writes };
-    } finally {
       fixture.cleanup();
       fs.rmSync(binDir, { recursive: true, force: true });
     }
@@ -99,11 +107,20 @@ describe('cmdUninstall：幂等判据与残留形态', () => {
     assert.deepEqual(r.writes, [], '早退路径不得执行任何 launchctl 写操作（桩记不到即证据）');
   });
 
+  it('正常卸载删除临时 HOME 中的 plist', () => {
+    const r = runUninstall({ withPlist: true });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /已卸载服务/);
+    assert.equal(r.plistExists, false, '未隔离 HOME 时会留下这份 plist，并转去操作真实 LaunchAgents');
+  });
+
   it('plist 缺失但任务仍装载：明说残留形态并 bootout 卸载（只看文件会永远停不掉）', () => {
     const r = runUninstall({ printExit: 0 });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /未找到 plist，但服务仍处装载状态/);
     assert.match(r.stdout, /已卸载服务/);
+    assert.match(r.stdout, /删除受管数据/);
+    assert.ok(!r.stdout.includes('删除全部数据'), 'reset --full 不保证清空整个数据目录');
     assert.ok(r.writes.includes('bootout'), `应执行 bootout: ${JSON.stringify(r.writes)}`);
   });
 

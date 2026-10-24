@@ -1,7 +1,9 @@
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
+import { escapeRegExp } from '../text.js';
 import { pollUntil } from './poll.js';
 
 /**
@@ -124,6 +126,21 @@ export function isDead(pid: number): boolean {
 }
 
 /**
+ * 任何 pkill 之前的硬隔离闸门：目录必须位于 os.tmpdir 内，pattern 必须包含该目录。
+ * 同时接受字面路径与生产 escapeRegExp 后的路径；guard 本身不发起进程操作。
+ */
+export function assertIsolatedCleanupPattern(pattern: string, isolatedDir: string): void {
+  if (!path.isAbsolute(isolatedDir)) throw new Error(`测试清理目录必须是绝对路径: ${isolatedDir}`);
+  const relative = path.relative(os.tmpdir(), isolatedDir);
+  if (relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`测试清理目录必须位于 os.tmpdir() 内: ${isolatedDir}`);
+  }
+  if (!pattern.includes(isolatedDir) && !pattern.includes(escapeRegExp(isolatedDir))) {
+    throw new Error(`拒绝执行未锚定临时目录的 pkill: pattern=${pattern}, dir=${isolatedDir}`);
+  }
+}
+
+/**
  * 兜底清理：任何一条用例漏杀都不该把桩进程留在开发机上（pattern 为 MAIN_INSTANCE_PATTERN，
  * 隔离依据见文件头注释）。pattern 只杀得到 bash wrapper 本人——wrapper 里 `sleep 300`
  * 子进程的命令行不含 pattern，只靠 pkill 每次收尾都会漏出它成为 launchd 孤儿（进程组
@@ -131,8 +148,14 @@ export function isDead(pid: number): boolean {
  * 补杀全组。pid 复用在此不可达：记账集只活在单次 spec 进程的数秒生命周期内，macOS
  * 顺序分配 pid 不会在窗口内绕回。
  */
-export function killLeftovers(pattern: string): void {
-  spawnSync('pkill', ['-9', '-f', pattern], { timeout: 5000 });
+export function killLeftovers(
+  pattern: string,
+  isolatedDir: string,
+  killPattern: (value: string) => unknown = value => spawnSync('pkill', ['-9', '-f', value], { timeout: 5000 }),
+): void {
+  // 必须先于任何 pkill：测试体里的隔离断言可能排在 beforeEach 之后，不能作为唯一防线
+  assertIsolatedCleanupPattern(pattern, isolatedDir);
+  killPattern(pattern);
   for (const pgid of spawnedPgids) {
     try {
       process.kill(-pgid, 'SIGKILL');
