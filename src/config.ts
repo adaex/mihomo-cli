@@ -251,8 +251,9 @@ export function buildConfig(subRawContent: string, mode: RuntimeMode, scope?: Ov
     };
   }
 
-  // 无生效覆写时只做根层浅拷贝并合并静态系统字段，不会增加已检查订阅子图的深度。
-  if (overwriteFiles.length > 0) assertConfigGraphSafe(merged, '合并后的配置');
+  // JS 脚本每次执行后已检查完整结果；只有 YAML 深合并需要在最终根层浅合并后复查。
+  // 后续只做浅拷贝并补静态系统字段，不会让已检查子图变深或成环。
+  if (overwriteFiles.some(file => !file.transform)) assertConfigGraphSafe(merged, '合并后的配置');
   assertConfigShape(merged);
   return { config: merged, warnings: lockedWarnings, overwriteSummaries };
 }

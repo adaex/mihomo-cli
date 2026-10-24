@@ -571,20 +571,26 @@ export function runInheritedChild(command: string, args: string[], options: { en
 }
 
 /** gzip -dc 的 stdout 以 Buffer 收集；maxBuffer 同时限制解压后体积。 */
-function decompressGzip(tempPath: string): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    let untrack: () => void = () => {};
-    let cancelForceKill: () => void = () => {};
-    const child = execFile('gzip', ['-dc', tempPath], { encoding: 'buffer', maxBuffer: 256 * 1024 * 1024, timeout: GZIP_TIMEOUT_MS }, (error, stdout) => {
-      cancelForceKill();
-      untrack();
-      if (error) reject(error);
-      else resolve(stdout);
-    });
-    untrack = trackChildProcess(child);
-    // execFile 的 timeout 只发 SIGTERM；不响应该信号的进程仍需硬超时上界。
-    cancelForceKill = scheduleChildForceKill(child, GZIP_TIMEOUT_MS + CHILD_FORCE_KILL_GRACE_MS);
+async function decompressGzip(tempPath: string): Promise<Buffer> {
+  const execution = execFileAsync('gzip', ['-dc', tempPath], {
+    encoding: 'buffer',
+    maxBuffer: 256 * 1024 * 1024,
+    timeout: GZIP_TIMEOUT_MS,
   });
+  const untrack = trackChildProcess(execution.child);
+  // execFile 的 timeout 只发 SIGTERM；不响应该信号的进程仍需硬超时上界。
+  const cancelForceKill = scheduleChildForceKill(execution.child, GZIP_TIMEOUT_MS + CHILD_FORCE_KILL_GRACE_MS);
+  try {
+    const { stdout } = await execution;
+    return stdout;
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'number') throw new Error(`gzip 退出码 ${code}`);
+    throw error;
+  } finally {
+    cancelForceKill();
+    untrack();
+  }
 }
 
 /**
@@ -723,14 +729,7 @@ export async function downloadKernel(
     // 已按此前缀与 .gz 后缀过滤），直接 gzip 解压。
     const foundBinary = path.join(tempDir, path.basename(tempPath, '.gz'));
     // gzip -dc 输出到 stdout，捕获为 buffer 后写文件，避免 shell 重定向（注入风险）
-    let gzipStdout: Buffer;
-    try {
-      gzipStdout = await decompressGzip(tempPath);
-    } catch (error) {
-      const code = (error as { code?: unknown }).code;
-      if (typeof code === 'number') throw new Error(`gzip 退出码 ${code}`);
-      throw error;
-    }
+    const gzipStdout = await decompressGzip(tempPath);
     fs.writeFileSync(foundBinary, gzipStdout, { mode: 0o755 });
 
     // 自检在临时位置进行（旧内核尚未被触碰）：跑一次 -v 确认二进制可执行且未损坏/架构匹配

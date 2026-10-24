@@ -38,10 +38,11 @@ import { PATHS, ensureDirs } from ${JSON.stringify(moduleUrl('src/paths.ts'))};
 import { captureStopEpochBaseline } from ${JSON.stringify(moduleUrl('src/stop-epoch.ts'))};
 import { launchOrRestart } from ${JSON.stringify(moduleUrl('src/runtime.ts'))};
 import { getMihomoPids, MAIN_INSTANCE_PATTERN } from ${JSON.stringify(moduleUrl('src/process-probe.ts'))};
+import { writeStubExecutable } from ${JSON.stringify(moduleUrl('src/test-support/stub-bin.ts'))};
 
 console.log('PATTERN:' + MAIN_INSTANCE_PATTERN);
 ensureDirs();
-fs.writeFileSync(PATHS.mihomoBinary, '#!/usr/bin/env node\nsetInterval(() => {}, 1000);\n', { mode: 0o755 });
+writeStubExecutable(PATHS.mihomoBinary, 'setInterval(() => {}, 1000);', '/usr/bin/env node');
 fs.writeFileSync(PATHS.configFile, 'tun:\n  enable: true\n');
 Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
 captureStopEpochBaseline();

@@ -119,18 +119,12 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
       pid = await startTun(prefetched);
     } catch (e) {
       // sudo 等待或启动后的观察窗内发生 stop：报错归属取消，并确认没有留下刚起的进程
-      if (startAbortedByConcurrentStop()) {
-        await stopTunAfterConcurrentStop();
-        throw cancelledByConcurrentStop();
-      }
+      await throwIfTunStartCancelled();
       throw e;
     }
     // sudo 返回后的进程健康只证明「有进程」，不证明「后执行的 stop 仍应被覆盖」。
     // 终态必须以最后一条命令为准，清理成功后才可报告取消
-    if (startAbortedByConcurrentStop()) {
-      await stopTunAfterConcurrentStop();
-      throw cancelledByConcurrentStop();
-    }
+    await throwIfTunStartCancelled();
     return pid;
   }
 
@@ -184,6 +178,13 @@ async function stopTunAfterConcurrentStop(): Promise<void> {
       hint: [MANUAL_PKILL_HINT],
     });
   }
+}
+
+/** 未取消时放行原结果；已取消时先清理 TUN，再统一报告取消。 */
+async function throwIfTunStartCancelled(): Promise<void> {
+  if (!startAbortedByConcurrentStop()) return;
+  await stopTunAfterConcurrentStop();
+  throw cancelledByConcurrentStop();
 }
 
 /**

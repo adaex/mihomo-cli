@@ -192,4 +192,3 @@ proxies+:
 +rules:
   - DOMAIN-SUFFIX,example.internal,SSH-work
 ```
-
