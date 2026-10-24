@@ -1,0 +1,75 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    name: npm Trusted Publishing
+    runs-on: macos-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.20.0'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify tag and package contents
+        env:
+          MIHOMO_CLI_DIR: /tmp/mihomo-cli-release-${{ github.run_id }}
+          MIHOMO_CLI_DAEMON_LABEL: com.mihomo-cli.release-${{ github.run_id }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          test "${GITHUB_REF_NAME}" = "v${version}"
+          output="$(node dist/index.js version)"
+          printf '%s\n' "${output}"
+          case "${output}" in
+            *"mihomo-cli v${version}"*) ;;
+            *) printf 'dist version mismatch\n' >&2; exit 1 ;;
+          esac
+          npm pack --dry-run
+
+      # prepublishOnly 执行完整验证；OIDC 自动鉴权并生成 provenance，不需要 NPM_TOKEN 或 --provenance
+      - name: Publish with npm Trusted Publishing
+        run: npm publish
+
+  release:
+    name: GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create release from CHANGELOG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY' > /tmp/release-notes.md
+          import os
+          import re
+
+          version = os.environ['VERSION'].removeprefix('v')
+          lines = open('CHANGELOG.md', encoding='utf-8').read().splitlines()
+          starts = [i for i, line in enumerate(lines) if re.match(r'^## \[', line)]
+          begin = next(i for i in starts if lines[i].startswith(f'## [{version}]'))
+          end = next((i for i in starts if i > begin), len(lines))
+          print('\n'.join(lines[begin + 1:end]).strip())
+          PY
+          gh release create "${VERSION}" --title "${VERSION}" --notes-file /tmp/release-notes.md --verify-tag
