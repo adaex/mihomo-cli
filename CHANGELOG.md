@@ -1,6 +1,6 @@
 # Changelog
 
-## [未发布]
+## [26.10.114] - 2026-10-25
 
 ### 修复
 
@@ -17,6 +17,7 @@
 ### 变更（内部清理，无用户可见变化）
 
 - HTTP 客户端的成功响应收缩为唯一的文本用途，删除无生产消费方的 JSON/泛型分支；内核下载删除未读取的返回字段、不可达格式检查与重复 chmod，通道切换提示删除不可达的空错误分支
+- gzip 解压复用现有 Promise 执行封装，TUN 并发取消收尾与测试隔离守卫收敛重复流程；纯 JS 覆写不再重复执行已由脚本后检查覆盖的最终全图遍历，行为不变
 
 ## [26.10.113] - 2026-10-25
 
@@ -127,13 +128,4 @@
 - **测试基建单点化**：假内核轮询步进改用进程内 `Atomics.wait`（此前每个 50ms tick 都额外 fork 一个 `/bin/sleep` 子进程）；两份同构的轮询循环合一（`waitForPids` 委托 `pollUntil`）；「写桩 + chmod」三份副本（npm 桩、launchctl 桩）收进 test-support 新原语 `writeStubExecutable`
 - **start / ow / sub use 的选项白名单派生式收单**：三处各自复制的 `START_RESTART_FLAGS.flatMap(f => f.forms)` 改为 flags.ts 导出的 `START_RESTART_FLAG_FORMS`，与 `VALUE_FLAGS` 同范式，单表派生不再有表达式级拷贝
 - 补齐上轮样板收敛的两处漏网（subscription.spec 的子进程 spawnSync 形态），清理死参数、零消费选项与纯文案字段；process-start.spec 的存活桩改 `exec` 单进程形态，收尾 pid-kill 即杀净、不再依赖孤儿 sleep 自然过期。对用户无行为变化（946 用例全绿）
-
-
-## [26.10.104] - 2026-10-03
-
-### 变更（全仓冗余收敛：单表派生化与跨文档收口）
-
-- **start/ow 的选项白名单改由 flags.ts 单表派生**：此前两处手写同一份清单，将来新增 start 选项会漏同步（flags.ts「单表派生后漂移在结构上不可能」的不变量由此补全）；同时清理四个无消费方的导出与 logs 两处重复的用法提示，对用户无行为变化
-- **测试样板收敛进 src/test-support/**：新增 `runModule`/`moduleUrl`（子进程跑真实源码模块的公共形态）、`fake-kernel.ts`（假内核落盘/起进程/判死/收尾，两份逐字副本合一）、`guard.ts`（守卫类 preload 骨架）；模块级子进程样板 15+ 处、桩 launchctl 与 npm 桩 setup、env 拼装与元数据键循环全部改用公共实现，行为覆盖不变（946 用例全绿，与上版的计数差只来自三组同构循环合一）。公共化顺带补上一个既有收尾缺口：`pkill -f` 模式杀不到桩 wrapper 里的 `sleep` 子进程（命令行不含模式串），每次跑残留进程组会漏成 launchd 孤儿，killLeftovers 现按记账的进程组 `kill(-pgid)` 补杀全组
-- **跨文档双写收口**：控制器无鉴权说明只留 README 详版（SECURITY.md 改一句话 + 指针）、CLAUDE.md 的 D9 条目恢复指针式写法（细节见 decisions.md）、README 锁定键清单改类别级描述并指向代码里的 `LOCKED_CONFIG_KEYS` 唯一真相；两个高重合的 JS 覆写示例合一；release 流程补 CHANGELOG 补录纪律与主文件 10 版本滚动归档规则
 
