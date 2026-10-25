@@ -400,13 +400,19 @@ export async function startService(): Promise<{ started: boolean }> {
   // tun 残留是 root 属主，会与服务抢端口；有才清（这是唯一可能弹密码的地方），无则免密
   await cleanupKernelsOrThrow({ mainOutcome: '服务尚未启动', retryCommand: 'mihomo-cli start' });
 
+  // 锁外等待期间另一 start 可能已完成替换。只接受 PID 已更换且未 disabled 的新实例；
+  // 旧 PID 仍在仍是 bootout 未生效，不能拿「有进程在跑」吞掉卸载失败
+  const previousPid = getServiceStatus({ withDisabled: false }).pid;
   bootoutService();
-  await waitUntilUnloaded();
+  const unloadOutcome = await waitUntilUnloaded(serviceTarget(), {
+    acceptReplacement: pid => pid !== previousPid && !isServiceDisabledInLaunchd(),
+  });
 
   // 轮转日志。**必须卡在「旧进程已退出、新进程未 bootstrap」的窗口**：此时无人持有日志
   // fd，rename 才生效。运行中 rename 无效——launchd 的 StandardOutPath fd 指向旧 inode，
   // 改名后内核会继续往归档文件里写（restartService 因此只能 copy-truncate）。
-  rotateAndCleanupLogs();
+  // 并发者已换出新实例时不轮转其正在写入的日志，也不再重复 bootstrap
+  if (unloadOutcome === 'unloaded') rotateAndCleanupLogs();
 
   // 跨进程锁：串行化 enable/bootstrap 与 stop 的 bootout/disable/递增。锁内读停止计数，
   // 与命令入口的基线比对——变了就是期间有人 stop 过，放弃启动
@@ -416,6 +422,7 @@ export async function startService(): Promise<{ started: boolean }> {
       started = false;
       return;
     }
+    if (unloadOutcome === 'replacement-running') return;
     runLaunchctlOrThrow(['enable', serviceTarget()], '启用服务', SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS);
     bootstrapServiceIdempotentOrThrow('启动服务');
   });

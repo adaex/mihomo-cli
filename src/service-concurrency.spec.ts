@@ -621,12 +621,13 @@ case "$1" in
       echo 'Bootstrap failed: 5: Input/output error' >&2
       exit 5
     fi
-    touch "$FAKE_STATE"
+    printf '%s\\n' "$$" > "$FAKE_STATE"
     exit 0
     ;;
   print)
     if [ -f "$FAKE_STATE" ]; then
-      printf '\\tstate = running\\n\\tpid = 4321\\n'
+      pid="$(cat "$FAKE_STATE")"
+      printf '\\tstate = running\\n\\tpid = %s\\n' "$pid"
       exit 0
     fi
     exit 113
@@ -638,7 +639,11 @@ case "$1" in
     exit 0
     ;;
   bootout)
-    rm -f "$FAKE_STATE"
+    case "$FAKE_MODE" in
+      replace-on-bootout) printf '2222\\n' > "$FAKE_STATE" ;;
+      sticky) ;;
+      *) rm -f "$FAKE_STATE" ;;
+    esac
     exit 0
     ;;
 esac
@@ -675,11 +680,16 @@ try {
 }
 
 describe('并发同向 start：bootstrap 撞已装载按幂等成功（exit 5 复读 print 区分）', () => {
-  async function runBootstrapRace(mode: 'race' | 'never-load', children: number): Promise<{ status: number | null; stdout: string; stderr: string }[]> {
+  async function runBootstrapRace(
+    mode: 'race' | 'never-load' | 'replace-on-bootout' | 'sticky',
+    children: number,
+  ): Promise<{ status: number | null; stdout: string; stderr: string }[]> {
     const fixture = makeFixture('mihomo-bootstrap-race');
     const script = writeScript(fixture.fakeBin, 'start-service.mts', startServiceProbeScript());
     writeFakeLaunchctl(fixture.fakeBin, FAKE_LAUNCHCTL_BOOTSTRAP);
-    const env = scenarioEnv(fixture, { FAKE_STATE: path.join(fixture.fakeBin, 'loaded.state'), FAKE_MODE: mode });
+    const statePath = path.join(fixture.fakeBin, 'loaded.state');
+    if (mode === 'replace-on-bootout' || mode === 'sticky') fs.writeFileSync(statePath, '1111\n');
+    const env = scenarioEnv(fixture, { FAKE_STATE: statePath, FAKE_MODE: mode });
     try {
       const runs = Array.from({ length: children }, () => spawnScript(script, env));
       return await Promise.all(runs.map(r => r.done));
@@ -695,6 +705,21 @@ describe('并发同向 start：bootstrap 撞已装载按幂等成功（exit 5 �
       assert.equal(r.status, 0, `进程 ${i} 应正常退出，stdout: ${r.stdout}\nstderr: ${r.stderr}`);
       assert.match(r.stdout, /RESULT:started=true/, `进程 ${i} 应幂等成功，stdout: ${r.stdout}`);
     }
+  });
+
+  it('锁外等待时另一 start 换入新 PID：按幂等成功', async () => {
+    // 旧 1111 在 bootout 后被新 2222 替代：确定性覆盖 CI 暴露的 start‖start 交错
+    const results = await runBootstrapRace('replace-on-bootout', 1);
+
+    assert.equal(results[0].status, 0, `新实例已完成并发启动，stdout: ${results[0].stdout}\nstderr: ${results[0].stderr}`);
+    assert.match(results[0].stdout, /RESULT:started=true/);
+  });
+
+  it('旧 PID 始终未卸载：不得把 bootout 失败吸收为成功', async () => {
+    const results = await runBootstrapRace('sticky', 1);
+
+    assert.notEqual(results[0].status, 0, `旧实例仍在必须报错，stdout: ${results[0].stdout}`);
+    assert.match(results[0].stdout, /RESULT:error=服务卸载超时/);
   });
 
   // 负向对照：bootstrap 失败且 print 未装载（disabled 残留 / I/O error 的真失败形态）

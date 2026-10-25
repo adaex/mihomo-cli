@@ -268,17 +268,26 @@ const UNLOADED_POLL_INTERVAL_MS = 200;
  *     正是「报停止成功而 KeepAlive 约 10s 后拉回内核」的静默失效
  *
  * async + sleep：轮询必须让出事件循环，否则 stop 卡住期间 Ctrl+C 无响应。
+ * 返回 `unloaded` 表示确认卸载；startService 可传 acceptReplacement，在锁外等待期间
+ * 另一个 start 已换出新实例时返回 `replacement-running`。未传回调的 stop/install 路径不变。
  *
  * @param target 仅供测试注入（默认本服务目标）：传一个保证未装载的 label 即可只读验证
  */
-export async function waitUntilUnloaded(target: string = serviceTarget()): Promise<void> {
+export async function waitUntilUnloaded(
+  target: string = serviceTarget(),
+  options: { acceptReplacement?: (pid: number) => boolean } = {},
+): Promise<'unloaded' | 'replacement-running'> {
   for (let i = 0; i < UNLOADED_POLL_ATTEMPTS; i++) {
     const result = runLaunchctl(['print', target]);
-    if (result.status === LAUNCHCTL_NOT_LOADED) return;
+    if (result.status === LAUNCHCTL_NOT_LOADED) return 'unloaded';
     if (result.status !== 0) {
       throw new CliError(`无法确认服务已卸载（launchctl print 退出码 ${result.status ?? '执行失败'}）`, {
         hint: ['这不代表服务仍装载，只表示查询没成立。', `手动确认: launchctl print ${target}`],
       });
+    }
+    if (options.acceptReplacement) {
+      const { state, pid } = parseServicePrint(result.stdout);
+      if (state === 'running' && pid !== null && options.acceptReplacement(pid)) return 'replacement-running';
     }
     await sleep(UNLOADED_POLL_INTERVAL_MS);
   }
