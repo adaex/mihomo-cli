@@ -99,3 +99,18 @@ MIHOMO_CLI_DIR=/tmp/vp/data MIHOMO_CLI_DAEMON_LABEL="com.mihomo-cli.pack-smoke-$
 ```
 
 完成后清理临时目录、进程与测试 plist
+
+## 发布后：更新在线 edge
+
+每次 CI 的 npm publish 与 GitHub Release 都成功后，立即更新自己的在线 edge；这一步是发布收尾，不能省略
+
+1. 先跑 `ssh-net status`，以当时的拓扑和输出确认 edge 清单与入口，不把当前主机名硬编码成永久清单
+2. 对可连接的 edge 先只读核对 `node --version`、`npm --version` 与 `mihomo-cli version`；版本满足要求且不是本次版本时执行：
+
+   ```bash
+   ssh <edge别名> 'npm install -g mihomo-cli@X.Y.Z && mihomo-cli version'
+   ```
+
+   已是本次版本的只核实，不重复安装；输出必须确认实际运行的就是本次版本
+3. 无法解析地址、连接失败、已离线或地址过期的 edge 直接忽略，不尝试唤醒、不守候，也不给用户布置恢复步骤。registry 尚未落地导致明确版本装不上时同样如实记下，不退回 `@latest`
+4. 收尾按「已更新 <清单>；已跳过 <清单及原因>」汇报，跳过不等于已更新，不必把离线机器当阻塞事项
