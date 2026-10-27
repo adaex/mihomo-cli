@@ -33,6 +33,7 @@
 - downloadSubscription 的缓存写失败回滚以写前内容为准：原有 YAML 逐字恢复，仅原本不存在文件时删除本次产物；回滚异常进入提示，不得假报已恢复或已删除。YAML 写入、缓存提交与失败回滚同在 subscriptionCommitLock 内串行，较慢下载的回滚不能覆盖另一进程已提交的新配置（subscription.spec 的本地服务、缓存目录故障与跨进程锁用例）
 - cleanupStaleTmpFiles 按 1h 龄清扫原子写 `<目标>.<pid>.<序号>.tmp`、kernel/.tmp-XXXXXX、根目录 check-XXXXXX 与 service.plist.stage；lstat 核对文件/目录类型，名称或类型不符一律保留。全小写六位后缀与 check-backup 等手工目录无法区分，宁可漏扫也不误删（下载硬超时 180s，清扫 1h 有 20 倍余量；paths.spec）
 - proxy 连通性探测**不做进程内缓存**：CLI 是单命令短进程，status 与 doctor 从不在同一进程同时发生，每进程至多一次调用，缓存没有第二个读端（与 D10 同前提）；--no-probe 在调用方跳过
+- CLI 诊断事件只在入口守卫后的命令上下文中启用，直接 import 底层函数不写文件；同步 O_APPEND 多进程追加逐行可解析，EISDIR 不改变原命令输出/错误。raw/candidate/runtime 哈希配对与仅凭据变化的 hash 差异由隔离订阅和 prepare/commit 用例锁定；热重载成功、PUT 500、PID 不匹配、查询失败与 kickstart→bootstrap 自愈均保留真实阶段结果（diagnostic-events/subscription-prepare/service-concurrency/service-restart-fallback 测试）
 - 覆写 DSL 已裁边：`~`/`~?`/`<x>` 转义与 match 的 `subscription` 同义键移除（前者报「已移除的操作符」，后者按未知键报错），按 name 合并数组元素这类带条件的变换改由 JS 脚本承担（全信任模型同 `.zshrc`，同步函数、锁定键在脚本后剥除并告警）；移除形态显式报错给迁移指引。不在 CLI 复制一份分组必填字段校验（字段集随内核漂移），残缺元素仍由 `-t` 拒绝
 - 原生 `-t` 只验证配置解析，不能证明节点可达、端口可绑定或真实 TUN 路由正常；服务健康与代理连通性检查仍有独立价值
 - `sudo pkill -f <PATTERN>` 不会匹配 sudo 脚本自身的命令行：`escapeRegExp` 把点转义后，进程命令行里出现的是带反斜杠的正则源码、正则却要匹配字面点，恰好坏掉自匹配（对照实验：把 `\.` 换回 `.` 立即自匹配）。三个 root 脚本同此结论，不加行首锚；未来若改用未转义拼接必须重验
@@ -42,6 +43,7 @@
 
 ## 未覆盖与待复核
 
+- **诊断事件是 best-effort，不是审计日志**：append 不做 fsync，SIGKILL/系统崩溃可能丢末尾事件；大小轮转与并发 append 交错时也允许缺事件，不能用缺行证明操作未发生。launchd 登录自启直接拉起内核、不经过 CLI，本轮只覆盖开机前后的 CLI 操作，不记录这一次自启的健康或探测；要补这一跳需另评启动包装/观察器，不改变现有服务入口
 - **订阅下载不自动使用 Mixed 或系统代理**：subscription 的 HTTP 客户端是 Node 原生 fetch（http.ts createHttpClient），undici 默认不读 http(s)_proxy/ALL_PROXY（Node 24 需显式 `NODE_USE_ENV_PROXY=1` 才启用 env proxy），也没有按运行态经本机 Mixed 端口转发的逻辑；macOS 系统代理同样不被 fetch 识别。故订阅主机直连不通时 `sub add/update` 可能失败；已有 TUN 路由可接管下载，首次添加仍需能访问订阅地址或换可直连地址。clearProxyEnv（D9）对默认 fetch 路径无影响。若要支持自动经 Mixed 下载是独立特性：undici ProxyAgent 需按运行态注入 dispatcher，且服务停止或未安装时的下载不能无条件依赖自己的端口
 - **remove 并发在途 sub update/add 的孤儿 yaml 与 cache 条目**（记录不修）：下载刻意不持 settings 锁（60s 下载不能压进临界区），写盘只认命令开头快照的订阅名、不复核 settings。remove 走完全程（锁内删条目与 postCommit rm，随后删 cache 条目）后，在途下载照写。两个触发形状：add——A remove 时 B 的 yaml 尚未写出，postCommit rm 落空、B 随后写盘；update——A remove 删的正是旧 yaml，B 的在途更新把刚删的文件原地复活。复活的除 yaml 还有 cache 条目（deleteSubscriptionCache 之后 saveSubscriptionMeta 照写回）。add 路径另有文案失真：B 下载完成后 setDefaultSubscription 返回 false 被忽略（subAdd），照打「已添加并切换」。无行为消费方：yaml 只按 settings 里的名字读（requireSubscriptionRawConfig 的 start/config/doctor 三处消费方均从 settings 取名，grep 证实无 subscriptions/ 目录枚举），cache 只按 settings 名字合并（getSubscriptionsWithCache），仅 `dir open subs` 与手翻 cache.json 可见；同名 sub add 覆盖自愈或 reset 清理。要封死需下载完成后二次确认归属（写盘段进 settings 锁、锁内复核条目仍在），但这会打破 downloadSubscription「与 settings 解耦的下载原语」契约——缓存写失败回滚与写盘闸门两套 spec 都拿未入库的 probe 名直接调它，收益不抵复杂度
 - **stop 游离路径批量 pkill 与并发 start 的交错**（记录不修）：B 读 status（未装载）→ 并发 A bootstrap 并拉起服务内核 → B 读 pids 命中 A 的内核 → stop() 的 cleanupAll pkill 杀掉它，KeepAlive 约 10s 拉回（游离路径不 bootout）。B 报「已停止」与终态相反。与已接受的「探测与动作之间隔一次查询」同族（TUN sudo 窗口），方向相反（stop 伤 start），触发要求两次读取之间落入对方的 bootstrap+进程拉起，记录不修
@@ -84,7 +86,7 @@
 
 ## 已评估未采纳
 
-- **全局 `--verbose`**：输出散在各模块，无中心化日志层；选项又按命令白名单校验，全局开关需要横切 argv 与输出层，收益不明。排查已有 `doctor`、`logs`、`status --json` 三条路径；真要做，先建日志层再谈开关
+- **全局 `--verbose`**：终端输出散在各模块，全局开关需要横切 argv 与输出层，收益不明。结构化诊断事件已经承担操作链留痕，不等于把各模块终端输出全部镜像成 verbose；排查已有 `doctor`、`logs`、`logs --diagnostic`、`status --json`
 - **名为 help 的订阅 `use` 撞车**：频率极低、`sub use help` 可用、动 argv 拦截的风险大于收益
 - **lsof 多 pid 取第一个**：误判方向是回退 kickstart，保守侧
 - **stopService/uninstallService 的同形锁体不抽公共函数**：两处临界区各带不可拆的预算与顺序约束，抽取收益低

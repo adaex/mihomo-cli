@@ -88,17 +88,17 @@ export function readLogTail(): string[] {
 const MAX_ARCHIVE_SEQ = 1000;
 
 /**
- * 分配一个归档路径并**原子占名**：`mihomo.<时间戳>.log`，名字被占则追加序号。
+ * 分配一个归档路径并**原子占名**：默认 `mihomo.<时间戳>.log`，名字被占则追加序号。
+ * 诊断事件复用同一原子占名原语，传入固定 prefix/extension；内核归档判据 ARCHIVE_LOG_RE 不变。
  *
  * 返回时该名字已被本进程以空占位文件占住（`openSync` 的 `wx`/O_EXCL）：两个进程同秒轮转时
  * existsSync 判否是 TOCTOU，后到者会静默覆盖先到者的归档。调用方随后的 rename/copy 直接
- * 盖掉占位即可；覆写失败残留的空归档随保留期清理。
- * 归档命名规则只此一份（rotateLog 与 restartService 的 copy-truncate 共用）。
+ * 盖掉占位即可；覆写失败残留的空归档随各自保留期清理。
  */
-export function allocateArchivePath(): string {
+export function allocateArchivePath(prefix = 'mihomo', extension = 'log'): string {
   const timestamp = formatLocalTimestamp();
   for (let seq = 0; seq <= MAX_ARCHIVE_SEQ; seq++) {
-    const name = seq === 0 ? `mihomo.${timestamp}.log` : `mihomo.${timestamp}.${seq}.log`;
+    const name = seq === 0 ? `${prefix}.${timestamp}.${extension}` : `${prefix}.${timestamp}.${seq}.${extension}`;
     const archivePath = path.join(DIRS.logs, name);
     let fd: number | null = null;
     try {

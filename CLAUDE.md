@@ -2,7 +2,7 @@
 
 本仓开发约定；使用说明见 README，覆写机制的用户详版见 docs/overwrite.md，架构决策见 docs/decisions.md，验证结论与边界见 CONCLUSIONS，版本历史见 CHANGELOG，刻意推迟的重构待办见 docs/todo.md。代码注释只写判据与契约，历史叙事不进注释
 
-按需索引：服务与并发看 D1–D4；配置解析、锁定与覆写看 D5–D7、D12–D14；内核下载与 env 代理看 D8–D9；settings 快照看 D10；测试纪律看 D11；应用代理边界看 D15。CONCLUSIONS 只在涉及对应已知风险或验证边界时打开，CHANGELOG 归档不作为现行约定加载
+按需索引：服务与并发看 D1–D4；配置解析、锁定与覆写看 D5–D7、D12–D14；内核下载与 env 代理看 D8–D9；settings 快照看 D10；测试纪律看 D11；应用代理边界看 D15；诊断事件看 D16。CONCLUSIONS 只在涉及对应已知风险或验证边界时打开，CHANGELOG 归档不作为现行约定加载
 
 ## 项目与架构
 
@@ -25,7 +25,8 @@ macOS 命令行客户端，TypeScript ESM，Node.js >= 24.20.0。入口 `src/ind
 | `process-probe.ts` / `process-start.ts` / `process-stop.ts` | 进程探测、TUN 启动、清理与残留处置（未走完的清理：进程仍在则抛、已清空则警告） |
 | `kernel.ts` / `http.ts` | 内核下载与有超时、大小限制的 HTTP 客户端 |
 | `paths.ts` | 路径、目录、原子写与跨进程锁 |
-| `log-files.ts` / `open.ts` | 日志轮转、查询与系统打开操作 |
+| `log-files.ts` / `open.ts` | 内核日志轮转、查询与系统打开操作；归档原子占名原语供诊断轮转复用 |
+| `diagnostic-events.ts` | CLI 操作上下文、白名单事件与配置哈希、同步 JSONL 追加及独立轮转（D16） |
 | `redact.ts` | `config` 展示侧的凭据脱敏：敏感键递归掩码、provider 订阅 URL 复用 maskUrl |
 | `system-proxy.ts` | env 自代理判定（isLoopbackHost/proxyEnvPointsAtSelf）与系统代理只读检测、分档提示（不写系统设置） |
 | `proxy-probe.ts` / `spinner.ts` / `sudo.ts` | 连通性探测、等待反馈、按需提权 |
@@ -83,6 +84,7 @@ npm run typecheck && npm test && npm run check && npm run build
 - 跨进程锁只在数据根目录、以 `Lock` 结尾命名（paths.spec 按约定枚举断言）；会被 rmrf 的目录不放任何有生命周期的文件（锁、stage、epoch）
 - 原子写 = 临时文件 + fsync + rename + fsync 父目录；崩溃遗留 `*.tmp` 由守卫之后按龄清扫
 - 并发判据唯一：`epochChanged` / `startAbortedByConcurrentStop`（epoch）与 `describeExitCause`，调用点不散写第二份比较；基线由 main() 捕获为进程状态（D2/D4）
+- 诊断事件只在 CLI 守卫后启用，固定白名单不记订阅名、原始参数、配置正文或错误正文；同步 O_APPEND、写失败静默，不进现有锁，不混入内核日志编号（D16）
 
 **配置与覆写**
 - 入站与控制面锁定的唯一真相是 constants.ts 的 `LOCKED_CONFIG_KEYS` 与实际执行集 `EFFECTIVELY_LOCKED_KEYS`（快照表 + tls）：告警扫描、剥除循环、脚本探针、快照 spec 全派生自它，不许重抄；判据与上游核对方法见 D5，完整性由 `config-inbound-snapshot.spec.ts` 兜底

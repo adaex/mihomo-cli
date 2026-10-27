@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 
 import { assertKnownFlags, assertPositionalCount, assertRestartOptionValues, getNonFlagArg, hasFlag } from '../argv.js';
 import { colors } from '../colors.js';
+import { setDiagnosticCommand } from '../diagnostic-events.js';
 import { CliError, relabelCliError } from '../errors.js';
 import { START_RESTART_FLAG_FORMS as USE_FLAGS } from '../flags.js';
 import { formatDate, formatRelativeTime, formatTimestamp, formatTraffic } from '../format.js';
@@ -99,6 +100,7 @@ function readUrlFromClipboard(): string | null {
 }
 
 async function subAdd(args: string[]): Promise<void> {
+  setDiagnosticCommand('sub add');
   // url 与可选 name 至多两个；校验先于入库/下载，避免半成品副作用
   assertPositionalCount(args, 2, 2, 'mihomo-cli sub add <url> [name]');
   let url = args[2]?.trim();
@@ -157,6 +159,7 @@ async function subAdd(args: string[]): Promise<void> {
 }
 
 async function subUpdate(args: string[]): Promise<void> {
+  setDiagnosticCommand('sub update');
   assertPositionalCount(args, 1, 2, 'mihomo-cli sub update [name]');
   const nameArg = getNonFlagArg(args, 2);
   const subs = getSubscriptions();
@@ -210,6 +213,7 @@ async function subUpdate(args: string[]): Promise<void> {
 }
 
 async function subUse(args: string[]): Promise<void> {
+  setDiagnosticCommand('sub use');
   // 名称至多一个；带值选项的值（-u 5000）不算位置参数
   assertPositionalCount(args, 1, 2, 'mihomo-cli sub use <name>');
   // 即使未在运行、不触发重启，-u 缺值/非法值也在此刻报错，不静默吞掉
@@ -253,6 +257,7 @@ async function subUse(args: string[]): Promise<void> {
 }
 
 async function subRemove(args: string[]): Promise<void> {
+  setDiagnosticCommand('sub remove');
   assertPositionalCount(args, 1, 2, 'mihomo-cli sub remove <name>');
   // 用 getNonFlagArg 而非 args[2]：允许 -y 出现在名称之前（`sub remove -y foo`）
   const name = getNonFlagArg(args, 2);

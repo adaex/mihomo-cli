@@ -2,6 +2,7 @@ import { assertKnownFlags, assertPositionalCount, getNonFlagArg, hasFlag, parseI
 import { colors } from '../colors.js';
 import { assertKernelInstalled, runtimeModeLabel } from '../config.js';
 import { DEFAULT_AUTO_UPDATE_TIMEOUT, DEFAULT_MIXED_PORT } from '../constants.js';
+import { recordDiagnosticEvent } from '../diagnostic-events.js';
 import { CliError, relabelCliError } from '../errors.js';
 import { START_RESTART_FLAG_FORMS as START_FLAGS } from '../flags.js';
 import { getServiceStatus } from '../launchctl.js';
@@ -40,6 +41,7 @@ export async function cmdStart(args: string[]): Promise<void> {
   // 也不该让用户先看到「未找到内核」再发现自己选项写错（ow on 已有同款提前校验）
   const skipUpdate = hasFlag(args, '-s', '--no-update');
   const updateTimeout = parseIntArg(args, '-u', '--update-timeout', DEFAULT_AUTO_UPDATE_TIMEOUT);
+  recordDiagnosticEvent('start', 'begin', { mode: targetMode, updateRequested: !skipUpdate, timeoutMs: updateTimeout });
   // TUN 分支若在弹密码前关了服务自启，启动失败/取消时错误提示要带上自启位的最终状态
   let disabledAutoStartForTun = false;
 

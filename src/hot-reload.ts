@@ -26,30 +26,44 @@ export function logOversized(): boolean {
   }
 }
 
+export type HotReloadStage = 'status' | 'controller' | 'version' | 'identity' | 'put';
+
+export type HotReloadResult =
+  | { ok: true }
+  | {
+      ok: false;
+      stage: HotReloadStage;
+      reason: string;
+      httpStatus?: number;
+      errorType?: string;
+      aborted?: boolean;
+    };
+
 /**
- * 经 external-controller 热重载配置（走 localhost、免 sudo）。成功返回 true。
+ * 经 external-controller 热重载配置（走 localhost、免 sudo）。
  * 用空 body：内核重新加载它启动时 `-f` 指定的配置文件（正是我们写入的 configFile）。
  * 不传 {path}——mihomo 的 SAFE_PATHS 限制只允许 workdir/home 下的路径，
  * 而 configFile 在 runtime/ 下会被拒成 400；空 body 重载 `-f` 文件天然规避该限制。
  *
- * 返回 false 即回退 kickstart（重启内核），因此**「重载被内核拒绝」是安全的**：
+ * 返回 ok:false 即回退 kickstart（重启内核），因此**「重载被内核拒绝」是安全的**：
  * 配置解析失败时 mihomo 返回 4xx，这里判 false，坏配置不会被当成生效。
- * 但也正因回退路径会真的重启内核，调用方必须对回退结果做健康检查——
- * 见 restartService 的返回值与 launchOrRestart。
+ * stage/reason 只给 restartService 写诊断，不能改变任何回退或健康确认语义。
  */
-export async function tryHotReload(prefetched?: ServiceStatus): Promise<boolean> {
+export async function tryHotReload(prefetched?: ServiceStatus): Promise<HotReloadResult> {
   // 必须先确认 controller 端口上确实是我们托管的服务内核：端口被其他程序占用且对 PUT
   // 返回 2xx 时，CLI 会报「已启动」而内核仍跑旧配置。任何探测失败（含状态查询抛错）都
   // 按「热重载不可用」回退 kickstart——launchd 病态时恰恰最需要 kickstart 自愈
   const controller = new AbortController();
+  let stage: HotReloadStage = 'status';
   try {
     // prefetched：调用方同一同步拍已查过的状态，免再发一次 launchctl print
     const status = prefetched ?? getServiceStatus({ withDisabled: false });
-    if (!status.running || status.pid === null) return false;
+    if (!status.running || status.pid === null) return { ok: false, stage, reason: 'service-not-running' };
 
+    stage = 'controller';
     // 端口与 secret 取同一份 settings 快照（D10）；端口非法按「热重载不可用」回退
     const endpoint = getControllerEndpoint();
-    if (endpoint.port === null) return false;
+    if (endpoint.port === null) return { ok: false, stage, reason: 'controller-unavailable' };
     const baseUrl = `http://127.0.0.1:${endpoint.port}`;
     // 配置了 controller_secret 时必须带 Bearer，否则内核返回 401 → 热重载恒失败回退重启
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -57,18 +71,22 @@ export async function tryHotReload(prefetched?: ServiceStatus): Promise<boolean>
     // timer 起表在状态查询之后：abort 预算只覆盖 /version、lsof 与 PUT，不被慢 launchctl 分食
     const timer = setTimeout(() => controller.abort(), HOT_RELOAD_TIMEOUT_MS);
     try {
+      stage = 'version';
       // /version 是 mihomo 特有端点，返回体带 version 字段；用它确认应答方是 mihomo
       // 而非碰巧监听同端口的其他程序（后者极可能对未知路径的 PUT 也返回 2xx）
       const probe = await fetch(`${baseUrl}/version`, { headers, signal: controller.signal });
-      if (!probe.ok) return false;
+      if (!probe.ok) return { ok: false, stage, reason: 'http-status', httpStatus: probe.status };
       const info = (await probe.json()) as { version?: unknown };
-      if (typeof info?.version !== 'string') return false;
+      if (typeof info?.version !== 'string') return { ok: false, stage, reason: 'invalid-response' };
 
+      stage = 'identity';
       // /version 只确认「端口上是个 mihomo」，挡不住「另一个 mihomo」（手工起的实例、
       // 端口冲突）。用 lsof 取监听 pid 与服务 pid 比对，不一致则回退 kickstart
       const listenerPids = lsofListenPids(endpoint.port);
-      if (listenerPids === null || listenerPids[0] !== status.pid) return false;
+      if (listenerPids === null) return { ok: false, stage, reason: 'listener-unknown' };
+      if (listenerPids[0] !== status.pid) return { ok: false, stage, reason: 'owner-mismatch' };
 
+      stage = 'put';
       const res = await fetch(`${baseUrl}/configs?force=true`, {
         method: 'PUT',
         headers,
@@ -76,11 +94,19 @@ export async function tryHotReload(prefetched?: ServiceStatus): Promise<boolean>
         signal: controller.signal,
       });
       // 文档化成功码是 204（属 2xx，res.ok 天然涵盖）；非 2xx 一律回退 kickstart
-      return res.ok;
+      if (!res.ok) return { ok: false, stage, reason: 'http-status', httpStatus: res.status };
+      return { ok: true };
     } finally {
       clearTimeout(timer);
     }
-  } catch {
-    return false;
+  } catch (e) {
+    const aborted = controller.signal.aborted;
+    return {
+      ok: false,
+      stage,
+      reason: aborted ? 'timeout' : 'exception',
+      errorType: e instanceof Error && e.name === 'AbortError' ? 'AbortError' : 'Error',
+      ...(aborted ? { aborted: true } : {}),
+    };
   }
 }

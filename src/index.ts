@@ -6,6 +6,7 @@ import { printCommandHelp, printShortHelp } from './commands/help.js';
 import { allCommandTokens, findCommand } from './commands/registry.js';
 import { printStatus } from './commands/status.js';
 import { DEFAULT_MIXED_PORT, isValidPortNumber, NODE_ENGINES } from './constants.js';
+import { beginDiagnosticOperation } from './diagnostic-events.js';
 import { CliError, errorMessage } from './errors.js';
 import { isSilentSigint, terminateActiveChildren } from './lifecycle.js';
 import { cleanupStaleTmpFiles, ensureDirs, PATHS } from './paths.js';
@@ -167,6 +168,7 @@ async function main(): Promise<void> {
     assertNotRoot('status');
     ensureDirs();
     cleanupStaleTmpFiles();
+    beginDiagnosticOperation('status');
     await printStatus();
     printShortHelp();
     return;
@@ -201,6 +203,7 @@ async function main(): Promise<void> {
     // 捕获并发判定基线（stopEpochBaseline）：必须早于命令的一切慢速阶段与状态观察，
     // 命令入口是满足该约束的最早且唯一的公共点（D4）。纯读 epoch 文件，无副作用
     captureStopEpochBaseline();
+    beginDiagnosticOperation(command.name);
   }
 
   // meta 不接受选项；help 可带一个命令名（help <命令>），version 不带任何位置参数

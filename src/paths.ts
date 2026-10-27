@@ -45,6 +45,8 @@ export const PATHS = {
   subscriptionsCacheFile: path.join(DIRS.subscriptions, 'cache.json'),
   configFile: path.join(DIRS.runtime, 'config.yaml'),
   logFile: path.join(DIRS.logs, 'mihomo.log'),
+  /** CLI 结构化操作事件；独立于内核文本日志及其归档编号，由 diagnostic-events.ts 自管轮转 */
+  diagnosticEventsFile: path.join(DIRS.logs, 'diagnostic.jsonl'),
   pidFile: path.join(DIRS.runtime, 'pid'),
   /**
    * installService 的 plist 暂存文件（plutil -lint 校验通过后才原子写

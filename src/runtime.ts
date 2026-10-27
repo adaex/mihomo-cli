@@ -1,4 +1,5 @@
 import { getConfigInfo } from './config.js';
+import { diagnosticErrorDetails, recordDiagnosticEvent } from './diagnostic-events.js';
 import { CliError } from './errors.js';
 import { getServiceStatus, isServiceInstalled } from './launchctl.js';
 import { readLogTail } from './log-files.js';
@@ -110,6 +111,18 @@ export function restartModeOnChange(): RuntimeMode | null {
  * bump 自启后已重捕获基线，此处复核消费的是重捕获后的值。
  */
 export async function launchOrRestart(mode: RuntimeMode): Promise<number | null> {
+  const startedAt = Date.now();
+  try {
+    const pid = await launchOrRestartImpl(mode);
+    recordDiagnosticEvent('runtime.launch', 'success', { mode, kernelPid: pid, durationMs: Date.now() - startedAt });
+    return pid;
+  } catch (e) {
+    recordDiagnosticEvent('runtime.launch', 'failure', { mode, durationMs: Date.now() - startedAt, ...diagnosticErrorDetails(e) });
+    throw e;
+  }
+}
+
+async function launchOrRestartImpl(mode: RuntimeMode): Promise<number | null> {
   if (mode === 'tun') {
     // 复核与 startTun 的 pkill 前复核共用同一份装载态：两次查询在同一同步拍，
     // 透传进去免 startTun 再发一次 launchctl print
@@ -247,7 +260,15 @@ export function startCommandForCurrentMode(state: RunningState): string {
  * 被 OOM killer / `kill -9` 杀掉的内核会显示成「退出码 null」。
  */
 export async function assertServiceHealthy(label = '启动失败'): Promise<number | null> {
+  const startedAt = Date.now();
   const health = await waitServiceHealthy();
+  recordDiagnosticEvent('service.health', health.healthy ? 'success' : 'failure', {
+    reason: health.healthy ? undefined : health.crashed ? 'crashed' : 'not-running',
+    kernelPid: health.pid,
+    lastExitCode: health.exitCode,
+    lastTerminatingSignal: health.terminatingSignal,
+    durationMs: Date.now() - startedAt,
+  });
   if (health.healthy) return health.pid;
 
   const tail = readLogTail();

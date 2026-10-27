@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { isProbeSuccessStatus, probeProxyConnectivity } from './proxy-probe.js';
+import { makeFixture, moduleUrl, runModule } from './test-support/cli.js';
 import { runWithEnvRecordingStubCurl } from './test-support/stub-curl-env.js';
 
 describe('isProbeSuccessStatus', () => {
@@ -43,5 +45,35 @@ describe('probeProxyConnectivity（curl spawn env 出口端到端）', () => {
     assert.equal(r.ok, false);
     assert.match(r.error ?? '', /Failed to connect|Connection refused/);
     assert.doesNotMatch(r.error ?? '', /Command failed/);
+  });
+
+  it('实际探测记录结构化 curl 错误码，不持久化 stderr 正文', () => {
+    const fixture = makeFixture('mihomo-probe-diagnostic');
+    try {
+      const script = `
+        import { beginDiagnosticOperation } from ${JSON.stringify(moduleUrl('src/diagnostic-events.ts'))};
+        import { probeProxyConnectivity } from ${JSON.stringify(moduleUrl('src/proxy-probe.ts'))};
+        beginDiagnosticOperation('test');
+        const result = await probeProxyConnectivity(1);
+        console.log('OK:' + result.ok);
+      `;
+      const result = runModule(script, fixture.dataDir);
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /OK:false/);
+      const rows = fs
+        .readFileSync(path.join(fixture.dataDir, 'logs', 'diagnostic.jsonl'), 'utf8')
+        .trimEnd()
+        .split('\n')
+        .map(line => JSON.parse(line));
+      const probe = rows.find(row => row.event === 'proxy.probe');
+      assert.equal(probe.result, 'failure');
+      assert.equal(probe.port, 1);
+      assert.equal(probe.httpStatus, null);
+      assert.equal(typeof probe.errorCode, 'number');
+      assert.ok(!('message' in probe));
+      assert.ok(!('stack' in probe));
+    } finally {
+      fixture.cleanup();
+    }
   });
 });

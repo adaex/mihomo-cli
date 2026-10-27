@@ -120,6 +120,7 @@ mihomo-cli ui yacd     # YACD
 | `mihomo-cli logs` | 列出当前日志与历史归档 |
 | `mihomo-cli logs <编号>` | 查看日志：`0` 为当前，`1+` 为归档；`-f` 跟随，`-n N` 行数，`-o` 用系统程序打开 |
 | `mihomo-cli logs -f` | 跟随当前日志；给 `-f` / `-n` / `-o` 而省略编号时均视为 `logs 0` |
+| `mihomo-cli logs --diagnostic` | 查看 CLI 结构化诊断事件；同样支持 `-f` / `-n N` / `-o`，不接受内核日志编号 |
 
 ### 订阅管理
 
@@ -298,7 +299,7 @@ TUN 会劫持 53 端口流量，因此 `dns.enable` 恒为 `true`；订阅或覆
 
 ### 日志
 
-运行日志持续追加到 `mihomo.log`。轮转和清理不是后台定时任务：
+内核运行日志持续追加到 `mihomo.log`。轮转和清理不是后台定时任务：
 
 - 冷启动时，非空当前日志会归档为 `mihomo.<时间戳>.log`
 - 运行中的配置热重载通常不轮转日志
@@ -306,10 +307,22 @@ TUN 会劫持 53 端口流量，因此 `dns.enable` 恒为 `true`；订阅或覆
 - 启动或重启时会清理 7 天前的归档；同秒多次轮转使用序号后缀避免覆盖
 
 ```bash
-mihomo-cli logs         # 列出当前日志与归档
-mihomo-cli logs 0 -f    # 实时跟随当前日志
-mihomo-cli logs 1       # 查看最新归档
+mihomo-cli logs         # 列出当前内核日志与归档
+mihomo-cli logs 0 -f    # 实时跟随当前内核日志
+mihomo-cli logs 1       # 查看最新内核归档
 ```
+
+CLI 自身的结构化诊断事件独立写入 `logs/diagnostic.jsonl`，不进入上述内核日志编号。每次操作用同一个 `operationId` 串联命令退出、订阅下载、配置校验与写盘、热重载或重启、服务健康和代理探测
+
+```bash
+mihomo-cli logs --diagnostic        # 最后 100 行 JSONL
+mihomo-cli logs --diagnostic -n 50  # 最后 50 行
+mihomo-cli logs --diagnostic -f     # 实时跟随
+```
+
+诊断只保留时间、规范命令名、事件阶段、退出/HTTP/curl 错误码、耗时、节点与组计数、整份配置 SHA-256 等白名单字段；不记录原始 argv、订阅名称或 URL、节点名称与凭据、配置正文、自由文本错误或堆栈。新建文件权限为 0600，写入失败不影响主命令
+
+当前诊断文件超过 2 MB 后在下一次写入前轮转，归档命名为 `diagnostic.<时间戳>[.N].jsonl` 并保留 7 天；可用 `mihomo-cli dir open logs` 查看。诊断是 best-effort 记录，进程被强杀或并发轮转窗口可能缺事件；launchd 登录自启直接拉起内核、不经过 CLI，因此不会产生这一次自启的 CLI 事件。`reset logs` 删除全部诊断历史，命令退出时会重建仅含本次 reset 结果的文件
 
 ## 内核更新通道
 
@@ -440,8 +453,10 @@ mihomo-cli start --update-timeout=30000
 ├── kernel/
 │   └── mihomo                 # 内核二进制
 ├── logs/
-│   ├── mihomo.log             # 当前日志
-│   └── mihomo.YYYY-MM-DD_HH-MM-SS[.N].log
+│   ├── mihomo.log             # 当前内核日志
+│   ├── mihomo.YYYY-MM-DD_HH-MM-SS[.N].log
+│   ├── diagnostic.jsonl       # CLI 结构化诊断事件（独立轮转，0600）
+│   └── diagnostic.YYYY-MM-DD_HH-MM-SS[.N].jsonl
 ├── data/                      # GeoIP、选择缓存等，由内核管理
 └── runtime/
     ├── pid                    # TUN 临时进程的 PID；Mixed 服务不使用此文件

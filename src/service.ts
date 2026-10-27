@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { assertKernelInstalled, assertRuntimeConfigPresent, getConfigInfo } from './config.js';
 import { assertServiceLabelSafe } from './constants.js';
+import { diagnosticErrorDetails, recordDiagnosticEvent } from './diagnostic-events.js';
 import { CliError } from './errors.js';
 import { logOversized, tryHotReload } from './hot-reload.js';
 import {
@@ -560,11 +561,20 @@ export async function restartService(prefetched?: ServiceStatus): Promise<{ hotR
 
   // prefetched 是调用方同一同步拍刚取的状态（launchOrRestart 决定走重启分支用的
   // 就是它），透传给热重载探测免再发一次 launchctl print；缺省自查保留直接调用路径
-  if (!oversized && (await tryHotReload(prefetched))) {
+  const hotReload = oversized ? null : await tryHotReload(prefetched);
+  if (hotReload?.ok) {
+    recordDiagnosticEvent('service.hot-reload', 'success', { stage: 'put' });
     // 热重载是唯一没有健康确认的生效路径：探测到 PUT 之间的并发 stop 只有这次复读兜得住。
     // hotReloaded 如实为 true（内核确实吃进了配置），是否报成功由 started 决定
     return { hotReloaded: true, started: !startAbortedByConcurrentStop() };
   }
+  recordDiagnosticEvent('service.hot-reload', 'fallback', {
+    stage: hotReload?.stage ?? 'log-rotation',
+    reason: hotReload?.reason ?? 'log-oversized',
+    httpStatus: hotReload?.httpStatus,
+    errorType: hotReload?.errorType,
+    aborted: hotReload?.aborted,
+  });
 
   if (oversized) {
     // 归档路径经 allocateArchivePath（log-files.ts 的单一命名规则）：同一秒内两次轮转
@@ -586,23 +596,35 @@ export async function restartService(prefetched?: ServiceStatus): Promise<{ hotR
   // 随后并发 stop」这一交错仍在锁外——那一支由 launchOrRestart 在健康确认失败后
   // 复读计数兜住，不在这里重复设防。
   const kick = runLaunchctl(['kickstart', '-k', serviceTarget()], 60_000);
+  recordDiagnosticEvent('service.kickstart', kick.status === 0 ? 'success' : 'failure', { exitCode: kick.status });
   if (kick.status !== 0) {
     // 回退路径与 startService 同族：enable + bootstrap 会把并发 stop 的成果覆盖掉，
     // 终态与用户最后一条命令相反。判据共用 epochChanged——
     // **别在这里散写别的判据**
-    const bootstrapped = withFileLock(PATHS.serviceLock, () => {
-      if (startAbortedByConcurrentStop()) return null;
-      runLaunchctl(['enable', serviceTarget()], SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS); // 容忍失败：bootstrap 会再判一次
-      return bootstrapServiceIdempotentOrThrow('重启服务');
-    });
+    let bootstrapped: boolean | null;
+    try {
+      bootstrapped = withFileLock(PATHS.serviceLock, () => {
+        if (startAbortedByConcurrentStop()) return null;
+        runLaunchctl(['enable', serviceTarget()], SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS); // 容忍失败：bootstrap 会再判一次
+        return bootstrapServiceIdempotentOrThrow('重启服务');
+      });
+    } catch (e) {
+      recordDiagnosticEvent('service.bootstrap', 'failure', diagnosticErrorDetails(e));
+      throw e;
+    }
     // 被取消：直接返回，不清理归档也不做别的收尾
-    if (bootstrapped === null) return { hotReloaded: false, started: false };
+    if (bootstrapped === null) {
+      recordDiagnosticEvent('service.bootstrap', 'cancelled', { reason: 'concurrent-stop' });
+      return { hotReloaded: false, started: false };
+    }
     if (!bootstrapped) {
+      recordDiagnosticEvent('service.bootstrap', 'failure', { reason: 'replacement-not-bootstrapped', exitCode: kick.status });
       const detail = kick.stderr.trim();
       throw new CliError(`重启服务失败（kickstart 退出码 ${kick.status ?? '执行失败'}）：服务仍已装载，本次未重新装载`, {
         hint: [detail, '旧进程可能仍在运行，新配置未确认生效；请重试: mihomo-cli start', `手动确认: launchctl print ${serviceTarget()}`].filter(Boolean),
       });
     }
+    recordDiagnosticEvent('service.bootstrap', 'success');
   }
 
   // 顺手清理过期归档：归档可能为 root 属主，但 logs/ 目录归用户所有，unlink 只看目录权限

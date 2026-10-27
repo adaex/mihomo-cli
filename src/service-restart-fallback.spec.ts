@@ -7,8 +7,27 @@ import { describe, it } from 'node:test';
 import { makeFixture, moduleUrl, runModule } from './test-support/cli.js';
 import { writeStubExecutable } from './test-support/stub-bin.js';
 
+interface DiagnosticRow {
+  event: string;
+  result: string;
+  stage?: string;
+  reason?: string;
+  exitCode?: number;
+}
+
+function readDiagnosticEvents(dataDir: string): DiagnosticRow[] {
+  const file = path.join(dataDir, 'logs', 'diagnostic.jsonl');
+  if (!fs.existsSync(file)) return [];
+  return fs
+    .readFileSync(file, 'utf8')
+    .trimEnd()
+    .split('\n')
+    .filter(Boolean)
+    .map(line => JSON.parse(line) as DiagnosticRow);
+}
+
 describe('kickstart 失败后的重启回退', () => {
-  function runRestart(bootstrapStatus: 0 | 5): { stdout: string; stderr: string; status: number | null } {
+  function runRestart(bootstrapStatus: 0 | 5): { stdout: string; stderr: string; status: number | null; events: DiagnosticRow[] } {
     const fixture = makeFixture('mihomo-restart-fallback');
     const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-restart-home-'));
     const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-restart-bin-'));
@@ -50,6 +69,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS, ensureDirs } from ${JSON.stringify(moduleUrl('src/paths.ts'))};
 import { captureStopEpochBaseline } from ${JSON.stringify(moduleUrl('src/stop-epoch.ts'))};
+import { beginDiagnosticOperation } from ${JSON.stringify(moduleUrl('src/diagnostic-events.ts'))};
 import { launchOrRestart } from ${JSON.stringify(moduleUrl('src/runtime.ts'))};
 
 ensureDirs();
@@ -57,6 +77,7 @@ fs.mkdirSync(path.dirname(PATHS.userAgentPlist), { recursive: true });
 fs.writeFileSync(PATHS.userAgentPlist, 'stub');
 fs.writeFileSync(PATHS.settingsFile, JSON.stringify({ ports: { mixed: 0, controller: 0 } }));
 captureStopEpochBaseline();
+beginDiagnosticOperation('test');
 try {
   const pid = await launchOrRestart('mixed');
   console.log('RESULT:PID=' + pid);
@@ -64,7 +85,7 @@ try {
   console.log('RESULT:' + (e instanceof Error ? e.message : String(e)));
 }
 `;
-      return runModule(script, fixture.dataDir, {
+      const result = runModule(script, fixture.dataDir, {
         env: {
           HOME: fakeHome,
           MIHOMO_CLI_DAEMON_LABEL: fixture.label,
@@ -72,6 +93,7 @@ try {
         },
         timeout: 20_000,
       });
+      return { ...result, events: readDiagnosticEvents(fixture.dataDir) };
     } finally {
       fs.rmSync(fakeHome, { recursive: true, force: true });
       fs.rmSync(fakeBin, { recursive: true, force: true });
@@ -84,11 +106,27 @@ try {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /RESULT:重启服务失败.*本次未重新装载/);
     assert.doesNotMatch(result.stdout, /RESULT:PID=/);
+    assert.equal(result.events.find(event => event.event === 'service.kickstart')?.exitCode, 1);
+    assert.equal(result.events.find(event => event.event === 'service.hot-reload')?.stage, 'controller');
+    assert.equal(result.events.find(event => event.event === 'service.bootstrap')?.reason, 'replacement-not-bootstrapped');
+    assert.equal(result.events.find(event => event.event === 'runtime.launch')?.result, 'failure');
   });
 
   it('kickstart 失败后确实重新 bootstrap：保留回退自愈并返回新 PID', () => {
     const result = runRestart(0);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /RESULT:PID=5678/);
+    const chain = result.events.filter(event =>
+      ['service.hot-reload', 'service.kickstart', 'service.bootstrap', 'service.health', 'runtime.launch'].includes(event.event),
+    );
+    assert.deepEqual(
+      chain.map(event => event.event),
+      ['service.hot-reload', 'service.kickstart', 'service.bootstrap', 'service.health', 'runtime.launch'],
+    );
+    assert.equal(chain[1].result, 'failure', 'kickstart 是中间失败，不应被改写成最终启动失败');
+    assert.deepEqual(
+      chain.slice(2).map(event => event.result),
+      ['success', 'success', 'success'],
+    );
   });
 });

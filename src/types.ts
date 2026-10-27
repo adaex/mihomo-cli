@@ -81,6 +81,11 @@ export interface ConfigSummary {
 export interface PreparedConfig {
   buildResult: BuildConfigResult;
   info: ConfigSummary;
+  /** prepare 时的来源与候选摘要；commit 不重读订阅，避免并发更新造成 raw/runtime 错配 */
+  diagnostic: {
+    sourceRawSha256: string;
+    candidateSha256: string;
+  };
 }
 
 export interface OverwriteFileEntry {

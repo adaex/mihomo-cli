@@ -141,7 +141,27 @@ const MODULES = {
   service: JSON.stringify(path.resolve('src/service.ts')),
   stopEpoch: JSON.stringify(path.resolve('src/stop-epoch.ts')),
   runtime: JSON.stringify(path.resolve('src/runtime.ts')),
+  diagnostic: JSON.stringify(path.resolve('src/diagnostic-events.ts')),
 };
+
+interface DiagnosticRow {
+  event: string;
+  result: string;
+  stage?: string;
+  reason?: string;
+  httpStatus?: number;
+}
+
+function readDiagnosticEvents(dataDir: string): DiagnosticRow[] {
+  const file = path.join(dataDir, 'logs', 'diagnostic.jsonl');
+  if (!fs.existsSync(file)) return [];
+  return fs
+    .readFileSync(file, 'utf8')
+    .trimEnd()
+    .split('\n')
+    .filter(Boolean)
+    .map(line => JSON.parse(line) as DiagnosticRow);
+}
 
 /** 桩 launchctl（热重载场景）：print 恒报 running（pid 读自 PID_FILE）、print-disabled 空表（= 启用） */
 const FAKE_LAUNCHCTL_HOT_RELOAD = `
@@ -170,6 +190,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from ${MODULES.paths};
 import { captureStopEpochBaseline, bumpStopEpoch } from ${MODULES.stopEpoch};
+import { beginDiagnosticOperation } from ${MODULES.diagnostic};
 import { launchOrRestart } from ${MODULES.runtime};
 
 const server = http.createServer((req, res) => {
@@ -178,7 +199,7 @@ const server = http.createServer((req, res) => {
     res.end('{"version":"stub-kernel"}');
   } else if (req.method === 'PUT' && req.url !== undefined && req.url.startsWith('/configs')) {
     if (process.env.BUMP === '1') bumpStopEpoch();
-    res.writeHead(204);
+    res.writeHead(Number(process.env.PUT_STATUS ?? '204'));
     res.end();
   } else {
     res.writeHead(404);
@@ -188,14 +209,15 @@ const server = http.createServer((req, res) => {
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const port = (server.address() as import('node:net').AddressInfo).port;
 
-// 桩 launchctl 报的 pid 与 lsof 查到的监听 pid 必须是同一个进程：就是本子进程
-fs.writeFileSync(process.env.PID_FILE as string, String(process.pid));
+// 默认让桩 launchctl 与 lsof 看到同一 pid；REPORTED_PID 用于模拟身份不匹配
+fs.writeFileSync(process.env.PID_FILE as string, process.env.REPORTED_PID ?? String(process.pid));
 fs.mkdirSync(path.dirname(PATHS.userAgentPlist), { recursive: true });
 fs.writeFileSync(PATHS.userAgentPlist, 'stub');
 fs.writeFileSync(PATHS.settingsFile, JSON.stringify({ ports: { mixed: 17890, controller: port } }));
 fs.writeFileSync(PATHS.serviceStopEpoch, '5');
 // 基线在此捕获（命令入口的等价位置）：BUMP 发生在捕获之后，计数变化才会被判定为并发
 captureStopEpochBaseline();
+beginDiagnosticOperation('test');
 
 try {
   const pid = await launchOrRestart('mixed');
@@ -231,18 +253,23 @@ try {
 
 describe('热重载成功路径的并发停止防线（launchOrRestart 消费点）', () => {
   /** 跑一次热重载场景。返回子进程退出码、完整 stdout 与 spawn 拿到的 pid */
-  async function runHotReloadScenario(bump: boolean): Promise<{ status: number | null; stdout: string; stderr: string; pid: number | null }> {
+  async function runHotReloadScenario(
+    bump: boolean,
+    options: { putStatus?: number; reportedPid?: number } = {},
+  ): Promise<{ status: number | null; stdout: string; stderr: string; pid: number | null; events: DiagnosticRow[] }> {
     const fixture = makeFixture('mihomo-hotreload');
     const script = writeScript(fixture.fakeBin, 'hot-reload.mts', hotReloadScript());
     writeFakeLaunchctl(fixture.fakeBin, FAKE_LAUNCHCTL_HOT_RELOAD);
     const env = scenarioEnv(fixture, {
       PID_FILE: path.join(fixture.fakeBin, 'server.pid'),
       BUMP: bump ? '1' : '0',
+      PUT_STATUS: String(options.putStatus ?? 204),
+      ...(options.reportedPid !== undefined ? { REPORTED_PID: String(options.reportedPid) } : {}),
     });
     try {
       const run = spawnScript(script, env);
       const result = await run.done;
-      return { ...result, pid: run.child.pid ?? null };
+      return { ...result, pid: run.child.pid ?? null, events: readDiagnosticEvents(fixture.dataDir) };
     } finally {
       cleanupFixture(fixture);
     }
@@ -257,6 +284,8 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
 
     assert.notEqual(result.status, 0, `应非 0 退出（并发停止须按取消处理），stdout: ${result.stdout}\nstderr: ${result.stderr}`);
     assert.match(result.stdout, /RESULT:error=启动已取消：期间检测到停止操作/, `应对用户报并发取消，stdout: ${result.stdout}`);
+    assert.equal(result.events.find(event => event.event === 'service.hot-reload')?.result, 'success', '热重载已被接受的事实不能被改记成失败');
+    assert.equal(result.events.find(event => event.event === 'runtime.launch')?.result, 'failure');
   });
 
   // 负向对照：同样的链路、没有并发 stop（PUT 不递增），必须照常报成功并给出 pid
@@ -266,15 +295,35 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
 
     assert.equal(result.status, 0, `应正常退出，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
     assert.match(result.stdout, new RegExp(`RESULT:pid=${result.pid}\\b`), `应返回监听进程的 pid，stdout: ${result.stdout}`);
+    assert.equal(result.events.find(event => event.event === 'service.hot-reload')?.result, 'success');
+    assert.equal(result.events.find(event => event.event === 'runtime.launch')?.result, 'success');
+  });
+
+  it('PUT 返回 500：记录 put/httpStatus 并保留 kickstart 自愈', async () => {
+    const result = await runHotReloadScenario(false, { putStatus: 500 });
+    assert.equal(result.status, 0, result.stderr);
+    const hotReload = result.events.find(event => event.event === 'service.hot-reload');
+    assert.equal(hotReload?.result, 'fallback');
+    assert.equal(hotReload?.stage, 'put');
+    assert.equal(hotReload?.httpStatus, 500);
+    assert.equal(result.events.find(event => event.event === 'service.kickstart')?.result, 'success');
+    assert.equal(result.events.find(event => event.event === 'runtime.launch')?.result, 'success');
+  });
+
+  it('controller 监听 PID 与服务 PID 不同：记录 identity/owner-mismatch 后回退', async () => {
+    const result = await runHotReloadScenario(false, { reportedPid: 1 });
+    assert.equal(result.status, 0, result.stderr);
+    const hotReload = result.events.find(event => event.event === 'service.hot-reload');
+    assert.equal(hotReload?.result, 'fallback');
+    assert.equal(hotReload?.stage, 'identity');
+    assert.equal(hotReload?.reason, 'owner-mismatch');
+    assert.equal(result.events.find(event => event.event === 'service.kickstart')?.result, 'success');
   });
 });
 
 describe('热重载探测查询失败时回退 kickstart（不把 launchctl 瞬时故障升级成命令失败）', () => {
-  // 桩按全局调用计数切换：入口状态查询（第 1 次 print）报 running；热重载探测的
-  // getServiceStatus（第 3 次 launchctl 调用 = 第 2 次 print）退 112（查询失败）；
-  // kickstart 成功；其后的健康观察窗恢复 running。
-  // 修复前第 3 次调用的 112 直接冒出 restartService → start 整体失败；修复后
-  // tryHotReload 按契约回退 false、走 kickstart 自愈
+  // 第 3 次 launchctl 调用退 112，模拟健康观察中的瞬时查询失败；本地无 controller，
+  // 热重载在 version 阶段回退 kickstart，失败轮次跳过、其后的健康观察恢复 running
   const FAKE_LAUNCHCTL_QUERY_FAILS = `
 COUNT_FILE="$FAKE_BIN/count"
 n=0
@@ -302,6 +351,7 @@ exit 0
 import path from 'node:path';
 import { PATHS } from ${MODULES.paths};
 import { captureStopEpochBaseline } from ${MODULES.stopEpoch};
+import { beginDiagnosticOperation } from ${MODULES.diagnostic};
 import { launchOrRestart } from ${MODULES.runtime};
 
 fs.writeFileSync(process.env.PID_FILE as string, String(process.pid));
@@ -311,6 +361,7 @@ fs.writeFileSync(PATHS.settingsFile, JSON.stringify({ ports: { mixed: 17890, con
 
 // epoch 文件不存在（首启形态），基线捕获为 0；全程无并发 stop，应正常完成
 captureStopEpochBaseline();
+beginDiagnosticOperation('test');
 
 try {
   const pid = await launchOrRestart('mixed');
@@ -332,6 +383,12 @@ try {
       const result = await run.done;
       assert.equal(result.status, 0, `查询失败应回退而非报错，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
       assert.match(result.stdout, /RESULT:pid=\d+/, `应走 kickstart 并通过健康确认，stdout: ${result.stdout}`);
+      const events = readDiagnosticEvents(fixture.dataDir);
+      const hotReload = events.find(event => event.event === 'service.hot-reload');
+      assert.equal(hotReload?.result, 'fallback');
+      assert.equal(hotReload?.stage, 'version');
+      assert.equal(events.find(event => event.event === 'service.kickstart')?.result, 'success');
+      assert.equal(events.find(event => event.event === 'service.health')?.result, 'success');
     } finally {
       cleanupFixture(fixture);
     }

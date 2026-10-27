@@ -11,7 +11,7 @@ import { makeFixture, runCli } from '../test-support/cli.js';
  * （-n 非跟随、跑完即退），归档序号映射用预摆归档锁定。隔离：MIHOMO_CLI_DIR。
  */
 describe('logs：编号省略与归档序号映射', () => {
-  function withLogs(check: (run: (args: string[]) => { status: number | null; stdout: string; stderr: string }) => void): void {
+  function withLogs(check: (run: (args: string[]) => { status: number | null; stdout: string; stderr: string }, dataDir: string) => void): void {
     const fixture = makeFixture('mihomo-logs');
     const { dataDir } = fixture;
     try {
@@ -31,7 +31,7 @@ describe('logs：编号省略与归档序号映射', () => {
         const r = runCli(args, fixture);
         return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
       };
-      check(run);
+      check(run, dataDir);
     } finally {
       fixture.cleanup();
     }
@@ -86,5 +86,34 @@ describe('logs：编号省略与归档序号映射', () => {
       const r = run(['logs', '9']);
       assert.notEqual(r.status, 0);
       assert.match(r.stderr, /未找到日志 "9"/);
+    }));
+
+  it('logs --diagnostic 读取独立 JSONL，不混入内核编号与内容', () =>
+    withLogs((run, dataDir) => {
+      fs.writeFileSync(path.join(dataDir, 'logs', 'diagnostic.jsonl'), '{"event":"first"}\n{"event":"second"}\n');
+      const r = run(['logs', '--diagnostic', '-n', '1']);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /diagnostic\.jsonl/);
+      assert.match(r.stdout, /second/);
+      assert.doesNotMatch(r.stdout, /first|current-line|archive-/);
+    }));
+
+  it('空诊断历史明确显示为空，不让首次查看误报文件不存在', () => {
+    const fixture = makeFixture('mihomo-logs-diagnostic-empty');
+    try {
+      const r = runCli(['logs', '--diagnostic'], fixture);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /暂无诊断事件/);
+      assert.match(fs.readFileSync(path.join(fixture.dataDir, 'logs', 'diagnostic.jsonl'), 'utf8'), /"event":"cli.command"/);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('logs --diagnostic 与内核日志编号显式互斥', () =>
+    withLogs(run => {
+      const r = run(['logs', '--diagnostic', '1']);
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /--diagnostic 与内核日志编号互斥/);
     }));
 });

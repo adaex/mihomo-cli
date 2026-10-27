@@ -244,7 +244,7 @@ async function collectChecks(): Promise<Check[]> {
   if (active && hasKernel()) {
     try {
       const mode = deriveRuntimeMode(info);
-      const prepared = await prepareConfigForStart(mode, active.name);
+      const prepared = await prepareConfigForStart(mode, active.name, 'doctor');
       const warnings = prepared.buildResult.warnings;
       if (warnings.length > 0) {
         // 内核校验是通过的，不升为 fail；但 warnings 是「配置没按用户预期生效」的信号

@@ -108,7 +108,12 @@ const COMMANDS: Command[] = [
     aliases: [],
     handler: cmdLogs,
     group: 'interface',
-    usage: [{ signature: 'logs [-f] [-n N] [编号] [-o]', description: '日志列表/查看（裸 logs 列列表；0=当前，1+=归档；省略编号但给 -f/-n/-o 时看当前日志）' }],
+    usage: [
+      {
+        signature: 'logs [--diagnostic] [-f] [-n N] [编号] [-o]',
+        description: '裸 logs 列列表；0=当前，1+=归档；省略编号但给 -f/-n/-o 时看当前日志；--diagnostic 查看 CLI 诊断事件',
+      },
+    ],
   },
   // === 订阅 ===
   {
