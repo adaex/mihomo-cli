@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [26.10.115] - 2026-10-28
 
 ### 新增
 
@@ -126,13 +126,3 @@
 - **未命中覆写脚本不再进配置告警**：start/update 顶部的黄色「配置提示: 覆写脚本 xxx 未返回 true…」与 status 的展示重复，措辞是脚本作者视角、使用者无事可做；`mh config` 提示段与 doctor 计数同步安静，配置告警只留真异常（脚本 ctx.warn、锁定键被剥除、TUN 强制开 DNS）
 - **status 覆写区块收敛为一行**：不适用文件只计数不点名（`覆写: 已启用 (mini, seal，1 个不适用)`），逐行点名与「脚本未返回 true」术语不再暴露——想知道是哪个文件，对照 `mh ow` 列表的作用域栏；`status --json` 的 applied/files 契约不变
 - **内部清理**：删除零消费的 `BuildConfigResult.scriptMatches` 字段与过期契约注释；status 用例负断言从锁句子改为锁文件名（换措辞恢复点名也能被测试拦住）
-
-
-## [26.10.105] - 2026-10-03
-
-### 变更（质量清理：测试基建单点化与白名单派生收单）
-
-- **测试基建单点化**：假内核轮询步进改用进程内 `Atomics.wait`（此前每个 50ms tick 都额外 fork 一个 `/bin/sleep` 子进程）；两份同构的轮询循环合一（`waitForPids` 委托 `pollUntil`）；「写桩 + chmod」三份副本（npm 桩、launchctl 桩）收进 test-support 新原语 `writeStubExecutable`
-- **start / ow / sub use 的选项白名单派生式收单**：三处各自复制的 `START_RESTART_FLAGS.flatMap(f => f.forms)` 改为 flags.ts 导出的 `START_RESTART_FLAG_FORMS`，与 `VALUE_FLAGS` 同范式，单表派生不再有表达式级拷贝
-- 补齐上轮样板收敛的两处漏网（subscription.spec 的子进程 spawnSync 形态），清理死参数、零消费选项与纯文案字段；process-start.spec 的存活桩改 `exec` 单进程形态，收尾 pid-kill 即杀净、不再依赖孤儿 sleep 自然过期。对用户无行为变化（946 用例全绿）
-

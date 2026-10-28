@@ -2,6 +2,14 @@
 
 以下为 2026-10-03 及更早（含 26.9.90 起的对齐序号与误序的 26.9.37）的发布记录，自 CHANGELOG.md 原样迁入、未作改写。近期版本见 [CHANGELOG.md](../../CHANGELOG.md)。
 
+## [26.10.105] - 2026-10-03
+
+### 变更（质量清理：测试基建单点化与白名单派生收单）
+
+- **测试基建单点化**：假内核轮询步进改用进程内 `Atomics.wait`（此前每个 50ms tick 都额外 fork 一个 `/bin/sleep` 子进程）；两份同构的轮询循环合一（`waitForPids` 委托 `pollUntil`）；「写桩 + chmod」三份副本（npm 桩、launchctl 桩）收进 test-support 新原语 `writeStubExecutable`
+- **start / ow / sub use 的选项白名单派生式收单**：三处各自复制的 `START_RESTART_FLAGS.flatMap(f => f.forms)` 改为 flags.ts 导出的 `START_RESTART_FLAG_FORMS`，与 `VALUE_FLAGS` 同范式，单表派生不再有表达式级拷贝
+- 补齐上轮样板收敛的两处漏网（subscription.spec 的子进程 spawnSync 形态），清理死参数、零消费选项与纯文案字段；process-start.spec 的存活桩改 `exec` 单进程形态，收尾 pid-kill 即杀净、不再依赖孤儿 sleep 自然过期。对用户无行为变化（946 用例全绿）
+
 ## [26.10.104] - 2026-10-03
 
 ### 变更（全仓冗余收敛：单表派生化与跨文档收口）
