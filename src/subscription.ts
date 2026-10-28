@@ -247,8 +247,6 @@ function assertLooksLikeSubscription(parsed: Record<string, unknown>, maskedUrl:
 export async function downloadSubscription(url: string, subName: string, signal?: AbortSignal): Promise<ConfigSummary> {
   const startedAt = Date.now();
   let stage = 'http';
-  let rawBeforeSha256: string | null = null;
-  let changed = false;
   let rollback: 'restored' | 'deleted' | 'failed' | undefined;
   try {
     let response: HttpResponse;
@@ -282,12 +280,10 @@ export async function downloadSubscription(url: string, subName: string, signal?
 
     const meta = extractSubscriptionMeta(response.headers);
     stage = 'raw-commit';
-    withFileLock(PATHS.subscriptionCommitLock, () => {
+    const previousContent = withFileLock(PATHS.subscriptionCommitLock, () => {
       // YAML 与缓存是一个提交区间：并发下载不能在前者写入后、后者提交前交错，
       // 否则较慢一方的回滚会把另一进程已成功提交的新 YAML 覆盖回旧内容。
       const previousContent = readSubscriptionRawConfig(subName);
-      rawBeforeSha256 = previousContent === null ? null : hashDiagnosticContent(previousContent);
-      changed = previousContent !== content;
       saveSubscriptionRawConfig(subName, content);
 
       stage = 'cache-commit';
@@ -318,7 +314,12 @@ export async function downloadSubscription(url: string, subName: string, signal?
           hint: [rollbackHint, '若 cache.json 被手工改动，修复后重试'],
         });
       }
+      return previousContent;
     });
+
+    // 哈希和全文比较只服务诊断，放在提交锁外；内容未变时复用已计算的新内容摘要。
+    const changed = previousContent !== content;
+    const rawBeforeSha256 = previousContent === null ? null : changed ? hashDiagnosticContent(previousContent) : rawAfterSha256;
 
     recordDiagnosticEvent('subscription.download', 'success', {
       stage: 'commit',
@@ -372,11 +373,12 @@ export async function prepareConfigForStart(mode: RuntimeMode, subName: string, 
     stage = 'build';
     const subUrl = getSubscriptions().find(s => s.name === subName)?.url;
     const buildResult = buildConfig(rawContent, mode, { subName, subUrl });
-    candidateSha256 = hashDiagnosticContent(dumpYaml(buildResult.config));
+    const candidateContent = dumpYaml(buildResult.config);
+    candidateSha256 = hashDiagnosticContent(candidateContent);
 
     stage = 'validate';
     // 透传生效的覆写清单：内核只说「哪个键坏了」，说不出「它是覆写追加进来的」
-    await validateConfigWithKernel(buildResult.config, buildResult.overwriteSummaries);
+    await validateConfigWithKernel(candidateContent, buildResult.overwriteSummaries);
     const info = countConfigNodes(buildResult.config);
     recordDiagnosticEvent('config.prepare', 'success', {
       stage,
@@ -507,7 +509,6 @@ export async function autoUpdateStaleSubscription(options: { timeout?: number } 
   const controller = new AbortController();
   // 结果就地收集：超时后也能统计已完成的更新，而不是把全部计为失败
   const results: TryUpdateResult[] = [];
-  let timedOut = false;
   const updatePromise = Promise.all(
     staleSubs.map(sub =>
       tryUpdateOne(sub, controller.signal).then(r => {
@@ -520,20 +521,23 @@ export async function autoUpdateStaleSubscription(options: { timeout?: number } 
     await withSpinner('更新订阅中', () => withTimeout(updatePromise, timeoutMs));
   } catch (e) {
     if (!(e instanceof TimeoutError)) throw e;
-    timedOut = true;
     controller.abort(); // 中断仍在跑的 fetch，阻止其超时后成功回来又写盘（与"已用缓存启动"竞态）
     await updatePromise.catch(() => {}); // 等 abort 落地，收全已完成/已失败的结果
     console.log(colors.yellow(`自动更新超时 (${timeoutMs / 1000}s)，已完成的更新生效，其余使用缓存配置`));
   }
 
+  const timedOut = controller.signal.aborted;
   // aborted（超时跳过）既不算成功也不算失败：用缓存启动是设计内降级；
-  // 逐条结果都由 printUpdateResult 打印，计数无消费者
+  // 逐条打印时同步计数，避免为诊断字段重复遍历结果。
+  let succeeded = 0;
+  let abortedCount = 0;
+  let failed = 0;
   for (const r of results) {
     printUpdateResult(r);
+    if (r.success) succeeded++;
+    else if (r.aborted === true) abortedCount++;
+    else failed++;
   }
-  const succeeded = results.filter(r => r.success).length;
-  const abortedCount = results.filter(r => !r.success && r.aborted === true).length;
-  const failed = results.filter(r => !r.success && r.aborted !== true).length;
   recordDiagnosticEvent('subscription.auto-update', timedOut ? 'timeout' : failed > 0 ? 'failure' : 'success', {
     staleCount: staleSubs.length,
     timeoutMs,

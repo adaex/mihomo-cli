@@ -6,6 +6,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS } from './launchctl.js';
 import { LOCK_STALE_MS } from './paths.js';
+import { type DiagnosticRow, readDiagnosticEvents } from './test-support/diagnostic.js';
 import { writeStubExecutable } from './test-support/stub-bin.js';
 import { sleep } from './utils.js';
 
@@ -143,25 +144,6 @@ const MODULES = {
   runtime: JSON.stringify(path.resolve('src/runtime.ts')),
   diagnostic: JSON.stringify(path.resolve('src/diagnostic-events.ts')),
 };
-
-interface DiagnosticRow {
-  event: string;
-  result: string;
-  stage?: string;
-  reason?: string;
-  httpStatus?: number;
-}
-
-function readDiagnosticEvents(dataDir: string): DiagnosticRow[] {
-  const file = path.join(dataDir, 'logs', 'diagnostic.jsonl');
-  if (!fs.existsSync(file)) return [];
-  return fs
-    .readFileSync(file, 'utf8')
-    .trimEnd()
-    .split('\n')
-    .filter(Boolean)
-    .map(line => JSON.parse(line) as DiagnosticRow);
-}
 
 /** 桩 launchctl（热重载场景）：print 恒报 running（pid 读自 PID_FILE）、print-disabled 空表（= 启用） */
 const FAKE_LAUNCHCTL_HOT_RELOAD = `

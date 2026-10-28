@@ -1,9 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
-import path from 'node:path';
 
 import { CliError } from './errors.js';
-import { allocateArchivePath } from './log-files.js';
+import { cleanupOldArchives, rotateFile } from './log-files.js';
 import { DIRS, PATHS } from './paths.js';
 
 /**
@@ -66,7 +65,6 @@ let exitHookRegistered = false;
 
 /** 单文件超过 2MB 后在下一次写入前轮转；归档保留 7 天，与内核归档互不混用。 */
 export const DIAGNOSTIC_LOG_MAX_BYTES = 2 * 1024 * 1024;
-const DIAGNOSTIC_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DIAGNOSTIC_ARCHIVE_RE = /^diagnostic\.\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:\.\d+)?\.jsonl$/;
 
 /** 建立一次 CLI 调用的关联上下文；退出钩子必须同步，覆盖 main.catch 与 viewLogWithTail 的直接 process.exit。 */
@@ -136,43 +134,11 @@ export function diagnosticErrorDetails(error: unknown): DiagnosticDetails {
   return details;
 }
 
-function cleanupDiagnosticArchives(): void {
-  const now = Date.now();
-  for (const file of fs.readdirSync(DIRS.logs)) {
-    if (!DIAGNOSTIC_ARCHIVE_RE.test(file)) continue;
-    try {
-      const archivePath = path.join(DIRS.logs, file);
-      if (now - fs.statSync(archivePath).mtimeMs > DIAGNOSTIC_RETENTION_MS) fs.unlinkSync(archivePath);
-    } catch {
-      /* 单个归档不可读/并发删除不挡其他清理 */
-    }
-  }
-}
-
-/** 与内核 rotateLog 同款的 rename 语义；绝不为轮转读全文件或重写 JSONL。 */
+/** 与内核日志共用 rename 和保留期清理机制，但文件、阈值与归档判据各自独立。 */
 function rotateDiagnosticLogIfNeeded(): void {
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(PATHS.diagnosticEventsFile);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw e;
+  if (rotateFile(PATHS.diagnosticEventsFile, DIAGNOSTIC_LOG_MAX_BYTES, 'diagnostic', 'jsonl')) {
+    cleanupOldArchives(file => DIAGNOSTIC_ARCHIVE_RE.test(file));
   }
-  if (stat.size < DIAGNOSTIC_LOG_MAX_BYTES) return;
-
-  const archivePath = allocateArchivePath('diagnostic', 'jsonl');
-  try {
-    fs.renameSync(PATHS.diagnosticEventsFile, archivePath);
-  } catch (e) {
-    try {
-      fs.unlinkSync(archivePath);
-    } catch {
-      /* ignore */
-    }
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw e;
-  }
-  cleanupDiagnosticArchives();
 }
 
 /** 追加一条完整 JSONL。序列化、轮转和写入同一层全捕获，不向 stdout/stderr 泄露辅助错误。 */
@@ -189,10 +155,16 @@ export function recordDiagnosticEvent(event: string, result: DiagnosticResult, d
       pid: process.pid,
       ...details,
     })}\n`;
-    fs.mkdirSync(DIRS.logs, { recursive: true, mode: 0o700 });
     rotateDiagnosticLogIfNeeded();
-    // O_APPEND + 单次小写入保证并发进程不会交叉拼接事件；不能用整文件原子替换
-    fs.appendFileSync(PATHS.diagnosticEventsFile, line, { encoding: 'utf8', mode: 0o600 });
+    // O_APPEND + 单次小写入保证并发进程不会交叉拼接事件；不能用整文件原子替换。
+    // 正常路径不重复创建目录，首次运行或 reset logs 删除目录后才在 ENOENT 时补建重试。
+    try {
+      fs.appendFileSync(PATHS.diagnosticEventsFile, line, { encoding: 'utf8', mode: 0o600 });
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      fs.mkdirSync(DIRS.logs, { recursive: true, mode: 0o700 });
+      fs.appendFileSync(PATHS.diagnosticEventsFile, line, { encoding: 'utf8', mode: 0o600 });
+    }
   } catch {
     /* 诊断永远是 best-effort，不能替换主命令成功/失败 */
   }

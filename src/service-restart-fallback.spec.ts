@@ -5,26 +5,8 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { makeFixture, moduleUrl, runModule } from './test-support/cli.js';
+import { type DiagnosticRow, readDiagnosticEvents } from './test-support/diagnostic.js';
 import { writeStubExecutable } from './test-support/stub-bin.js';
-
-interface DiagnosticRow {
-  event: string;
-  result: string;
-  stage?: string;
-  reason?: string;
-  exitCode?: number;
-}
-
-function readDiagnosticEvents(dataDir: string): DiagnosticRow[] {
-  const file = path.join(dataDir, 'logs', 'diagnostic.jsonl');
-  if (!fs.existsSync(file)) return [];
-  return fs
-    .readFileSync(file, 'utf8')
-    .trimEnd()
-    .split('\n')
-    .filter(Boolean)
-    .map(line => JSON.parse(line) as DiagnosticRow);
-}
 
 describe('kickstart 失败后的重启回退', () => {
   function runRestart(bootstrapStatus: 0 | 5): { stdout: string; stderr: string; status: number | null; events: DiagnosticRow[] } {

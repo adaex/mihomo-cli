@@ -546,7 +546,7 @@ describe('validateConfigWithKernel：执行失败与配置拒绝分开诊断', (
 
   it('不可执行假内核报权限/重装提示，不误导为订阅或覆写被拒绝', async () => {
     writeFakeKernel('not executable\n', 0o644);
-    await assert.rejects(validateConfigWithKernel({}, ['overwrite.x.yaml (全局)']), (e: unknown) => {
+    await assert.rejects(validateConfigWithKernel(dumpYaml({}), ['overwrite.x.yaml (全局)']), (e: unknown) => {
       if (!(e instanceof CliError)) return false;
       const text = [e.message, ...e.hint].join('\n');
       return (
@@ -562,7 +562,7 @@ describe('validateConfigWithKernel：执行失败与配置拒绝分开诊断', (
 
   it('假内核真实退出 1 仍按配置拒绝处理，保留内核输出与覆写清单', async () => {
     writeFakeKernel("#!/bin/sh\necho 'bad config' >&2\nexit 1\n", 0o755);
-    await assert.rejects(validateConfigWithKernel({}, ['overwrite.x.yaml (全局)']), (e: unknown) => {
+    await assert.rejects(validateConfigWithKernel(dumpYaml({}), ['overwrite.x.yaml (全局)']), (e: unknown) => {
       if (!(e instanceof CliError)) return false;
       const text = [e.message, ...e.hint].join('\n');
       return (

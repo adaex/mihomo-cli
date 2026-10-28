@@ -334,12 +334,13 @@ export function buildKernelRejectHint(detail: string, overwriteSummaries: string
  * 由内核检查节点、分组引用与规则语义，不在 CLI 中维护另一份配置修复器。
  * 临时配置只用于 -t，成功后调用方才替换运行时配置；成功或失败都会清理临时文件。
  *
+ * configContent 由调用方序列化：prepare 可复用同一文本计算候选摘要，避免为校验再 dump 一次。
  * overwriteSummaries 由调用方从 buildConfig 的结果透传（见 BuildConfigResult）：
  * 本函数不自行 loadOverwriteFile——它拿不到 scope 无从按作用域过滤，且违反
  * 「覆写的加载与筛选由调用方完成」的分工。参数必填、不给默认值：透传快照的
  * 可选默认值会让新调用方静默丢覆写清单。
  */
-export async function validateConfigWithKernel(config: Record<string, unknown>, overwriteSummaries: string[]): Promise<void> {
+export async function validateConfigWithKernel(configContent: string, overwriteSummaries: string[]): Promise<void> {
   assertKernelInstalled();
   ensureDirs();
   // stage 建在数据根而非 runtime/：`mihomo -t` 校验最长 30s，此窗口并发的 stop
@@ -349,7 +350,7 @@ export async function validateConfigWithKernel(config: Record<string, unknown>, 
   const stageDir = fs.mkdtempSync(path.join(USER_DATA_DIR, 'check-'));
   const stageFile = path.join(stageDir, 'config.yaml');
   try {
-    fs.writeFileSync(stageFile, dumpYaml(config), { mode: 0o600 });
+    fs.writeFileSync(stageFile, configContent, { mode: 0o600 });
     try {
       await promisify(execFile)(PATHS.mihomoBinary, ['-t', '-d', DIRS.data, '-f', stageFile], {
         encoding: 'utf8',

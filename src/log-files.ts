@@ -120,23 +120,23 @@ export function allocateArchivePath(prefix = 'mihomo', extension = 'log'): strin
   });
 }
 
-function rotateLog(): void {
-  const logFile = PATHS.logFile;
-
+/** 达到 minBytes 时 rename 到原子占名的归档；返回是否由本次调用完成轮转。 */
+export function rotateFile(filePath: string, minBytes: number, prefix = 'mihomo', extension = 'log'): boolean {
   let stat: fs.Stats;
   try {
-    stat = fs.statSync(logFile);
+    stat = fs.statSync(filePath);
   } catch (e) {
     // 日志不存在，或恰好被并发轮转搬走（检查与 stat 之间被 rename）——都没有可轮转的内容
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false;
     throw e;
   }
-  if (stat.size === 0) return;
+  if (stat.size < minBytes) return false;
 
-  const rotatedPath = allocateArchivePath();
+  const rotatedPath = allocateArchivePath(prefix, extension);
   try {
     // rename 对已存在目标是原子替换：直接盖掉分配时的空占位
-    fs.renameSync(logFile, rotatedPath);
+    fs.renameSync(filePath, rotatedPath);
+    return true;
   } catch (e) {
     // 覆写失败时回收占位，不留一个混进 logs 列表的空归档。最常见的 ENOENT 是
     // 并发轮转已把日志搬走：归档已由对方完成，本次无事可做，不能让并发的
@@ -146,12 +146,16 @@ function rotateLog(): void {
     } catch {
       /* ignore */
     }
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false;
     throw e;
   }
 }
 
-export function cleanupOldLogs(): void {
+function rotateLog(): void {
+  rotateFile(PATHS.logFile, 1);
+}
+
+export function cleanupOldArchives(isArchive: (filename: string) => boolean): void {
   const logsDir = DIRS.logs;
   if (!fs.existsSync(logsDir)) return;
 
@@ -160,7 +164,7 @@ export function cleanupOldLogs(): void {
   const maxAgeMs = DEFAULT_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
   for (const file of files) {
-    if (!isArchiveLogFilename(file)) continue;
+    if (!isArchive(file)) continue;
 
     try {
       const filePath = path.join(logsDir, file);
@@ -172,6 +176,10 @@ export function cleanupOldLogs(): void {
       // 单个归档删不动（权限/并发删除）不挡其余清理
     }
   }
+}
+
+export function cleanupOldLogs(): void {
+  cleanupOldArchives(isArchiveLogFilename);
 }
 
 export function listLogs(): LogList {
