@@ -1,6 +1,6 @@
 # 开发约定
 
-改代码、测试或项目文档前阅读。模块职责、产品边界与跨模块契约见 [架构与契约](architecture.md)
+改代码或测试前阅读全文；改项目文档时只读「文档归属」与「Git 与流程」。模块职责、产品边界与跨模块契约见 [架构与契约](architecture.md)
 
 ## 验证命令
 
@@ -30,7 +30,6 @@ npm run typecheck && npm test && npm run check && npm run build
 ## 隔离与反向验证
 
 - 进程类测试必须先隔离再有副作用：临时 `MIHOMO_CLI_DIR`，涉及服务/reset 再加一次性 `MIHOMO_CLI_DAEMON_LABEL`；`killLeftovers` 必须先经 `assertIsolatedCleanupPattern`，guard 失败时任何 `pkill` 都不得发生。`runCli` / `runModule` 的隔离键不允许被 env 覆盖；涉及 plist 的服务测试还要临时 HOME 和 PATH launchctl 桩
-- 真实 sudo/TUN 与永久污染 launchd disabled 表的用例不自动执行，理由见 [自动化测试边界](../CONCLUSIONS.md#自动化测试边界)
 - 修完必做反向验证：还原修复，确认用例转红，规则见 [D11](decisions.md#d11-测试纪律反向验证与失败安全隔离)。预测落空处是认知与实现的偏差点，补不变量用例挡在结构层
 
 ## 命名

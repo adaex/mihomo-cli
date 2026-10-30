@@ -16,7 +16,7 @@ macOS 命令行客户端，TypeScript ESM，Node.js >= 24.20.0。入口 `src/ind
 
 | 文档 | 什么时候打开 |
 | --- | --- |
-| [开发约定](docs/development.md) | 改代码、测试或项目文档前；包含验证、测试隔离、命名与 Git 流程 |
+| [开发约定](docs/development.md) | 改代码或测试前阅读全文；改项目文档时只读「文档归属」与「Git 与流程」 |
 | [架构与契约](docs/architecture.md) | 查模块职责、产品边界或跨模块契约；改对应域前只读相关节 |
 | [README](README.md) | 查改用户承诺、命令行为或使用示例 |
 | [覆写配置详版](docs/overwrite.md) | 查改覆写的用户语法与示例；不是内部实现约定 |
@@ -32,5 +32,3 @@ macOS 命令行客户端，TypeScript ESM，Node.js >= 24.20.0。入口 `src/ind
 | [架构决策](docs/decisions.md) | 需要某条决策的背景、理由或拒绝过的替代方案；先用文内主题索引定位 |
 | [现行结论与边界](CONCLUSIONS.md) | 涉及相关实测结论、已知风险或验证边界；改到对应代码时同步更新 |
 | [CHANGELOG](CHANGELOG.md) | 查用户可见版本历史或补当轮变化；[归档](docs/changelog/CHANGELOG-archive.md) 不作为现行约定加载 |
-
-代码注释只写判据与契约，历史叙事不进注释。当轮验证过程与测试计数留在提交信息，不复制进现行文档
