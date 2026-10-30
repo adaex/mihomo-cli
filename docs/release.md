@@ -1,9 +1,6 @@
----
-description: 发布新版本 mihomo-cli（检查清单、CI Trusted Publishing、发布结果核实）
-argument-hint: [版本号]
----
+# 发布流程
 
-发布 mihomo-cli $ARGUMENTS。本地准备版本、验证并推送；`.github/workflows/publish.yml` 在版本 tag 推送后通过 npm Trusted Publishing（OIDC）发布，并在成功后创建 GitHub Release。不在本地或 GitHub Secrets 保存长期 npm token
+用户要求发布 mihomo-cli 时执行本流程。本地准备版本、验证并推送；`.github/workflows/publish.yml` 在版本 tag 推送后通过 npm Trusted Publishing（OIDC）发布，并在成功后创建 GitHub Release。不在本地或 GitHub Secrets 保存长期 npm token
 
 ## 版本号规则：年.月.序号（如 26.9.90）
 
@@ -51,7 +48,7 @@ for (const c of commands) if (c) console.log([c.name, ...c.aliases].join(', ').p
 ## 步骤
 
 1. 更新 `package.json` 中的 `version`；`npm install --package-lock-only` 让 lock 的 version 跟上，避免 package 与 lock 版本漂移
-2. `CHANGELOG.md` 顶部添加新版本记录（新增/变更/修复/安全 分组），按 [文档归属](../../docs/development.md#文档归属) 写用户可见变化，必要时一句根因。主文件超过 10 个版本小节时，把最旧整节**原样**搬进 `docs/changelog/CHANGELOG-archive.md`，不改写历史
+2. `CHANGELOG.md` 顶部添加新版本记录（新增/变更/修复/安全 分组），按 [文档归属](development.md#文档归属) 写用户可见变化，必要时一句根因。主文件超过 10 个版本小节时，把最旧整节**原样**搬进 `docs/changelog/CHANGELOG-archive.md`，不改写历史
 3. 检查并更新 README 及其链接的用户文档（新增功能、命令变更、示例）
 4. 执行 `npm run typecheck && npm test && npm run check && npm run build`，再完成下方产物自检。CI 的 `prepublishOnly` 会在 tag 源码上重新验证，不以此替代本地检查
 5. 逐文件核对 `git status --short`，只显式暂存已确认的发布相关文件（禁止 `git add .` / `git add -A`）；用 `git diff --cached --stat` 复核后提交：`git commit -m "chore: 发布 vX.Y.Z"`

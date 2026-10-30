@@ -22,8 +22,7 @@ macOS 命令行客户端，TypeScript ESM，Node.js >= 24.20.0。入口 `src/ind
 | [覆写配置详版](docs/overwrite.md) | 查改覆写的用户语法与示例；不是内部实现约定 |
 | [安全说明](SECURITY.md) | 查改安全边界、漏洞报告方式或支持范围 |
 | [重构待办](docs/todo.md) | 正要改对应域，需要核对刻意推迟的结构性重构 |
-| [worktree 收尾](.claude/commands/wt-done.md) | worktree 改动提交后，合入 main 并清理 |
-| [发布流程](.claude/commands/release.md) | 用户明确要求发布时 |
+| [发布流程](docs/release.md) | 用户明确要求发布时 |
 
 ## 需要查证时再打开
 
