@@ -1,6 +1,6 @@
 # 现行结论与边界
 
-规则见 CLAUDE.md，架构决策见 docs/decisions.md，版本历史见 CHANGELOG 与 git tag（发布状态以 tag 为准，本文不记）。本文只保留**现行有效**的结论：实测结论、未覆盖风险、已评估未采纳、测试边界与平台备忘；当轮验证过程留在提交信息里，过时条目直接删除。改相关代码时同步更新对应节。
+现行约定从 [CLAUDE.md](CLAUDE.md) 的文档导航进入，架构决策见 [docs/decisions.md](docs/decisions.md)，版本历史见 CHANGELOG 与 git tag（发布状态以 tag 为准，本文不记）。本文只保留**现行有效**的结论：实测结论、未覆盖风险、已评估未采纳、测试边界与平台备忘；当轮验证过程留在提交信息里，过时条目直接删除。改相关代码时同步更新对应节。
 
 ## 已有验证仍支持的结论
 
@@ -79,7 +79,7 @@
 - sudo 三处收口（超时 60s、退出码分工、残留清理 CliError）的完整链路只能真机 sudo 验证：慢密码场景、bootout 真实失败的 exit 3 渲染、四个命令下的实际终端输出；包装决策已纯函数化测试
 - `restartService` 的 copy-truncate 路径中 `allocateArchivePath()` 在 best-effort try 之外：同秒已存在 1001 个归档（序号耗尽）时 CliError 会穿出而非被吞。病态场景，接受之；动这段时别顺手「修」进 try——归档名拿不到时轮转整体跳过是更合理的语义
 - TUN 运行中 `sub use`/`ow` 按原模式重启、更新提示使用 `start tun`；真实 TUN 提权流程的端到端（sudo 弹窗、路由切换、恢复）未自动复测，仅经 runtime.spec 的桩内核路径验证决策
-- 深审其余未修的低危项：`unhandledRejection`/`uncaughtException` 已统一口径但渲染函数本身不可注入测试；`NO_COLOR`/stderr 设色经 pty 手工验证、无自动化；clearProxyEnv 对企业 env 代理网络的影响已文档化（CLAUDE）但无提示机制。`npm_config_proxy` 等 npm 专属代理变量未清——npm 读 npmrc 不依赖该 env、gh/curl 不识别，不构成下载死锁，保持现状
+- 深审其余未修的低危项：`unhandledRejection`/`uncaughtException` 已统一口径但渲染函数本身不可注入测试；`NO_COLOR`/stderr 设色经 pty 手工验证、无自动化；clearProxyEnv 对企业 env 代理网络的影响已文档化（[D9](docs/decisions.md#d9-启动时只清除指向本机-mixed-端口的-env-代理)）但无提示机制。`npm_config_proxy` 等 npm 专属代理变量未清——npm 读 npmrc 不依赖该 env、gh/curl 不识别，不构成下载死锁，保持现状
 - 曾记录但未修（判定接受或不可自动化）：`FORCE_COLOR` 不支持、`TERM=dumb` 仍出色；无 `--` 结束选项约定（当前无需要它的入口，订阅名已禁止 `-` 开头）；gh 资产名未拦前导 `-`（仅 GitHub API 被篡改时可达）；代理探测 curl 未加 `--proto =https`（只看 204 无机密）
 - **reset 确认后重读仍有的残余窗口**（终审推演确认，记录接受）：危险分支（重读时 serviceActive=false）里，重读之后到删除 kernel/config 之间还隔着 cleanupAll 的 root 残留提权（sudo 密码窗最长 60s）；serviceActive=true 分支还隔 stop/uninstall 自身的锁等待（≤10s）与 bootout+waitUntilUnloaded（≤5s）。并发 install+start 整体落进这些窗口时其锁内判定放行（epoch 基线取自最近 bump 之后），删除后 KeepAlive 崩溃循环——与「stop 游离路径」同族同方向，但触发窗在有 root 残留时是秒到 60 秒级。不修的理由：删除前再读再 stop 会引入第二层窗口（uninstall 自身窗口内又可有并发，无穷回归），且触发需「root 残留内核存在 + 并发 install+start 恰在窗口完成 bootstrap」双重前置；若将来 reset 支持并发场景，优先考虑把删除段并入 serviceLock 临界区
 - npm 不执行 uninstall 生命周期钩子（npm 11.19.0 三场景实测 + 官方文档注明未实现），preuninstall 设施已删除——卸载提醒只能靠 README 的顺序说明，别指望恢复钩子（README 卸载段已如实写）

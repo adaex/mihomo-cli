@@ -1,114 +1,36 @@
 # CLAUDE.md
 
-本仓开发约定；使用说明见 README，覆写机制的用户详版见 docs/overwrite.md，架构决策见 docs/decisions.md，验证结论与边界见 CONCLUSIONS，版本历史见 CHANGELOG，刻意推迟的重构待办见 docs/todo.md。代码注释只写判据与契约，历史叙事不进注释
+本仓开发入口。这里只保留每次任务都需要的事实、安全边界与文档导航；具体做法按任务打开，不预读链接文档
 
-按需索引：服务与并发看 D1–D4；配置解析、锁定与覆写看 D5–D7、D12–D14；内核下载与 env 代理看 D8–D9；settings 快照看 D10；测试纪律看 D11；应用代理边界看 D15；诊断事件看 D16。CONCLUSIONS 只在涉及对应已知风险或验证边界时打开，CHANGELOG 归档不作为现行约定加载
+## 项目
 
-## 项目与架构
+macOS 命令行客户端，TypeScript ESM，Node.js >= 24.20.0。入口 `src/index.ts`，tsx 开发，tsup 打包。命令入口 `mihomo-cli`（全称）/ `mh`（简写），`package.json` 的 bin 是唯一登记表
 
-macOS 命令行客户端，TypeScript ESM，Node.js >= 24.20.0。入口 `src/index.ts`，tsx 开发，tsup 打包。命令入口 `mihomo-cli`（全称）/`mh`（简写），package.json bin 是唯一登记表。
+## 常驻安全边界
 
-| 模块 | 职责 |
+- 开发验证不得操作真实的 `~/.mihomo-cli`、LaunchAgent 或系统网络设置；不把裸 `npm run dev` 当验证命令，隔离要求见 [开发约定](docs/development.md)
+- 真实 sudo/TUN 与永久污染 launchd disabled 表的用例不自动执行；测试边界见 [CONCLUSIONS](CONCLUSIONS.md#自动化测试边界)
+- 只有查改当前用户真实的 `~/.mihomo-cli` 时才读 [本机真实配置](docs/local-config.md)；普通开发与隔离测试无需加载，也不得拿真实配置做夹具
+
+## 按任务打开
+
+| 文档 | 什么时候打开 |
 | --- | --- |
-| `commands/registry.ts` | 命令、别名、帮助与 argv 改写的唯一登记表 |
-| `commands/*.ts` | 命令处理器；shared 提供子命令分发、确认与重启入口 |
-| `types.ts` / `constants.ts` / `flags.ts` | 共享类型、默认值与带值选项登记表 |
-| `argv.ts` / `format.ts` / `suggest.ts` / `text.ts` | argv 解析、显示格式化、did-you-mean、字符串安全 |
-| `kernel-args.ts` | kernel 的 --mirror/--proxy 选项解析与白名单 |
-| `settings.ts` | 设置、订阅列表、订阅缓存与原始配置读写 |
-| `subscription.ts` | 订阅下载、更新、配置准备与提交 |
-| `config.ts` | YAML 解析、覆写与系统配置合并、内核原生校验 |
-| `overwrite.ts` | 覆写加载（YAML + JS 脚本）、作用域过滤与合并语法 |
-| `runtime.ts` | Mixed 服务与 TUN 临时进程的运行时入口 |
-| `service.ts` | 用户级 LaunchAgent 的安装与启停、健康确认 |
-| `launchctl.ts` / `stop-epoch.ts` / `hot-reload.ts` | launchctl 解析与状态读取、停止计数与并发基线（D2/D4）、热重载探测与结论；调用方直接从各自模块导入，service.ts 不做转发 |
-| `process-probe.ts` / `process-start.ts` / `process-stop.ts` | 进程探测、TUN 启动、清理与残留处置（未走完的清理：进程仍在则抛、已清空则警告） |
-| `kernel.ts` / `http.ts` | 内核下载与有超时、大小限制的 HTTP 客户端 |
-| `paths.ts` | 路径、目录、原子写与跨进程锁 |
-| `log-files.ts` / `open.ts` | 内核日志轮转、查询与系统打开操作；归档原子占名原语供诊断轮转复用 |
-| `diagnostic-events.ts` | CLI 操作上下文、白名单事件与配置哈希、同步 JSONL 追加及独立轮转（D16） |
-| `redact.ts` | `config` 展示侧的凭据脱敏：敏感键递归掩码、provider 订阅 URL 复用 maskUrl |
-| `system-proxy.ts` | env 自代理判定（isLoopbackHost/proxyEnvPointsAtSelf）与系统代理只读检测、分档提示（不写系统设置） |
-| `proxy-probe.ts` / `spinner.ts` / `sudo.ts` | 连通性探测、等待反馈、按需提权 |
-| `curl-spawn.ts` | 全仓 curl 子进程代理策略唯一出口，产物下载、release API 查询与连通性探测共用（D9） |
-| `errors.ts` / `utils.ts` / `colors.ts` / `lifecycle.ts` | 错误、杂项（sleep）、颜色、信号处理 |
+| [开发约定](docs/development.md) | 改代码、测试或项目文档前；包含验证、测试隔离、命名与 Git 流程 |
+| [架构与契约](docs/architecture.md) | 查模块职责、产品边界或跨模块契约；改对应域前只读相关节 |
+| [README](README.md) | 查改用户承诺、命令行为或使用示例 |
+| [覆写配置详版](docs/overwrite.md) | 查改覆写的用户语法与示例；不是内部实现约定 |
+| [安全说明](SECURITY.md) | 查改安全边界、漏洞报告方式或支持范围 |
+| [重构待办](docs/todo.md) | 正要改对应域，需要核对刻意推迟的结构性重构 |
+| [worktree 收尾](.claude/commands/wt-done.md) | worktree 改动提交后，合入 main 并清理 |
+| [发布流程](.claude/commands/release.md) | 用户明确要求发布时 |
 
-## 开发与验证
+## 需要查证时再打开
 
-```bash
-npm run typecheck && npm test && npm run check && npm run build
-```
+| 文档 | 什么时候打开 |
+| --- | --- |
+| [架构决策](docs/decisions.md) | 需要某条决策的背景、理由或拒绝过的替代方案；先用文内主题索引定位 |
+| [现行结论与边界](CONCLUSIONS.md) | 涉及相关实测结论、已知风险或验证边界；改到对应代码时同步更新 |
+| [CHANGELOG](CHANGELOG.md) | 查用户可见版本历史或补当轮变化；[归档](docs/changelog/CHANGELOG-archive.md) 不作为现行约定加载 |
 
-- 不把裸 `npm run dev` 当验证命令：它会操作真实数据目录、查询真实服务，status 还会探测网络并加载用户覆写脚本的顶层代码。需要 smoke 时用 `makeFixture` / `runCli`，或显式隔离 `MIHOMO_CLI_DIR` 与 `MIHOMO_CLI_DAEMON_LABEL`
-
-- Biome 管格式与 import 排序；`npm run check` 的输出必须确认 `Checked N files` 且 N > 0，warn/info 也要逐条看，不能只看退出码。只需检查源码时可用 `npx biome check src/`
-- 测试用 node:test + tsx，命名 `*.spec.ts`；验证行为与数据最终状态，不用实现清单断言代替
-- 端到端夹具统一收在 `src/test-support/`，不在各 spec 重抄 spawn 与 env：cli.ts（makeFixture/runCli/readEpochIn/ENTRY，模块级子进程 runModule/moduleUrl，CLI 夹具自带临时 MIHOMO_CLI_DIR + 一次性 label + NO_COLOR 三件套）、fake-kernel.ts（假内核落盘/起进程/等出现/判死/收尾，禁静态 import 模块加载期固化 DIR 的模块）、guard.ts（守卫类 preload spawn 骨架，env 整体替换以表达「刻意不设 DIR」形态）、stub-bin.ts（PATH 桩可执行文件原语）、stub-curl-env.ts（桩 curl 记录 no_proxy 实见值的回归闸夹具）、spawn-eval.ts（异步 tsx -e 子进程原语，并发用例的 spawn 形态）、poll.ts（同步轮询原语，跨进程文件信号的统一等待骨架）
-- 验收命令不接管道收尾（`npm test | tail` 的退出码是 tail 的）：红会被吞成 0，要截断输出就重定向到文件再看
-- 修完必做反向验证（还原修复、确认用例转红），规则见 decisions.md D11；预测落空处是认知与实现的偏差点，补不变量用例挡在结构层
-- 真实 sudo/TUN 与永久污染 launchd disabled 表的用例不自动执行，理由见 CONCLUSIONS
-- 进程类测试必须先隔离再有副作用：临时 `MIHOMO_CLI_DIR`，涉及服务/reset 再加一次性 `MIHOMO_CLI_DAEMON_LABEL`；`killLeftovers` 必须先经 `assertIsolatedCleanupPattern`，guard 失败时任何 `pkill` 都不得发生。`runCli`/`runModule` 的隔离键不允许被 env 覆盖；涉及 plist 的服务测试还要临时 HOME 和 PATH launchctl 桩
-- 异步子进程用 `spawnEval` 的默认 20 秒超时兜底，调用方仍必须在 `finally` 清理自建进程，不能把超时当常规收尾
-- 删除或更名导出后全仓搜索（含测试内嵌脚本与 Markdown 示例）；typecheck 看不到字符串里的 import
-- 跨进程并发用 spawn 并行验证，spawnSync 顺序跑验不了
-
-## 产品边界（开发判据，用户承诺见 README）
-
-- Mixed 只由用户级 LaunchAgent 托管；TUN 是按需 sudo 的临时进程，CLI 本身不以 root 运行
-- 不自动设置系统代理、不提供 proxy on/off；用户主路径是在具体浏览器或需要代理的应用中按需配置 Mixed 端口，快速开始与启动提示不推荐全局 Mac 代理或 `networksetup`（D15）。`system-proxy.ts` 只读，不能扩展成写系统设置
-- 单活跃订阅；多机场节点用 mihomo 原生 proxy-providers；SSH 出口由用户自行 `ssh -D`
-- 注册表只登记当前支持的命令与别名；未知命令/子命令/选项统一报错，不维护旧版本迁移分支
-- 破坏性操作需要确认：非 TTY 且无显式跳过选项时报错退出 1，交互拒绝才显示已取消；`sub remove` 精确同名视为明确意图直接删除，只有模糊命中需要确认
-- reset 流程固定：解析与确认 → 停止或卸载服务 → 清理进程 → 删除目标 → 更新相关设置；确认前不做破坏性操作；删除失败必须报错，成功提示以实际删除为准
-- 服务 label 固定 `com.mihomo-cli.daemon`，可用 `MIHOMO_CLI_DAEMON_LABEL` 隔离；label 是持久化注册键，随意改名会遗留无法管理的自启进程
-
-## 本机真实配置
-
-只有查改当前用户真实的 `~/.mihomo-cli` 时才读 `docs/local-config.md`；普通开发与隔离测试无需加载，也不得拿真实配置做夹具
-
-## 命名
-
-- 帮助与内部命名用全称单数（subscription/directory/overwrite），示例与提示用 `mihomo-cli sub` / `dir` / `ow`；内部变量函数全称单数，常量全大写下划线
-- `dir open` 精确匹配 root/subs/logs/data/runtime/kernel
-
-## 关键不变量（跨模块契约，论证见 decisions.md）
-
-**错误与结果**
-- 预期错误抛 `CliError` 由 main().catch 统一渲染；再包装前透传已有 CliError；模块顶层不抛 CliError
-- 报告成功要有独立结果依据（写入结果/健康/卸载/大小），不能用「命令没报错」代替
-- 探测失败 ≠ 目标不存在：launchctl print 只认 113 为未装载，bootout 容忍 3/113（`BOOTOUT_NOT_LOADED_CODES`/`isBootoutNotLoaded` 唯一出处），pgrep/pkill 只收退出码 0/1
-
-**数据与并发**
-- `readSettings()` 每次读盘；一致视图由调用方在命令开头取快照显式传递（D4/D10）
-- 依赖现值的写入走 `updateSettings(mutator, postCommit?)`：持锁、同步 mutator、写盘成功后才做文件副作用
-- 跨进程锁只在数据根目录、以 `Lock` 结尾命名（paths.spec 按约定枚举断言）；会被 rmrf 的目录不放任何有生命周期的文件（锁、stage、epoch）
-- 原子写 = 临时文件 + fsync + rename + fsync 父目录；崩溃遗留 `*.tmp` 由守卫之后按龄清扫
-- 并发判据唯一：`epochChanged` / `startAbortedByConcurrentStop`（epoch）与 `describeExitCause`，调用点不散写第二份比较；基线由 main() 捕获为进程状态（D2/D4）
-- 诊断事件只在 CLI 守卫后启用，固定白名单不记订阅名、原始参数、配置正文或错误正文；同步 O_APPEND、写失败静默，不进现有锁，不混入内核日志编号（D16）
-
-**配置与覆写**
-- 入站与控制面锁定的唯一真相是 constants.ts 的 `LOCKED_CONFIG_KEYS` 与实际执行集 `EFFECTIVELY_LOCKED_KEYS`（快照表 + tls）：告警扫描、剥除循环、脚本探针、快照 spec 全派生自它，不许重抄；判据与上游核对方法见 D5，完整性由 `config-inbound-snapshot.spec.ts` 兜底
-- 合并闸门唯一出口 `selectActiveOverwriteFiles`；加载双路径（合并硬失败/诊断旁路）见 D7
-- 覆写操作符（`key!`/`+key`/`key+`）只在顶层生效；带条件的变换一律写 JS 脚本（`export default (config, ctx) => {}`，契约见 D12–D14：就地修改、必须同步、返回值忽略）。status 不调用变换函数，但 ow/status 加载模块会执行顶层代码，doctor 构建会调用变换函数；status 的「生效」与 `overwrite.applied` 只表示选中，不证明脚本实际修改配置。脚本在 YAML 之前、剥锁定键之前执行，改不动系统锁定项；`~`/`~?`/`<x>` 已移除，写这些形态显式报错，不许静默当字面键
-- match 的 name 只支持尾部 `*`（前缀）与头部 `*`（后缀）两种通配，其余报错——不引入通用匹配器（正则转义实现曾有灾难性回溯）；JS 脚本无 match 机制，作用域写在脚本里
-- 配置解析只走 YAML（D6）； Mixed 清 tun 字段，TUN 强制 dns.enable=true
-
-**launchd 与进程**
-- 改服务代码前读对应函数注释；锁内 launchctl 预算关系由 service-concurrency.spec 断言，新增锁内调用前先改测试（D3）
-- 热重载成功不验、kickstart 回退必须健康确认（restartService 返回值语义）
-- kill 前逐 pid 复核命令行，复核不匹配按「无事可做」计成功
-- TUN 与服务共享 config.yaml，起 TUN 前必须关服务自启，两条方向都有并发防线
-
-**内核下载**
-- 镜像只作用产物下载、选择不持久化；版本查询代理可用时直接经代理（D8）
-- 守卫前清 env 代理只清指向本机 Mixed 端口的自指形态（D9）；gh 回退与 npm 恢复两个 per-spawn 并存例外的判据与构造见 D9（共同前提「全程不重启内核」，均不写回 process.env）
-- 下载候选由 `resolveDownloadChannels` 生成，逐个尝试首个成功即用；命令层不得额外追加 direct。代理运行时只有 proxy 与同代理 gh，代理未运行且 gh 可用时只有 gh；显式 --mirror/--proxy 只有一个候选（显式意图不自动换道）
-- curl 子进程代理策略唯一出口是 `curl-spawn.ts` 的 `buildCurlSpawnEnv`：per-spawn env 置空 no_proxy/NO_PROXY 保 `-x` 权威；直连通道的 `--noproxy '*'` 在 args 层（buildKernelCurlArgs），proxy 通道 args 绝不能加 --noproxy；三处 spawn（产物下载/release API 查询/连通性探测）不得另写 env 代理处理
-
-## Git 与流程
-
-- 默认在 `.claude/worktrees/` 工作，创建前 fetch；创建后先核对基线与本地 main，落后则先 `git merge --ff-only main`，再重读待编辑文件（工具默认基线可能是 origin/main，而本地 main 有未推送提交）。首次验证前在 worktree 内执行 `npm ci`，不得依赖父目录偶然可解析的 node_modules
-- 不需要 Co-Authored-By；提交后按 `.claude/commands/wt-done.md` 合入 main 并立即清理
-- 发布仅在用户要求时执行，按 `.claude/commands/release.md`
-- 历史修复叙事留在 CHANGELOG/git，不复制进现行文档
-- CHANGELOG 只写用户可见变化，每条 1–3 句，不按审查轮次组织；当轮验证过程与测试计数留在提交信息。长期边界收进 CONCLUSIONS，发布与归档细则由 `.claude/commands/release.md` 持有
+代码注释只写判据与契约，历史叙事不进注释。当轮验证过程与测试计数留在提交信息，不复制进现行文档

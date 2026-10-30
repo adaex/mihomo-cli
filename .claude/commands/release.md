@@ -51,7 +51,7 @@ for (const c of commands) if (c) console.log([c.name, ...c.aliases].join(', ').p
 ## 步骤
 
 1. 更新 `package.json` 中的 `version`；`npm install --package-lock-only` 让 lock 的 version 跟上，避免 package 与 lock 版本漂移
-2. `CHANGELOG.md` 顶部添加新版本记录（新增/变更/修复/安全 分组），**每条 1–3 句**：写改了什么、用户会看到什么变化、必要时一句根因；按用户可见变化组织，不按审查轮次组织。当轮实测耗时、差分组数、反向验证与测试计数留在提交信息；长期边界与教训收进 CONCLUSIONS，稳定判据留在 CLAUDE 与代码注释。主文件超过 10 个版本小节时，把最旧整节**原样**搬进 `docs/changelog/CHANGELOG-archive.md`，不改写历史
+2. `CHANGELOG.md` 顶部添加新版本记录（新增/变更/修复/安全 分组），**每条 1–3 句**：写改了什么、用户会看到什么变化、必要时一句根因；按用户可见变化组织，不按审查轮次组织。当轮实测耗时、差分组数、反向验证与测试计数留在提交信息；长期边界与教训收进 CONCLUSIONS，稳定判据留在 `CLAUDE.md` 导航指向的现行约定文档与代码注释。主文件超过 10 个版本小节时，把最旧整节**原样**搬进 `docs/changelog/CHANGELOG-archive.md`，不改写历史
 3. 检查并更新 README 及其链接的用户文档（新增功能、命令变更、示例）
 4. 执行 `npm run typecheck && npm test && npm run check && npm run build`，再完成下方产物自检。CI 的 `prepublishOnly` 会在 tag 源码上重新验证，不以此替代本地检查
 5. 逐文件核对 `git status --short`，只显式暂存已确认的发布相关文件（禁止 `git add .` / `git add -A`）；用 `git diff --cached --stat` 复核后提交：`git commit -m "chore: 发布 vX.Y.Z"`
