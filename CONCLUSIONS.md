@@ -99,9 +99,7 @@
 
 真实 sudo/TUN 会修改路由、需要密码并可能留下 root 属主文件，开发机和 CI 不自动执行
 
-完整服务启停测试也不默认运行：enable/disable 会在 `/var/db/com.apple.xpc.launchd/disabled<uid>.plist` 给每个临时 label 留永久记录，launchctl 无清除动词；只用 bootstrap/bootout 的一次性 label 可以临时验证有限的 launchd 行为，但不能覆盖 stop 的全部语义。要驱动服务层的 launchctl 路径时用 PATH 前置的桩 launchctl（service-concurrency.spec 的做法）：代码走真实路径、真实 launchd 一点不被碰，配 HOME/MIHOMO_CLI_DIR/一次性 label 三层隔离
-
-进程与 reset 测试必须验证隔离前提：临时 MIHOMO_CLI_DIR 限定进程路径，独立 MIHOMO_CLI_DAEMON_LABEL 限定 plist/服务查询；涉及 plist 还要临时 HOME 与 PATH launchctl 桩，仅隔离数据目录不足以保护用户服务。清理 side effect 之前必须有硬 guard：killLeftovers 在任何 pkill 前验证 pattern 锚定 os.tmpdir 下的本次目录，runCli/runModule 在 spawn 前拒绝 env 覆盖隔离键；不能只在 beforeEach 之后的测试体里断言
+完整服务启停测试也不默认运行：enable/disable 会在 `/var/db/com.apple.xpc.launchd/disabled<uid>.plist` 给每个临时 label 留永久记录，launchctl 无清除动词；只用 bootstrap/bootout 的一次性 label 可以临时验证有限的 launchd 行为，但不能覆盖 stop 的全部语义。要驱动服务层的 launchctl 路径时，用 PATH 前置的桩 launchctl 让代码走真实路径而不触碰真实 launchd；HOME、临时目录、一次性 label 与清理守卫的具体操作要求见 [开发约定](docs/development.md#隔离与反向验证)
 
 doctor 的内核版本项与 npm 查询项取值依赖网络（GitHub 可达性、限流），用例只锁检查项存在，不写死 ok/warn/skip
 

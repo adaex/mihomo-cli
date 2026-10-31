@@ -1,6 +1,6 @@
 # 开发约定
 
-改代码或测试前阅读全文；改项目文档时只读「文档归属」与「Git 与流程」。模块职责、产品边界与跨模块契约见 [架构与契约](architecture.md)
+模块职责、产品边界与跨模块契约见 [架构与契约](architecture.md)
 
 ## 验证命令
 
@@ -49,5 +49,5 @@ npm run typecheck && npm test && npm run check && npm run build
 - 不需要 Co-Authored-By；提交前用 `git status` 逐文件核对改动归属，避免混入并行代理未提交的工作
 - worktree 内全部提交并确认干净后，退出 worktree（保留分支）并回主仓合入：先 `git merge --ff-only <分支>`；main 已前进时用 cherry-pick 或 rebase，不用 `--no-ff`。cherry-pick 后用 `git diff <分支> main --stat` 核对树内容，不能只看 git log
 - 确认无遗漏后立即 `git worktree remove` + `git branch -D`，并核实临时目录、一次性 label 的 plist 与自建进程已清理
-- 文档冲突保留双方的用户可见变化、实测结论与现行约定，不把审查轮次或测试计数写进 CHANGELOG
+- 文档冲突保留双方的用户可见变化、实测结论与现行约定
 - 发布仅在用户要求时执行，按 [发布流程](release.md)

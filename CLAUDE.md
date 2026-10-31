@@ -28,6 +28,6 @@ macOS 命令行客户端，TypeScript ESM，Node.js >= 24.20.0。入口 `src/ind
 
 | 文档 | 什么时候打开 |
 | --- | --- |
-| [架构决策](docs/decisions.md) | 需要某条决策的背景、理由或拒绝过的替代方案；先用文内主题索引定位 |
-| [现行结论与边界](CONCLUSIONS.md) | 涉及相关实测结论、已知风险或验证边界；改到对应代码时同步更新 |
+| [架构决策](docs/decisions.md) | 需要某条决策的背景、理由或拒绝过的替代方案；按 D 编号或标题搜索，无需通读全文 |
+| [现行结论与边界](CONCLUSIONS.md) | 涉及相关实测结论、已知风险或验证边界；按模块名或关键词搜索，只读命中条目，改到对应代码时同步更新 |
 | [CHANGELOG](CHANGELOG.md) | 查用户可见版本历史或补当轮变化；[归档](docs/changelog/CHANGELOG-archive.md) 不作为现行约定加载 |
