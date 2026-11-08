@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [26.11.116] - 2026-11-09
 
 ### 移除
 
@@ -130,11 +130,3 @@
 ### 变更（内部清理，无用户可见变化）
 
 - **/simplify 三轮收尾**：`firstLine` 收编全仓 12 处 `split('\n')[0]` 副本；卸载/重置残留提示与 bootout 未装载容忍码（3/113）收单点（TS 判定与 legacy bash 脚本生成共用一份码表）；控制器端口+密钥快照读收 `getControllerEndpoint`；CliError 再包装收 `relabelCliError`（exitCode 透传在结构上不可能丢）；「桩 curl 记录 no_proxy」端到端夹具收 test-support 新模块（三份逐字骨架合一）；http 手动跟随重定收单循环。960 用例全绿
-
-## [26.10.106] - 2026-10-03
-
-### 修复（覆写提示降噪）
-
-- **未命中覆写脚本不再进配置告警**：start/update 顶部的黄色「配置提示: 覆写脚本 xxx 未返回 true…」与 status 的展示重复，措辞是脚本作者视角、使用者无事可做；`mh config` 提示段与 doctor 计数同步安静，配置告警只留真异常（脚本 ctx.warn、锁定键被剥除、TUN 强制开 DNS）
-- **status 覆写区块收敛为一行**：不适用文件只计数不点名（`覆写: 已启用 (mini, seal，1 个不适用)`），逐行点名与「脚本未返回 true」术语不再暴露——想知道是哪个文件，对照 `mh ow` 列表的作用域栏；`status --json` 的 applied/files 契约不变
-- **内部清理**：删除零消费的 `BuildConfigResult.scriptMatches` 字段与过期契约注释；status 用例负断言从锁句子改为锁文件名（换措辞恢复点名也能被测试拦住）
