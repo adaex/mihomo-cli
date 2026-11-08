@@ -6,21 +6,10 @@ import { assertKnownFlags, assertPositionalCount } from '../argv.js';
 import { colors } from '../colors.js';
 import { PKG_NAME, VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
+import { parseProxyEndpoint, stripSelfProxyEnv } from '../proxy-env.js';
 import { withSpinner } from '../spinner.js';
-import { getClearedProxyEnv, parseProxyEndpoint } from '../system-proxy.js';
 
 const execFileAsync = promisify(execFile);
-
-/**
- * 纯决策：给 npm 子进程恢复哪些代理 env。
- * - 入口没清过自指 env（cleared 为 null）：{}——不替用户发明代理配置
- * - 清过但探活失败（端口没监听）：{}——D9 的死锁/死端口防护照旧，npm 直连
- * - 清过且端口活着（内核在跑）：原样恢复——update/doctor 全程不重启内核，无死锁
- * npm 读 .npmrc 的优先级高于 env，用户在 .npmrc 里显式配置的代理不被覆盖。
- */
-export function restoreProxyEnvForNpm(cleared: Record<string, string> | null, listening: boolean): Record<string, string> {
-  return cleared !== null && listening ? cleared : {};
-}
 
 /** 探活超时：只探本机回环端口，正常毫秒级；500ms 封顶且失败按「不可用」（不拖慢 doctor） */
 const PROXY_PROBE_TIMEOUT_MS = 500;
@@ -48,21 +37,21 @@ export function isProxyPortListening(host: string, port: number): Promise<boolea
 }
 
 /**
- * 构造 npm 子进程 env：入口 clearProxyEnv（D9）清掉了指向本机 Mixed 的自指代理 env，
- * 但 update/doctor 的 npm 全程不碰内核——被清时代理端口仍在监听（内核在跑）就 per-spawn
- * 注回用户原本的配置；端口不通（env 残留/内核已停）保持清除。每次调用独立探活：
+ * 构造 npm 子进程 env（D9）：env 里指向本机 Mixed 的自指代理，端口在监听（内核在跑）就
+ * 原样保留——update/doctor 的 npm 全程不碰内核，无下载死锁，国内靠自己代理出网的用户
+ * 不该被剥掉；端口不通（env 残留/内核已停）则去掉，npm 直连。不凭空注入：没配 env
+ * 代理的用户路径不变；.npmrc 显式 proxy 优先级高于 env，不受影响。每次调用独立探活：
  * view 与 install 之间可能隔着用户确认，代理状态允许变化。
  */
 async function buildNpmSpawnEnv(): Promise<NodeJS.ProcessEnv> {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  const cleared = getClearedProxyEnv();
-  // 所有被清键同一时刻指向同一组本机端口，取任一值探活即可
-  const sample = cleared ? Object.values(cleared).find(v => v) : undefined;
+  const { env, removed } = stripSelfProxyEnv();
+  // 被去掉的键同一时刻指向同一本机端口，取任一值探活即可
+  const sample = Object.values(removed)[0];
   const endpoint = sample ? parseProxyEndpoint(sample) : null;
-  const listening = endpoint ? await isProxyPortListening(endpoint.host, endpoint.port) : false;
-  Object.assign(env, restoreProxyEnvForNpm(cleared, listening));
+  if (endpoint && (await isProxyPortListening(endpoint.host, endpoint.port))) return { ...process.env };
   return env;
 }
+
 /** npm view 查询最新版的超时：网络不佳时降级为直接安装，不让用户干等 */
 const NPM_VIEW_TIMEOUT_MS = 15_000;
 

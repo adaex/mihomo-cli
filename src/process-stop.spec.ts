@@ -142,7 +142,7 @@ describe('cleanupKernelsOrThrow：返回 cleanupAll 结果供外层消费', () =
 
 /**
  * 未走完的清理的统一包装：主体动作到了哪一步、残留 PID、重试入口与 pkill 兜底；
- * sudo 取消按「已取消」（用户主动行为）渲染。真实 sudo 路径不自动测试（CONCLUSIONS）。
+ * sudo 取消按「已取消」（用户主动行为）渲染。真实 sudo 路径不自动测试（见 docs/development.md「自动化测试边界」）。
  */
 describe('buildRootResidueCleanupError', () => {
   const ctx = { mainOutcome: '服务已停止，登录自启已关闭', retryCommand: 'mihomo-cli stop' };

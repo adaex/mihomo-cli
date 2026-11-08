@@ -1,12 +1,11 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { assertKernelInstalled, assertRuntimeConfigPresent, getConfigInfo } from './config.js';
 import { assertServiceLabelSafe } from './constants.js';
-import { diagnosticErrorDetails, recordDiagnosticEvent } from './diagnostic-events.js';
 import { CliError } from './errors.js';
-import { logOversized, tryHotReload } from './hot-reload.js';
 import {
   bootstrapDomain,
   buildPlist,
@@ -25,9 +24,10 @@ import { allocateArchivePath, cleanupOldLogs, rotateAndCleanupLogs } from './log
 import { atomicWriteFileSync, ensureDirs, PATHS, withFileLock } from './paths.js';
 import { getMihomoPids } from './process-probe.js';
 import { cleanupKernelsOrThrow } from './process-stop.js';
+import { lsofListenPids } from './proxy-probe.js';
+import { getControllerEndpoint } from './settings.js';
 import { bumpStopEpoch, startAbortedByConcurrentStop } from './stop-epoch.js';
 import type { CleanupResult, ServiceStatus } from './types.js';
-import { sleep } from './utils.js';
 
 /**
  * launchd 服务层：Mixed 模式的唯一运行方式。
@@ -38,7 +38,6 @@ import { sleep } from './utils.js';
  * 相邻模块（调用方直接从各自模块导入）：
  * - launchctl.ts：print 输出解析、退出码语义、查询包装与服务状态读取
  * - stop-epoch.ts：停止计数与并发判定基线（D2/D4）
- * - hot-reload.ts：热重载探测与结论；restartService 留在此处（消费 startService 的自举链）
  */
 
 /**
@@ -190,7 +189,7 @@ export function describeAbnormalExit(status: ServiceStatus): string | null {
 /**
  * 「服务在跑，TUN 起不来」的修复指引，两个触发语境共用一份（散写会漂移）。
  * 标题区分语境：入口快照（cmdStart）处服务可能是用户自己开着的；启动前/pkill 前
- * 复核（runtime/process-start）处只可能是另一终端在慢速阶段并发拉起
+ * 复核（runtime 的 startTun）处只可能是另一终端在慢速阶段并发拉起
  */
 function tunBlockedHint(lastLine: string): string[] {
   return ['两者会抢占同一组端口与配置。请先停止服务:', '  mihomo-cli stop', '', lastLine];
@@ -537,6 +536,76 @@ export async function uninstallService(): Promise<CleanupResult> {
   return cleanup;
 }
 
+/** 热重载（PUT /configs）超时 */
+const HOT_RELOAD_TIMEOUT_MS = 5000;
+
+/** 日志超过该大小时，restartService 借 kickstart 顺便 copy-truncate（startService 走 rotateAndCleanupLogs 无条件轮转） */
+const LOG_ROTATE_MAX_BYTES = 10 * 1024 * 1024;
+
+function logOversized(): boolean {
+  try {
+    return fs.statSync(PATHS.logFile).size > LOG_ROTATE_MAX_BYTES;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 经 external-controller 热重载配置（走 localhost、免 sudo）。
+ * 用空 body：内核重新加载它启动时 `-f` 指定的配置文件（正是我们写入的 configFile）。
+ * 不传 {path}——mihomo 的 SAFE_PATHS 限制只允许 workdir/home 下的路径，
+ * 而 configFile 在 runtime/ 下会被拒成 400；空 body 重载 `-f` 文件天然规避该限制。
+ *
+ * 返回 false 即回退 kickstart（重启内核），因此**「重载被内核拒绝」是安全的**：
+ * 配置解析失败时 mihomo 返回 4xx，这里判 false，坏配置不会被当成生效。
+ */
+async function tryHotReload(prefetched?: ServiceStatus): Promise<boolean> {
+  // 必须先确认 controller 端口上确实是我们托管的服务内核：端口被其他程序占用且对 PUT
+  // 返回 2xx 时，CLI 会报「已启动」而内核仍跑旧配置。任何探测失败（含状态查询抛错）都
+  // 按「热重载不可用」回退 kickstart——launchd 病态时恰恰最需要 kickstart 自愈
+  try {
+    // prefetched：调用方同一同步拍已查过的状态，免再发一次 launchctl print
+    const status = prefetched ?? getServiceStatus({ withDisabled: false });
+    if (!status.running || status.pid === null) return false;
+
+    // 端口与 secret 取同一份 settings 快照（D10）；端口非法按「热重载不可用」回退
+    const endpoint = getControllerEndpoint();
+    if (endpoint.port === null) return false;
+    const baseUrl = `http://127.0.0.1:${endpoint.port}`;
+    // 配置了 controller_secret 时必须带 Bearer，否则内核返回 401 → 热重载恒失败回退重启
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (endpoint.secret) headers.Authorization = `Bearer ${endpoint.secret}`;
+    // timer 起表在状态查询之后：abort 预算只覆盖 /version、lsof 与 PUT，不被慢 launchctl 分食
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), HOT_RELOAD_TIMEOUT_MS);
+    try {
+      // /version 是 mihomo 特有端点，返回体带 version 字段；用它确认应答方是 mihomo
+      // 而非碰巧监听同端口的其他程序（后者极可能对未知路径的 PUT 也返回 2xx）
+      const probe = await fetch(`${baseUrl}/version`, { headers, signal: controller.signal });
+      if (!probe.ok) return false;
+      const info = (await probe.json()) as { version?: unknown };
+      if (typeof info?.version !== 'string') return false;
+
+      // /version 只确认「端口上是个 mihomo」，挡不住「另一个 mihomo」（手工起的实例、
+      // 端口冲突）。用 lsof 取监听 pid 与服务 pid 比对，不一致则回退 kickstart
+      if (lsofListenPids(endpoint.port)?.[0] !== status.pid) return false;
+
+      const res = await fetch(`${baseUrl}/configs?force=true`, {
+        method: 'PUT',
+        headers,
+        body: '{}',
+        signal: controller.signal,
+      });
+      // 文档化成功码是 204（属 2xx，res.ok 天然涵盖）；非 2xx 一律回退 kickstart
+      return res.ok;
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 重启托管内核使配置变更生效：优先热重载（PUT /configs，免 launchctl），失败回退 kickstart
  * （任务未装载时 bootstrap 自愈）。
@@ -561,20 +630,12 @@ export async function restartService(prefetched?: ServiceStatus): Promise<{ hotR
 
   // prefetched 是调用方同一同步拍刚取的状态（launchOrRestart 决定走重启分支用的
   // 就是它），透传给热重载探测免再发一次 launchctl print；缺省自查保留直接调用路径
-  const hotReload = oversized ? null : await tryHotReload(prefetched);
-  if (hotReload?.ok) {
-    recordDiagnosticEvent('service.hot-reload', 'success', { stage: 'put' });
+  const hotReloaded = !oversized && (await tryHotReload(prefetched));
+  if (hotReloaded) {
     // 热重载是唯一没有健康确认的生效路径：探测到 PUT 之间的并发 stop 只有这次复读兜得住。
     // hotReloaded 如实为 true（内核确实吃进了配置），是否报成功由 started 决定
     return { hotReloaded: true, started: !startAbortedByConcurrentStop() };
   }
-  recordDiagnosticEvent('service.hot-reload', 'fallback', {
-    stage: hotReload?.stage ?? 'log-rotation',
-    reason: hotReload?.reason ?? 'log-oversized',
-    httpStatus: hotReload?.httpStatus,
-    errorType: hotReload?.errorType,
-    aborted: hotReload?.aborted,
-  });
 
   if (oversized) {
     // 归档路径经 allocateArchivePath（log-files.ts 的单一命名规则）：同一秒内两次轮转
@@ -596,35 +657,23 @@ export async function restartService(prefetched?: ServiceStatus): Promise<{ hotR
   // 随后并发 stop」这一交错仍在锁外——那一支由 launchOrRestart 在健康确认失败后
   // 复读计数兜住，不在这里重复设防。
   const kick = runLaunchctl(['kickstart', '-k', serviceTarget()], 60_000);
-  recordDiagnosticEvent('service.kickstart', kick.status === 0 ? 'success' : 'failure', { exitCode: kick.status });
   if (kick.status !== 0) {
     // 回退路径与 startService 同族：enable + bootstrap 会把并发 stop 的成果覆盖掉，
     // 终态与用户最后一条命令相反。判据共用 epochChanged——
     // **别在这里散写别的判据**
-    let bootstrapped: boolean | null;
-    try {
-      bootstrapped = withFileLock(PATHS.serviceLock, () => {
-        if (startAbortedByConcurrentStop()) return null;
-        runLaunchctl(['enable', serviceTarget()], SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS); // 容忍失败：bootstrap 会再判一次
-        return bootstrapServiceIdempotentOrThrow('重启服务');
-      });
-    } catch (e) {
-      recordDiagnosticEvent('service.bootstrap', 'failure', diagnosticErrorDetails(e));
-      throw e;
-    }
+    const bootstrapped = withFileLock(PATHS.serviceLock, () => {
+      if (startAbortedByConcurrentStop()) return null;
+      runLaunchctl(['enable', serviceTarget()], SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS); // 容忍失败：bootstrap 会再判一次
+      return bootstrapServiceIdempotentOrThrow('重启服务');
+    });
     // 被取消：直接返回，不清理归档也不做别的收尾
-    if (bootstrapped === null) {
-      recordDiagnosticEvent('service.bootstrap', 'cancelled', { reason: 'concurrent-stop' });
-      return { hotReloaded: false, started: false };
-    }
+    if (bootstrapped === null) return { hotReloaded: false, started: false };
     if (!bootstrapped) {
-      recordDiagnosticEvent('service.bootstrap', 'failure', { reason: 'replacement-not-bootstrapped', exitCode: kick.status });
       const detail = kick.stderr.trim();
       throw new CliError(`重启服务失败（kickstart 退出码 ${kick.status ?? '执行失败'}）：服务仍已装载，本次未重新装载`, {
         hint: [detail, '旧进程可能仍在运行，新配置未确认生效；请重试: mihomo-cli start', `手动确认: launchctl print ${serviceTarget()}`].filter(Boolean),
       });
     }
-    recordDiagnosticEvent('service.bootstrap', 'success');
   }
 
   // 顺手清理过期归档：归档可能为 root 属主，但 logs/ 目录归用户所有，unlink 只看目录权限

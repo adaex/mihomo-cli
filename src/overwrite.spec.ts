@@ -122,35 +122,6 @@ describe('互斥操作符与空键：合并层显式报错，不静默按分支�
   }
 });
 
-describe('已移除的操作符形态：显式报错给迁移指引，不当字面键静默落进配置', () => {
-  // ~（按 name 合并）与 <x>（尖括号转义）已随 DSL 裁剪移除。内核对未知顶层键宽容，
-  // 没有专属报错的话老写法会被当字面键静默写进运行配置——零反馈的语义消失
-  for (const key of ['~proxies', '~?proxy-groups', '~<weird>', '+~rules']) {
-    it(`"${key}" → 报已移除的操作符并指向 JS 脚本`, () => {
-      assert.throws(
-        () => mergeOnce({}, { [key]: [{ name: 'x' }] }),
-        e => e instanceof CliError && /已移除的操作符/.test(e.message) && /JS 覆写脚本/.test((e as CliError).hint.join('\n')),
-      );
-    });
-  }
-
-  for (const key of ['<rules>', '<+dns>', '+<+dns>']) {
-    it(`"${key}" → 报已移除的操作符`, () => {
-      assert.throws(
-        () => mergeOnce({}, { [key]: ['x'] }),
-        e => e instanceof CliError && /已移除的操作符/.test(e.message),
-      );
-    });
-  }
-
-  it('裸 ~ / ~? 同样被拦（不再走空键名分支）', () => {
-    assert.throws(
-      () => mergeOnce({}, { '~': 'x' }),
-      e => e instanceof CliError && /已移除的操作符/.test(e.message),
-    );
-  });
-});
-
 describe('applyOverwrite 单文件合并', () => {
   it('对象深合并保留未覆盖字段', () => {
     const target = { dns: { enable: true, listen: '0.0.0.0:53' } };
@@ -499,14 +470,6 @@ describe('文件级操作符校验：诊断路径与合并路径看到同一份�
     }
   }
 
-  it('已移除的 ~ 操作符在 ow/status 即标为加载失败，不被列成生效文件', () => {
-    assertBrokenOnBothPaths('overwrite.tilde.yaml', '~dns: {}\n', /已移除的操作符/);
-  });
-
-  it('尖括号转义在文件加载阶段拦截', () => {
-    assertBrokenOnBothPaths('overwrite.angle.yaml', '<dns>: {}\n', /已移除的操作符/);
-  });
-
   it('__proto__ 键在加载阶段即判坏（含 __proto__! 形态），诊断与合并路径结论一致', () => {
     assertBrokenOnBothPaths('overwrite.proto.yaml', '__proto__: {}\n', /"__proto__" 键/);
     assertBrokenOnBothPaths('overwrite.protof.yaml', '__proto__!: { evil: true }\n', /"__proto__" 键/);
@@ -632,73 +595,28 @@ describe('loadOverwriteFile：match 笔误形态', () => {
   });
 });
 
-describe('loadOverwriteFile：近失文件名提示', () => {
-  /** 收集 console.warn 输出，避免污染测试输出；loadOverwriteFile 的警告走 stderr 直出 */
-  const captureWarn = (fn: () => void): string[] => {
-    const lines: string[] = [];
-    const original = console.warn;
-    console.warn = (message?: unknown) => {
-      lines.push(String(message));
-    };
+describe('loadOverwriteFile：文件名判定', () => {
+  it('主文件只认 overwrite.yaml；扩展文件 overwrite.*.yaml 与 .yml 都认', () => {
+    write('overwrite.glados.yaml', 'log-level: info\n');
+    write('overwrite.glados.yml', 'log-level: debug\n');
+    write('overwrite.yml', 'log-level: warning\n');
     try {
-      fn();
+      assert.deepEqual(
+        loadOverwriteFile().map(f => f.name),
+        ['overwrite.glados.yaml', 'overwrite.glados.yml'],
+      );
     } finally {
-      console.warn = original;
-    }
-    return lines;
-  };
-
-  it('overwrite.yml 不被加载并打一行警告（主文件只认 overwrite.yaml）', () => {
-    fs.writeFileSync(path.join(tmpDir, 'overwrite.yml'), 'log-level: debug\n');
-    try {
-      const warns = captureWarn(() => {
-        const files = loadOverwriteFile();
-        assert.deepEqual(
-          files.map(f => f.name),
-          [],
-        );
-      });
-      assert.equal(warns.length, 1);
-      assert.match(warns[0], /overwrite\.yml/);
-      assert.match(warns[0], /overwrite\.yaml/);
-    } finally {
-      fs.rmSync(path.join(tmpDir, 'overwrite.yml'));
+      cleanup('overwrite.glados.yaml', 'overwrite.glados.yml', 'overwrite.yml');
     }
   });
 
-  it('合法扩展文件（overwrite.glados.yaml 与 .yml）正常加载且不警告', () => {
-    fs.writeFileSync(path.join(tmpDir, 'overwrite.glados.yaml'), 'log-level: info\n');
-    fs.writeFileSync(path.join(tmpDir, 'overwrite.glados.yml'), 'log-level: debug\n');
+  it('不合法的文件名一律不加载（.ts 不能直接执行、大小写变体、备份与无关文件）', () => {
+    const names = ['overwrite.ts', 'overwrite.x.ts', 'Overwrite.YAML', 'overwrite.yaml.bak', 'notes.txt', 'overwrit.yaml'];
+    for (const name of names) write(name, 'x: 1\n');
     try {
-      const warns = captureWarn(() => {
-        const files = loadOverwriteFile();
-        assert.deepEqual(
-          files.map(f => f.name),
-          ['overwrite.glados.yaml', 'overwrite.glados.yml'],
-        );
-      });
-      assert.deepEqual(warns, []);
+      assert.deepEqual(loadOverwriteFile(), []);
     } finally {
-      fs.rmSync(path.join(tmpDir, 'overwrite.glados.yaml'));
-      fs.rmSync(path.join(tmpDir, 'overwrite.glados.yml'));
-    }
-  });
-
-  it('无关与意图不明的文件不警告（误报零容忍，宁可漏报）', () => {
-    // overwrite.yaml.bak 是用户故意改名禁用/编辑器备份；overwrit.yaml 拼写意图不明
-    for (const name of ['overwrite.yaml.bak', 'notes.txt', 'overwrit.yaml']) {
-      fs.writeFileSync(path.join(tmpDir, name), 'x: 1\n');
-    }
-    try {
-      const warns = captureWarn(() => {
-        const files = loadOverwriteFile();
-        assert.deepEqual(files, []);
-      });
-      assert.deepEqual(warns, []);
-    } finally {
-      for (const name of ['overwrite.yaml.bak', 'notes.txt', 'overwrit.yaml']) {
-        fs.rmSync(path.join(tmpDir, name));
-      }
+      cleanup(...names);
     }
   });
 });
@@ -806,88 +724,7 @@ describe('覆写文件 enabled 开关', () => {
     }
   });
 
-  it('元数据键的操作符、已移除操作符与大小写/空白近失形态显式报错，不静默落进配置', () => {
-    // 三族失效方向不同、断言面不同，键集合与断言逐族列在表里；文件名与引号形态
-    // 按原用例保留（近失族键含首尾空白，YAML 里必须加引号写入）
-    interface MetaKeyFamily {
-      keys: string[];
-      fileName: string;
-      /** 键加引号写入（近失族原用例即如此） */
-      quoted: boolean;
-      messageRe: RegExp;
-      /** 断言 CliError.label（已移除操作符族原本不查 label） */
-      label?: string;
-      /** 诊断路径把文件标成 broken 的附加断言（已移除操作符族） */
-      broken?: string;
-    }
-    const families: MetaKeyFamily[] = [
-      {
-        // 剥离发生在解构、早于操作符解析：enabled!: false 既不停用文件，
-        // 又会被规范成键 enabled 写进最终配置——正是本功能要消灭的静默失效。
-        // <enabled> / ~enabled 走「已移除操作符」族（下一项），不在本列表
-        keys: ['enabled!', 'match!', '+enabled', 'match+'],
-        fileName: 'overwrite.op.yaml',
-        quoted: false,
-        messageRe: /疑似想写元数据键/,
-        label: '覆写配置错误',
-      },
-      {
-        // 尖括号转义与 ~ 已删：文件级操作符校验提前到加载阶段后，这两种元数据键变体
-        // 不再是「加载时静默、合并时才报」——ow/status 的诊断旁路同样把文件标成加载失败，
-        // 不会列成生效文件
-        keys: ['<enabled>', '~enabled'],
-        fileName: 'overwrite.op.yaml',
-        quoted: false,
-        messageRe: /已移除/,
-        broken: 'overwrite.op.yaml',
-      },
-      {
-        // YAML 键大小写敏感：`Enabled: false` 既不停用文件（剥离用精确键名），
-        // 又会原样写进运行配置，而内核对未知顶层键不报错——用户零反馈。
-        // 与操作符形态是同一种静默失效，只是走大小写这条路
-        keys: ['Enabled', 'ENABLED', 'Match', 'MATCH', 'enabled ', ' enabled'],
-        fileName: 'overwrite.cap.yaml',
-        quoted: true,
-        messageRe: /疑似想写元数据键/,
-        label: '覆写配置错误',
-      },
-    ];
-    for (const family of families) {
-      for (const key of family.keys) {
-        const asWritten = family.quoted ? `"${key}"` : key;
-        write(family.fileName, `${asWritten}: false\nlog-level: debug\n`);
-        try {
-          assert.throws(
-            () => loadOverwriteFile(),
-            (e: unknown) => {
-              assert.ok(e instanceof CliError, `${key} 应抛 CliError`);
-              if (family.label !== undefined) assert.equal((e as CliError).label, family.label);
-              assert.match((e as Error).message, family.messageRe);
-              return true;
-            },
-            `${asWritten} 应被拒绝`,
-          );
-          if (family.broken !== undefined) assert.ok(listOverwriteFile().broken.some(b => b.name === family.broken));
-        } finally {
-          cleanup(family.fileName);
-        }
-      }
-    }
-  });
-
-  it('与元数据键无关的键不被误伤（含形近但语义无关的）', () => {
-    // 误报零容忍：只认「小写去空白后完全等于元数据键」，不做模糊猜测
-    write('overwrite.ok.yaml', 'enabled-by: me\nmatcher: x\nmatches: [a]\nlog-level: debug\n');
-    try {
-      const files = loadOverwriteFile();
-      assert.deepEqual(Object.keys(files[0].config ?? {}).sort(), ['enabled-by', 'log-level', 'matcher', 'matches']);
-      assert.equal(files[0].enabled, true);
-    } finally {
-      cleanup('overwrite.ok.yaml');
-    }
-  });
-
-  it('名为 enabled 的普通嵌套键不受影响（只拦顶层元数据键的操作符形式）', () => {
+  it('名为 enabled 的普通嵌套键不受影响（只有顶层 enabled 是文件开关）', () => {
     write('overwrite.nested.yaml', 'dns:\n  enabled: true\nlog-level: debug\n');
     try {
       const files = loadOverwriteFile();
@@ -1055,7 +892,7 @@ describe('JS 覆写脚本', () => {
   });
 
   it('主脚本三形态 overwrite.js / overwrite.mjs / overwrite.cjs 都被认（主文件不限于 .js）', () => {
-    // 只认 .js 的话，写 overwrite.mjs 的用户会静默不加载（typo 检测也不覆盖）——
+    // 只认 .js 的话，写 overwrite.mjs 的用户会静默不加载——
     // README 承诺「或 .mjs / .cjs」，主文件与扩展文件必须同宽
     write('overwrite.mjs', 'export default function (config) { config.m = 1; }\n');
     write('overwrite.c.cjs', 'module.exports = function (config) { config.c = 1; }\n');
@@ -1289,26 +1126,6 @@ describe('JS 覆写脚本', () => {
       assert.deepEqual(info.files[0].keys, []);
     } finally {
       cleanup('overwrite.list.js');
-    }
-  });
-
-  it('overwrite.ts 不被加载并提示改用 .js（TypeScript 不能直接执行）', () => {
-    write('overwrite.ts', 'export default function () {}\n');
-    write('overwrite.x.ts', 'export default function () {}\n');
-    const warns: string[] = [];
-    const original = console.warn;
-    console.warn = (message?: unknown) => {
-      warns.push(String(message));
-    };
-    try {
-      const files = loadOverwriteFile();
-      assert.equal(files.length, 0);
-      assert.equal(warns.length, 2);
-      assert.ok(warns.every(w => /不会被当作覆写文件加载/.test(w)));
-    } finally {
-      console.warn = original;
-      cleanup('overwrite.ts');
-      cleanup('overwrite.x.ts');
     }
   });
 });

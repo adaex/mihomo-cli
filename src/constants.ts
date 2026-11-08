@@ -101,6 +101,11 @@ export function isValidPortNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535;
 }
 
+/** 「非 null、非数组的对象」形态守卫：settings / 订阅缓存 / 配置 / 覆写解析外部 JSON·YAML 时共用的唯一谓词 */
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 export const TUN_CONFIG = {
   tun: {
     enable: true,

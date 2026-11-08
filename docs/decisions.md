@@ -1,20 +1,20 @@
 # 架构决策记录
 
-每条记录一个跨模块、稳定、回答「仓为什么长这样」的决策：背景 → 决策 → 拒绝的替代方案 → 关键后果
+每条记录一个跨模块、稳定、回答「仓为什么长这样」的决策：背景 → 决策 → 拒绝的替代方案 → 关键后果。只写现行状态与被否定的方案，不写演进过程——版本史留在 CHANGELOG 与 git
 
-审查产出的 finding 处置——某条为什么不修、与轮次绑定的边界——记在 [CONCLUSIONS](../CONCLUSIONS.md)。代码注释与其他文档的通用归属见 [开发约定](development.md#文档归属)
+某条为什么不修、已知残余风险与实测结论记在 [CONCLUSIONS](../CONCLUSIONS.md)；各文档的归属见 [CLAUDE.md](../CLAUDE.md#文档归属)
 
-新增决策在文末追加，不重写旧条目；决策被推翻时把条目改为「已废弃」并指向取代它的条目，不物理删除——否定过的方案会被人重新提议。
+新增决策在文末追加、编号不重排（代码注释按 D 编号引用）；决策被推翻时把条目改为「已废弃」并保留一句理由，不物理删除——否定过的方案会被人重新提议。
 
 ## D1 服务是用户级 LaunchAgent，不提供 root 安装
 
-v3.0–v4.0 用 root LaunchDaemon（system 域），每次启停都要输密码。改用用户域（`gui/<uid>`）后，正常 install/start/stop/uninstall 服务操作免密；清理 root 属主的 TUN 残留是独立的按需 sudo 路径。旧实现选 root 是为绕开 macOS 本地网络隐私对局域网设备的限制，但 Apple DTS 明确豁免条件是「以 root 运行」而非「身为 daemon」——用户域 agent 只意味着走正常授权弹窗，且回环地址（如自建 ssh -D 出口）本就不属于「本地网络」，完全不触发该机制。
+服务用用户域（`gui/<uid>`）LaunchAgent，正常 install/start/stop/uninstall 免密；清理 root 属主的 TUN 残留是独立的按需 sudo 路径。拒绝的替代：root LaunchDaemon（system 域）——每次启停都要输密码；选它是为绕开 macOS 本地网络隐私对局域网设备的限制，但 Apple DTS 明确豁免条件是「以 root 运行」而非「身为 daemon」——用户域 agent 只意味着走正常授权弹窗，且回环地址（如自建 ssh -D 出口）本就不属于「本地网络」，完全不触发该机制。
 
-后果：CLI 全程以普通用户运行，TUN 的 root 需求由 CLI 内部按需 sudo（临时进程）；不做「读 SUDO_UID 回落用户域」的自动降级（sudo 下 HOME 是否保留取决于 sudoers，静默改域只会制造更难查的错位），index.ts 的 root 守卫直接拒绝。遗留 root LaunchDaemon 的识别与清理曾按本条保留（它有 KeepAlive 会抢端口，不认就是幽灵），2026-10 移除：兼容窗口面向 2026-07–08 的 v3.0–v4.0 安装，存量设备已全部升级；极少数仍残留旧安装的机器（症状：代理停不掉、`/Library/LaunchDaemons/com.mihomo-cli.daemon.plist` 存在）手动清理——`sudo launchctl bootout system/com.mihomo-cli.daemon` 后 `sudo rm -f /Library/LaunchDaemons/com.mihomo-cli.daemon.plist`。
+后果：CLI 全程以普通用户运行，TUN 的 root 需求由 CLI 内部按需 sudo（临时进程）；不做「读 SUDO_UID 回落用户域」的自动降级（sudo 下 HOME 是否保留取决于 sudoers，静默改域只会制造更难查的错位），index.ts 的 root 守卫直接拒绝。不识别也不清理早期版本遗留的 root LaunchDaemon（兼容窗口已结束）；极少数仍残留旧安装的机器（症状：代理停不掉、`/Library/LaunchDaemons/com.mihomo-cli.daemon.plist` 存在）手动清理——`sudo launchctl bootout system/com.mihomo-cli.daemon` 后 `sudo rm -f /Library/LaunchDaemons/com.mihomo-cli.daemon.plist`。
 
 ## D2 并发防线的判据是停止计数（epoch），不是 launchd 的 disable 位
 
-两个终端并发 start/stop 时，「本次 start 执行期间是否有人 stop 过」launchd 自身给不出答案：disable 位是持久的、没有写入时间，「上次 stop 留下的」与「刚刚并发置的」完全同形。判据演进的两版教训：v4.7.5 判「当前是否 disabled」，把持久位误判成并发位，stop 之后的每次 start 都静默不启动；v4.7.6 判「disable 位前后快照比对」，在「上次也 stop 过」这个最常见前置下两边都是 true，并发 stop 隐形。
+两个终端并发 start/stop 时，「本次 start 执行期间是否有人 stop 过」launchd 自身给不出答案：disable 位是持久的、没有写入时间，「上次 stop 留下的」与「刚刚并发置的」完全同形。拒绝的替代判据：判「当前是否 disabled」，把持久位误判成并发位，stop 之后的每次 start 都静默不启动；判「disable 位前后快照比对」，在「上次也 stop 过」这个最常见前置下两边都是 true，并发 stop 隐形。
 
 决策：CLI 自己维护单调递增的停止计数（service-stop-epoch 文件），stop 系列路径在「已确认不会自启且无内核在跑」之后递增，start 系列在锁内比对「计数是否变了」。递增点必须覆盖**没有 disable 可做**但同样得出停止结论的路径（stop 的提前返回、reset 的游离内核清理），否则防线只铺一条路径——「防线只铺一条路径」正是本仓反复栽的坑。
 
@@ -52,69 +52,64 @@ API 若也走镜像，`browser_download_url` 就完全由镜像说了算，而�
 
 版本查询在代理可用时直接经代理；无代理且 gh 可用时先走 gh api 认证通道，失败再回退 curl 直连（`--noproxy '*'`，不读 env 代理）。curl 只替代原 Node fetch 的直连分支，gh 仍是独立的认证子进程通道（D9）。版本查询出网决策唯一出口是 kernel.ts 的 resolveReleaseQuery（cmdKernel 与 doctor 共用，与下载通道决策同源输入）；downloadKernel 只取产物、release 由调用方必传，不再有从下载通道反推查询方式的兜底路径
 
-## D9 启动时只清除指向本机 Mixed 端口的 env 代理
+## D9 出网子进程的 env 代理：per-spawn 去掉指向本机 Mixed 端口的自指形态
 
-无差别清除 http(s)_proxy 会让只能靠 env 代理出网的用户（企业网/其他工具）在 update/kernel 必败，且报错与代理无关。唯一必须清除的是「代理恰好是本工具自己」的死锁：下载经自己的端口，而重启会先停掉那个内核。判定按整条 URL（不按逗号拆分），回环主机集合（127.0.0.1/localhost/::1/0.0.0.0/::——后两者 connect 会路由到本机监听器）与端口比对；裸 localhost:7890 必须补协议重解析（new URL 会把它当 scheme、hostname 为空而漏判）。守卫前用无副作用的只读方式取端口，异常回退默认 7890。
+无差别清除 http(s)_proxy 会让只能靠 env 代理出网的用户（企业网/其他工具）在 update/kernel 必败，且报错与代理无关。唯一必须去掉的是「代理恰好是本工具自己」的自指形态：下载经自己的端口，而重启会先停掉那个内核（死锁）；内核没跑时则经死端口出网。判定按整条 URL（不按逗号拆分），回环主机集合（127.0.0.1/localhost/::1/0.0.0.0/::——后两者 connect 会路由到本机监听器）与端口比对；裸 localhost:7890 必须补协议重解析（new URL 会把它当 scheme、hostname 为空而漏判）。本机端口取自 settings.json 的原始值，纯读（不触发损坏备份等副作用），缺失/损坏/非法一律回退默认 7890。
 
-刻意的并存例外有两处，共同前提都是「该子进程全程不重启内核」，且一律 per-spawn 注入、不写回 process.env：
+实现：`proxy-env.ts` 的 `stripSelfProxyEnv` 返回去掉自指键（`http_proxy` / `https_proxy` / `all_proxy` 大小写共 6 个）的 env 副本，由出网子进程在各自 spawn 处使用，**一律不写 process.env**，与 `curl-spawn.ts` 的 per-spawn 姿态一致。各 spawn 点各自表达自己要什么：
 
-1. **内核下载的 gh 回退**：gh（Go）没有命令行代理选项。通道决策把本机代理地址挂在 gh 候选上（与首选 curl 通道同一出网路径，与用户是否配过 env 无关），下载时注入 HTTPS_PROXY/https_proxy。v26.10.98 初版只在注释里假设「gh 继承同一代理」而未注入，被入口清除打掉后 gh 实际直连，是这条并存关系没写清导致的缺陷。
-2. **update/doctor 的 npm**：npm 是用户环境的工具，通道决策不管它，故只**忠实恢复用户自己原本配过的形态**——清除时登记原值（recordClearedProxyEnv），npm spawn 前 TCP 探活被指端口：在监听（内核在跑）才注回全部被清键；端口不活（env 残留/内核已停）保持清除，死锁防护照旧。不凭空注入：没用 env 代理习惯的用户（如 .npmrc 配镜像源）路径不变；.npmrc 显式 proxy 配置优先级高于 env，也不会被覆盖。探活每次 spawn 独立（view 与 install 之间隔着用户确认，代理状态允许变）。
+1. **curl**：版本查询的直连分支（`--noproxy '*'`）与下载（显式 `-x`）已由命令行参数决定出网路径、no_proxy 置空，不读 env，无需处理。
+2. **gh（版本查询与下载回退）**：先 `stripSelfProxyEnv`，再由 `buildGhSpawnEnv` 按通道决策注入代理（大小写两种形式都给，Go 的 httpproxy 两者都认、大写优先）——gh 没有命令行代理选项，只认环境变量。下载回退候选带着本机代理地址（与首选 curl 通道同一出网路径，与用户是否配过 env 无关）；只去不注，gh 会在内核在跑时也静默直连。版本查询的 gh api 只去不注。内核下载不中途重启内核（产物自检通过才原子换入，重启由用户之后手动做），所以注入不违反本条。
+3. **npm（update/doctor）**：npm 是用户环境的工具，通道决策不管它，只**忠实保留用户自己的配置**：env 里有自指代理时，TCP 探活被指端口——在监听（内核在跑）就保留原 env，端口不通（env 残留/内核已停）则去掉，npm 直连。不凭空注入：没有 env 代理习惯的用户（如 .npmrc 配镜像源）路径不变；.npmrc 显式 proxy 优先级高于 env，也不受影响。探活每次 spawn 独立（view 与 install 之间隔着用户确认，代理状态允许变）。
+
+后果：新增出网子进程必须自己走 `stripSelfProxyEnv`（process.env 不再被入口清理，裸继承会带上自指代理）；sudo/TUN 脚本靠 sudo 默认 env_reset 不继承 env；进程内 fetch 默认不读 env 代理，不受影响——用户显式设 `NODE_USE_ENV_PROXY=1` 时 fetch 会遵守其 env 代理（含指向本机的），这是用户自己的显式选择，CLI 不替它改写。拒绝的替代：命令入口全局清除自指 env + 登记原值、npm/gh 路径再「恢复」——全局可变状态让每个 spawn 点都要记得还原，漏一处就是静默直连或残留。per-spawn 把「这个子进程要什么」放回 spawn 点，不留需要还原的状态。
 
 ## D10 settings 每次读盘，一致视图靠调用方显式传快照
 
 readSettings() 无进程级缓存：CLI 是短进程，缓存省不了多少，却会让「同一操作内读到的设置不一致」这类 bug 无法被发现。需要一致视图时（如一次 start 内多处读端口/订阅），调用方在命令开头取一份快照显式传递——与 D4 的 epoch 快照同一姿态。
 
-## D11 测试纪律：反向验证与失败安全隔离
+## D11 测试纪律（已迁出）
 
-修完必做反向验证：把修复还原，确认对应用例真的转红。预测「理应会红」不能代替实跑——预测落空处往往正是认知与实现的偏差点，比预测对更值钱；发现后补不变量用例挡在结构层，别只改当前这一处
-
-隔离不能只靠测试体里的断言：beforeEach 可能先执行清理，守卫被反向删除时测试也可能先伤害环境再报红。进程清理由 killLeftovers 在任何 pkill 之前验证 pattern 锚定 os.tmpdir 下的本次目录；runCli/runModule 在 spawn 前拒绝 env 覆盖隔离键。服务负例必须同时具备临时 DIR、一次性 label、临时 HOME 与 PATH launchctl 桩，保证守卫失效时下游仍无害
-
-异步子进程默认 20s 超时终止，barrier 与自建子进程在 finally 中清理；超时只是兜底，不是常规收尾。真实 sudo/TUN 与永久污染 launchd disabled 表的用例不自动执行，理由见 CONCLUSIONS「自动化测试边界」
+这是流程规则而非架构决策，已移入 [开发约定](development.md#隔离与反向验证)。编号保留，避免旧引用悬空。
 
 ## D12 覆写 DSL 裁边：声明式只留三个操作符，带条件的变换走 JS 脚本
 
-判据与 v4.13.0 删补全子系统同一条：设施规模与真实使用面不匹配。`~key`/`~?key`（按 name 合并数组元素 + 未命中追加/跳过两态）是唯一「一句话说不清」的操作符，历史上贡献了 v4.8.1 的残缺分组事故；`<x>` 尖括号转义与嵌套形似告警服务的是不存在的键名形态（mihomo 顶层键无 `+`/`~`/`!`/尖括号），零使用记录。保留 `key!`（替换）、`+key`（前插）、`key+`（追加）——纯数据、无逻辑；match 的 `subscription` 同义键一并收掉，同一条件只保留 `name` 入口。
+判据：设施规模与真实使用面不匹配。保留 `key!`（替换）、`+key`（前插）、`key+`（追加）——纯数据、无逻辑。拒绝的替代：`~key`/`~?key`（按 name 合并数组元素 + 未命中追加/跳过两态）——它是唯一「一句话说不清」的操作符，语义面（分组合并、两态未命中）撑不起零散的使用；`<x>` 尖括号转义与嵌套形似告警——服务的是不存在的键名形态（mihomo 顶层键无 `+`/`~`/`!`/尖括号），这些字符出现在键名里就是普通字面键，不报错也不告警。match 只有 `name` 一个入口，不设 `subscription` 同义键。
 
-复杂变换由 JS 脚本承担（`overwrite.js` / `overwrite.*.{js,mjs,cjs}`，默认导出函数）：**全信任模型**——脚本以用户身份运行、不沙箱不超时（同 `.zshrc`，README 明示别装来路不明的脚本），但**必须同步**（返回 Promise 报错：buildConfig 是同步管线，require(esm)（Node ≥22.12 即支持，本仓下界 24）同步加载、`await import` 会把整条合并链传染性 async 化，而纯转换没有要等网络的场景）。管线位置是安全关键：脚本执行 → YAML 合并 → 剥 LOCKED_CONFIG_KEYS → 系统配置注入（段序的翻转与论证见 D13）——脚本设置的锁定键被剥除（安全边界对脚本输出一视同仁）但经前后深快照检出并告警（不静默，脚本作者会困惑「设置了怎么没生效」）；systemConfig 最后注入，脚本改不掉端口与控制面。脚本无 match/enabled 机制（作用域写在脚本里，想停用改扩展名），受 `ow` 全局开关与 selectActiveOverwriteFiles 闸门管理；返回值忽略，CLI 不判定脚本是否命中（D14）。加载失败/执行抛错与坏 YAML 同款双路径姿态（D7）。脚本的锁定键告警文案与 YAML 侧共用一份（renderLockedWarning），清单 LOCKED_CONFIG_KEYS 物理上住 constants.ts（overwrite.ts 要读它做快照、config.ts import overwrite.ts，反向会循环依赖）。
+复杂变换由 JS 脚本承担（`overwrite.js` / `overwrite.*.{js,mjs,cjs}`，默认导出函数）：**全信任模型**——脚本以用户身份运行、不沙箱不超时（同 `.zshrc`，README 明示别装来路不明的脚本），但**必须同步**（返回 Promise 报错：buildConfig 是同步管线，require(esm)（Node ≥22.12 即支持，本仓下界 24）同步加载、`await import` 会把整条合并链传染性 async 化，而纯转换没有要等网络的场景）。管线位置是安全关键：脚本执行 → YAML 合并 → 剥 LOCKED_CONFIG_KEYS → 系统配置注入（段序论证见 D13）——脚本设置的锁定键被剥除（安全边界对脚本输出一视同仁）但经前后深快照检出并告警（不静默，脚本作者会困惑「设置了怎么没生效」）；systemConfig 最后注入，脚本改不掉端口与控制面。脚本无 match/enabled 机制（作用域写在脚本里，想停用改扩展名），受 `ow` 全局开关与 selectActiveOverwriteFiles 闸门管理；返回值忽略，CLI 不判定脚本是否命中（D14）。加载失败/执行抛错与坏 YAML 同款双路径姿态（D7）。脚本的锁定键告警文案与 YAML 侧共用一份（renderLockedWarning），清单 LOCKED_CONFIG_KEYS 物理上住 constants.ts（overwrite.ts 要读它做快照、config.ts import overwrite.ts，反向会循环依赖）。
 
-订阅名匹配同轮裁边：只留尾部 `*`（前缀）与头部 `*`（后缀）两种字面比对（startsWith/endsWith，无回溯结构），其余通配报错——通用 glob 匹配器曾有灾难性回溯事故（70 秒挂死，见 CONCLUSIONS），而真实使用面只有前缀区分一种；复杂匹配脚本里自己写。
+订阅名匹配只留尾部 `*`（前缀）与头部 `*`（后缀）两种字面比对（startsWith/endsWith，无回溯结构），其余通配报错。拒绝通用 glob 匹配器：它有灾难性回溯风险（实测 70 秒挂死，见 CONCLUSIONS），而真实使用面只有前缀区分一种；复杂匹配脚本里自己写。
 
-## D13 覆写执行顺序翻转：脚本在前、YAML 在后
+## D13 覆写执行顺序：脚本在前、YAML 在后
 
-D12 原定「YAML 全部合并 → 脚本执行」（声明式基底，程序化后处理）。真实形态是脚本承担整体结构重组（典型：重建整个 `proxy-groups` 数组），YAML 只做几条声明式注入（`+proxies`/`+rules`）；脚本最后执行并整体重建数组时，YAML 先前插的组被抹到数组末尾——数组布局是「最后写入者决定」，声明式微调失去微调能力。翻转后管线为脚本执行 → YAML 声明式合并 → 剥 LOCKED_CONFIG_KEYS → 系统配置注入：心智模型改为「程序化结构变换在前，声明式微调兜底」，YAML 的 `+key` 前插永远落在脚本产出之后、不被重组吞掉。
+管线为脚本执行 → YAML 声明式合并 → 剥 LOCKED_CONFIG_KEYS → 系统配置注入：心智模型是「程序化结构变换在前，声明式微调兜底」。理由：脚本承担整体结构重组（典型：重建整个 `proxy-groups` 数组），YAML 只做几条声明式注入（`+proxies`/`+rules`）；数组布局是「最后写入者决定」，若脚本最后执行，YAML 先前插的组会被重建抹到数组末尾，声明式微调就失去微调能力。拒绝的替代：YAML 先合并、脚本后处理。YAML 的 `+key` 前插永远落在脚本产出之后，不被重组吞掉。
 
-Breaking 面：脚本看到的始终是订阅配置，读不到 YAML 注入项（ctx 只提供订阅信息）；依赖旧顺序的写法需把那段逻辑并入脚本。顺序唯一真相仍是 `overwriteSortKey`：段序（脚本 0 / YAML 1）→ 主文件优先 → 文件名码点序；`ow` 列表与合并共用同一排序，列表即执行序。
+后果：脚本看到的始终是订阅配置，读不到 YAML 注入项（ctx 只提供订阅信息）；需要 YAML 注入项的逻辑要并入脚本。顺序唯一真相是 `overwriteSortKey`：段序（脚本 0 / YAML 1）→ 主文件优先 → 文件名码点序；`ow` 列表与合并共用同一排序，列表即执行序。
 
 安全边界不随段序移动：剥 LOCKED_CONFIG_KEYS 在**全部**覆写之后、systemConfig 最后注入，两类覆写都改不掉入站与控制面；脚本锁定键检测是执行前后深快照（before 是订阅配置，本就含机场下发的端口键），不依赖 YAML 先合并；YAML 侧锁定键检测作用于最终合并配置，与文件顺序无关。
 
-脚本的命中报告（`return true` 约定）**已废弃**，见 D14。
+## D14 CLI 不判定脚本是否命中，status 不调用变换函数
 
-## D14 收缩：CLI 不判定脚本是否命中，status 不调用变换函数
+决策：脚本返回值忽略；status 把启用中的脚本一律列入覆写清单，不调用变换函数。这里的「生效」与 `overwrite.applied` 只表示「按总开关、文件开关和 YAML match 选中，启用脚本全部列入」，不证明脚本适用于当前订阅或实际修改了配置。
 
-D13 尾段的 `return true` 命中报告为了让 status 区分脚本「生效/不适用」，引入了 ScriptMatch 类型、applyOverwrite 的额外返回值、`OverwriteListResult.entries` 与独立旁路 judgeScriptMatches——代价是 `status` 为得到一行展示信息而额外调用用户变换函数。判据与 D12 相同：设施规模与真实使用面不匹配
+拒绝的替代：脚本用 `return true` 报告命中、让 status 区分「生效/不适用」——需要额外的类型、applyOverwrite 的附加返回值与独立旁路，代价是 `status` 为得到一行展示信息而额外调用用户变换函数。判据与 D12 相同：设施规模与真实使用面不匹配。也拒绝「保留判定但缓存结果」：缓存需要失效协议，而展示收益不抵这套状态。
 
-决策：脚本返回值忽略；status 把启用中的脚本一律列入覆写清单，不调用变换函数。这里的「生效」与 `overwrite.applied` 只表示「按总开关、文件开关和 YAML match 选中，启用脚本全部列入」，不证明脚本适用于当前订阅或实际修改了配置
+边界必须写全：`ow` / `status` 加载模块时仍会执行顶层代码，`doctor` 构建配置时仍会调用变换函数。本条只取消 status 为命中判定额外执行变换函数，不宣称诊断面不执行任何用户代码。
 
-边界必须写全：`ow` / `status` 加载模块时仍会执行顶层代码，`doctor` 构建配置时仍会调用变换函数。本条只取消 status 为命中判定额外执行变换函数，不宣称诊断面不执行任何用户代码。拒绝的替代是保留判定但缓存结果：缓存需要失效协议，而展示收益仍不抵这套状态
-
-`status --json` 同步移除旧的 `overwrite.files`，只保留上述选中口径的 `applied`，避免两个字段并存时让消费者选错
+`status --json` 只提供上述选中口径的 `applied`，不另设 `overwrite.files`，避免两个字段并存时让消费者选错。
 
 ## D15 代理接入按应用配置，CLI 不管理 macOS 全局代理
 
 Mixed 的产品边界是提供回环 HTTP + SOCKS5 端口，不是接管系统网络设置。用户的主路径是在具体浏览器或需要代理的应用中按需配置 `127.0.0.1:<mixed-port>`，不依赖全局 Mac 代理
 
-决策：CLI 不自动设置、切换或清除 macOS 系统代理，不提供全局 `proxy on/off`，快速开始与启动提示也不把 `networksetup` 或全局代理配置作为推荐步骤。`system-proxy.ts` 的 env 自代理判定和系统代理检测都只读，用于避免自指死锁与展示环境信息，不能扩展成写入系统设置
+决策：CLI 不读取、设置、切换或清除 macOS 系统代理（不调用 `networksetup`/`scutil`），不提供全局 `proxy on/off`，快速开始与启动提示也不把全局代理配置作为推荐步骤。`start` 成功后只打印一行静态提示（Mixed 地址与按应用配置的说明）。`proxy-env.ts` 只读进程 env，用于避免自指死锁（D9），不能扩展成读写系统设置
+
+拒绝的替代：`start` 时用 `scutil --proxy` 检测系统代理是否指向本机、按三档给提示——检测的是「系统代理」，而用户的主路径本来就不走系统代理，提示对多数人是噪声，且引入对系统命令输出格式的解析依赖。
 
 后果：`start` 成功只表示内核与端口可用，不表示所有应用流量已走代理；用户文档必须在 Mixed 主路径说明按应用配置。TUN 是用户显式选择的另一种接管系统流量的模式，不是 CLI 自动修改全局代理的替代后门
 
-## D16 CLI 诊断事件独立于内核日志，只记白名单元数据
+## D16 CLI 诊断事件日志（已废弃）
 
-内核 stdout/stderr 能说明节点与 DNS 为什么失败，却还原不了 CLI 是否更新订阅、配置是否写盘、热重载为何回退、最终启动是否健康。把 CLI 事件混入 `mihomo.log` 会同时破坏内核日志查看和结构化消费；记录完整 argv、错误正文或配置又能把订阅 URL、密码和 UUID 持久化到求助材料里
+曾在 `logs/diagnostic.jsonl` 独立记录 CLI 操作链（白名单元数据、一次调用共享 operation id）。已移除：它与 `doctor`、`logs`、`status --json` 已覆盖的信息重叠，却带来独立的轮转/清理、写入失败降级与白名单维护成本；而它是 best-effort（强杀、崩溃、并发窗口允许缺事件），无法当审计日志用，缺事件时反而误导排障。
 
-决策：在 `logs/diagnostic.jsonl` 独立记录操作链。只有入口守卫通过并建立命令上下文后才启用，一次 CLI 调用共享 operation id，退出钩子记录最终退出码；各阶段只由事实拥有者记一次。字段采用白名单，配置只留整份 SHA-256 与节点/组计数，错误只留内部类型和结构化状态码，不记订阅名、URL、原始 argv、配置正文、自由文本错误或 stack。写入用单次同步 O_APPEND，所有异常静默降级；不得用整文件原子重写、异步 buffered writer 或现有服务/订阅锁
-
-诊断文件独立做 2 MB 轮转和 7 天归档清理，不进入 `logs 0/1+` 的内核编号。热重载探测返回结构化 stage/reason 供 `restartService` 记录，但所有失败仍按原路径回退，最终启动结果必须等健康检查结束。拒绝用增加锁来保证轮转期间一条不缺：诊断是 best-effort，不能反过来增加业务阻塞与故障面
-
-后果：`logs --diagnostic` 可还原开机前后的 CLI 操作链；launchd 直接登录自启不经过 CLI，本轮仍没有这一次自启的 CLI 事件。强杀、未 fsync 的崩溃和并发 rename/append 窗口允许缺事件，不能以诊断缺失反推操作未发生；`reset logs` 删除历史后由退出事件重建本次 reset 结果
+若将来重提：先说明现有三个入口哪里答不了，再论证为何不能给它们补字段。旧安装留下的 `diagnostic*.jsonl` 不再被管理，可经 `mihomo-cli dir open logs` 手动删除。

@@ -18,21 +18,21 @@ export interface SubCommand {
 }
 
 /**
- * 子命令表的重复 token 防护，与 registry 的 COMMAND_INDEX 同款判据：
- * 两个子命令撞主名/别名时，分发用的 `table.find` 静默取先注册者，后者永远不可达
- * 且无任何提示。表只有 1-4 个条目，每次分发直接扫描即可。
+ * 命令/子命令表的重复 token 防护（registry 与 dispatchSubcommand 共用）：
+ * 两个条目撞主名/别名时，按 token 查找静默取先注册者，后者永远不可达且无任何提示。
+ * 子命令表只有 1-4 个条目，每次分发直接扫描即可。
  *
- * 抛普通 Error 而非 CliError：表写错是代码 bug，不是用户输入错误（与 COMMAND_INDEX 一致）。
+ * 抛普通 Error 而非 CliError：表写错是代码 bug，不是用户输入错误。
  */
-function assertUniqueTokens(table: SubCommand[]): void {
+export function assertUniqueTokens(entries: ReadonlyArray<{ name: string; aliases?: readonly string[] }>, what: string): void {
   const owner = new Map<string, string>();
-  for (const cmd of table) {
-    for (const token of [cmd.name, ...(cmd.aliases ?? [])]) {
+  for (const entry of entries) {
+    for (const token of [entry.name, ...(entry.aliases ?? [])]) {
       const prev = owner.get(token);
       if (prev !== undefined) {
-        throw new Error(`子命令表存在重复 token: "${token}"（${prev} 与 ${cmd.name}）`);
+        throw new Error(`${what}存在重复 token: "${token}"（${prev} 与 ${entry.name}）`);
       }
-      owner.set(token, cmd.name);
+      owner.set(token, entry.name);
     }
   }
 }
@@ -48,7 +48,7 @@ export async function dispatchSubcommand(
   table: SubCommand[],
   options: { fallback: (args: string[]) => void | Promise<void>; onUnknown: (action: string) => never },
 ): Promise<void> {
-  assertUniqueTokens(table);
+  assertUniqueTokens(table, '子命令表');
   // 与顶层入口（index.ts 对命令 token 做 toLowerCase）口径一致：子命令名同样不区分大小写。
   // 空串按显式提供处理（`ui ""`/`sub update ""` 同口径）：静默落 fallback = 把显式
   // 输入当缺省，列表刷屏掩盖真实问题

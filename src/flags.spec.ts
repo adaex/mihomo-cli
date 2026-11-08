@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { assertKnownFlags, extractStartOptions, parseIntArg } from './argv.js';
-import { FLAGS, matchValueFlagToken, VALUE_FLAGS } from './flags.js';
+import { collectFlagValues, FLAGS, matchValueFlagToken, VALUE_FLAGS } from './flags.js';
 
 describe('flags 单一登记表派生', () => {
   it('VALUE_FLAGS 恰好包含全部带值（含可选值）选项的各形式', () => {
@@ -56,6 +56,37 @@ describe('matchValueFlagToken：带值选项形式的唯一判定入口', () => 
     for (const token of ['-s', '-sx', '--no-update=1', '-z5', 'foo', '-']) {
       assert.equal(matchValueFlagToken(token), null, `${token} 不应命中`);
     }
+  });
+});
+
+describe('collectFlagValues：带值选项取值的唯一入口', () => {
+  it('必填值选项：exact 无条件吞下一个 token（-n -n 的第二个 -n 是值，不是第二次命中）', () => {
+    assert.deepEqual(collectFlagValues(['-n', '-n'], ['-n']), [{ flag: '-n', value: '-n' }]);
+    assert.deepEqual(collectFlagValues(['-n', '-n', '200'], ['-n']), [{ flag: '-n', value: '-n' }]);
+    assert.deepEqual(collectFlagValues(['-n', '200', '-n'], ['-n']), [
+      { flag: '-n', value: '200' },
+      { flag: '-n', value: null },
+    ]);
+  });
+
+  it('必填值选项：末尾裸写 value=null；attached / 等号形式自带值，可为空串', () => {
+    assert.deepEqual(collectFlagValues(['-n'], ['-n', '--lines']), [{ flag: '-n', value: null }]);
+    assert.deepEqual(collectFlagValues(['-n200', '--lines=', '--lines=5'], ['--lines']), [
+      { flag: '-n', value: '200' },
+      { flag: '--lines', value: '' },
+      { flag: '--lines', value: '5' },
+    ]);
+  });
+
+  it('可选值选项（--mirror）：下一 token 是 flag 或缺失时 value=null 且不吞该 token', () => {
+    assert.deepEqual(collectFlagValues(['--mirror', '--proxy', '7897'], ['--mirror']), [{ flag: '--mirror', value: null }]);
+    assert.deepEqual(collectFlagValues(['--mirror'], ['--mirror']), [{ flag: '--mirror', value: null }]);
+    assert.deepEqual(collectFlagValues(['--mirror', 'cdn'], ['--mirror']), [{ flag: '--mirror', value: 'cdn' }]);
+  });
+
+  it('只收集 forms 所属的登记条目，无关选项与位置参数忽略', () => {
+    assert.deepEqual(collectFlagValues(['kernel', '--mirror', 'cdn', '--proxy', '7897', '-s'], ['--proxy']), [{ flag: '--proxy', value: '7897' }]);
+    assert.deepEqual(collectFlagValues(['logs', '-u', '5000'], ['-n', '--lines']), []);
   });
 });
 

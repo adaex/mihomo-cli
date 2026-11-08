@@ -5,7 +5,6 @@
 ## 版本号规则：年.月.序号（如 26.9.90）
 
 - **年.月**取发布当日的日历（两位年），**序号**是**全局发布计数**——从 npm 上全部历史版本延续、**永不重置**：本次序号 = `npm view mihomo-cli versions --json` 的数组长度 + 1
-- 计数记账：26.9.37 是第 89 个发布、但序号误取了当月计数（37），已 deprecate；自 26.9.90（第 90 个发布）起序号与全局计数对齐
 - 年月与序号都只增，semver 比较天然反映发布先后，`compare-versions` 与 npm 均按普通三元组处理，无需特判
 
 ## 一次性：npm Trusted Publisher 绑定
@@ -27,7 +26,7 @@ CI 使用 GitHub-hosted runner、npm CLI >= 11.5.1 与 `id-token: write`。Trust
 - [ ] `npm run typecheck`、`npm test`、`npm run check` 全绿；检查输出确认 `Checked N files` 且 N > 0，warn/info 已逐条审阅
 - [ ] 所有新增功能已在 README 或其链接的用户文档中说明；每类复杂行为只有一个详版，不在多处复制规则
 - [ ] 命令列表与 `src/commands/registry.ts` 实际注册一致
-- [ ] `CHANGELOG.md` 顶部已添加新版本记录，且每条控制在 1–3 句
+- [ ] `CHANGELOG.md` 已有本次版本小节（由顶部 `## [Unreleased]` 改名，没有则新增），只写用户可见变化，每条 1–3 句
 - [ ] 若本轮改了 CONCLUSIONS 记录的结论或边界涉及的代码，同步更新该文档对应节
 - [ ] 版本号定得对：序号 = registry 全部版本数 + 1（`npm view mihomo-cli versions --json` 数组长度 + 1），年.月 按发布当日日历
 - [ ] `git log vX.Y.Z(上一个)..main` 过一遍——**发布区间可能含上轮遗留的未发布提交**，CHANGELOG 要覆盖它们，不只是本次会话做的事
@@ -48,7 +47,7 @@ for (const c of commands) if (c) console.log([c.name, ...c.aliases].join(', ').p
 ## 步骤
 
 1. 更新 `package.json` 中的 `version`；`npm install --package-lock-only` 让 lock 的 version 跟上，避免 package 与 lock 版本漂移
-2. `CHANGELOG.md` 顶部添加新版本记录（新增/变更/修复/安全 分组），按 [文档归属](development.md#文档归属) 写用户可见变化，必要时一句根因。主文件超过 10 个版本小节时，把最旧整节**原样**搬进 `docs/changelog/CHANGELOG-archive.md`，不改写历史
+2. `CHANGELOG.md`：把顶部 `## [Unreleased]` 改成 `## [X.Y.Z] - YYYY-MM-DD`（没有则新增；分组用 新增/变更/修复/移除/安全），按 [文档归属](../CLAUDE.md#文档归属) 写用户可见变化，必要时一句根因。主文件只保留最近 10 个版本小节，更旧的整节删去——历史在 git 与 GitHub Releases，不另设归档文件。`publish.yml` 按 `## [X.Y.Z]` 标题截取发布说明，标题格式不能改
 3. 检查并更新 README 及其链接的用户文档（新增功能、命令变更、示例）
 4. 执行 `npm run typecheck && npm test && npm run check && npm run build`，再完成下方产物自检。CI 的 `prepublishOnly` 会在 tag 源码上重新验证，不以此替代本地检查
 5. 逐文件核对 `git status --short`，只显式暂存已确认的发布相关文件（禁止 `git add .` / `git add -A`）；用 `git diff --cached --stat` 复核后提交：`git commit -m "chore: 发布 vX.Y.Z"`
@@ -96,18 +95,3 @@ MIHOMO_CLI_DIR=/tmp/vp/data MIHOMO_CLI_DAEMON_LABEL="com.mihomo-cli.pack-smoke-$
 ```
 
 完成后清理临时目录、进程与测试 plist
-
-## 发布后：更新在线 edge
-
-每次 CI 的 npm publish 与 GitHub Release 都成功后，立即更新自己的在线 edge；这一步是发布收尾，不能省略
-
-1. 先跑 `ssh-net status`，以当时的拓扑和输出确认 edge 清单与入口，不把当前主机名硬编码成永久清单
-2. 对可连接的 edge 先只读核对 `node --version`、`npm --version` 与 `mihomo-cli version`；版本满足要求且不是本次版本时执行：
-
-   ```bash
-   ssh <edge别名> 'npm install -g mihomo-cli@X.Y.Z && mihomo-cli version'
-   ```
-
-   已是本次版本的只核实，不重复安装；输出必须确认实际运行的就是本次版本
-3. 无法解析地址、连接失败、已离线或地址过期的 edge 直接忽略，不尝试唤醒、不守候，也不给用户布置恢复步骤。registry 尚未落地导致明确版本装不上时同样如实记下，不退回 `@latest`
-4. 收尾按「已更新 <清单>；已跳过 <清单及原因>」汇报，跳过不等于已更新，不必把离线机器当阻塞事项

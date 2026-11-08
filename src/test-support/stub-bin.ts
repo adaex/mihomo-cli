@@ -13,3 +13,13 @@ export function writeStubExecutable(file: string, body: string, interpreter = '/
   fs.writeFileSync(file, `#!${interpreter}\n${body}\n`, { mode: 0o755 });
   return file;
 }
+
+/** 解析桩脚本 `env > file` 落盘的内容为键值表：桩实见的 env 断言（代理键是否透传/被去掉）共用 */
+export function parseEnvDump(text: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const line of text.split('\n')) {
+    const eq = line.indexOf('=');
+    if (eq > 0) env[line.slice(0, eq)] = line.slice(eq + 1);
+  }
+  return env;
+}

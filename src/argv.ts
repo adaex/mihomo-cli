@@ -1,6 +1,6 @@
 import { DEFAULT_AUTO_UPDATE_TIMEOUT } from './constants.js';
 import { CliError } from './errors.js';
-import { matchValueFlagToken, START_RESTART_FLAGS, VALUE_FLAGS } from './flags.js';
+import { collectFlagValues, matchValueFlagToken, START_RESTART_FLAGS, VALUE_FLAGS } from './flags.js';
 
 /**
  * argv 解析：白名单校验、位置参数计数、带值选项取值、start 选项透传。
@@ -56,31 +56,39 @@ export function assertKnownFlags(args: string[] | undefined, known: readonly str
 }
 
 /**
- * 校验非 flag 位置参数的个数不超过命令声明的上限（max），与 assertKnownFlags 配对：
- * flag 侧早已「未知即报错」，位置参数却只认第一个的话，`start mixed garbage` 会忽略
- * garbage 继续执行，不对称。
+ * 位置参数（非 flag、且不是带值选项的值）按出现顺序。assertPositionalCount 与 getNonFlagArg 共用，
+ * 两处跳值口径不许漂移。
  *
  * 带值选项的值不算位置参数；跳值只在下一个 token **不是 flag** 时进行——可选值选项
  * （`--mirror`）裸写后跟 `--proxy 7897` 时它没有值，无条件跳会吞掉 `--proxy` 本身、
  * 把 7897 误判成多余位置参数。
  */
-export function assertPositionalCount(args: string[] | undefined, max: number, startIdx: number, usage: string): void {
-  if (!args) return;
-  let count = 0;
+function positionalArgs(args: readonly string[], startIdx: number): string[] {
+  const out: string[] = [];
   for (let i = startIdx; i < args.length; i++) {
     const a = args[i];
-    if (a.startsWith('-')) {
-      // 跳过该带值选项的值；值位置上是 flag 说明该选项没有值（可选值选项裸写）
-      if (VALUE_FLAGS.has(a) && i + 1 < args.length && !args[i + 1].startsWith('-')) i++;
-      continue;
+    if (!a.startsWith('-')) {
+      out.push(a);
+    } else if (VALUE_FLAGS.has(a) && i + 1 < args.length && !args[i + 1].startsWith('-')) {
+      i++;
     }
-    count++;
-    if (count > max) {
-      throw new CliError(`多余的参数: ${a}`, {
-        label: '参数错误',
-        hint: [`用法: ${usage}`],
-      });
-    }
+  }
+  return out;
+}
+
+/**
+ * 校验非 flag 位置参数的个数不超过命令声明的上限（max），与 assertKnownFlags 配对：
+ * flag 侧早已「未知即报错」，位置参数却只认第一个的话，`start mixed garbage` 会忽略
+ * garbage 继续执行，不对称。
+ */
+export function assertPositionalCount(args: string[] | undefined, max: number, startIdx: number, usage: string): void {
+  if (!args) return;
+  const extra = positionalArgs(args, startIdx)[max];
+  if (extra !== undefined) {
+    throw new CliError(`多余的参数: ${extra}`, {
+      label: '参数错误',
+      hint: [`用法: ${usage}`],
+    });
   }
 }
 
@@ -94,56 +102,26 @@ export function assertPositionalCount(args: string[] | undefined, max: number, s
 export function parseIntArg(args: string[] | undefined, short: string, long: string, defaultValue: number): number {
   if (!args) return defaultValue;
 
-  const parse = (raw: string, flag: string): number => {
-    // 只接受纯十进制整数：parseInt('5s') === 5 会静默吞掉单位
-    if (!/^\d+$/.test(raw.trim())) {
-      throw new CliError(`选项 ${flag} 需要正整数，收到 "${raw}"`, { hint: [`例如: ${flag} ${defaultValue}`] });
-    }
-    const val = Number(raw);
-    if (!Number.isSafeInteger(val) || val < 1) {
-      throw new CliError(`选项 ${flag} 需要 >= 1 的整数，收到 "${raw}"`, { hint: [`例如: ${flag} ${defaultValue}`] });
-    }
-    return val;
-  };
+  const hits = collectFlagValues(args, [short, long]);
+  if (hits.length === 0) return defaultValue;
 
-  // 顺序扫描：exact 命中若值缺失或值本身是 flag 形态（`-n -n`，用户漏写了值），
-  // 立即按缺值/非法值报错——先记重复会把「漏值」误诊成「选项重复」，指向不存在的
-  // 问题。值合法则跳过该值 token 继续找后续命中（重复才报重复）
-  let first: { value: string; flag: string } | null = null;
-  let count = 0;
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === short || args[i] === long) {
-      if (first === null && count === 0) {
-        // 第一个 exact 命中：值缺失按「缺少值」报（末尾 parse('') 只会报「收到空串」，
-        // 不如缺值准）；随后跳过值 token——漏值形态（`-n -n`）的第二个 -n 是第一个
-        // 的「值」，不会被数成第二次命中，最终按「需要正整数,收到 "-n"」报错
-        if (i + 1 >= args.length) {
-          throw new CliError(`选项 ${args[i]} 缺少值`, { hint: [`例如: ${args[i]} ${defaultValue}`] });
-        }
-        first = { value: args[i + 1], flag: args[i] };
-        i++; // 跳过值 token
-        count++;
-        continue;
-      }
-      count++;
-      continue;
-    }
-    const match = matchValueFlagToken(args[i]);
-    if (match && match.form !== 'exact' && (match.spec.forms.includes(short) || match.spec.forms.includes(long))) {
-      if (first === null && count === 0) {
-        first = { value: match.inlineValue ?? '', flag: match.baseForm };
-      }
-      count++;
-    }
+  const { flag, value } = hits[0];
+  const hint = [`例如: ${flag} ${defaultValue}`];
+  if (hits.length > 1) {
+    throw new CliError(`选项 ${flag} 只能指定一次（出现 ${hits.length} 次）`, { hint });
   }
-  if (count > 1) {
-    const flag = first?.flag ?? short;
-    throw new CliError(`选项 ${flag} 只能指定一次（出现 ${count} 次）`, { hint: [`例如: ${flag} ${defaultValue}`] });
+  if (value === null) {
+    throw new CliError(`选项 ${flag} 缺少值`, { hint });
   }
-  if (first !== null) {
-    return parse(first.value, first.flag);
+  // 只接受纯十进制整数：parseInt('5s') === 5 会静默吞掉单位
+  if (!/^\d+$/.test(value.trim())) {
+    throw new CliError(`选项 ${flag} 需要正整数，收到 "${value}"`, { hint });
   }
-  return defaultValue;
+  const val = Number(value);
+  if (!Number.isSafeInteger(val) || val < 1) {
+    throw new CliError(`选项 ${flag} 需要 >= 1 的整数，收到 "${value}"`, { hint });
+  }
+  return val;
 }
 
 /**
@@ -183,17 +161,8 @@ export function assertRestartOptionValues(args: string[] | undefined): void {
   parseIntArg(args, '-u', '--update-timeout', DEFAULT_AUTO_UPDATE_TIMEOUT);
 }
 
-/** 取第一个非 flag 位置参数（跳过带值选项的值，与 assertPositionalCount 同口径：
- * 可选值选项裸写、下一 token 是 flag 时不跳，免得吞掉后续选项） */
+/** 取第一个非 flag 位置参数（跳值口径与 assertPositionalCount 同源，见 positionalArgs） */
 export function getNonFlagArg(args: string[] | undefined, startIdx: number): string | null {
   if (!args) return null;
-  for (let i = startIdx; i < args.length; i++) {
-    const a = args[i];
-    if (a.startsWith('-')) {
-      if (VALUE_FLAGS.has(a) && i + 1 < args.length && !args[i + 1].startsWith('-')) i++;
-      continue;
-    }
-    return a;
-  }
-  return null;
+  return positionalArgs(args, startIdx)[0] ?? null;
 }

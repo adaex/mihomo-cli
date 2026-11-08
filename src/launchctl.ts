@@ -1,12 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { SERVICE_LABEL } from './constants.js';
 import { CliError } from './errors.js';
 import { DIRS, PATHS } from './paths.js';
 import { escapeRegExp } from './text.js';
 import type { ServiceStatus } from './types.js';
-import { sleep } from './utils.js';
 
 /**
  * launchctl 解析与执行层：print / print-disabled 输出解析、退出码语义、查询包装与服务状态读取。

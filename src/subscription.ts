@@ -1,7 +1,6 @@
 import { colors } from './colors.js';
 import { buildConfig, countConfigNodes, dumpYaml, parseConfigContent, validateConfigWithKernel, writeMihomoConfig } from './config.js';
 import { DEFAULT_AUTO_UPDATE_TIMEOUT, DEFAULT_UPDATE_INTERVAL_HOURS } from './constants.js';
-import { diagnosticErrorDetails, hashDiagnosticContent, hashDiagnosticFile, recordDiagnosticEvent } from './diagnostic-events.js';
 import { CliError, TimeoutError, withTimeout } from './errors.js';
 import { createHttpClient } from './http.js';
 import { PATHS, withFileLock } from './paths.js';
@@ -245,173 +244,97 @@ function assertLooksLikeSubscription(parsed: Record<string, unknown>, maskedUrl:
 }
 
 export async function downloadSubscription(url: string, subName: string, signal?: AbortSignal): Promise<ConfigSummary> {
-  const startedAt = Date.now();
-  let stage = 'http';
-  let rollback: 'restored' | 'deleted' | 'failed' | undefined;
+  let response: HttpResponse;
   try {
-    let response: HttpResponse;
-    try {
-      response = await HTTP_CLIENT.get(url, { signal });
-    } catch (e) {
-      const maskedUrl = maskUrl(url);
-      let errorMsg = `获取订阅失败: ${(e as Error).message}`;
-      const err = e as Error & { response?: { status: number } };
-      if (err.response) {
-        errorMsg += ` (HTTP ${err.response.status})`;
-      }
-      errorMsg += `\n  URL: ${maskedUrl}`;
-      // cause 只供结构化诊断提取 HTTP/DNS 错误码；用户可见文本仍按原样脱敏
-      throw new Error(errorMsg, { cause: e });
-    }
-
-    stage = 'empty-response';
-    const content = response.data;
-    if (!content?.trim()) {
-      throw new Error('订阅内容为空');
-    }
-
-    stage = 'parse';
-    const parsed = parseConfigContent(content, '订阅内容');
-
-    stage = 'content-validation';
-    assertLooksLikeSubscription(parsed, maskUrl(url));
-    const { proxies, proxyGroups } = countConfigNodes(parsed);
-    const rawAfterSha256 = hashDiagnosticContent(content);
-
-    const meta = extractSubscriptionMeta(response.headers);
-    stage = 'raw-commit';
-    const previousContent = withFileLock(PATHS.subscriptionCommitLock, () => {
-      // YAML 与缓存是一个提交区间：并发下载不能在前者写入后、后者提交前交错，
-      // 否则较慢一方的回滚会把另一进程已成功提交的新 YAML 覆盖回旧内容。
-      const previousContent = readSubscriptionRawConfig(subName);
-      saveSubscriptionRawConfig(subName, content);
-
-      stage = 'cache-commit';
-      try {
-        saveSubscriptionMeta(subName, meta);
-      } catch (e) {
-        // 缓存失败须回到写前状态：已有文件恢复旧内容，只有原本不存在的文件才删除。
-        // 回滚结果必须进入提示，回滚异常不替换缓存写入主错误。
-        let rollbackHint: string;
-        try {
-          if (previousContent === null) {
-            removeSubscriptionRawConfig(subName);
-            rollback = 'deleted';
-            rollbackHint = '订阅文件已随失败回滚删除';
-          } else {
-            saveSubscriptionRawConfig(subName, previousContent);
-            rollback = 'restored';
-            rollbackHint = '订阅文件已恢复为更新前内容';
-          }
-        } catch (rollbackError) {
-          rollback = 'failed';
-          rollbackHint = `订阅文件回滚失败（${(rollbackError as Error).message}），当前内容未确认，请手工检查`;
-        }
-        throw new CliError(`订阅缓存写入失败: ${(e as Error).message}`, {
-          label: '更新失败',
-          // 不给命令级指引：add 与 update 两个消费方都会走到这里，而 add 失败后条目已
-          // 回滚删除，照「sub update」执行只会得到「没有订阅」——hint 只陈述已做的事
-          hint: [rollbackHint, '若 cache.json 被手工改动，修复后重试'],
-        });
-      }
-      return previousContent;
-    });
-
-    // 哈希和全文比较只服务诊断，放在提交锁外；内容未变时复用已计算的新内容摘要。
-    const changed = previousContent !== content;
-    const rawBeforeSha256 = previousContent === null ? null : changed ? hashDiagnosticContent(previousContent) : rawAfterSha256;
-
-    recordDiagnosticEvent('subscription.download', 'success', {
-      stage: 'commit',
-      durationMs: Date.now() - startedAt,
-      rawBeforeSha256,
-      rawAfterSha256,
-      changed,
-      proxies,
-      proxyGroups,
-    });
-
-    // 订阅元信息（流量/到期/用户名等）已由 saveSubscriptionMeta 落缓存，
-    // 展示一律从缓存读；返回值只带摘要计数供格式化
-    return { proxies, proxyGroups };
+    response = await HTTP_CLIENT.get(url, { signal });
   } catch (e) {
-    recordDiagnosticEvent('subscription.download', signal?.aborted === true ? 'aborted' : 'failure', {
-      stage,
-      durationMs: Date.now() - startedAt,
-      rollback,
-      ...diagnosticErrorDetails(e),
-    });
-    throw e;
+    const maskedUrl = maskUrl(url);
+    let errorMsg = `获取订阅失败: ${(e as Error).message}`;
+    const err = e as Error & { response?: { status: number } };
+    if (err.response) {
+      errorMsg += ` (HTTP ${err.response.status})`;
+    }
+    errorMsg += `\n  URL: ${maskedUrl}`;
+    throw new Error(errorMsg);
   }
+
+  const content = response.data;
+  if (!content?.trim()) {
+    throw new Error('订阅内容为空');
+  }
+
+  const parsed = parseConfigContent(content, '订阅内容');
+  assertLooksLikeSubscription(parsed, maskUrl(url));
+  const { proxies, proxyGroups } = countConfigNodes(parsed);
+
+  const meta = extractSubscriptionMeta(response.headers);
+  withFileLock(PATHS.subscriptionCommitLock, () => {
+    // YAML 与缓存是一个提交区间：并发下载不能在前者写入后、后者提交前交错，
+    // 否则较慢一方的回滚会把另一进程已成功提交的新 YAML 覆盖回旧内容。
+    const previousContent = readSubscriptionRawConfig(subName);
+    saveSubscriptionRawConfig(subName, content);
+
+    try {
+      saveSubscriptionMeta(subName, meta);
+    } catch (e) {
+      // 缓存失败须回到写前状态：已有文件恢复旧内容，只有原本不存在的文件才删除。
+      // 回滚结果必须进入提示，回滚异常不替换缓存写入主错误。
+      let rollbackHint: string;
+      try {
+        if (previousContent === null) {
+          removeSubscriptionRawConfig(subName);
+          rollbackHint = '订阅文件已随失败回滚删除';
+        } else {
+          saveSubscriptionRawConfig(subName, previousContent);
+          rollbackHint = '订阅文件已恢复为更新前内容';
+        }
+      } catch (rollbackError) {
+        rollbackHint = `订阅文件回滚失败（${(rollbackError as Error).message}），当前内容未确认，请手工检查`;
+      }
+      throw new CliError(`订阅缓存写入失败: ${(e as Error).message}`, {
+        label: '更新失败',
+        // 不给命令级指引：add 与 update 两个消费方都会走到这里，而 add 失败后条目已
+        // 回滚删除，照「sub update」执行只会得到「没有订阅」——hint 只陈述已做的事
+        hint: [rollbackHint, '若 cache.json 被手工改动，修复后重试'],
+      });
+    }
+  });
+
+  // 订阅元信息（流量/到期/用户名等）已由 saveSubscriptionMeta 落缓存，
+  // 展示一律从缓存读；返回值只带摘要计数供格式化
+  return { proxies, proxyGroups };
 }
 
 /** 构建配置并交给内核校验；不替换现有 config.yaml，不停止正在运行的内核 */
-export async function prepareConfigForStart(mode: RuntimeMode, subName: string, purpose: 'start' | 'doctor' = 'start'): Promise<PreparedConfig> {
-  const startedAt = Date.now();
-  let stage = 'read';
-  let sourceRawSha256: string | undefined;
-  let candidateSha256: string | undefined;
+export async function prepareConfigForStart(mode: RuntimeMode, subName: string): Promise<PreparedConfig> {
+  // 条目还在、文件没了（手动删除/外部清理）→ 指引重新下载：守卫收口在
+  // requireSubscriptionRawConfig（与 config/doctor 同口径，三处不出现两个方向）。
+  // 例外：subName 来自命令入口的快照，本函数之前的自动更新窗口（约 10s）里条目
+  // 可能已被并发删除——照「有条目但没有本地配置文件」报错会指引一条必败的修复
+  // 路径（sub update <已不存在的名字>），复读现值分档成「已被移除」
+  let rawContent: string;
   try {
-    // 条目还在、文件没了（手动删除/外部清理）→ 指引重新下载：守卫收口在
-    // requireSubscriptionRawConfig（与 config/doctor 同口径，三处不出现两个方向）。
-    // 例外：subName 来自命令入口的快照，本函数之前的自动更新窗口（约 10s）里条目
-    // 可能已被并发删除——照「有条目但没有本地配置文件」报错会指引一条必败的修复
-    // 路径（sub update <已不存在的名字>），复读现值分档成「已被移除」
-    let rawContent: string;
-    try {
-      rawContent = requireSubscriptionRawConfig(subName);
-    } catch (e) {
-      if (e instanceof CliError && !getSubscriptions().some(s => s.name === subName)) {
-        throw new CliError(`订阅 "${subName}" 已在启动过程中被移除（可能另一终端执行了 sub remove/reset）`, {
-          hint: ['查看当前列表: mihomo-cli sub', '确认后重试: mihomo-cli start'],
-        });
-      }
-      throw e;
-    }
-    sourceRawSha256 = hashDiagnosticContent(rawContent);
-
-    stage = 'build';
-    const subUrl = getSubscriptions().find(s => s.name === subName)?.url;
-    const buildResult = buildConfig(rawContent, mode, { subName, subUrl });
-    const candidateContent = dumpYaml(buildResult.config);
-    candidateSha256 = hashDiagnosticContent(candidateContent);
-
-    stage = 'validate';
-    // 透传生效的覆写清单：内核只说「哪个键坏了」，说不出「它是覆写追加进来的」
-    await validateConfigWithKernel(candidateContent, buildResult.overwriteSummaries);
-    const info = countConfigNodes(buildResult.config);
-    recordDiagnosticEvent('config.prepare', 'success', {
-      stage,
-      purpose,
-      mode,
-      durationMs: Date.now() - startedAt,
-      sourceRawSha256,
-      candidateSha256,
-      ...info,
-    });
-
-    return {
-      buildResult,
-      info,
-      diagnostic: { sourceRawSha256, candidateSha256 },
-    };
+    rawContent = requireSubscriptionRawConfig(subName);
   } catch (e) {
-    recordDiagnosticEvent('config.prepare', 'failure', {
-      stage,
-      purpose,
-      mode,
-      durationMs: Date.now() - startedAt,
-      sourceRawSha256,
-      candidateSha256,
-      ...diagnosticErrorDetails(e),
-    });
+    if (e instanceof CliError && !getSubscriptions().some(s => s.name === subName)) {
+      throw new CliError(`订阅 "${subName}" 已在启动过程中被移除（可能另一终端执行了 sub remove/reset）`, {
+        hint: ['查看当前列表: mihomo-cli sub', '确认后重试: mihomo-cli start'],
+      });
+    }
     throw e;
   }
+
+  const subUrl = getSubscriptions().find(s => s.name === subName)?.url;
+  const buildResult = buildConfig(rawContent, mode, { subName, subUrl });
+  const candidateContent = dumpYaml(buildResult.config);
+
+  // 透传生效的覆写清单：内核只说「哪个键坏了」，说不出「它是覆写追加进来的」
+  await validateConfigWithKernel(candidateContent, buildResult.overwriteSummaries);
+  return { buildResult, info: countConfigNodes(buildResult.config) };
 }
 
 /** 校验成功后才原子替换配置；仅保留内核实际使用的配置文件 */
 export function commitPreparedConfig(prepared: PreparedConfig): ConfigSummary {
-  const startedAt = Date.now();
   const { buildResult } = prepared;
 
   if (buildResult.warnings.length > 0) {
@@ -421,31 +344,7 @@ export function commitPreparedConfig(prepared: PreparedConfig): ConfigSummary {
     console.log('');
   }
 
-  const runtimeBeforeSha256 = hashDiagnosticFile(PATHS.configFile);
-  try {
-    writeMihomoConfig(buildResult.config);
-  } catch (e) {
-    recordDiagnosticEvent('config.commit', 'failure', {
-      stage: 'write',
-      durationMs: Date.now() - startedAt,
-      sourceRawSha256: prepared.diagnostic.sourceRawSha256,
-      candidateSha256: prepared.diagnostic.candidateSha256,
-      runtimeBeforeSha256,
-      ...diagnosticErrorDetails(e),
-    });
-    throw e;
-  }
-  recordDiagnosticEvent('config.commit', 'success', {
-    stage: 'write',
-    durationMs: Date.now() - startedAt,
-    sourceRawSha256: prepared.diagnostic.sourceRawSha256,
-    candidateSha256: prepared.diagnostic.candidateSha256,
-    runtimeBeforeSha256,
-    runtimeAfterSha256: prepared.diagnostic.candidateSha256,
-    changed: runtimeBeforeSha256 === null ? null : runtimeBeforeSha256 !== prepared.diagnostic.candidateSha256,
-    ...prepared.info,
-  });
-
+  writeMihomoConfig(buildResult.config);
   return prepared.info;
 }
 
@@ -492,10 +391,7 @@ export async function autoUpdateStaleSubscription(options: { timeout?: number } 
   const allSubs = getSubscriptionsWithCache();
   const staleSubs = allSubs.filter(needsAutoUpdate);
 
-  if (staleSubs.length === 0) {
-    recordDiagnosticEvent('subscription.auto-update', 'skipped', { reason: 'fresh', staleCount: 0 });
-    return;
-  }
+  if (staleSubs.length === 0) return;
 
   if (staleSubs.length === 1) {
     const sub = staleSubs[0];
@@ -526,24 +422,6 @@ export async function autoUpdateStaleSubscription(options: { timeout?: number } 
     console.log(colors.yellow(`自动更新超时 (${timeoutMs / 1000}s)，已完成的更新生效，其余使用缓存配置`));
   }
 
-  const timedOut = controller.signal.aborted;
-  // aborted（超时跳过）既不算成功也不算失败：用缓存启动是设计内降级；
-  // 逐条打印时同步计数，避免为诊断字段重复遍历结果。
-  let succeeded = 0;
-  let abortedCount = 0;
-  let failed = 0;
-  for (const r of results) {
-    printUpdateResult(r);
-    if (r.success) succeeded++;
-    else if (r.aborted === true) abortedCount++;
-    else failed++;
-  }
-  recordDiagnosticEvent('subscription.auto-update', timedOut ? 'timeout' : failed > 0 ? 'failure' : 'success', {
-    staleCount: staleSubs.length,
-    timeoutMs,
-    timedOut,
-    succeeded,
-    failed,
-    abortedCount,
-  });
+  // aborted（超时跳过）既不算成功也不算失败：用缓存启动是设计内降级
+  for (const r of results) printUpdateResult(r);
 }

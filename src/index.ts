@@ -1,18 +1,15 @@
-import fs from 'node:fs';
 import { satisfies } from 'compare-versions';
 import { assertKnownFlags, assertPositionalCount } from './argv.js';
 import { stderrColors } from './colors.js';
 import { printCommandHelp, printShortHelp } from './commands/help.js';
 import { allCommandTokens, findCommand } from './commands/registry.js';
 import { printStatus } from './commands/status.js';
-import { DEFAULT_MIXED_PORT, isValidPortNumber, NODE_ENGINES } from './constants.js';
-import { beginDiagnosticOperation } from './diagnostic-events.js';
+import { NODE_ENGINES } from './constants.js';
 import { CliError, errorMessage } from './errors.js';
 import { isSilentSigint, terminateActiveChildren } from './lifecycle.js';
-import { cleanupStaleTmpFiles, ensureDirs, PATHS } from './paths.js';
+import { cleanupStaleTmpFiles, ensureDirs } from './paths.js';
 import { captureStopEpochBaseline } from './stop-epoch.js';
 import { suggestSimilar } from './suggest.js';
-import { proxyEnvPointsAtSelf, recordClearedProxyEnv } from './system-proxy.js';
 
 process.on('SIGINT', () => {
   terminateActiveChildren('SIGINT');
@@ -42,47 +39,6 @@ process.on('unhandledRejection', (reason: unknown) => {
   console.error(`\n未处理的 Promise 拒绝: ${errorMessage(reason)}`);
   process.exit(1);
 });
-
-const PROXY_ENV_KEYS = ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY'] as const;
-
-/**
- * 在守卫与 ensureDirs **之前**取本机 Mixed 端口：不能建目录、不能因 settings 损坏抛错，
- * 故直接读 settings.json 原始 JSON，任何异常都回退默认端口。
- * 它只服务一个判断：env 代理是否恰好指向自己（见 clearProxyEnv）。
- */
-function readSelfMixedPortEarly(): number {
-  try {
-    const raw = JSON.parse(fs.readFileSync(PATHS.settingsFile, 'utf8')) as { ports?: { mixed?: unknown } } | null;
-    const mixed = raw?.ports?.mixed;
-    // 端口谓词与 settings 校验、--proxy 归一同源（isValidPortNumber）
-    if (isValidPortNumber(mixed)) return mixed;
-  } catch {
-    // 文件不存在/损坏/非对象：用默认端口，不影响守卫之前不抛错的约束
-  }
-  return DEFAULT_MIXED_PORT;
-}
-
-/**
- * 只清除指向**本机 Mixed 端口**的代理环境变量，其余保留。
- *
- * 无差别清除会误伤：企业网络或国内环境里，npm/gh/curl 出网本身就依赖用户 shell 里
- * export 的 https_proxy（指向公司代理或别的工具）；清掉后 `mihomo-cli update`/`kernel`
- * 必然直连失败，而报错里没有任何代理线索。唯一必须清除的是「代理恰好是本工具自己」
- * 的死锁形态——下载经自己的端口，而重启会先停掉那个内核。
- */
-function clearProxyEnv(): void {
-  const selfPort = readSelfMixedPortEarly();
-  const cleared: Record<string, string> = {};
-  for (const key of PROXY_ENV_KEYS) {
-    const value = process.env[key];
-    if (value && proxyEnvPointsAtSelf(value, selfPort)) {
-      cleared[key] = value;
-      delete process.env[key];
-    }
-  }
-  // 登记原值：全程不重启内核的出网子进程（npm update/doctor）可在端口探活后 per-spawn 注回
-  if (Object.keys(cleared).length > 0) recordClearedProxyEnv(cleared);
-}
 
 /**
  * root 守卫：以 `sudo mihomo-cli …` 运行会让所有服务操作静默失效，必须挡在最前面。
@@ -158,8 +114,6 @@ function assertSupportedPlatform(commandName: string): void {
 }
 
 async function main(): Promise<void> {
-  clearProxyEnv();
-
   const args = process.argv.slice(2);
 
   if (args.length === 0) {
@@ -168,7 +122,6 @@ async function main(): Promise<void> {
     assertNotRoot('status');
     ensureDirs();
     cleanupStaleTmpFiles();
-    beginDiagnosticOperation('status');
     await printStatus();
     printShortHelp();
     return;
@@ -203,7 +156,6 @@ async function main(): Promise<void> {
     // 捕获并发判定基线（stopEpochBaseline）：必须早于命令的一切慢速阶段与状态观察，
     // 命令入口是满足该约束的最早且唯一的公共点（D4）。纯读 epoch 文件，无副作用
     captureStopEpochBaseline();
-    beginDiagnosticOperation(command.name);
   }
 
   // meta 不接受选项；help 可带一个命令名（help <命令>），version 不带任何位置参数

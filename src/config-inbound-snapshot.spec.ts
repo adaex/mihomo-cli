@@ -25,7 +25,7 @@ import { BASE_CONFIG, EFFECTIVELY_LOCKED_KEYS, LOCKED_CONFIG_KEYS } from './cons
  * 照样漏。它的真实价值是把「凭记忆重新推导整张清单」降级成「拿结构体 diff 一份
  * 已存在的清单」，并让漏掉的决定无法静默通过。
  *
- * **因此：内核大版本升级时必须人工刷新下方快照**（CLAUDE.md 已记一条）。刷新方法不是
+ * **因此：内核大版本升级时必须人工刷新下方快照**（见 D5 与 CONCLUSIONS）。刷新方法不是
  * 按键名眼熟程度挑，而是照 `config.Inbound` 结构体字段全集 +
  * `hub/executor.updateListeners()` 里逐个 ReCreate* 的入参对表：进得去那份名单的都能开监听。
  */

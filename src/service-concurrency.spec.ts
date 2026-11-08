@@ -4,11 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { SERVICE_LOCK_LAUNCHCTL_TIMEOUT_MS } from './launchctl.js';
 import { LOCK_STALE_MS } from './paths.js';
-import { type DiagnosticRow, readDiagnosticEvents } from './test-support/diagnostic.js';
 import { writeStubExecutable } from './test-support/stub-bin.js';
-import { sleep } from './utils.js';
 
 /**
  * 服务层两条并发防线的消费点验证。
@@ -18,7 +17,7 @@ import { sleep } from './utils.js';
  * **消费点漏铺**——热重载成功路径不查计数、stop 锁体持锁超过强夺阈值。判据纯函数
  * 测不出来，只有把真实 restartService/stopService 跑起来才能咬住。而真实 launchctl
  * 写操作不进自动化测试（enable/disable 会在 /var/db/com.apple.xpc.launchd/ 留永久
- * 记录，见 CONCLUSIONS「自动化测试边界」）——桩 launchctl 让代码走真实路径、
+ * 记录，见 docs/development.md「自动化测试边界」）——桩 launchctl 让代码走真实路径、
  * launchd 一点不被碰。
  *
  * 隔离三层：MIHOMO_CLI_DIR 指临时数据目录（锁、epoch、settings 都在里面）；
@@ -142,11 +141,14 @@ const MODULES = {
   service: JSON.stringify(path.resolve('src/service.ts')),
   stopEpoch: JSON.stringify(path.resolve('src/stop-epoch.ts')),
   runtime: JSON.stringify(path.resolve('src/runtime.ts')),
-  diagnostic: JSON.stringify(path.resolve('src/diagnostic-events.ts')),
 };
 
-/** 桩 launchctl（热重载场景）：print 恒报 running（pid 读自 PID_FILE）、print-disabled 空表（= 启用） */
+/**
+ * 桩 launchctl（热重载场景）：print 恒报 running（pid 读自 PID_FILE）、print-disabled 空表（= 启用）。
+ * 每次调用把动词记到 `$PID_FILE.calls`，供用例判断「有没有回退到 kickstart」
+ */
 const FAKE_LAUNCHCTL_HOT_RELOAD = `
+echo "$1" >> "$PID_FILE.calls"
 # 只会被查到状态查询：热重载不碰 launchctl 写动词
 case "$1" in
   print)
@@ -172,7 +174,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from ${MODULES.paths};
 import { captureStopEpochBaseline, bumpStopEpoch } from ${MODULES.stopEpoch};
-import { beginDiagnosticOperation } from ${MODULES.diagnostic};
 import { launchOrRestart } from ${MODULES.runtime};
 
 const server = http.createServer((req, res) => {
@@ -199,7 +200,6 @@ fs.writeFileSync(PATHS.settingsFile, JSON.stringify({ ports: { mixed: 17890, con
 fs.writeFileSync(PATHS.serviceStopEpoch, '5');
 // 基线在此捕获（命令入口的等价位置）：BUMP 发生在捕获之后，计数变化才会被判定为并发
 captureStopEpochBaseline();
-beginDiagnosticOperation('test');
 
 try {
   const pid = await launchOrRestart('mixed');
@@ -234,16 +234,17 @@ try {
 }
 
 describe('热重载成功路径的并发停止防线（launchOrRestart 消费点）', () => {
-  /** 跑一次热重载场景。返回子进程退出码、完整 stdout 与 spawn 拿到的 pid */
+  /** 跑一次热重载场景。返回子进程退出码、完整 stdout、spawn 拿到的 pid 与桩 launchctl 收到的动词序列 */
   async function runHotReloadScenario(
     bump: boolean,
     options: { putStatus?: number; reportedPid?: number } = {},
-  ): Promise<{ status: number | null; stdout: string; stderr: string; pid: number | null; events: DiagnosticRow[] }> {
+  ): Promise<{ status: number | null; stdout: string; stderr: string; pid: number | null; calls: string[] }> {
     const fixture = makeFixture('mihomo-hotreload');
     const script = writeScript(fixture.fakeBin, 'hot-reload.mts', hotReloadScript());
     writeFakeLaunchctl(fixture.fakeBin, FAKE_LAUNCHCTL_HOT_RELOAD);
+    const pidFile = path.join(fixture.fakeBin, 'server.pid');
     const env = scenarioEnv(fixture, {
-      PID_FILE: path.join(fixture.fakeBin, 'server.pid'),
+      PID_FILE: pidFile,
       BUMP: bump ? '1' : '0',
       PUT_STATUS: String(options.putStatus ?? 204),
       ...(options.reportedPid !== undefined ? { REPORTED_PID: String(options.reportedPid) } : {}),
@@ -251,7 +252,8 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
     try {
       const run = spawnScript(script, env);
       const result = await run.done;
-      return { ...result, pid: run.child.pid ?? null, events: readDiagnosticEvents(fixture.dataDir) };
+      const calls = fs.existsSync(`${pidFile}.calls`) ? fs.readFileSync(`${pidFile}.calls`, 'utf8').split('\n').filter(Boolean) : [];
+      return { ...result, pid: run.child.pid ?? null, calls };
     } finally {
       cleanupFixture(fixture);
     }
@@ -266,8 +268,7 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
 
     assert.notEqual(result.status, 0, `应非 0 退出（并发停止须按取消处理），stdout: ${result.stdout}\nstderr: ${result.stderr}`);
     assert.match(result.stdout, /RESULT:error=启动已取消：期间检测到停止操作/, `应对用户报并发取消，stdout: ${result.stdout}`);
-    assert.equal(result.events.find(event => event.event === 'service.hot-reload')?.result, 'success', '热重载已被接受的事实不能被改记成失败');
-    assert.equal(result.events.find(event => event.event === 'runtime.launch')?.result, 'failure');
+    assert.ok(!result.calls.includes('kickstart'), '热重载已被接受，取消路径不得再 kickstart');
   });
 
   // 负向对照：同样的链路、没有并发 stop（PUT 不递增），必须照常报成功并给出 pid
@@ -277,29 +278,19 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
 
     assert.equal(result.status, 0, `应正常退出，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
     assert.match(result.stdout, new RegExp(`RESULT:pid=${result.pid}\\b`), `应返回监听进程的 pid，stdout: ${result.stdout}`);
-    assert.equal(result.events.find(event => event.event === 'service.hot-reload')?.result, 'success');
-    assert.equal(result.events.find(event => event.event === 'runtime.launch')?.result, 'success');
+    assert.ok(!result.calls.includes('kickstart'), '热重载成功不重启内核');
   });
 
-  it('PUT 返回 500：记录 put/httpStatus 并保留 kickstart 自愈', async () => {
+  it('PUT 返回 500：保留 kickstart 自愈', async () => {
     const result = await runHotReloadScenario(false, { putStatus: 500 });
     assert.equal(result.status, 0, result.stderr);
-    const hotReload = result.events.find(event => event.event === 'service.hot-reload');
-    assert.equal(hotReload?.result, 'fallback');
-    assert.equal(hotReload?.stage, 'put');
-    assert.equal(hotReload?.httpStatus, 500);
-    assert.equal(result.events.find(event => event.event === 'service.kickstart')?.result, 'success');
-    assert.equal(result.events.find(event => event.event === 'runtime.launch')?.result, 'success');
+    assert.ok(result.calls.includes('kickstart'), `PUT 被拒应回退 kickstart: ${result.calls}`);
   });
 
-  it('controller 监听 PID 与服务 PID 不同：记录 identity/owner-mismatch 后回退', async () => {
+  it('controller 监听 PID 与服务 PID 不同：回退 kickstart', async () => {
     const result = await runHotReloadScenario(false, { reportedPid: 1 });
     assert.equal(result.status, 0, result.stderr);
-    const hotReload = result.events.find(event => event.event === 'service.hot-reload');
-    assert.equal(hotReload?.result, 'fallback');
-    assert.equal(hotReload?.stage, 'identity');
-    assert.equal(hotReload?.reason, 'owner-mismatch');
-    assert.equal(result.events.find(event => event.event === 'service.kickstart')?.result, 'success');
+    assert.ok(result.calls.includes('kickstart'), `身份不匹配应回退 kickstart: ${result.calls}`);
   });
 });
 
@@ -312,6 +303,7 @@ n=0
 [ -f "$COUNT_FILE" ] && n=$(cat "$COUNT_FILE")
 n=$((n+1))
 echo "$n" > "$COUNT_FILE"
+echo "$1" >> "$FAKE_BIN/verbs"
 case "$1" in
   print)
     if [ "$n" -eq 3 ]; then exit 112; fi
@@ -333,7 +325,6 @@ exit 0
 import path from 'node:path';
 import { PATHS } from ${MODULES.paths};
 import { captureStopEpochBaseline } from ${MODULES.stopEpoch};
-import { beginDiagnosticOperation } from ${MODULES.diagnostic};
 import { launchOrRestart } from ${MODULES.runtime};
 
 fs.writeFileSync(process.env.PID_FILE as string, String(process.pid));
@@ -343,7 +334,6 @@ fs.writeFileSync(PATHS.settingsFile, JSON.stringify({ ports: { mixed: 17890, con
 
 // epoch 文件不存在（首启形态），基线捕获为 0；全程无并发 stop，应正常完成
 captureStopEpochBaseline();
-beginDiagnosticOperation('test');
 
 try {
   const pid = await launchOrRestart('mixed');
@@ -365,12 +355,8 @@ try {
       const result = await run.done;
       assert.equal(result.status, 0, `查询失败应回退而非报错，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
       assert.match(result.stdout, /RESULT:pid=\d+/, `应走 kickstart 并通过健康确认，stdout: ${result.stdout}`);
-      const events = readDiagnosticEvents(fixture.dataDir);
-      const hotReload = events.find(event => event.event === 'service.hot-reload');
-      assert.equal(hotReload?.result, 'fallback');
-      assert.equal(hotReload?.stage, 'version');
-      assert.equal(events.find(event => event.event === 'service.kickstart')?.result, 'success');
-      assert.equal(events.find(event => event.event === 'service.health')?.result, 'success');
+      const verbs = fs.readFileSync(path.join(fixture.fakeBin, 'verbs'), 'utf8').split('\n');
+      assert.ok(verbs.includes('kickstart'), `热重载探测失败应回退 kickstart，实际动词: ${verbs}`);
     } finally {
       cleanupFixture(fixture);
     }
@@ -538,7 +524,7 @@ function startTunProbeScript(): string {
   return `import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from ${MODULES.paths};
-import { startTun } from ${JSON.stringify(path.resolve('src/process-start.ts'))};
+import { startTun } from ${MODULES.runtime};
 
 fs.mkdirSync(path.dirname(PATHS.mihomoBinary), { recursive: true });
 fs.writeFileSync(PATHS.mihomoBinary, 'stub-kernel');
@@ -610,7 +596,7 @@ describe('TUN 方向的并发防线（cmdStart bump 与 startTun 复核的消费
     const script = `import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from ${MODULES.paths};
-import { startTun } from ${JSON.stringify(path.resolve('src/process-start.ts'))};
+import { startTun } from ${MODULES.runtime};
 
 fs.mkdirSync(path.dirname(PATHS.mihomoBinary), { recursive: true });
 fs.writeFileSync(PATHS.mihomoBinary, 'stub-kernel');

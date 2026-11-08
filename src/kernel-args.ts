@@ -1,7 +1,7 @@
 import { assertKnownFlags } from './argv.js';
 import { AVAILABLE_MIRRORS, isValidPortNumber, MIRROR_ALIASES, MIRROR_BARE } from './constants.js';
 import { CliError } from './errors.js';
-import { matchValueFlagToken } from './flags.js';
+import { collectFlagValues } from './flags.js';
 import { suggestSimilar } from './suggest.js';
 import type { MirrorArg, ProxyArg } from './types.js';
 
@@ -88,15 +88,9 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
   // 两个解析器先后各跑一次同白名单的 assertKnownFlags（幂等），先跑的负责拦未知选项
   assertKnownFlags(args.slice(1), KERNEL_FLAG_WHITELIST, 'kernel [--mirror [镜像]] [--proxy <端口|地址>]');
 
-  // 两种形式（exact `--mirror url` 与等号 `--mirror=url`）的词法识别走登记表
-  // matchValueFlagToken，与 parseProxyArg 同构；本函数只保留 mirror 自己的值语义
-  // （裸写 = 默认镜像域、空值报错、direct = 强制直连、别名/URL 归一）
-  const hits: { value: string | null }[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const match = matchValueFlagToken(args[i]);
-    if (!match?.spec.forms.includes('--mirror')) continue;
-    hits.push({ value: match.form === 'exact' ? (args[i + 1] ?? null) : match.inlineValue });
-  }
+  // 取值走登记表 collectFlagValues（三种形式与跳值口径同 parseProxyArg）；本函数只保留
+  // mirror 自己的值语义（裸写 = 默认镜像域、空值报错、direct = 强制直连、别名/URL 归一）
+  const hits = collectFlagValues(args, ['--mirror']);
   if (hits.length === 0) {
     return { mirror: null, isOverride: false };
   }
@@ -114,7 +108,7 @@ export function parseMirrorArg(args: string[] | undefined): MirrorArg {
       hint: ['用法: mihomo-cli kernel [--mirror [镜像]]', `可用镜像: ${AVAILABLE_MIRRORS.join(', ')}`, '不使用镜像: mihomo-cli kernel --mirror direct'],
     });
   }
-  // null（末尾裸写）或下一 token 是 flag（`--mirror --proxy x`）：无值 = 默认镜像域
+  // null（末尾裸写，或下一 token 是 flag：`--mirror --proxy x`）= 无值 = 默认镜像域
   if (value === null || value.startsWith('-')) {
     return { mirror: MIRROR_BARE, isOverride: true };
   }
@@ -182,18 +176,8 @@ export function parseProxyArg(args: string[] | undefined): ProxyArg {
 
   assertKnownFlags(args.slice(1), KERNEL_FLAG_WHITELIST, 'kernel [--mirror [镜像]] [--proxy <端口|地址>]');
 
-  // 三种形式（`--proxy 7897` / `-p7897` / `--proxy=7897`）统一走登记表 matchValueFlagToken
-  const hits: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const match = matchValueFlagToken(args[i]);
-    if (!match?.spec.forms.includes('--proxy')) continue;
-    if (match.form === 'exact') {
-      hits.push(args[i + 1] ?? '');
-      i++;
-    } else {
-      hits.push(match.inlineValue ?? '');
-    }
-  }
+  // 三种形式（`--proxy 7897` / `-p7897` / `--proxy=7897`）统一走登记表 collectFlagValues
+  const hits = collectFlagValues(args, ['--proxy']);
   if (hits.length === 0) {
     return { proxy: null };
   }
@@ -204,7 +188,7 @@ export function parseProxyArg(args: string[] | undefined): ProxyArg {
     });
   }
 
-  const raw = hits[0].trim();
+  const raw = (hits[0].value ?? '').trim();
   if (!raw || raw.startsWith('-')) {
     throw new CliError('--proxy 需要一个端口或代理地址', {
       label: '参数错误',

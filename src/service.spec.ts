@@ -222,7 +222,7 @@ describe('parseServicePrint：last terminating signal（信号死亡）', () => 
 /**
  * 崩溃描述收口成 describeAbnormalExit：status / doctor 三处此前各写一遍
  * `lastExitCode !== null && !== 0`，补信号判据时必须同步改三处——正是
- * CLAUDE.md 说的「防线只铺一条路径」的形状。
+ * D2 说的「防线只铺一条路径」的形状。
  */
 describe('describeAbnormalExit', () => {
   const status = (over: Partial<ServiceStatus>): ServiceStatus => ({
@@ -384,7 +384,7 @@ describe('epochChanged：判据是停止计数的变化，不是 disable 位的�
  * 不在测试里另抄一份——抄一份等于在验副本，两边一漂移就测了个假的。
  *
  * 不碰 launchctl——`disableServiceAutoStart` 会真改 launchd 的 disabled 表（在系统里
- * 留永久记录，见 `CONCLUSIONS.md` 的「自动化测试边界」）。这里只验计数机制本身：
+ * 留永久记录，见 `docs/development.md` 的「自动化测试边界」）。这里只验计数机制本身：
  * 文件层通了，配合上面的判据用例，整条链路的正确性就锁住了。
  */
 describe('停止计数的读取（并发判定的物理基础）', () => {
@@ -556,9 +556,9 @@ describe('waitServiceHealthy：轮询期间 launchctl 查询失败的容错', ()
   /**
    * 子进程 + MIHOMO_CLI_DIR 隔离：healthViaProcessProbe 的 pgrep pattern 锚定
    * PATHS.mihomoBinary——父进程直接调时 pattern 指向真实 ~/.mihomo-cli，开发机上
-   * 自己的内核在跑会让 healthy:false 用例假红、pid 断言飘（D11：进程匹配类测试
-   * 必须断言隔离前提）。真实用到的系统工具只有 pgrep（pattern 锚定隔离目录，
-   * 匹配不到任何真实进程）。
+   * 自己的内核在跑会让 healthy:false 用例假红、pid 断言飘（docs/development.md
+   * 「隔离与反向验证」：进程匹配类测试必须断言隔离前提）。真实用到的系统工具只有 pgrep
+   * （pattern 锚定隔离目录，匹配不到任何真实进程）。
    */
   function runHealthScenario(scenario: { initialMode: 'fail' | 'notrunning' | 'ok'; switchTo?: { mode: string; afterMs: number }; fakeKernel?: boolean }): {
     stdout: string;

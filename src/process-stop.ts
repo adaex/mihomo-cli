@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { colors } from './colors.js';
 import { CliError } from './errors.js';
 import { DIRS, ensureDirs, PATHS, rmrf } from './paths.js';
@@ -7,10 +8,9 @@ import { getMihomoPids, isProbedMihomo, MAIN_INSTANCE_PATTERN, probeProcess } fr
 import { describeSudoFailure, runSudoScript, SudoAuthError } from './sudo.js';
 import { shellQuote } from './text.js';
 import type { CleanupResult, StopResult } from './types.js';
-import { sleep } from './utils.js';
 
 /**
- * 内核进程的停止与残留清理。与启动（process-start.ts）分家：
+ * 内核进程的停止与残留清理。与启动（runtime.ts 的 startTun）分家：
  * 游离内核的 stop()、服务路径（service.ts）的残留收口、reset 的停机清理
  * 都走本文件唯一的 cleanupAll，不再各维护一份杀进程实现；
  * cleanupAll 结果的处置（抛错/警告与包装）也收口在此。

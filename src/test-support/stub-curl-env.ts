@@ -8,8 +8,8 @@ import { writeStubExecutable } from './stub-bin.js';
 
 /**
  * 「桩 curl 记录 no_proxy/NO_PROXY + 固定响应」端到端夹具：curl spawn 的 env 代理策略
- * 回归闸（curl-spawn.ts 唯一出口的接线锚点）共用这一份骨架。CLAUDE.md 夹具纪律——
- * spawn 与 env 形态不在各 spec 重抄；接线被拔掉时对应用例转红（D11 反向验证）。
+ * 回归闸（curl-spawn.ts 唯一出口的接线锚点）共用这一份骨架。夹具纪律（docs/development.md）——
+ * spawn 与 env 形态不在各 spec 重抄；接线被拔掉时对应用例转红（反向验证）。
  *
  * 文件名不带 .spec 后缀：测试只收 *.spec.ts 结尾的文件，本支撑模块不会被当套件执行。
  */

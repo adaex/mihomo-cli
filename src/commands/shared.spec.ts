@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import readline from 'node:readline';
 import { beforeEach, describe, it } from 'node:test';
 
-import { confirmPrompt, dispatchSubcommand, type SubCommand } from './shared.js';
+import { assertUniqueTokens, confirmPrompt, dispatchSubcommand, type SubCommand } from './shared.js';
 
 /** 记录命中的 handler（协议约定 handler 返回 void，用副作用观察分发结果） */
 let called: string[] = [];
@@ -38,11 +38,25 @@ beforeEach(() => {
 });
 
 /**
- * 子命令表的重复 token 防护：registry 的 COMMAND_INDEX 在构建时对重复 token 抛错，
- * 但 dispatchSubcommand 用 `table.find`，两个子命令撞主名/别名时会静默取先注册者，
- * 后者永远不可达且无提示。入口处补同款检查（表只有 1-4 个条目，每次分发直接扫描）。
+ * 子命令表的重复 token 防护：dispatchSubcommand 用 `table.find`，两个子命令撞主名/别名时
+ * 会静默取先注册者，后者永远不可达且无提示。分发入口与 registry 共用 assertUniqueTokens
+ * （表只有 1-4 个条目，每次分发直接扫描）。
  */
 describe('dispatchSubcommand：子命令表重复 token 防护', () => {
+  it('registry 同款守卫：条目撞 token 时错误带上调用方给的表名', () => {
+    assert.throws(
+      () =>
+        assertUniqueTokens(
+          [
+            { name: 'a', aliases: ['x'] },
+            { name: 'b', aliases: ['x'] },
+          ],
+          '命令注册表',
+        ),
+      /命令注册表存在重复 token: "x"（a 与 b）/,
+    );
+  });
+
   it('两个子命令的主名相同时抛错，不静默取先注册者', async () => {
     const dup: SubCommand[] = [
       { name: 'add', handler: () => {} },

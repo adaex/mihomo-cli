@@ -87,33 +87,4 @@ describe('logs：编号省略与归档序号映射', () => {
       assert.notEqual(r.status, 0);
       assert.match(r.stderr, /未找到日志 "9"/);
     }));
-
-  it('logs --diagnostic 读取独立 JSONL，不混入内核编号与内容', () =>
-    withLogs((run, dataDir) => {
-      fs.writeFileSync(path.join(dataDir, 'logs', 'diagnostic.jsonl'), '{"event":"first"}\n{"event":"second"}\n');
-      const r = run(['logs', '--diagnostic', '-n', '1']);
-      assert.equal(r.status, 0, r.stderr);
-      assert.match(r.stdout, /diagnostic\.jsonl/);
-      assert.match(r.stdout, /second/);
-      assert.doesNotMatch(r.stdout, /first|current-line|archive-/);
-    }));
-
-  it('空诊断历史明确显示为空，不让首次查看误报文件不存在', () => {
-    const fixture = makeFixture('mihomo-logs-diagnostic-empty');
-    try {
-      const r = runCli(['logs', '--diagnostic'], fixture);
-      assert.equal(r.status, 0, r.stderr);
-      assert.match(r.stdout, /暂无诊断事件/);
-      assert.match(fs.readFileSync(path.join(fixture.dataDir, 'logs', 'diagnostic.jsonl'), 'utf8'), /"event":"cli.command"/);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it('logs --diagnostic 与内核日志编号显式互斥', () =>
-    withLogs(run => {
-      const r = run(['logs', '--diagnostic', '1']);
-      assert.notEqual(r.status, 0);
-      assert.match(r.stderr, /--diagnostic 与内核日志编号互斥/);
-    }));
 });

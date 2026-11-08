@@ -2,7 +2,6 @@ import { assertKnownFlags, assertPositionalCount, getNonFlagArg, hasFlag, parseI
 import { colors } from '../colors.js';
 import { assertKernelInstalled, runtimeModeLabel } from '../config.js';
 import { DEFAULT_AUTO_UPDATE_TIMEOUT, DEFAULT_MIXED_PORT } from '../constants.js';
-import { recordDiagnosticEvent } from '../diagnostic-events.js';
 import { CliError, relabelCliError } from '../errors.js';
 import { START_RESTART_FLAG_FORMS as START_FLAGS } from '../flags.js';
 import { getServiceStatus } from '../launchctl.js';
@@ -11,7 +10,6 @@ import { disableServiceAutoStart, tunBlockedByRunningService } from '../service.
 import { getPortsOrNull } from '../settings.js';
 import { bumpStopEpoch, captureStopEpochBaseline } from '../stop-epoch.js';
 import * as subscription from '../subscription.js';
-import { printSystemProxyHint } from '../system-proxy.js';
 import { firstLine } from '../text.js';
 import type { PreparedConfig, RuntimeMode } from '../types.js';
 
@@ -41,7 +39,6 @@ export async function cmdStart(args: string[]): Promise<void> {
   // 也不该让用户先看到「未找到内核」再发现自己选项写错（ow on 已有同款提前校验）
   const skipUpdate = hasFlag(args, '-s', '--no-update');
   const updateTimeout = parseIntArg(args, '-u', '--update-timeout', DEFAULT_AUTO_UPDATE_TIMEOUT);
-  recordDiagnosticEvent('start', 'begin', { mode: targetMode, updateRequested: !skipUpdate, timeoutMs: updateTimeout });
   // TUN 分支若在弹密码前关了服务自启，启动失败/取消时错误提示要带上自启位的最终状态
   let disabledAutoStartForTun = false;
 
@@ -166,12 +163,13 @@ export async function cmdStart(args: string[]): Promise<void> {
 
   // Mixed 只提供端口，不自动修改 macOS 系统代理：进程活着 ≠ 应用流量走代理。
   // 主路径由具体浏览器或应用按需配置（D15）；TUN 接管系统流量，无需此步。
-  // 系统代理检测只读，提示按环境分档；端口取实际配置（settings.ports 可覆盖默认 7890）。
+  // 端口取实际配置（settings.ports 可覆盖默认 7890）。
   // 用 getPortsOrNull：这是「已启动」之后的附加提示（同上方 printStatus 的容错），
   // 启动多秒窗口内 settings.ports 被改坏时不能把成功命令翻成 exit 1；坏值由
   // doctor 的端口配置检查项专门报
   if (targetMode === 'mixed') {
-    printSystemProxyHint(getPortsOrNull()?.mixed ?? DEFAULT_MIXED_PORT);
+    const mixedPort = getPortsOrNull()?.mixed ?? DEFAULT_MIXED_PORT;
+    console.log(colors.gray(`提示: Mixed 不自动修改 macOS 系统代理；需要代理的具体应用请配置 HTTP/SOCKS5 127.0.0.1:${mixedPort}（TUN 模式无需）`));
   } else {
     // TUN 是 root 临时进程：关终端、退出 shell 都不会停它，「怎么收掉」必须随成功一起告知
     console.log(colors.gray('TUN 为临时进程，关闭终端不会停止；停止: mihomo-cli stop（之后 mihomo-cli start 恢复 Mixed）'));

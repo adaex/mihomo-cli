@@ -10,6 +10,7 @@ import { buildCurlSpawnEnv } from './curl-spawn.js';
 import { createHttpError } from './http.js';
 import { trackChildProcess } from './lifecycle.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
+import { stripSelfProxyEnv } from './proxy-env.js';
 import { escapeRegExp, lastCurlErrorLine } from './text.js';
 import type { GitHubAsset, GitHubRelease, KernelUpdateInfo } from './types.js';
 
@@ -72,7 +73,7 @@ const loopbackHttpUrl = (port: number): string => `http://127.0.0.1:${port}`;
  * - proxy：curl 经代理（本机混合端口或显式 --proxy），有 --fail-with-body 与低速超时，失败语义最明确
  * - gh：GitHub CLI，信任锚是 gh 本身 + 精确资产名；经代理时实测吞吐方差大（1.6～210s），
  *   故本机代理在跑时作为回退候选而非首选。回退候选由 resolveDownloadChannels 注入
- *   proxy（per-spawn env，见 buildGhDownloadEnv），与首选通道同一出网路径
+ *   proxy（per-spawn env，见 buildGhSpawnEnv），与首选通道同一出网路径
  * - mirror：第三方镜像前缀，无法验证来源完整性，仅兜底；可附带 proxy 做传输层
  * - direct：curl 直连
  */
@@ -100,13 +101,13 @@ export interface ChannelResolutionInput {
  * - 显式覆盖（--mirror direct / --mirror <镜像> / --proxy）只有一个候选——显式意图不自动换道
  * - 默认：本机代理在跑 → proxy 首选、gh 回退；代理没跑 → gh；都没有 → direct
  *
- * 回退的局限要清楚：gh 候选**带着本机代理地址**（注入子进程 env，见 buildGhDownloadEnv），
+ * 回退的局限要清楚：gh 候选**带着本机代理地址**（注入子进程 env，见 buildGhSpawnEnv），
  * url-test 的 interval 为 300s，两次尝试间组的选中节点通常不变——回退只换客户端不换路径，
  * 对「同节点低速」失败不保证有效；它真正能治的是连接类瞬断，以及恰好跨过测速间隔的情形。
  * 根因（url-test 按握手延迟选节点、不测带宽）在 CLI 层无法根治，全失败时提示用户手动换节点。
  *
- * 注意 env 注入不能省：main() 入口的 clearProxyEnv（D9）会删掉指向**本机自己** Mixed
- * 端口的代理 env——shell 里 export 了 https_proxy 的最常见形态恰好被清掉，不注入的话
+ * 注意 env 注入不能省：buildGhSpawnEnv（D9）会去掉指向**本机自己** Mixed 端口的代理 env——
+ * shell 里 export 了 https_proxy 的最常见形态恰好被去掉，不注入的话
  * gh 回退会实际直连，「只换客户端不换路径」与全失败时的换节点提示就都不成立。
  *
  * 实证背景（2026-10）：gh 与 curl 经同一代理后路径相同，快慢取决于 url-test 选中的
@@ -125,7 +126,7 @@ export function resolveDownloadChannels(input: ChannelResolutionInput): Download
   if (input.proxyRunning && input.proxyPort !== null) {
     const proxyUrl = loopbackHttpUrl(input.proxyPort);
     const channels: DownloadChannel[] = [{ kind: 'proxy', proxy: proxyUrl }];
-    // gh 候选带同一个本机代理：入口 clearProxyEnv 会清掉自指 env，不带地址 gh 就直连了
+    // gh 候选带同一个本机代理：buildGhSpawnEnv 会去掉自指 env，不带地址 gh 就直连了
     if (input.ghAvailable) channels.push({ kind: 'gh', proxy: proxyUrl });
     return channels;
   }
@@ -332,6 +333,7 @@ async function getLatestReleaseViaGh(repo: string, signal?: AbortSignal): Promis
     encoding: 'utf8',
     maxBuffer: 50 * 1024 * 1024,
     timeout: GH_API_TIMEOUT,
+    env: buildGhSpawnEnv(),
     signal,
   });
   return pickLatestRelease(JSON.parse(result.stdout) as GitHubRelease[]);
@@ -491,16 +493,17 @@ export function buildGhReleaseDownloadArgs(tag: string, assetName: string, dir: 
 }
 
 /**
- * 构造 gh 下载子进程的 env：gh（Go）只认代理环境变量、没有命令行代理选项。
+ * 构造 gh 子进程（版本查询与下载共用）的 env：先去掉指向本机 Mixed 端口的自指代理
+ * （D9：防「经自己代理下载、重启又先停掉自己」死锁，也防内核没跑时经死端口出网），
+ * 再按需注入通道指定的代理——gh（Go）只认代理环境变量、没有命令行代理选项。
  *
- * 这是 resolveDownloadChannels 给 gh 回退候选注入 proxy 的落点——只作用于**本次 spawn**，
- * 不写 process.env。main() 入口的 clearProxyEnv（D9）会删掉指向本机 Mixed 端口的自指
- * 代理 env（防「经自己代理下载、重启又先停掉自己」死锁）；kernel 下载不中途重启内核
- * （产物自检通过才原子换入，重启由用户之后手动做），故 per-spawn 注回不违反 D9，
- * 也不泄漏给同一进程后续的子进程。大小写两种形式都给（Go httpproxy 两种都认，大写优先）。
+ * 注入是 resolveDownloadChannels 给 gh 回退候选挂 proxy 的落点，只作用于**本次 spawn**，
+ * 不写 process.env；kernel 下载不中途重启内核（产物自检通过才原子换入，重启由用户之后
+ * 手动做），故注入不违反 D9。大小写两种形式都给（Go httpproxy 两种都认，大写优先）。
+ * selfPort 缺省读 settings，测试可显式传入。
  */
-export function buildGhDownloadEnv(proxy: string | null): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+export function buildGhSpawnEnv(proxy: string | null = null, selfPort?: number): NodeJS.ProcessEnv {
+  const { env } = stripSelfProxyEnv(process.env, selfPort);
   if (proxy) {
     env.HTTPS_PROXY = proxy;
     env.https_proxy = proxy;
@@ -658,8 +661,8 @@ export async function downloadKernel(
       }
       const ghResult = await runInheritedChild('gh', buildGhReleaseDownloadArgs(latest.tag_name, asset.name, tempDir), {
         timeout: GH_DOWNLOAD_TIMEOUT,
-        // gh 回退候选带本机代理：per-spawn 注入（buildGhDownloadEnv 注释述其与 D9 的关系）
-        env: buildGhDownloadEnv(channel.proxy ?? null),
+        // gh 回退候选带本机代理：per-spawn 注入（buildGhSpawnEnv 注释述其与 D9 的关系）
+        env: buildGhSpawnEnv(channel.proxy ?? null),
       });
       if (ghResult.error) {
         if ((ghResult.error as NodeJS.ErrnoException).code === 'ENOENT') {

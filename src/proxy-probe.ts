@@ -2,7 +2,6 @@ import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { buildCurlSpawnEnv } from './curl-spawn.js';
-import { diagnosticErrorDetails, recordDiagnosticEvent } from './diagnostic-events.js';
 import { parsePidList } from './process-probe.js';
 import { lastCurlErrorLine } from './text.js';
 import type { ProxyProbeResult } from './types.js';
@@ -67,19 +66,15 @@ export async function probeProxyConnectivity(port: number): Promise<ProxyProbeRe
     const code = Number.parseInt(stdout.trim(), 10);
     const statusCode = Number.isFinite(code) ? code : null;
     const ok = isProbeSuccessStatus(statusCode);
-    const durationMs = Date.now() - start;
-    recordDiagnosticEvent('proxy.probe', ok ? 'success' : 'failure', { port, httpStatus: statusCode, durationMs });
     return {
       ok,
       statusCode,
       error: ok ? null : `HTTP ${statusCode ?? '无响应'}`,
-      durationMs,
+      durationMs: Date.now() - start,
     };
   } catch (e) {
     const err = e as { message?: string; stderr?: string | Buffer };
     const detail = lastCurlErrorLine(err.stderr) ?? err.message ?? '请求失败';
-    const durationMs = Date.now() - start;
-    recordDiagnosticEvent('proxy.probe', 'failure', { port, httpStatus: null, durationMs, ...diagnosticErrorDetails(e) });
-    return { ok: false, statusCode: null, error: detail, durationMs };
+    return { ok: false, statusCode: null, error: detail, durationMs: Date.now() - start };
   }
 }

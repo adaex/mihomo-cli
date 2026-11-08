@@ -698,7 +698,7 @@ describe('buildConfig 带出本次参与构建的覆写清单', () => {
     }
   });
 
-  // 原 `~?key` 的两个现场改由 JS 脚本承担（~ 操作符已移除），用例同时是新机制的迁移示例
+  // 按 name 找分组这类带条件的数组元素修改由 JS 脚本承担（YAML 覆写不提供按 name 合并）
   it('脚本按 name 找分组：未找到时 ctx.warn 进 warnings，订阅分组不受影响', () => {
     const OW_SCRIPT = 'overwrite.glados.js';
     fs.writeFileSync(

@@ -117,7 +117,7 @@ export function waitForPids(count: number, listPids: () => number[]): number[] {
 /**
  * 进程是否真的死了。**不能用 `process.kill(pid, 0)`**：它对僵尸进程（已死但父进程
  * 尚未收割，detached 桩进程的常态）同样返回成功——这正是 v4.2.3 给 TUN 启动判活修过的
- * 同一个坑（见 process-start.ts）。判据以 ps 状态列为准：Z 开头或查不到都算死。
+ * 同一个坑（见 runtime.ts 的 buildTunLaunchScript）。判据以 ps 状态列为准：Z 开头或查不到都算死。
  */
 export function isDead(pid: number): boolean {
   const r = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' });

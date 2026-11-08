@@ -20,7 +20,7 @@ npm run typecheck && npm test && npm run check && npm run build
   - `cli.ts`：`makeFixture` / `runCli` / `readEpochIn` / `ENTRY`，模块级子进程 `runModule` / `moduleUrl`；CLI 夹具自带临时 `MIHOMO_CLI_DIR`、一次性 label、`NO_COLOR` 三件套
   - `fake-kernel.ts`：假内核落盘、起进程、等出现、判死、收尾；禁静态 import 模块加载期固化 DIR 的模块
   - `guard.ts`：守卫类 preload spawn 骨架，env 整体替换以表达「刻意不设 DIR」形态
-  - `stub-bin.ts`：PATH 桩可执行文件原语
+  - `stub-bin.ts`：PATH 桩可执行文件原语（`writeStubExecutable`），`parseEnvDump` 把桩转储的 env 解析成键值，供断言子进程实际收到的 env
   - `stub-curl-env.ts`：桩 curl 记录 no_proxy 实见值的回归闸夹具
   - `spawn-eval.ts`：异步 `tsx -e` 子进程原语，并发用例的 spawn 形态
   - `poll.ts`：同步轮询原语，跨进程文件信号的统一等待骨架
@@ -31,23 +31,18 @@ npm run typecheck && npm test && npm run check && npm run build
 ## 隔离与反向验证
 
 - 进程类测试必须先隔离再有副作用：临时 `MIHOMO_CLI_DIR`，涉及服务/reset 再加一次性 `MIHOMO_CLI_DAEMON_LABEL`；`killLeftovers` 必须先经 `assertIsolatedCleanupPattern`，guard 失败时任何 `pkill` 都不得发生。`runCli` / `runModule` 的隔离键不允许被 env 覆盖；涉及 plist 的服务测试还要临时 HOME 和 PATH launchctl 桩
-- 修完必做反向验证：还原修复，确认用例转红，规则见 [D11](decisions.md#d11-测试纪律反向验证与失败安全隔离)。预测落空处是认知与实现的偏差点，补不变量用例挡在结构层
+- 隔离不能只靠测试体里的断言：`beforeEach` 可能先执行清理，守卫被反向删除时测试也可能先伤害环境再报红。所以守卫要在副作用之前生效（`killLeftovers` 在任何 `pkill` 之前验证 pattern 锚定 `os.tmpdir` 下的本次目录，`runCli` / `runModule` 在 spawn 前拒绝覆盖隔离键）；服务负例必须同时具备临时 DIR、一次性 label、临时 HOME 与 PATH launchctl 桩，保证守卫失效时下游仍无害
+- 修完必做反向验证：把修复还原，确认对应用例真的转红。预测「理应会红」不能代替实跑——预测落空处往往正是认知与实现的偏差点；发现后补不变量用例挡在结构层，别只改当前这一处
+
+## 自动化测试边界
+
+- 真实 sudo/TUN 会修改路由、需要密码并可能留下 root 属主文件，开发机和 CI 不自动执行
+- 完整服务 start/stop 用例也不默认运行：enable/disable 会在 `/var/db/com.apple.xpc.launchd/disabled.<uid>.plist` 给每个临时 label 留永久记录，launchctl 无清除动词。只用 bootstrap/bootout 的一次性 label 可以临时验证有限的 launchd 行为，但覆盖不了 stop 的全部语义；要驱动服务层的 launchctl 路径，用 PATH 前置的桩 launchctl，让代码走真实路径而不触碰真实 launchd
+- doctor 的内核版本项与 npm 查询项取值依赖网络（GitHub 可达性、限流），用例只锁检查项存在，不写死 ok/warn/skip
+- 子进程 + 本地桩 server 的用例必须**异步 spawn**：spawnSync 会阻塞父进程事件循环，桩 server 无法 accept、子进程 fetch 挂死（父子死锁，实测 30s 超时零请求到达桩）
+- 测试只依赖 macOS 自带命令（bash/launchctl/pgrep/pkill/lsof/gh）与 node 本身，bash 仅作桩的 shebang；桩里要计时或计算用 `process.execPath -e "Date.now()"`，不用 python3，不引入第二套运行时
 
 ## 命名
 
 - 帮助与内部命名用全称单数（subscription/directory/overwrite），示例与提示用 `mihomo-cli sub` / `dir` / `ow`；内部变量函数全称单数，常量全大写下划线
 - `dir open` 精确匹配 root/subs/logs/data/runtime/kernel
-
-## 文档归属
-
-- 代码注释只写判据与契约，历史修复叙事留在 CHANGELOG/git，不复制进现行文档
-- CHANGELOG 只写用户可见变化，每条 1–3 句，不按审查轮次组织；当轮验证过程与测试计数留在提交信息。长期边界收进 CONCLUSIONS，发布与归档细则由 [发布流程](release.md) 持有
-
-## Git 与流程
-
-- 默认在 `.claude/worktrees/` 工作，创建前 fetch；创建后先核对基线与本地 main，落后则先 `git merge --ff-only main`，再重读待编辑文件（工具默认基线可能是 origin/main，而本地 main 有未推送提交）。首次验证前在 worktree 内执行 `npm ci`，不得依赖父目录偶然可解析的 node_modules
-- 不需要 Co-Authored-By；提交前用 `git status` 逐文件核对改动归属，避免混入并行代理未提交的工作
-- worktree 内全部提交并确认干净后，退出 worktree（保留分支）并回主仓合入：先 `git merge --ff-only <分支>`；main 已前进时用 cherry-pick 或 rebase，不用 `--no-ff`。cherry-pick 后用 `git diff <分支> main --stat` 核对树内容，不能只看 git log
-- 确认无遗漏后立即 `git worktree remove` + `git branch -D`，并核实临时目录、一次性 label 的 plist 与自建进程已清理
-- 文档冲突保留双方的用户可见变化、实测结论与现行约定
-- 发布仅在用户要求时执行，按 [发布流程](release.md)

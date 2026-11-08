@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { CONTROLLER_PORT, DEFAULT_MIXED_PORT, isValidPortNumber } from './constants.js';
+import { CONTROLLER_PORT, DEFAULT_MIXED_PORT, isPlainObject, isValidPortNumber } from './constants.js';
 import { CliError } from './errors.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, withFileLock } from './paths.js';
 import type { Settings, Subscription, SubscriptionCache, SubscriptionCacheEntry, SubscriptionUrgency, SubscriptionWithCache } from './types.js';
@@ -41,7 +41,7 @@ export function readSettings(): Settings {
   if (!fs.existsSync(PATHS.settingsFile)) return {};
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(PATHS.settingsFile, 'utf8'));
-    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Settings;
+    if (isPlainObject(parsed)) return parsed as Settings;
     // **JSON 合法但不是对象**（`[1,2,3]`、`"str"`、`42`、`null`）与解析失败是同一类
     // 「文件不可用」：下一次 updateSettings 会把文件整个覆盖成默认内容，用户的原件会
     // 无声无息地没了，故同样走备份+告警（doctor 的设置文件检查能识别这种形态，
@@ -60,7 +60,7 @@ export function readSettings(): Settings {
 export function isValidSettingsContent(content: string): boolean {
   try {
     const parsed: unknown = JSON.parse(content);
-    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
+    return isPlainObject(parsed);
   } catch {
     return false;
   }
@@ -120,7 +120,7 @@ function validatePort(value: unknown, key: string): number | undefined {
 export function getPorts(settings: Settings = readSettings()): { mixed: number; controller: number } {
   const ports = settings.ports;
   if (ports === undefined) return { mixed: DEFAULT_MIXED_PORT, controller: CONTROLLER_PORT };
-  if (ports === null || typeof ports !== 'object' || Array.isArray(ports)) {
+  if (!isPlainObject(ports)) {
     throw new CliError('settings.json 的 ports 需为对象，如 { "mixed": 17890, "controller": 19090 }', { label: '配置错误' });
   }
   const configuredMixed = validatePort(ports.mixed, 'ports.mixed');
@@ -156,8 +156,8 @@ export function getPortsOrNull(settings: Settings = readSettings()): { mixed: nu
 }
 
 /**
- * 控制器端点（端口 + 访问密钥）的同快照读取（D10）：ui 打印连接信息与 hot-reload 拼
- * 请求共用——两次独立读盘之间 settings 被原子替换时，打印/请求的端口与密钥可能来自
+ * 控制器端点（端口 + 访问密钥）的同快照读取（D10）：ui 打印连接信息与 restartService
+ * 热重载拼请求共用——两次独立读盘之间 settings 被原子替换时，打印/请求的端口与密钥可能来自
  * 两个版本，排查方向自相矛盾。端口非法归 null（getPortsOrNull 的降级语义），密钥只
  * 认非空字符串（数字/对象不拼进 Authorization、不进剪贴板）
  */
@@ -187,7 +187,7 @@ export function readSubscriptionCache(): SubscriptionCache {
       // JSON 合法但不是对象（数组/标量/null）与解析失败是同一类「文件不可用」，处置一致
       // （备份+告警，与 readSettings 对齐）：下一次写缓存会把文件整个覆盖，用户的原件
       // 无声无息地没了
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      if (!isPlainObject(parsed)) {
         return backupCorruptSubscriptionCache(nonObjectReason(parsed));
       }
       // 拷进无原型对象：JSON.parse 的结果仍是普通对象，直接返回会让后续
@@ -225,7 +225,7 @@ export function saveSubscriptionCache(subName: string, data: Partial<Subscriptio
     const cache = readSubscriptionCache();
     // 损坏的条目可能是字符串/数字（cache.json 被手改），展开会产生字符键垃圾
     const old = cache[subName];
-    cache[subName] = { ...(old && typeof old === 'object' && !Array.isArray(old) ? old : {}), ...data };
+    cache[subName] = { ...(isPlainObject(old) ? old : {}), ...data };
     writeSubscriptionCache(cache);
   });
 }
@@ -295,7 +295,7 @@ export function getSubscriptionsWithCache(): SubscriptionWithCache[] {
     // subscriptionUrgency/formatTraffic 的运算对同一形态都有防护）：非对象条目
     // 直接展开会让字符串产出 0..n 的字符键垃圾，混进 status/doctor 消费的对象
     const entry = cache[s.name];
-    const safe = entry !== null && typeof entry === 'object' && !Array.isArray(entry) ? entry : {};
+    const safe = isPlainObject(entry) ? entry : {};
     return { ...s, ...safe };
   });
 }

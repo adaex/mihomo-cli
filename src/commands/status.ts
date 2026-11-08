@@ -101,7 +101,7 @@ function buildStatusJson(args: {
       // 会与同一份 JSON 里的 overwrite.enabled:false 自相矛盾
       applied: args.overwriteEnabled ? args.overwriteFiles.filter(isActiveOverwrite).map(f => f.name) : [],
       // 加载失败的文件不属于 applied（既没合并也无法判 enabled/match），单列 errors。
-      // hint 必须带出：最有用的迁移指引（已移除操作符改 JS、*edu 加引号等）都在里面，
+      // hint 必须带出：可执行的修复指引（*edu 加引号、操作符写法等）都在里面，
       // 只给 message 等于把可执行的修复步骤扔在启动硬失败那一条路径上
       errors: args.overwriteBroken.map(b => ({ name: b.name, message: b.message, hint: b.hint })),
     },

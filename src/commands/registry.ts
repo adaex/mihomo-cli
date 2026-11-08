@@ -7,6 +7,7 @@ import { cmdLogs } from './log.js';
 import { cmdOverwrite } from './overwrite.js';
 import { cmdReset } from './reset.js';
 import { cmdInstall, cmdUninstall } from './service.js';
+import { assertUniqueTokens } from './shared.js';
 import { cmdStart } from './start.js';
 import { printStatus } from './status.js';
 import { cmdStop } from './stop.js';
@@ -110,8 +111,8 @@ const COMMANDS: Command[] = [
     group: 'interface',
     usage: [
       {
-        signature: 'logs [--diagnostic] [-f] [-n N] [编号] [-o]',
-        description: '裸 logs 列列表；0=当前，1+=归档；省略编号但给 -f/-n/-o 时看当前日志；--diagnostic 查看 CLI 诊断事件',
+        signature: 'logs [-f] [-n N] [编号] [-o]',
+        description: '裸 logs 列列表；0=当前，1+=归档；省略编号但给 -f/-n/-o 时看当前日志',
       },
     ],
   },
@@ -214,18 +215,9 @@ const COMMANDS: Command[] = [
   },
 ];
 
-const COMMAND_INDEX: Map<string, Command> = (() => {
-  const index = new Map<string, Command>();
-  for (const cmd of COMMANDS) {
-    for (const token of [cmd.name, ...cmd.aliases]) {
-      if (index.has(token)) {
-        throw new Error(`命令注册表存在重复 token: "${token}"（${index.get(token)?.name} 与 ${cmd.name}）`);
-      }
-      index.set(token, cmd);
-    }
-  }
-  return index;
-})();
+assertUniqueTokens(COMMANDS, '命令注册表');
+
+const COMMAND_INDEX: Map<string, Command> = new Map(COMMANDS.flatMap(cmd => [cmd.name, ...cmd.aliases].map((token): [string, Command] => [token, cmd])));
 
 /** 按 token(命令名或别名)查找命令;未命中返回 undefined。 */
 export function findCommand(token: string): Command | undefined {

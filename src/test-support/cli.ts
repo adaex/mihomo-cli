@@ -9,7 +9,7 @@ import { DEFAULT_TEST_PROCESS_TIMEOUT_MS } from './spawn-eval.js';
 /**
  * 端到端跑真实 CLI 的测试夹具，所有 commands/*.spec.ts 共用这一份。
  *
- * 隔离契约（CLAUDE.md 进程类测试纪律）：每次跑都给
+ * 隔离契约（docs/development.md「隔离与反向验证」）：每次跑都给
  * - 临时 MIHOMO_CLI_DIR（数据目录互不干扰、finally 删除）
  * - 一次性 MIHOMO_CLI_DAEMON_LABEL（服务/reset 用例必须隔离 label——plist 在数据目录
  *   之外，真实 launchctl 写操作按 label 注册）

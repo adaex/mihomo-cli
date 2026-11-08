@@ -8,15 +8,14 @@ macOS 命令行客户端，TypeScript ESM，Node.js >= 24.20.0。入口 `src/ind
 
 ## 常驻安全边界
 
-- 开发验证不得操作真实的 `~/.mihomo-cli`、LaunchAgent 或系统网络设置；不把裸 `npm run dev` 当验证命令，隔离要求见 [开发约定](docs/development.md)
-- 真实 sudo/TUN 与永久污染 launchd disabled 表的用例不自动执行；测试边界见 [CONCLUSIONS](CONCLUSIONS.md#自动化测试边界)
-- 只有查改当前用户真实的 `~/.mihomo-cli` 时才读 [本机真实配置](docs/local-config.md)；普通开发与隔离测试无需加载，也不得拿真实配置做夹具
+- 开发验证不得操作真实的 `~/.mihomo-cli`、LaunchAgent 或系统网络设置，也不得拿真实配置做夹具；不把裸 `npm run dev` 当验证命令，隔离要求见 [开发约定](docs/development.md)
+- 真实 sudo/TUN 与永久污染 launchd disabled 表的用例不自动执行；测试边界见 [开发约定](docs/development.md#自动化测试边界)
 
 ## 按任务打开
 
 | 文档 | 什么时候打开 |
 | --- | --- |
-| [开发约定](docs/development.md) | 改代码或测试前阅读全文；改项目文档时只读「文档归属」与「Git 与流程」 |
+| [开发约定](docs/development.md) | 改代码或测试前阅读全文 |
 | [架构与契约](docs/architecture.md) | 查模块职责、产品边界或跨模块契约；改对应域前只读相关节 |
 | [README](README.md) | 查改用户承诺、命令行为或使用示例 |
 | [覆写配置详版](docs/overwrite.md) | 查改覆写的用户语法与示例；不是内部实现约定 |
@@ -30,4 +29,16 @@ macOS 命令行客户端，TypeScript ESM，Node.js >= 24.20.0。入口 `src/ind
 | --- | --- |
 | [架构决策](docs/decisions.md) | 需要某条决策的背景、理由或拒绝过的替代方案；按 D 编号或标题搜索，无需通读全文 |
 | [现行结论与边界](CONCLUSIONS.md) | 涉及相关实测结论、已知风险或验证边界；按模块名或关键词搜索，只读命中条目，改到对应代码时同步更新 |
-| [CHANGELOG](CHANGELOG.md) | 查用户可见版本历史或补当轮变化；[归档](docs/changelog/CHANGELOG-archive.md) 不作为现行约定加载 |
+| [CHANGELOG](CHANGELOG.md) | 查用户可见版本历史或补当轮变化 |
+
+## 文档归属
+
+- 一条事实只有一个归属，其余处链接：契约与模块职责 → architecture；决策与拒绝过的替代 → decisions；实测结论、已知风险与验证边界 → CONCLUSIONS；用户语法与示例 → README / overwrite.md；刻意推迟的重构 → todo
+- 代码注释只写判据与契约；修复过程与版本史留在 CHANGELOG / git，不复制进现行文档
+- CHANGELOG 只写用户可见变化，每条 1–3 句：不记内部清理，不按审查轮次组织，不写测试计数
+
+## Git 与流程
+
+- 提交前用 `git status` 逐文件核对改动归属，避免混入并行代理未提交的工作；不需要 Co-Authored-By
+- 文档冲突保留双方的用户可见变化、实测结论与现行约定
+- 发布仅在用户要求时执行，按 [发布流程](docs/release.md)

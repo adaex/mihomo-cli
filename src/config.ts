@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 
 import * as yaml from 'js-yaml';
 import { assertConfigGraphSafe } from './config-graph.js';
-import { BASE_CONFIG, EFFECTIVELY_LOCKED_KEYS, TUN_CONFIG, YAML_MAX_ALIASES } from './constants.js';
+import { BASE_CONFIG, EFFECTIVELY_LOCKED_KEYS, isPlainObject, TUN_CONFIG, YAML_MAX_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
 import { applyOverwrite, describeOverwriteScope, loadOverwriteFile, lockedKeysReferencedBy, selectActiveOverwriteFiles } from './overwrite.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, USER_DATA_DIR } from './paths.js';
@@ -40,11 +40,11 @@ export function parseConfigContent(content: string, errorMsg?: string): Record<s
     throw new CliError(`${label}格式错误，无法解析: ${firstLine((e as Error).message)}`, { label: '配置错误' });
   }
 
-  if (result == null || typeof result !== 'object' || Array.isArray(result)) {
+  if (!isPlainObject(result)) {
     throw new CliError(`${label}不是有效的配置对象（顶层需为映射，当前是${Array.isArray(result) ? '列表' : typeof result}）`, { label: '配置错误' });
   }
   assertConfigGraphSafe(result, label);
-  return result as Record<string, unknown>;
+  return result;
 }
 
 /**
@@ -66,7 +66,7 @@ export function dumpYaml(obj: unknown): string {
  */
 function assertDnsShape(dnsRaw: unknown): void {
   if (dnsRaw === undefined || dnsRaw === null) return;
-  if (typeof dnsRaw !== 'object' || Array.isArray(dnsRaw)) {
+  if (!isPlainObject(dnsRaw)) {
     throw new CliError(`dns 配置必须是映射，当前是${Array.isArray(dnsRaw) ? '数组' : `标量（${typeof dnsRaw}）`}`, {
       label: '配置错误',
       hint: ['dns 是订阅/覆写里的对象配置块（enable、nameserver 等），不支持标量或数组。'],
@@ -112,13 +112,13 @@ export function assertConfigShape(config: Record<string, unknown>): void {
         });
       }
       if (needsName) {
-        if (typeof item !== 'object' || Array.isArray(item)) {
+        if (!isPlainObject(item)) {
           throw new CliError(`${key}[${i}] 必须是映射`, {
             label: '配置错误',
             hint: [`${label}段（${key}）第 ${i + 1} 项应为 {name: ..., ...} 形式，当前是 ${Array.isArray(item) ? '列表' : typeof item}。`],
           });
         }
-        const name = (item as Record<string, unknown>).name;
+        const name = item.name;
         if (typeof name !== 'string' || name === '') {
           throw new CliError(`${key}[${i}] 缺少有效的 name`, {
             label: '配置错误',

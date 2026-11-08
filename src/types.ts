@@ -81,11 +81,6 @@ export interface ConfigSummary {
 export interface PreparedConfig {
   buildResult: BuildConfigResult;
   info: ConfigSummary;
-  /** prepare 时的来源与候选摘要；commit 不重读订阅，避免并发更新造成 raw/runtime 错配 */
-  diagnostic: {
-    sourceRawSha256: string;
-    candidateSha256: string;
-  };
 }
 
 export interface OverwriteFileEntry {
@@ -362,7 +357,7 @@ export interface StatusJson {
   overwrite: {
     enabled: boolean;
     applied: string[];
-    /** hint 是可执行的迁移/修复指引（如已移除操作符的改写示例），诊断界面与 JSON 都必须带出 */
+    /** hint 是可执行的修复指引（如 `*edu` 加引号的写法示例），诊断界面与 JSON 都必须带出 */
     errors: { name: string; message: string; hint: string[] }[];
   };
   service: {

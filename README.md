@@ -120,7 +120,6 @@ mihomo-cli ui yacd     # YACD
 | `mihomo-cli logs` | 列出当前日志与历史归档 |
 | `mihomo-cli logs <编号>` | 查看日志：`0` 为当前，`1+` 为归档；`-f` 跟随，`-n N` 行数，`-o` 用系统程序打开 |
 | `mihomo-cli logs -f` | 跟随当前日志；给 `-f` / `-n` / `-o` 而省略编号时均视为 `logs 0` |
-| `mihomo-cli logs --diagnostic` | 查看 CLI 结构化诊断事件；同样支持 `-f` / `-n N` / `-o`，不接受内核日志编号 |
 
 ### 订阅管理
 
@@ -201,7 +200,7 @@ mihomo-cli ui yacd     # YACD
 
 - 在回环地址提供 HTTP + SOCKS5 混合端口，默认 `127.0.0.1:7890`
 - 由 launchd 托管，需先执行一次 `mihomo-cli install`
-- 需要代理的浏览器或应用自行配置 Mixed 地址；CLI 不自动设置 macOS 系统代理
+- 需要代理的浏览器或应用自行配置 Mixed 地址，见[快速开始第 4 步](#4-在具体应用中按需配置代理)
 - 正常安装和启停免密；清理 root 属主的 TUN 残留时仍可能要求管理员密码
 
 ### TUN 模式（透明代理）
@@ -247,7 +246,7 @@ mihomo-cli reset --full   # 删除所有已登记的受管数据并卸载服务
 npm uninstall -g mihomo-cli
 ```
 
-`reset --full` 不保证清空整个数据目录：锁、停止计数、无法识别的近失文件和用户手工放入的其他文件可能保留。若还要删除这些残留与目录本身，默认安装下可在确认路径和内容后执行：
+`reset --full` 不保证清空整个数据目录：锁、停止计数和用户手工放入的其他文件可能保留。若还要删除这些残留与目录本身，默认安装下可在确认路径和内容后执行：
 
 ```bash
 rm -rf ~/.mihomo-cli
@@ -311,18 +310,6 @@ mihomo-cli logs         # 列出当前内核日志与归档
 mihomo-cli logs 0 -f    # 实时跟随当前内核日志
 mihomo-cli logs 1       # 查看最新内核归档
 ```
-
-CLI 自身的结构化诊断事件独立写入 `logs/diagnostic.jsonl`，不进入上述内核日志编号。每次操作用同一个 `operationId` 串联命令退出、订阅下载、配置校验与写盘、热重载或重启、服务健康和代理探测
-
-```bash
-mihomo-cli logs --diagnostic        # 最后 100 行 JSONL
-mihomo-cli logs --diagnostic -n 50  # 最后 50 行
-mihomo-cli logs --diagnostic -f     # 实时跟随
-```
-
-诊断只保留时间、规范命令名、事件阶段、退出/HTTP/curl 错误码、耗时、节点与组计数、整份配置 SHA-256 等白名单字段；不记录原始 argv、订阅名称或 URL、节点名称与凭据、配置正文、自由文本错误或堆栈。新建文件权限为 0600，写入失败不影响主命令
-
-当前诊断文件超过 2 MB 后在下一次写入前轮转，归档命名为 `diagnostic.<时间戳>[.N].jsonl` 并保留 7 天；可用 `mihomo-cli dir open logs` 查看。诊断是 best-effort 记录，进程被强杀或并发轮转窗口可能缺事件；launchd 登录自启直接拉起内核、不经过 CLI，因此不会产生这一次自启的 CLI 事件。`reset logs` 删除全部诊断历史，命令退出时会重建仅含本次 reset 结果的文件
 
 ## 内核更新通道
 
@@ -454,9 +441,7 @@ mihomo-cli start --update-timeout=30000
 │   └── mihomo                 # 内核二进制
 ├── logs/
 │   ├── mihomo.log             # 当前内核日志
-│   ├── mihomo.YYYY-MM-DD_HH-MM-SS[.N].log
-│   ├── diagnostic.jsonl       # CLI 结构化诊断事件（独立轮转，0600）
-│   └── diagnostic.YYYY-MM-DD_HH-MM-SS[.N].jsonl
+│   └── mihomo.YYYY-MM-DD_HH-MM-SS[.N].log
 ├── data/                      # GeoIP、选择缓存等，由内核管理
 └── runtime/
     ├── pid                    # TUN 临时进程的 PID；Mixed 服务不使用此文件

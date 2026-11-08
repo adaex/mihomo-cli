@@ -2,8 +2,9 @@
  * 命令行选项的单一登记表。
  *
  * 新增选项只需在此加一条——`VALUE_FLAGS`（`getNonFlagArg` 跳过带值选项的值）、
- * start 的重启透传集合（`extractStartOptions`）与带值选项三种形式的判定
- * （`matchValueFlagToken`，`assertKnownFlags` / `parseIntArg` / `extractStartOptions` 共用）都从这里派生。
+ * start 的重启透传集合（`extractStartOptions`）、带值选项三种形式的判定
+ * （`matchValueFlagToken`，`assertKnownFlags` / `extractStartOptions` 共用）与取值
+ * （`collectFlagValues`，`parseIntArg` / `parseMirrorArg` / `parseProxyArg` 共用）都从这里派生。
  *
  * 只登记**带值**选项与 **start 的选项**：
  * - 布尔选项（`-f`/`-y` 等）以 `-` 开头，`getNonFlagArg` 本就跳过，无需登记
@@ -104,4 +105,38 @@ export function matchValueFlagToken(token: string): ValueFlagTokenMatch | null {
     if (spec) return { spec, baseForm: base, form: 'attached-short', inlineValue: token.slice(2) };
   }
   return null;
+}
+
+/** `collectFlagValues` 的一次命中 */
+export interface FlagHit {
+  /** 命中的基础形式（exact 即 token 本身） */
+  flag: string;
+  /** 取到的值；null = 没有值（必填值缺失，或可选值选项裸写）。attached/等号形式自带值，可能为空串 */
+  value: string | null;
+}
+
+/**
+ * 按登记表语义收集某个带值选项（`forms` 取其任一形式即可定位登记条目）在 args 里的全部命中。
+ * exact 形式的取值随 `takesValue`：`'required'` 无条件吞下一个 token（`-n -n` 里第二个 `-n`
+ * 是第一个的值，不会被数成重复，漏写值照实诊断为值非法）；`'optional'` 只在下一 token 存在
+ * 且不是 flag 时才吞。被吞掉的值 token 不再作为选项扫描。
+ *
+ * `parseIntArg` / `parseMirrorArg` / `parseProxyArg` 共用这一处取值，缺值、重复与值语义
+ * 由调用方按各自措辞判定。
+ */
+export function collectFlagValues(args: readonly string[], forms: readonly string[]): FlagHit[] {
+  const hits: FlagHit[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const match = matchValueFlagToken(args[i]);
+    if (!match || !forms.some(f => match.spec.forms.includes(f))) continue;
+    if (match.form !== 'exact') {
+      hits.push({ flag: match.baseForm, value: match.inlineValue });
+      continue;
+    }
+    const next = args[i + 1];
+    const takesNext = next !== undefined && (match.spec.takesValue === 'required' || !next.startsWith('-'));
+    hits.push({ flag: match.baseForm, value: takesNext ? next : null });
+    if (takesNext) i++;
+  }
+  return hits;
 }

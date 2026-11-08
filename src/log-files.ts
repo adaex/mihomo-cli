@@ -88,17 +88,16 @@ export function readLogTail(): string[] {
 const MAX_ARCHIVE_SEQ = 1000;
 
 /**
- * 分配一个归档路径并**原子占名**：默认 `mihomo.<时间戳>.log`，名字被占则追加序号。
- * 诊断事件复用同一原子占名原语，传入固定 prefix/extension；内核归档判据 ARCHIVE_LOG_RE 不变。
+ * 分配一个归档路径并**原子占名**：`mihomo.<时间戳>.log`，名字被占则追加序号。
  *
  * 返回时该名字已被本进程以空占位文件占住（`openSync` 的 `wx`/O_EXCL）：两个进程同秒轮转时
  * existsSync 判否是 TOCTOU，后到者会静默覆盖先到者的归档。调用方随后的 rename/copy 直接
  * 盖掉占位即可；覆写失败残留的空归档随各自保留期清理。
  */
-export function allocateArchivePath(prefix = 'mihomo', extension = 'log'): string {
+export function allocateArchivePath(): string {
   const timestamp = formatLocalTimestamp();
   for (let seq = 0; seq <= MAX_ARCHIVE_SEQ; seq++) {
-    const name = seq === 0 ? `${prefix}.${timestamp}.${extension}` : `${prefix}.${timestamp}.${seq}.${extension}`;
+    const name = seq === 0 ? `mihomo.${timestamp}.log` : `mihomo.${timestamp}.${seq}.log`;
     const archivePath = path.join(DIRS.logs, name);
     let fd: number | null = null;
     try {
@@ -120,23 +119,22 @@ export function allocateArchivePath(prefix = 'mihomo', extension = 'log'): strin
   });
 }
 
-/** 达到 minBytes 时 rename 到原子占名的归档；返回是否由本次调用完成轮转。 */
-export function rotateFile(filePath: string, minBytes: number, prefix = 'mihomo', extension = 'log'): boolean {
+/** 当前日志非空时 rename 到原子占名的归档；日志不存在或已被并发轮转搬走则无事可做。 */
+function rotateLog(): void {
   let stat: fs.Stats;
   try {
-    stat = fs.statSync(filePath);
+    stat = fs.statSync(PATHS.logFile);
   } catch (e) {
     // 日志不存在，或恰好被并发轮转搬走（检查与 stat 之间被 rename）——都没有可轮转的内容
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
     throw e;
   }
-  if (stat.size < minBytes) return false;
+  if (stat.size === 0) return;
 
-  const rotatedPath = allocateArchivePath(prefix, extension);
+  const rotatedPath = allocateArchivePath();
   try {
     // rename 对已存在目标是原子替换：直接盖掉分配时的空占位
-    fs.renameSync(filePath, rotatedPath);
-    return true;
+    fs.renameSync(PATHS.logFile, rotatedPath);
   } catch (e) {
     // 覆写失败时回收占位，不留一个混进 logs 列表的空归档。最常见的 ENOENT 是
     // 并发轮转已把日志搬走：归档已由对方完成，本次无事可做，不能让并发的
@@ -146,16 +144,12 @@ export function rotateFile(filePath: string, minBytes: number, prefix = 'mihomo'
     } catch {
       /* ignore */
     }
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
     throw e;
   }
 }
 
-function rotateLog(): void {
-  rotateFile(PATHS.logFile, 1);
-}
-
-export function cleanupOldArchives(isArchive: (filename: string) => boolean): void {
+export function cleanupOldLogs(): void {
   const logsDir = DIRS.logs;
   if (!fs.existsSync(logsDir)) return;
 
@@ -164,7 +158,7 @@ export function cleanupOldArchives(isArchive: (filename: string) => boolean): vo
   const maxAgeMs = DEFAULT_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
   for (const file of files) {
-    if (!isArchive(file)) continue;
+    if (!isArchiveLogFilename(file)) continue;
 
     try {
       const filePath = path.join(logsDir, file);
@@ -176,10 +170,6 @@ export function cleanupOldArchives(isArchive: (filename: string) => boolean): vo
       // 单个归档删不动（权限/并发删除）不挡其余清理
     }
   }
-}
-
-export function cleanupOldLogs(): void {
-  cleanupOldArchives(isArchiveLogFilename);
 }
 
 export function listLogs(): LogList {
