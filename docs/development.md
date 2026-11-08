@@ -46,3 +46,18 @@ npm run typecheck && npm test && npm run check && npm run build
 
 - 帮助与内部命名用全称单数（subscription/directory/overwrite），示例与提示用 `mihomo-cli sub` / `dir` / `ow`；内部变量函数全称单数，常量全大写下划线
 - `dir open` 精确匹配 root/subs/logs/data/runtime/kernel
+
+## 文档归属
+
+- 一条事实只有一个归属，其余处链接：契约与模块职责 → architecture；决策与拒绝过的替代 → decisions；实测结论、已知风险与验证边界 → CONCLUSIONS；用户语法与示例 → README / overwrite.md；刻意推迟的重构 → todo
+- 代码注释只写判据与契约；修复过程与版本史留在 CHANGELOG / git，不复制进现行文档
+- CHANGELOG 只写用户可见变化，每条 1–3 句，不记内部清理，不按审查轮次组织，不写测试计数；开发与验证的长期边界收进 CONCLUSIONS，发布与归档细则由 [发布流程](release.md) 持有
+
+## Git 与流程
+
+- 默认在 `.claude/worktrees/` 工作，创建前 fetch；创建后先核对基线与本地 main，落后则先 `git merge --ff-only main`，再重读待编辑文件（工具默认基线可能是 origin/main，而本地 main 有未推送提交）。首次验证前在 worktree 内执行 `npm ci`，不得依赖父目录偶然可解析的 node_modules
+- 不需要 Co-Authored-By；提交前用 `git status` 逐文件核对改动归属，避免混入并行代理未提交的工作
+- worktree 内全部提交并确认干净后，退出 worktree（保留分支）并回主仓合入：先 `git merge --ff-only <分支>`；main 已前进时用 cherry-pick 或 rebase，不用 `--no-ff`。cherry-pick 后用 `git diff <分支> main --stat` 核对树内容，不能只看 git log
+- 确认无遗漏后立即 `git worktree remove` + `git branch -D`，并核实临时目录、一次性 label 的 plist 与自建进程已清理
+- 文档冲突保留双方的用户可见变化、实测结论与现行约定
+- 发布仅在用户要求时执行，按 [发布流程](release.md)

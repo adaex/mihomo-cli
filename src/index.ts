@@ -1,13 +1,15 @@
+import fs from 'node:fs';
 import { satisfies } from 'compare-versions';
 import { assertKnownFlags, assertPositionalCount } from './argv.js';
 import { stderrColors } from './colors.js';
 import { printCommandHelp, printShortHelp } from './commands/help.js';
 import { allCommandTokens, findCommand } from './commands/registry.js';
 import { printStatus } from './commands/status.js';
-import { NODE_ENGINES } from './constants.js';
+import { DEFAULT_MIXED_PORT, isValidPortNumber, NODE_ENGINES } from './constants.js';
 import { CliError, errorMessage } from './errors.js';
 import { isSilentSigint, terminateActiveChildren } from './lifecycle.js';
-import { cleanupStaleTmpFiles, ensureDirs } from './paths.js';
+import { cleanupStaleTmpFiles, ensureDirs, PATHS } from './paths.js';
+import { clearSelfProxyEnv, recordClearedProxyEnv } from './proxy-env.js';
 import { captureStopEpochBaseline } from './stop-epoch.js';
 import { suggestSimilar } from './suggest.js';
 
@@ -39,6 +41,24 @@ process.on('unhandledRejection', (reason: unknown) => {
   console.error(`\n未处理的 Promise 拒绝: ${errorMessage(reason)}`);
   process.exit(1);
 });
+
+/** 在守卫与建目录前纯读 Mixed 端口；文件缺失、损坏或端口非法时回退默认值。 */
+function readSelfMixedPortEarly(): number {
+  try {
+    const raw = JSON.parse(fs.readFileSync(PATHS.settingsFile, 'utf8')) as { ports?: { mixed?: unknown } } | null;
+    const mixed = raw?.ports?.mixed;
+    if (isValidPortNumber(mixed)) return mixed;
+  } catch {
+    // 这里只服务自指代理判断，不能让设置问题提前阻断命令
+  }
+  return DEFAULT_MIXED_PORT;
+}
+
+/** 只清指向本机 Mixed 的代理；进程内 fetch 与所有子进程因此看到同一份安全 env。 */
+function clearProxyEnv(): void {
+  const cleared = clearSelfProxyEnv(process.env, readSelfMixedPortEarly());
+  if (Object.keys(cleared).length > 0) recordClearedProxyEnv(cleared);
+}
 
 /**
  * root 守卫：以 `sudo mihomo-cli …` 运行会让所有服务操作静默失效，必须挡在最前面。
@@ -114,6 +134,8 @@ function assertSupportedPlatform(commandName: string): void {
 }
 
 async function main(): Promise<void> {
+  clearProxyEnv();
+
   const args = process.argv.slice(2);
 
   if (args.length === 0) {

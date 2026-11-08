@@ -330,7 +330,7 @@ export async function prepareConfigForStart(mode: RuntimeMode, subName: string):
 
   // 透传生效的覆写清单：内核只说「哪个键坏了」，说不出「它是覆写追加进来的」
   await validateConfigWithKernel(candidateContent, buildResult.overwriteSummaries);
-  return { buildResult, info: countConfigNodes(buildResult.config) };
+  return { buildResult, candidateContent, info: countConfigNodes(buildResult.config) };
 }
 
 /** 校验成功后才原子替换配置；仅保留内核实际使用的配置文件 */
@@ -344,7 +344,7 @@ export function commitPreparedConfig(prepared: PreparedConfig): ConfigSummary {
     console.log('');
   }
 
-  writeMihomoConfig(buildResult.config);
+  writeMihomoConfig(prepared.candidateContent);
   return prepared.info;
 }
 

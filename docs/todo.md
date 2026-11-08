@@ -10,4 +10,4 @@
 - **overwrite.ts 按现有消费边界增量拆分**：操作符合并、文件加载与展示已是不同消费域，修改对应功能时可先抽其中一段并随迁测试；不得拆散 D7 的合并/诊断双路径、统一排序和 `selectActiveOverwriteFiles` 闸门，避免调用方重新拼装安全顺序。触发：下次改覆写合并或加载布局时
 - **service.spec 中 launchctl / stop-epoch 用例归位**：该文件目前还覆盖相邻模块，改动时把对应用例迁到 launchctl.spec / stop-epoch.spec，保留现有 colocated 形态，不新建根级 tests 目录。触发：下次改这些用例或其被测模块时
 - **内核存在性与版本探测抽成 kernel-probe**：探测位于 config.ts，kernel.ts 又反向消费；下次改探测逻辑时抽独立小模块，config 只保留原生配置校验，不顺手重写 kernel。触发：下次改内核版本或存在性探测时
-- **doctor 复用的 npm 查询迁出 commands/update**：版本查询与 `buildNpmSpawnEnv`（D9 的 npm 子进程 env 处理）目前和 update 命令流程同文件，doctor 直接复用 peer command；下次改 npm 查询时抽核心模块，保持 update 与 doctor 共用同一实现。触发：下次改 npm 查询或 npm 子进程 env 处理时
+- **doctor 复用的 npm 查询迁出 commands/update**：版本查询与 env 恢复目前和 update 命令流程同文件，doctor 直接复用 peer command；下次改 npm 查询或代理恢复机制时抽核心模块，保持 update 与 doctor 共用同一实现。触发：下次改 D9/npm 查询时

@@ -19,18 +19,18 @@
 ## 内核下载与上游
 
 - 上游 mihomo 已查资产（v1.19.30 实测）只有单文件 `.gz`（gzip 解压，`maxBuffer` 256MB 即体积上限），非 `.gz` 资产显式报错；**不提供 checksums**，来源钉死（`assertTrustedAssetUrl`）、大小比对与执行自检保留，不能写成已验证哈希
-- gh（Go）只认 `HTTPS_PROXY` / `https_proxy`，无命令行代理选项；env 里的自指代理被去掉后若不注入，gh 实际直连（真 gh + 拒绝端口实证报 `proxyconnect`）。故下载候选带本机代理、`buildGhSpawnEnv` per-spawn 注入（D9，kernel.spec 端到端锁定）
+- gh（Go）只认 `HTTPS_PROXY` / `https_proxy`，无命令行代理选项；入口清除自指代理后若不注入，gh 会直连。故下载候选带本机代理、`buildGhDownloadEnv` per-spawn 注入；显式注入时同时清 no_proxy/NO_PROXY，避免例外表把回退改回直连（D9，kernel.spec 锁定）
 - 上游面板自升级（update_core.go）的 `meta-backup` 是有意永久保留的旧内核副本：成功路径只 defer 清理 `meta-update`、从不清 `meta-backup`（每次升级覆盖写，已核对上游源码）。doctor 只把 `meta-update` 当真残留告警，`meta-backup` 按信息项给独立删除口径，绝不与暂存共用一条 `rm -rf`——合并告警会让面板成功升级一次后 doctor 永久误报，修复命令还会连回滚备份一起删
 - 上游 MetaCubeX/mihomo 的默认分支 `main` 自 2026-09 起是同名 Python 项目，内核源码与发布仍在 `Meta` 分支。版本查询与下载走 releases API（tag 固定、资产 URL 不变），不受影响；**上游源码核对（锁定清单对表）必须带 `?ref=Meta`**，config-inbound-snapshot.spec 的引用已带
 
 ## 配置、订阅与覆写
 
 - 原生 `-t` 只验证配置解析，不能证明节点可达、端口可绑定或真实 TUN 路由正常；服务健康与代理连通性检查仍有独立价值
-- 顶层未知键内核**不拒**（真内核 `-t` 实测 `enabled: false` 照常通过）——剥离元数据键完全是 CLI 的责任，没有内核兜底。因此覆写的 `match` / `enabled` 必须精确小写、不带操作符；`Enabled`、`enabled!`、`+match` 等近似写法不是元数据，按普通键参与合并（文件照常启用、不限作用域），有意不做近失检测
+- 顶层未知键内核**不拒**（真内核 `-t` 实测 `enabled: false` 照常通过）——元数据剥离与近失校验完全是 CLI 的责任。`Enabled`、`enabled!`、`Match`、`+match` 若按普通键放行，文件内其他配置仍会按启用、无 match 的全局范围生效，因此加载时必须显式报错；`~` / `~?` / `<x>` 旧语法同样给迁移指引，不能静默失效
 - **config-graph 不能用 js-yaml 的 `maxAliases` 替代**：该上限只数别名节点个数、不限展开体量——40 层倍增链（每层引用上一层两次）只用约 80 个别名即可加载并展开成 2^40 个节点。故保留带完成缓存的 DFS：active/completed 分离检查循环与 200 层深度，完成节点缓存展开成本与子树高度，共享 DAG 不按展开体量遍历。100000 展开节点预算只服务 config 脱敏与 JSON（含 `--reveal` 的单独预检）；下载、start、内核校验只查循环与深度，不套展示预算
-- **订阅下载不自动使用 Mixed 或系统代理**：订阅的 HTTP 客户端是 Node 原生 fetch（`http.ts` `createHttpClient`），undici 默认不读 `http(s)_proxy` / `ALL_PROXY`（Node 24 需显式 `NODE_USE_ENV_PROXY=1`），也没有按运行态经本机 Mixed 转发的逻辑；macOS 系统代理同样不被 fetch 识别。故订阅主机直连不通时 `sub add/update` 可能失败；已有 TUN 路由可接管下载，首次添加仍需能访问订阅地址或换可直连地址。D9 的 env 处理只作用于 curl/gh/npm 子进程；用户显式设 `NODE_USE_ENV_PROXY=1` 时 fetch 会遵守其 env 代理（含指向本机的），那是用户自己的选择，CLI 不改写。要支持经 Mixed 下载是独立特性：undici `ProxyAgent` 需按运行态注入 dispatcher，且服务停止或未安装时的下载不能无条件依赖自己的端口
+- **订阅下载不自动选择运行中的 Mixed 或系统代理**：HTTP 客户端是 Node 原生 fetch，undici 默认不读 env 代理（Node 24 需显式 `NODE_USE_ENV_PROXY=1`），也不读 macOS 系统代理。入口只清指向本机 Mixed 的自指 env，其他代理保留；显式启用 NODE_USE_ENV_PROXY 时，非自指代理可被 fetch 使用，自指代理仍被防护。要按运行态自动经 Mixed 下载是独立特性，需另评 undici dispatcher，不能在服务未运行时无条件指向自己的端口
 - `downloadSubscription` 的缓存写失败回滚以写前内容为准：原有 YAML 逐字恢复，仅原本不存在文件时删除本次产物；回滚异常进入提示，不得假报已恢复或已删除。YAML 写入、缓存提交与失败回滚同在 `subscriptionCommitLock` 内串行，较慢下载的回滚不能覆盖另一进程已提交的新配置
-- 覆写文件级校验（空键、互斥修饰、残留 `!` `+`、数组操作符命中 BASE_CONFIG 非数组键）在 `readOverwriteFiles` 加载阶段执行：诊断旁路（ow/status）与合并闸门（start/config/doctor）看到同一份 broken 列表（D7）；依赖订阅当前值的冲突仍只在合并期报错，因为 ow 不绑定订阅
+- 覆写文件级校验（已移除操作符、空键、互斥修饰、残留 `!` `+`、数组操作符命中 BASE_CONFIG 非数组键）在 `readOverwriteFiles` 加载阶段执行：诊断旁路（ow/status）与合并闸门（start/config/doctor）看到同一份 broken 列表（D7）；依赖订阅当前值的冲突仍只在合并期报错，因为 ow 不绑定订阅
 - 订阅侧 own `__proto__` 刻意不拦（探针实测）：js-yaml 解析订阅顶层 `__proto__:` 得 own 键，经展示 walk（`defineProperty` 绕原型 setter）与 dump 均不炸，内核按未知键忽略；只有覆写**合并层**在操作符解析后拦截，订阅侧透传是承诺行为
 - `config` 是按当前缓存与设置重新推导的**配置预览**，不写盘、不重启、不做内核校验，因此可能展示内核会拒绝的配置；校验归 `doctor` 与 `start`，预览也不保证与会先自动更新订阅的下一次 `start` 完全相同
 - `status --json` / `config --json` 的 stdout 在空环境、设置损坏告警期、有 warnings 三种场景下始终可整体解析，告警一律走 stderr
@@ -71,7 +71,6 @@
 - `restartService` 的 copy-truncate 路径中 `allocateArchivePath()` 在 best-effort try 之外：同秒已存在 1001 个归档（序号耗尽）时 CliError 会穿出而非被吞。病态场景，接受；动这段时别顺手「修」进 try——归档名拿不到时轮转整体跳过是更合理的语义
 - 裸 `-` 在 argv 层按未知选项拦截、不豁免：本 CLI 没有「`-` 表示 stdin」的约定，静默吞掉它会让 `sub update -` 落成无参形态批量更新、`start -` 静默起默认代理；它也建不出 remove/use 能指定的订阅名（`getNonFlagArg` 把 `-` 开头 token 当选项跳过）。`-` 前缀 token（`-my-sub`）同由未知选项拦截——handler 层不再需要第二道名称守卫（positional-args.spec 锁口径）
 - 其余低危项（接受或不可自动化）：`unhandledRejection` / `uncaughtException` 已统一口径但渲染函数本身不可注入测试；`NO_COLOR` / stderr 设色经 pty 手工验证、无自动化；`FORCE_COLOR` 不支持、`TERM=dumb` 仍出色；无 `--` 结束选项约定（当前无需要它的入口，订阅名已禁止 `-` 开头）；gh 资产名未拦前导 `-`（仅 GitHub API 被篡改时可达）；代理探测 curl 未加 `--proto =https`（只看 204 无机密）；`npm_config_proxy` 等 npm 专属代理变量不处理——npm 读 npmrc 不依赖该 env、gh/curl 不识别，不构成下载死锁
-- `cmdStop` 路径 (b) 的「记录必须在 `handleStopResult` 之后」只由代码位置与注释保证：非 root 下无法让 SIGKILL 失败，测不出来
 
 ## 只能手工验证的范围
 
@@ -84,9 +83,8 @@
 ## 已评估未采纳
 
 - **全局 `--verbose`**：终端输出散在各模块，全局开关需要横切 argv 与输出层，收益不明；排查已有 `doctor`、`logs`、`status --json`
-- **结构化诊断事件（JSONL）**：曾实现并已移除（D16）。best-effort 写入不能当审计日志用，却要长期维护白名单、轮转与退出钩子；求助场景靠 `doctor` / `logs` / `status --json` 足够
+- **结构化诊断事件（JSONL）**：曾实现并已移除（D16）。它提供的是实时状态之外的历史操作链，不与 doctor/status 信息重复；本轮选择减少独立白名单、轮转与退出钩子的长期维护，排障先以实时状态、配置检查和内核日志为主
 - **系统代理检测与分档提示**（`scutil`）：已移除。`start` 只打印一条静态提示，不读写系统代理（D15）
-- **覆写的近失检测与迁移提示**：近失文件名警告、元数据键近似写法（`Enabled`、`enabled!`）报错、已移除操作符（`~` / `<x>`）迁移报错均已移除——一类历史笔误占用每次加载路径上的一套相似度判据。精确语法错（空键、互斥修饰、残留 `!` `+`）仍显式报错
 - **订阅名通用 glob 匹配器**：只保留尾部 `*`（前缀）与头部 `*`（后缀）两种字面比对，复杂匹配走 JS 脚本（D12）。通用 glob 转正则曾发生灾难性回溯；输入长度受限不能替代匹配复杂度论证
 - **用 `util.parseArgs` 替换手写 argv**：可选值选项（`--mirror`）、attached 短选项（`-n200`）、`--opt=value`、裸 `-` 拒绝与定制中文报错无法对齐；已收口为带值选项共用 `collectFlagValues`（flags.ts）
 - **入站键改默认拒绝的白名单**：上游常新增字段，白名单会静默丢弃合法的未知 mihomo 键；维持锁定清单 + 快照 spec（D5）

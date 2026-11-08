@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 import * as yaml from 'js-yaml';
 import { assertConfigGraphSafe } from './config-graph.js';
-import { BASE_CONFIG, EFFECTIVELY_LOCKED_KEYS, isPlainObject, YAML_MAX_ALIASES } from './constants.js';
+import { BASE_CONFIG, EFFECTIVELY_LOCKED_KEYS, YAML_MAX_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
 import { USER_DATA_DIR } from './paths.js';
 import { readSettings, writeSettings } from './settings.js';
@@ -64,11 +64,18 @@ export function lockedKeysReferencedBy(rawKeys: readonly string[]): string[] {
 }
 
 /**
- * 校验解析结果：操作符修饰互斥、键名非空。
+ * 校验解析结果：操作符修饰互斥、键名非空、已移除的操作符形态显式报错。
  * 互斥组合（`+rules+`）解析器不报错、静默按分支处理，用户无法预期结果——矛盾输入一律显式报错。
  * 裸 `+:` / `!:` 解析出空键名，不能产出空字符串顶层键（内核静默忽略，笔误零反馈）。
+ * 已移除的 `~`/`~?`/`<x>`（mihomo 顶层键不含这些字符）不报错的话会被当字面键静默落进配置。
  */
 function assertValidParsedKey(rawKey: string, parsed: ParsedOverrideKey): void {
+  if (/[~<>]/.test(rawKey)) {
+    throw new CliError(`覆写键 "${rawKey}" 用了已移除的操作符（~ / ~? / <key>）`, {
+      label: '覆写配置错误',
+      hint: ['按 name 合并数组元素改用 JS 覆写脚本（README「覆写配置」章节）；<key> 转义不再需要，直接写键名。'],
+    });
+  }
   if (parsed.key === '') {
     throw new CliError(`覆写键名不能为空: "${rawKey}"`, {
       label: '覆写配置错误',
@@ -199,9 +206,16 @@ function mergeConfigLevel(target: unknown, override: unknown, parseOperators: bo
       continue;
     }
 
-    if (isPlainObject(value) && isPlainObject(existingValue)) {
+    if (
+      value !== null &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      existingValue !== null &&
+      typeof existingValue === 'object' &&
+      !Array.isArray(existingValue)
+    ) {
       // 目标已有同名映射 → 逐键深度合并（deep merge 语义不变），进入字面层
-      result[key] = mergeConfigLevel(existingValue, value, false);
+      result[key] = mergeConfigLevel(existingValue as Record<string, unknown>, value, false);
       continue;
     }
 
@@ -228,7 +242,7 @@ function isYamlOverwriteFilename(filename: string): boolean {
 /**
  * 判断文件名是否为 JS 覆写脚本：主脚本 overwrite.{js,mjs,cjs} 或扩展脚本
  * overwrite.*.{js,mjs,cjs}。三种主文件形态都认——只认 .js 的话，写 overwrite.mjs
- * 的用户会得到静默不加载，正是本仓要消灭的那类零提示失效。
+ * 的用户会得到静默不加载（typo 检测也不覆盖），正是本仓要消灭的那类零提示失效。
  * .mjs/.cjs 显式声明模块格式；.js 在数据目录（无 package.json）下靠 Node 的模块语法
  * 探测判 ESM/CJS（探测自 22.7 起默认启用，远早于本仓下界），两种写法都认。
  */
@@ -265,6 +279,38 @@ export function isOverwriteFilename(filename: string): boolean {
   return isYamlOverwriteFilename(filename) || isScriptOverwriteFilename(filename);
 }
 
+/**
+ * 判断文件名是否「形似覆写文件却不被 isOverwriteFilename 认」（整体近失）。
+ * 只认小写化后与某个合法形态完全一致、仅大小写或主文件扩展名不同的名字——最典型是
+ * `overwrite.yml`（主文件只认 .yaml；.yml 只在扩展文件 `overwrite.*.yml` 形态下合法）。
+ * `.ts` 单列：TypeScript 脚本不能直接加载，静默跳过会让用户以为脚本生效了。
+ * 误报零容忍：宁可漏报（overwrit.yaml、overwrite.json、overwrite.yaml.bak 这类
+ * 故意改名或意图不明的文件），也不把用户目录里自己的无关文件报出来。
+ */
+function isOverwriteFilenameTypo(filename: string): boolean {
+  if (isOverwriteFilename(filename)) return false;
+  const lower = filename.toLowerCase();
+  // 大小写变体（如 Overwrite.YAML）在大小写不敏感的 APFS 上与合法名同名，
+  // 但 readdirSync 返回的是存储大小写、按原样匹配不上，同样静默不加载
+  return (
+    // overwrite.yml 是 typo 特有的近失（主文件只认 .yaml）；其余 YAML 形态直接复用
+    // 合法判定，扩展名知识不留第二份
+    lower === 'overwrite.yml' || isYamlOverwriteFilename(lower) || lower === 'overwrite.ts' || /^overwrite\..+\.ts$/.test(lower)
+  );
+}
+
+/**
+ * 数据目录里「形似覆写文件却不会被加载」的近失文件名（overwrite.yml、overwrite.ts、
+ * 大小写变体）。加载时的警告与 reset overwrites 的残留提示共用这一个出口
+ */
+export function listTypoOverwriteFiles(): string[] {
+  try {
+    return fs.readdirSync(USER_DATA_DIR).filter(isOverwriteFilenameTypo);
+  } catch {
+    return [];
+  }
+}
+
 /** match 块支持的匹配键（作用域限定） */
 const MATCH_KEYS = new Set(['name', 'url-domain']);
 
@@ -290,11 +336,11 @@ export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch |
       hint: ['match: 后面要跟条件块（检查缩进），如:', '  match:', '    name: edu*'],
     });
   }
-  if (!isPlainObject(raw)) {
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
     throw new CliError(`覆写文件 "${fileName}" 的 match 必须是对象（name / url-domain）`, { label: '覆写配置错误' });
   }
 
-  const rawEntries = raw;
+  const rawEntries = raw as Record<string, unknown>;
 
   const result: OverwriteMatch = {};
   const problems: string[] = [];
@@ -398,7 +444,7 @@ function summarizeMatch(match?: OverwriteMatch): string | undefined {
  * 一行描述某个覆写文件「叫什么、管哪些订阅」，供内核校验失败时列出生效覆写。
  * 无 match 显式写成「全局」而非留空：这里是错误诊断，读者要判断「这个文件为什么会
  * 作用到当前订阅」，`ow list` 那种「没作用域就不打印该行」的省略在此会让人以为漏了信息。
- * 「全局」与 README / docs/overwrite.md 对无 match 文件「全局参与」的措辞一致。
+ * 「全局」与 docs/overwrite.md「无 match 全局参与」同一措辞。
  */
 export function describeOverwriteScope(file: OverwriteFileEntry): string {
   return `${file.name} (${summarizeMatch(file.match) ?? '全局'})`;
@@ -478,11 +524,31 @@ export function selectActiveOverwriteFiles(files: OverwriteFileEntry[], scope?: 
   return files.filter(f => f.enabled !== false && matchesScope(f.match, scope));
 }
 
+/** 元数据键：在合并前被剥离，绝不进入最终 mihomo-cli 配置。 */
+const METADATA_KEYS = new Set(['match', 'enabled']);
+
+/**
+ * 元数据键（match/enabled）的近失写法：带操作符（`enabled!`）或大小写/空白变体（`Enabled`）。
+ * 剥离按精确键名进行，近失写法既不停用文件/限定作用域，又被当普通键写进运行配置
+ * （内核对未知顶层键不报错）——静默失效，故一律报错。
+ */
+function assertNoMetadataKeyLookalikes(config: Record<string, unknown>, fileName: string): void {
+  for (const rawKey of Object.keys(config)) {
+    const normalized = parseOverrideKey(rawKey.trim().toLowerCase()).key;
+    if (normalized !== rawKey && METADATA_KEYS.has(normalized)) {
+      throw new CliError(`覆写文件 "${fileName}" 的 "${rawKey}" 疑似想写元数据键 ${normalized}`, {
+        label: '覆写配置错误',
+        hint: [`元数据键只认精确写法（区分大小写、不带操作符），"${rawKey}" 不会生效，反而会当普通键写进运行配置。`, `请写成 ${normalized}: <值>。`],
+      });
+    }
+  }
+}
+
 /**
  * 文件级（不依赖订阅内容）的操作符校验，在 readOverwriteFiles 加载阶段执行一次，
  * 让诊断路径（ow/status）与合并路径（start/config/doctor）看到同一份坏文件：
  *
- * - **操作符形态**（空键/互斥修饰/残留 `!` `+`）：只在合并期抛的话，诊断旁路根本不合并，
+ * - **操作符形态**（`~`/尖括号/空键/互斥修饰）：只在合并期抛的话，诊断旁路根本不合并，
  *   坏文件会被当成「已生效」列在 status/applied 里，而启动硬失败——同一文件两处结论
  * - **数组操作符命中系统默认的非数组键**（如 `log-level+`）：BASE_CONFIG 在合并
  *   **之后**才注入，合并期看不到它，`log-level+: x` 会先产出 `log-level: [x]`，
@@ -608,6 +674,15 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
     .map(e => e.name);
 
+  // 近失文件名：意图明显是覆写文件却不被任何合法模式认（最典型：主文件写成 overwrite.yml）。
+  // 静默不加载 = 用户以为覆写生效了、`ow` 列表里也看不见，故打一行警告。
+  // 只认整体近失（见 isOverwriteFilenameTypo），不扫全部「形近」文件
+  for (const typo of entries.filter(isOverwriteFilenameTypo)) {
+    console.warn(
+      `警告: "${typo}" 不会被当作覆写文件加载（合法文件名: overwrite.yaml 主文件、overwrite.*.yaml / overwrite.*.yml 扩展文件、overwrite.js 主脚本、overwrite.*.js / .mjs / .cjs 扩展脚本）；若是笔误请改名`,
+    );
+  }
+
   for (const file of files) {
     const filePath = path.join(USER_DATA_DIR, file);
     try {
@@ -621,15 +696,16 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
       // 落入 catch 会让 start/config/doctor 硬失败——先建空骨架文件再编辑是自然操作顺序
       if (isBlankYamlDocument(content)) continue;
       // 别名上限防 YAML 炸弹 DoS（同 config.ts loadYamlSafe，此处内联避免与 config 循环依赖）
-      const parsed: unknown = yaml.load(content, { maxAliases: YAML_MAX_ALIASES });
+      const parsed = yaml.load(content, { maxAliases: YAML_MAX_ALIASES }) as Record<string, unknown> | null;
       assertConfigGraphSafe(parsed, `覆写文件 "${file}"`);
       // 顶层数组/标量不是合法覆写文件，与语法错同族的静默失效，统一收进 broken
-      if (isPlainObject(parsed)) {
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         // match / enabled 是元数据键：抽成结构化字段并从 config 剥离，确保它们永不进入
         // 最终 mihomo-cli 配置（内核对未知顶层键宽松，剥离是本 CLI 的责任）。
         // 被停用的文件同样完整加载并校验 match：`ow` 列表要显示它的作用域，且避免
         // 「停用期间藏着错误、一启用就炸」
         const { match, enabled, ...config } = parsed;
+        assertNoMetadataKeyLookalikes(config, file);
         assertFileLevelOperatorRules(config, file);
         ok.push({ name: file, config, match: normalizeMatch(match, file), enabled: normalizeEnabled(enabled, file) });
       } else if (parsed !== null) {

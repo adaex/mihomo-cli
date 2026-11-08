@@ -26,6 +26,7 @@ before(() => {
     `#!/bin/sh
 [ "$1" = '-t' ] && [ "$2" = '-d' ] && [ "$4" = '-f' ] && [ -s "$5" ] || exit 7
 if [ -f "$0.reject" ]; then echo 'native rejected candidate' >&2; exit 1; fi
+cat "$5" > "$0.validated"
 `,
     { mode: 0o755 },
   );
@@ -45,6 +46,14 @@ describe('配置经内核校验后再提交', () => {
     const info = commitPreparedConfig(await prepareConfigForStart('mixed', 'x'));
     assert.deepEqual(info, { proxies: 1, proxyGroups: 1 });
     assert.deepEqual(fs.readdirSync(DIRS.runtime), ['config.yaml']);
+  });
+
+  it('commit 写入内核实际校验的文本，不对可能变化的对象再 dump 一次', async () => {
+    const prepared = await prepareConfigForStart('mixed', 'x');
+    const validated = fs.readFileSync(`${PATHS.mihomoBinary}.validated`, 'utf8');
+    prepared.buildResult.config['log-level'] = 'debug';
+    commitPreparedConfig(prepared);
+    assert.equal(fs.readFileSync(PATHS.configFile, 'utf8'), validated);
   });
 
   it('内核拒绝配置时保留现有配置并清理临时文件', async () => {

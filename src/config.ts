@@ -287,9 +287,9 @@ export function countConfigNodes(config: Record<string, unknown>): ConfigSummary
   };
 }
 
-export function writeMihomoConfig(configObj: Record<string, unknown>): void {
+/** 写入已经构建并通过内核校验的候选文本，不在提交阶段重新序列化对象。 */
+export function writeMihomoConfig(content: string): void {
   ensureDirs();
-  const content = dumpYaml(configObj);
   atomicWriteFileSync(PATHS.configFile, content, { mode: 0o600 });
 }
 

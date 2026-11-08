@@ -10,9 +10,10 @@ import { ENTRY } from './cli.js';
  * guard 类 spec（root/platform/node 守卫）的共享夹具，抽自三个 spec 原各自互抄的骨架：
  * 每用例一套临时目录（mkdtemp + rmSync）+「写预加载脚本 → 以 --import 它跑真实 CLI 入口」。
  *
- * 仓规「端到端夹具统一走 cli.ts」对 guard 类有豁免（docs/development.md「测试与夹具」）：守卫要在 CLI 逻辑运行前
- * 伪造进程身份/平台/Node 版本，只能靠 --import 预加载脚本；且豁免类用例要刻意不设
- * MIHOMO_CLI_DIR 或钉住 HOME——env 是整个替换而非叠加标准三件套。故单列本模块，不塞进 cli.ts。
+ * 端到端夹具统一收在 src/test-support/（docs/development.md「测试与夹具」），不是统一走 cli.ts。
+ * guard 要在 CLI 逻辑运行前伪造进程身份/平台/Node 版本，只能靠 --import 预加载脚本；
+ * 部分用例还要刻意不设 MIHOMO_CLI_DIR 或钉住 HOME，env 需整体替换而非叠加标准三件套，
+ * 故本模块与 cli.ts 并列，不是对「统一走 cli.ts」的豁免。
  *
  * env 策略（root/platform 的 DIR+HOME、node 的三件套、platform 清逃生阀）三家各不同，
  * 留在各 spec 的 runAsXxx 包装里；preload 伪造语句同样是各守卫的私事，由调用点传入。

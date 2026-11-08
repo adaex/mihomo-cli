@@ -41,15 +41,24 @@ interface SudoScriptOptions {
 }
 
 /**
- * sudo 退出码 → Error 的纯映射（runSudoScript 的可测内核）：
- * - 1 = sudo 鉴权取消/密码错误 → SudoAuthError。**即便 codeMessages 登记了 1 也不让**——
- *   退出码 1 不归脚本，脚本内部失败必须约定 ≥2，否则真实失败会被映射成「已取消」
- * - null = sudo 进程被信号终止
- * - 其余非零码先查 codeMessages（脚本内部失败，约定 ≥2），未登记的落到「动作失败（退出码 N）」
+ * spawnSync 结果 → Error 的纯映射（runSudoScript 的可测内核）：
+ * - error 优先：ETIMEDOUT 说明本工具时限已到，其他错误原样透传
+ * - 退出码 1 恒归 sudo 鉴权，codeMessages 不能抢走；脚本内部失败约定 ≥2
+ * - status null 表示被信号终止；status 0 返回 null，其余查脚本专属文案
  */
-export function sudoExitToError(action: string, status: number | null, codeMessages?: Record<number, string>): Error {
+export function sudoResultToError(
+  action: string,
+  result: { error?: NodeJS.ErrnoException | null; status: number | null },
+  codeMessages?: Record<number, string>,
+): Error | null {
+  if (result.error) {
+    if (result.error.code === 'ETIMEDOUT') return sudoTimeoutError(action);
+    return result.error;
+  }
+  const { status } = result;
+  if (status === 0) return null;
   if (status === 1) return new SudoAuthError();
-  if (status == null) return new Error(`${action}被中断（sudo 进程被信号终止）`);
+  if (status === null) return new Error(`${action}被中断（sudo 进程被信号终止）`);
   const custom = codeMessages?.[status];
   return new Error(custom ?? `${action}失败（退出码 ${status}）`);
 }
@@ -67,7 +76,7 @@ export function sudoTimeoutError(action: string): Error {
 /**
  * 写临时 bash 脚本并用单次交互式 sudo 执行（TUN 启动与系统级服务操作共用的范式）。
  * stdio:'inherit' 让 sudo 直接在 TTY 读密码；一个脚本内完成多步 root 操作，只弹一次密码。
- * 退出码 1 保留给 sudo 鉴权取消/密码错误；脚本内部失败用 ≥2 区分，映射见 sudoExitToError。
+ * 退出码 1 保留给 sudo 鉴权取消/密码错误；脚本内部失败用 ≥2 区分，映射见 sudoResultToError。
  */
 export function runSudoScript(scriptBody: string, opts: SudoScriptOptions): void {
   if (!process.stdin.isTTY) {
@@ -93,13 +102,8 @@ export function runSudoScript(scriptBody: string, opts: SudoScriptOptions): void
 
   try {
     const result = spawnSync('sudo', [scriptPath], { stdio: 'inherit', timeout: SUDO_TIMEOUT_MS });
-    // spawnSync 超时同时设置 error=ETIMEDOUT 与 status=null：先判 error 原样抛出会
-    // 绕过下面 sudoExitToError 的 null 分支，把内部串漏给用户
-    if (result.error) {
-      if ((result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') throw sudoTimeoutError(opts.action);
-      throw result.error;
-    }
-    if (result.status !== 0) throw sudoExitToError(opts.action, result.status, opts.codeMessages);
+    const error = sudoResultToError(opts.action, result, opts.codeMessages);
+    if (error) throw error;
   } finally {
     try {
       fs.unlinkSync(scriptPath);

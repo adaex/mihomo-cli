@@ -80,6 +80,8 @@ export interface ConfigSummary {
 /** 已构建校验、尚未写盘的配置。见 subscription.prepareConfigForStart */
 export interface PreparedConfig {
   buildResult: BuildConfigResult;
+  /** 已交给内核校验的文本；提交必须写同一份，不能再次 dump buildResult.config */
+  candidateContent: string;
   info: ConfigSummary;
 }
 
@@ -357,7 +359,7 @@ export interface StatusJson {
   overwrite: {
     enabled: boolean;
     applied: string[];
-    /** hint 是可执行的修复指引（如 `*edu` 加引号的写法示例），诊断界面与 JSON 都必须带出 */
+    /** hint 是可执行的迁移/修复指引（如已移除操作符的改写示例），诊断界面与 JSON 都必须带出 */
     errors: { name: string; message: string; hint: string[] }[];
   };
   service: {

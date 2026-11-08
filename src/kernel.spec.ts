@@ -7,8 +7,8 @@ import { describe, it } from 'node:test';
 import {
   assertTrustedAssetUrl,
   buildGhApiReleaseArgs,
+  buildGhDownloadEnv,
   buildGhReleaseDownloadArgs,
-  buildGhSpawnEnv,
   buildKernelCurlArgs,
   buildReleaseApiCurlArgs,
   checkUpdate,
@@ -22,7 +22,6 @@ import {
   translateReleaseApiCurlError,
 } from './kernel.js';
 import { runModule } from './test-support/cli.js';
-import { parseEnvDump, writeStubExecutable } from './test-support/stub-bin.js';
 import { readStubCurlEnv, runWithEnvRecordingStubCurl, STUB_CURL_ENV_MARKER_ENV, stubCurlEnvRecordLines } from './test-support/stub-curl-env.js';
 import type { GitHubAsset, GitHubRelease } from './types.js';
 
@@ -265,159 +264,64 @@ describe('buildGhReleaseDownloadArgs', () => {
   });
 });
 
-describe('buildGhSpawnEnv（gh 子进程 env：去自指代理 + 按通道注入）', () => {
-  const SELF_PORT = 7890;
-  const PROXY_KEYS = ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY'];
-  const saved = Object.fromEntries(PROXY_KEYS.map(k => [k, process.env[k]]));
+describe('buildGhDownloadEnv（gh 回退的代理注入）', () => {
+  const priorHttpsProxy = process.env.HTTPS_PROXY;
+  const priorHttpsProxyLower = process.env.https_proxy;
   const priorUnrelated = process.env.HOME;
 
-  /** 每个用例从「六个代理键都没有」起步，结束后还原，不污染同进程其他用例 */
-  const withProxyEnv = (proxyEnv: Record<string, string>, fn: () => void): void => {
-    for (const k of PROXY_KEYS) delete process.env[k];
-    Object.assign(process.env, proxyEnv);
-    try {
-      fn();
-    } finally {
-      for (const k of PROXY_KEYS) {
-        if (saved[k] === undefined) delete process.env[k];
-        else process.env[k] = saved[k];
-      }
-    }
-  };
-
   it('带 proxy：大小写两种形式都注入，其余 env 保留', () => {
-    withProxyEnv({}, () => {
-      const env = buildGhSpawnEnv('http://127.0.0.1:7890', SELF_PORT);
-      assert.equal(env.HTTPS_PROXY, 'http://127.0.0.1:7890');
-      assert.equal(env.https_proxy, 'http://127.0.0.1:7890');
-      assert.equal(env.HOME, priorUnrelated, '继承的其他 env 必须保留');
-    });
+    const env = buildGhDownloadEnv('http://127.0.0.1:7890');
+    assert.equal(env.HTTPS_PROXY, 'http://127.0.0.1:7890');
+    assert.equal(env.https_proxy, 'http://127.0.0.1:7890');
+    assert.equal(env.HOME, priorUnrelated, '继承的其他 env 必须保留');
   });
 
-  it('只返回新对象，不写回 process.env（不污染同进程后续子进程）', () => {
-    withProxyEnv({ HTTPS_PROXY: 'http://ambient.example:1', https_proxy: 'http://127.0.0.1:7890' }, () => {
-      const env = buildGhSpawnEnv('http://127.0.0.1:7890', SELF_PORT);
+  it('带 proxy：清除 no_proxy / NO_PROXY，例外表不能把显式通道改回直连', () => {
+    const previousLower = process.env.no_proxy;
+    const previousUpper = process.env.NO_PROXY;
+    process.env.no_proxy = 'localhost,127.0.0.1';
+    process.env.NO_PROXY = 'localhost,127.0.0.1';
+    try {
+      const env = buildGhDownloadEnv('http://127.0.0.1:7890');
+      assert.equal(env.no_proxy, undefined);
+      assert.equal(env.NO_PROXY, undefined);
+      assert.equal(process.env.no_proxy, 'localhost,127.0.0.1', '只改返回副本，不污染进程 env');
+      assert.equal(process.env.NO_PROXY, 'localhost,127.0.0.1');
+    } finally {
+      if (previousLower === undefined) delete process.env.no_proxy;
+      else process.env.no_proxy = previousLower;
+      if (previousUpper === undefined) delete process.env.NO_PROXY;
+      else process.env.NO_PROXY = previousUpper;
+    }
+  });
+
+  it('带 proxy：只返回新对象，不写回 process.env（不污染同进程后续子进程）', () => {
+    process.env.HTTPS_PROXY = 'http://ambient.example:1';
+    process.env.https_proxy = 'http://ambient.example:1';
+    try {
+      const env = buildGhDownloadEnv('http://127.0.0.1:7890');
       assert.equal(env.HTTPS_PROXY, 'http://127.0.0.1:7890');
       assert.equal(process.env.HTTPS_PROXY, 'http://ambient.example:1', 'process.env 不应被改写');
-      assert.equal(process.env.https_proxy, 'http://127.0.0.1:7890', '去掉自指键也只发生在返回的副本里');
-    });
+    } finally {
+      if (priorHttpsProxy === undefined) delete process.env.HTTPS_PROXY;
+      else process.env.HTTPS_PROXY = priorHttpsProxy;
+      if (priorHttpsProxyLower === undefined) delete process.env.https_proxy;
+      else process.env.https_proxy = priorHttpsProxyLower;
+    }
   });
 
   it('无 proxy：不新增代理键（独立 gh 候选按环境直连）', () => {
-    withProxyEnv({}, () => {
-      const env = buildGhSpawnEnv(null, SELF_PORT);
-      for (const k of PROXY_KEYS) assert.equal(env[k], undefined, k);
-      assert.equal(env.HOME, priorUnrelated);
-    });
-  });
-
-  it('无 proxy 且 env 里有自指代理（内核没跑、env 残留）：去掉，否则 gh 经死端口出网', () => {
-    withProxyEnv({ https_proxy: 'http://127.0.0.1:7890', ALL_PROXY: 'socks5://127.0.0.1:7890' }, () => {
-      const env = buildGhSpawnEnv(null, SELF_PORT);
-      assert.equal(env.https_proxy, undefined);
-      assert.equal(env.ALL_PROXY, undefined);
-    });
-  });
-
-  it('env 里的非自指代理（企业网络）保留；带 proxy 时只覆盖 HTTPS_PROXY/https_proxy', () => {
-    withProxyEnv({ HTTP_PROXY: 'http://proxy.corp.example:3128', https_proxy: 'http://proxy.corp.example:3128' }, () => {
-      assert.equal(buildGhSpawnEnv(null, SELF_PORT).https_proxy, 'http://proxy.corp.example:3128');
-      const injected = buildGhSpawnEnv('http://127.0.0.1:7890', SELF_PORT);
-      assert.equal(injected.HTTP_PROXY, 'http://proxy.corp.example:3128');
-      assert.equal(injected.https_proxy, 'http://127.0.0.1:7890');
-    });
-  });
-});
-
-describe('gh 子进程 env 接线（子进程 + PATH 桩 gh 端到端）', () => {
-  /**
-   * buildGhSpawnEnv 的单元用例碰不到两处 spawn 的接线（getLatestReleaseViaGh 与 downloadKernel
-   * 的 gh 通道）：桩 gh 把收到的 env dump 下来。回归方向是 gh 经自己的（可能已死的）端口出网。
-   * 数据目录无 settings.json → 自己的 Mixed 端口取默认 7890。
-   */
-  function runWithStubGh(
-    driverScript: string,
-    env: NodeJS.ProcessEnv,
-    sub: 'api' | 'release',
-  ): { stdout: string; stderr: string; ghEnv: Record<string, string> } {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-gh-env-'));
-    const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-gh-env-bin-'));
+    delete process.env.HTTPS_PROXY;
+    delete process.env.https_proxy;
     try {
-      writeStubExecutable(
-        path.join(fakeBin, 'gh'),
-        [
-          // 按子命令分文件落盘：gh --version 之类的探测调用不会覆盖 api/release 的记录
-          `env > "${dataDir}/gh-env.$1"`,
-          'if [ "$1" = "api" ]; then',
-          `  printf '[{"tag_name":"v1.0.0","assets":[]}]'`,
-          '  exit 0',
-          'fi',
-          // gh release download：按 --pattern/--dir 落一个资产文件，后续解压失败与本用例无关
-          'dir=""; pattern=""; prev=""',
-          'for a in "$@"; do',
-          '  if [ "$prev" = "--dir" ]; then dir="$a"; fi',
-          '  if [ "$prev" = "--pattern" ]; then pattern="$a"; fi',
-          '  prev="$a"',
-          'done',
-          `printf 'abc' > "$dir/$pattern"`,
-        ].join('\n'),
-      );
-      const r = runModule(driverScript, dataDir, { env: { PATH: `${fakeBin}:${process.env.PATH}`, ...env }, timeout: 30_000 });
-      const dumpFile = path.join(dataDir, `gh-env.${sub}`);
-      assert.ok(fs.existsSync(dumpFile), `桩 gh（${sub}）应被调用\n${r.stderr}`);
-      return { stdout: r.stdout, stderr: r.stderr, ghEnv: parseEnvDump(fs.readFileSync(dumpFile, 'utf8')) };
+      const env = buildGhDownloadEnv(null);
+      assert.equal(env.HTTPS_PROXY, undefined);
+      assert.equal(env.https_proxy, undefined);
+      assert.equal(env.HOME, priorUnrelated);
     } finally {
-      fs.rmSync(dataDir, { recursive: true, force: true });
-      fs.rmSync(fakeBin, { recursive: true, force: true });
+      if (priorHttpsProxy !== undefined) process.env.HTTPS_PROXY = priorHttpsProxy;
+      if (priorHttpsProxyLower !== undefined) process.env.https_proxy = priorHttpsProxyLower;
     }
-  }
-
-  const selfProxyEnv = {
-    http_proxy: 'http://127.0.0.1:7890',
-    https_proxy: 'http://127.0.0.1:7890',
-    all_proxy: 'socks5://127.0.0.1:7890',
-    HTTPS_PROXY: 'http://127.0.0.1:7890',
-  };
-
-  it('版本查询（gh api）：env 里的自指代理不传给 gh', () => {
-    const script = [
-      `const { checkUpdate } = await import(${JSON.stringify(path.resolve('src/kernel.ts'))});`,
-      "const r = await checkUpdate({ proxy: null, useGh: true, currentVersion: 'v0.0.1' });",
-      "console.log('LATEST:' + r.latest);",
-    ].join('\n');
-    const { stdout, ghEnv } = runWithStubGh(script, selfProxyEnv, 'api');
-    assert.match(stdout, /LATEST:v1\.0\.0/);
-    for (const k of Object.keys(selfProxyEnv)) assert.equal(ghEnv[k], undefined, `${k} 不得传给 gh`);
-  });
-
-  /**
-   * gh 通道下载：驱动 downloadKernel 走 {kind:'gh'}，解压阶段失败无所谓，只看 gh 实见 env。
-   * 资产名按当前平台/架构拼（x64 在 release 里叫 amd64），用例不依赖宿主是否 macOS。
-   */
-  const downloadViaGhScript = (channel: { kind: 'gh'; proxy?: string }): string =>
-    [
-      `const { downloadKernel } = await import(${JSON.stringify(path.resolve('src/kernel.ts'))});`,
-      "const arch = process.arch === 'x64' ? 'amd64' : process.arch;",
-      'const name = `mihomo-${process.platform}-${arch}-v1.19.30.gz`;',
-      'const releaseInfo = { tag_name: "v1.19.30", assets: [{',
-      '  name,',
-      '  browser_download_url: `https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/${name}`,',
-      '  size: 3,',
-      '}] };',
-      `try { await downloadKernel(null, ${JSON.stringify(channel)}, releaseInfo); } catch {}`,
-    ].join('\n');
-
-  it('gh 下载（本机代理已停，无注入）：自指代理全部去掉，gh 按环境直连', () => {
-    const { ghEnv } = runWithStubGh(downloadViaGhScript({ kind: 'gh' }), selfProxyEnv, 'release');
-    for (const k of Object.keys(selfProxyEnv)) assert.equal(ghEnv[k], undefined, `${k} 不得传给 gh`);
-  });
-
-  it('gh 下载（回退候选带本机代理）：先去自指键再注入，HTTPS_PROXY/https_proxy 取通道代理', () => {
-    const { ghEnv } = runWithStubGh(downloadViaGhScript({ kind: 'gh', proxy: 'http://127.0.0.1:7890' }), selfProxyEnv, 'release');
-    assert.equal(ghEnv.HTTPS_PROXY, 'http://127.0.0.1:7890');
-    assert.equal(ghEnv.https_proxy, 'http://127.0.0.1:7890');
-    assert.equal(ghEnv.http_proxy, undefined, '其余自指键仍被去掉，不随注入泄漏');
-    assert.equal(ghEnv.all_proxy, undefined);
   });
 });
 

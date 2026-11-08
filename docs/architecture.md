@@ -25,7 +25,7 @@
 | `paths.ts` | 路径、目录、原子写与跨进程锁 |
 | `log-files.ts` / `open.ts` | 内核日志轮转、查询与系统打开操作 |
 | `redact.ts` | `config` 展示侧的凭据脱敏：敏感键递归掩码、provider 订阅 URL 复用 maskUrl |
-| `proxy-env.ts` | env 自代理判定与 per-spawn 去除（`stripSelfProxyEnv` / `proxyEnvPointsAtSelf` / `isLoopbackHost`，只读进程 env，D9） |
+| `proxy-env.ts` | env 自代理判定、入口清理与原值登记（`clearSelfProxyEnv` / `recordClearedProxyEnv`），不读取系统代理（D9） |
 | `proxy-probe.ts` / `spinner.ts` / `sudo.ts` | 连通性探测、等待反馈、按需提权 |
 | `curl-spawn.ts` | 全仓 curl 子进程代理策略唯一出口，产物下载、release API 查询与连通性探测共用（D9） |
 | `errors.ts` / `colors.ts` / `lifecycle.ts` | 错误、颜色、信号处理 |
@@ -64,9 +64,10 @@
 
 - 入站与控制面锁定的唯一真相是 constants.ts 的 `LOCKED_CONFIG_KEYS` 与实际执行集 `EFFECTIVELY_LOCKED_KEYS`（快照表 + tls）：告警扫描、剥除循环、脚本探针、快照 spec 全派生自它，不许重抄；判据与上游核对方法见 D5，完整性由 `config-inbound-snapshot.spec.ts` 兜底
 - 合并闸门唯一出口 `selectActiveOverwriteFiles`；加载双路径（合并硬失败/诊断旁路）见 D7
-- 覆写操作符（`key!` / `+key` / `key+`）只在顶层生效；带条件的变换一律写 JS 脚本（`export default (config, ctx) => {}`，契约见 D12–D14：就地修改、必须同步、返回值忽略）。status 不调用变换函数，但 ow/status 加载模块会执行顶层代码，doctor 构建会调用变换函数；status 的「生效」与 `overwrite.applied` 只表示选中，不证明脚本实际修改配置。脚本在 YAML 之前、剥锁定键之前执行，改不动系统锁定项；`~key` / `~?key` / `<x>` 不是语法，按字面键名处理；`match` / `enabled` 元数据键必须精确小写、不带操作符
+- 覆写操作符（`key!` / `+key` / `key+`）只在顶层生效；带条件的变换一律写 JS 脚本（`export default (config, ctx) => {}`，契约见 D12–D14：就地修改、必须同步、返回值忽略）。status 不调用变换函数，但 ow/status 加载模块会执行顶层代码，doctor 构建会调用变换函数；status 的「生效」与 `overwrite.applied` 只表示选中，不证明脚本实际修改配置。脚本在 YAML 之前、剥锁定键之前执行，改不动系统锁定项；`~` / `~?` / `<x>` 已移除，写入必须显式报错并给迁移指引；`match` / `enabled` 只认精确小写、不带操作符，近失写法同样报错，避免文件意外全局生效
 - match 的 name 只支持尾部 `*`（前缀）与头部 `*`（后缀）两种通配，其余报错——不引入通用匹配器（正则转义实现曾有灾难性回溯）；JS 脚本无 match 机制，作用域写在脚本里
 - 配置解析只走 YAML（D6）；Mixed 清 tun 字段，TUN 强制 dns.enable=true
+- `prepareConfigForStart` 把已交给内核校验的 `candidateContent` 存进 `PreparedConfig`，`commitPreparedConfig` 原子写入同一份文本，不在提交时重新序列化对象
 
 ### launchd 与进程
 
@@ -78,6 +79,6 @@
 ### 内核下载
 
 - 镜像只作用产物下载、选择不持久化；版本查询代理可用时直接经代理（D8）
-- 出网子进程的 env 代理处理是 per-spawn：去掉指向本机 Mixed 端口的自指形态用 `stripSelfProxyEnv`，不写回 process.env；新增出网子进程必须自己走它，gh 回退再注入通道代理、npm 在端口监听时保留原 env 的细节见 D9
+- 入口只清指向本机 Mixed 端口的自指 env 代理，其他代理保留；进程内 fetch 与子进程共用这份防护。gh 回退与 npm 恢复两个 per-spawn 例外见 D9；gh 显式注入代理时同时清 no_proxy/NO_PROXY，npm 只在自指端口仍监听时恢复原值
 - 下载候选由 `resolveDownloadChannels` 生成，逐个尝试首个成功即用；命令层不得额外追加 direct。代理运行时只有 proxy 与同代理 gh，代理未运行且 gh 可用时只有 gh；显式 --mirror/--proxy 只有一个候选（显式意图不自动换道）
 - curl 子进程代理策略唯一出口是 `curl-spawn.ts` 的 `buildCurlSpawnEnv`：per-spawn env 置空 no_proxy/NO_PROXY 保 `-x` 权威；直连通道的 `--noproxy '*'` 在 args 层（buildKernelCurlArgs），proxy 通道 args 绝不能加 --noproxy；三处 spawn（产物下载/release API 查询/连通性探测）不得另写 env 代理处理

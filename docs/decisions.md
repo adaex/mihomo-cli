@@ -2,7 +2,7 @@
 
 每条记录一个跨模块、稳定、回答「仓为什么长这样」的决策：背景 → 决策 → 拒绝的替代方案 → 关键后果。只写现行状态与被否定的方案，不写演进过程——版本史留在 CHANGELOG 与 git
 
-某条为什么不修、已知残余风险与实测结论记在 [CONCLUSIONS](../CONCLUSIONS.md)；各文档的归属见 [CLAUDE.md](../CLAUDE.md#文档归属)
+某条为什么不修、已知残余风险与实测结论记在 [CONCLUSIONS](../CONCLUSIONS.md)；各文档的归属见 [开发约定](development.md#文档归属)
 
 新增决策在文末追加、编号不重排（代码注释按 D 编号引用）；决策被推翻时把条目改为「已废弃」并保留一句理由，不物理删除——否定过的方案会被人重新提议。
 
@@ -52,17 +52,18 @@ API 若也走镜像，`browser_download_url` 就完全由镜像说了算，而�
 
 版本查询在代理可用时直接经代理；无代理且 gh 可用时先走 gh api 认证通道，失败再回退 curl 直连（`--noproxy '*'`，不读 env 代理）。curl 只替代原 Node fetch 的直连分支，gh 仍是独立的认证子进程通道（D9）。版本查询出网决策唯一出口是 kernel.ts 的 resolveReleaseQuery（cmdKernel 与 doctor 共用，与下载通道决策同源输入）；downloadKernel 只取产物、release 由调用方必传，不再有从下载通道反推查询方式的兜底路径
 
-## D9 出网子进程的 env 代理：per-spawn 去掉指向本机 Mixed 端口的自指形态
+## D9 入口只清指向本机 Mixed 端口的 env 代理
 
-无差别清除 http(s)_proxy 会让只能靠 env 代理出网的用户（企业网/其他工具）在 update/kernel 必败，且报错与代理无关。唯一必须去掉的是「代理恰好是本工具自己」的自指形态：下载经自己的端口，而重启会先停掉那个内核（死锁）；内核没跑时则经死端口出网。判定按整条 URL（不按逗号拆分），回环主机集合（127.0.0.1/localhost/::1/0.0.0.0/::——后两者 connect 会路由到本机监听器）与端口比对；裸 localhost:7890 必须补协议重解析（new URL 会把它当 scheme、hostname 为空而漏判）。本机端口取自 settings.json 的原始值，纯读（不触发损坏备份等副作用），缺失/损坏/非法一律回退默认 7890。
+无差别清除 http(s)_proxy 会让只能靠 env 代理出网的用户（企业网/其他工具）在 update/kernel 必败。唯一必须清除的是「代理恰好是本工具自己」的自指形态：下载经自己的端口，而重启会先停掉那个内核；内核没跑时则会连接死端口。判定按整条 URL，回环主机集合与端口比对；裸 localhost:7890 必须补协议重解析，http/https 的默认端口按 80/443 识别。本机端口在守卫前纯读 settings.json，异常回退默认 7890。
 
-实现：`proxy-env.ts` 的 `stripSelfProxyEnv` 返回去掉自指键（`http_proxy` / `https_proxy` / `all_proxy` 大小写共 6 个）的 env 副本，由出网子进程在各自 spawn 处使用，**一律不写 process.env**，与 `curl-spawn.ts` 的 per-spawn 姿态一致。各 spawn 点各自表达自己要什么：
+实现：入口调用 `proxy-env.ts` 的 `clearSelfProxyEnv` 清掉六个大小写代理键中的自指值，其他 env 保留；`recordClearedProxyEnv` 只登记原值，不自动恢复。进程内 fetch 在 `NODE_USE_ENV_PROXY=1` 时也读同一份 process.env，因此不能只在子进程 spawn 点做清理。
 
-1. **curl**：版本查询的直连分支（`--noproxy '*'`）与下载（显式 `-x`）已由命令行参数决定出网路径、no_proxy 置空，不读 env，无需处理。
-2. **gh（版本查询与下载回退）**：先 `stripSelfProxyEnv`，再由 `buildGhSpawnEnv` 按通道决策注入代理（大小写两种形式都给，Go 的 httpproxy 两者都认、大写优先）——gh 没有命令行代理选项，只认环境变量。下载回退候选带着本机代理地址（与首选 curl 通道同一出网路径，与用户是否配过 env 无关）；只去不注，gh 会在内核在跑时也静默直连。版本查询的 gh api 只去不注。内核下载不中途重启内核（产物自检通过才原子换入，重启由用户之后手动做），所以注入不违反本条。
-3. **npm（update/doctor）**：npm 是用户环境的工具，通道决策不管它，只**忠实保留用户自己的配置**：env 里有自指代理时，TCP 探活被指端口——在监听（内核在跑）就保留原 env，端口不通（env 残留/内核已停）则去掉，npm 直连。不凭空注入：没有 env 代理习惯的用户（如 .npmrc 配镜像源）路径不变；.npmrc 显式 proxy 优先级高于 env，也不受影响。探活每次 spawn 独立（view 与 install 之间隔着用户确认，代理状态允许变）。
+刻意的 per-spawn 例外有两处，共同前提都是该子进程全程不重启内核：
 
-后果：新增出网子进程必须自己走 `stripSelfProxyEnv`（process.env 不再被入口清理，裸继承会带上自指代理）；sudo/TUN 脚本靠 sudo 默认 env_reset 不继承 env；进程内 fetch 默认不读 env 代理，不受影响——用户显式设 `NODE_USE_ENV_PROXY=1` 时 fetch 会遵守其 env 代理（含指向本机的），这是用户自己的显式选择，CLI 不替它改写。拒绝的替代：命令入口全局清除自指 env + 登记原值、npm/gh 路径再「恢复」——全局可变状态让每个 spawn 点都要记得还原，漏一处就是静默直连或残留。per-spawn 把「这个子进程要什么」放回 spawn 点，不留需要还原的状态。
+1. **内核下载的 gh 回退**：`buildGhDownloadEnv` 按通道注入 HTTPS_PROXY/https_proxy，并清掉 no_proxy/NO_PROXY，确保回退与首选 curl 走同一代理。内核产物自检通过后才原子换入，下载中途不重启内核。
+2. **update/doctor 的 npm**：每次 spawn 前 TCP 探活自指端口，仍在监听才恢复用户原值；端口不活保持清除。不凭空注入代理，不改写 .npmrc，view 与 install 之间允许代理状态变化。
+
+拒绝只在各出网子进程做 per-spawn 清理、完全不改 process.env 的方案：它会漏掉 `NODE_USE_ENV_PROXY=1` 时的进程内订阅 fetch，在本机代理未运行时重新引入下载失败。入口统一清理覆盖进程内与子进程两类消费方，npm 的恢复仍保持在每次 spawn 前。
 
 ## D10 settings 每次读盘，一致视图靠调用方显式传快照
 
@@ -74,7 +75,7 @@ readSettings() 无进程级缓存：CLI 是短进程，缓存省不了多少，�
 
 ## D12 覆写 DSL 裁边：声明式只留三个操作符，带条件的变换走 JS 脚本
 
-判据：设施规模与真实使用面不匹配。保留 `key!`（替换）、`+key`（前插）、`key+`（追加）——纯数据、无逻辑。拒绝的替代：`~key`/`~?key`（按 name 合并数组元素 + 未命中追加/跳过两态）——它是唯一「一句话说不清」的操作符，语义面（分组合并、两态未命中）撑不起零散的使用；`<x>` 尖括号转义与嵌套形似告警——服务的是不存在的键名形态（mihomo 顶层键无 `+`/`~`/`!`/尖括号），这些字符出现在键名里就是普通字面键，不报错也不告警。match 只有 `name` 一个入口，不设 `subscription` 同义键。
+判据：设施规模与真实使用面不匹配。保留 `key!`（替换）、`+key`（前插）、`key+`（追加）——纯数据、无逻辑。拒绝的替代：`~key` / `~?key`（按 name 合并数组元素与未命中两态）和 `<x>` 转义，语义复杂度超过真实使用面。这些旧形态与 `match` / `enabled` 的近失写法必须显式报错：内核会忽略未知顶层键，但文件内其他配置仍会按启用、无 match 的全局范围生效，不能把笔误当普通键静默放行。match 支持 `name` 与 `url-domain` 两个键；订阅名条件只保留 `name`，不再设 `subscription` 同义键。
 
 复杂变换由 JS 脚本承担（`overwrite.js` / `overwrite.*.{js,mjs,cjs}`，默认导出函数）：**全信任模型**——脚本以用户身份运行、不沙箱不超时（同 `.zshrc`，README 明示别装来路不明的脚本），但**必须同步**（返回 Promise 报错：buildConfig 是同步管线，require(esm)（Node ≥22.12 即支持，本仓下界 24）同步加载、`await import` 会把整条合并链传染性 async 化，而纯转换没有要等网络的场景）。管线位置是安全关键：脚本执行 → YAML 合并 → 剥 LOCKED_CONFIG_KEYS → 系统配置注入（段序论证见 D13）——脚本设置的锁定键被剥除（安全边界对脚本输出一视同仁）但经前后深快照检出并告警（不静默，脚本作者会困惑「设置了怎么没生效」）；systemConfig 最后注入，脚本改不掉端口与控制面。脚本无 match/enabled 机制（作用域写在脚本里，想停用改扩展名），受 `ow` 全局开关与 selectActiveOverwriteFiles 闸门管理；返回值忽略，CLI 不判定脚本是否命中（D14）。加载失败/执行抛错与坏 YAML 同款双路径姿态（D7）。脚本的锁定键告警文案与 YAML 侧共用一份（renderLockedWarning），清单 LOCKED_CONFIG_KEYS 物理上住 constants.ts（overwrite.ts 要读它做快照、config.ts import overwrite.ts，反向会循环依赖）。
 
@@ -102,7 +103,7 @@ readSettings() 无进程级缓存：CLI 是短进程，缓存省不了多少，�
 
 Mixed 的产品边界是提供回环 HTTP + SOCKS5 端口，不是接管系统网络设置。用户的主路径是在具体浏览器或需要代理的应用中按需配置 `127.0.0.1:<mixed-port>`，不依赖全局 Mac 代理
 
-决策：CLI 不读取、设置、切换或清除 macOS 系统代理（不调用 `networksetup`/`scutil`），不提供全局 `proxy on/off`，快速开始与启动提示也不把全局代理配置作为推荐步骤。`start` 成功后只打印一行静态提示（Mixed 地址与按应用配置的说明）。`proxy-env.ts` 只读进程 env，用于避免自指死锁（D9），不能扩展成读写系统设置
+决策：CLI 不读取、设置、切换或清除 macOS 系统代理（不调用 `networksetup`/`scutil`），不提供全局 `proxy on/off`，快速开始与启动提示也不把全局代理配置作为推荐步骤。`start` 成功后只打印一行静态提示（Mixed 地址与按应用配置的说明）。`proxy-env.ts` 只处理进程 env，用于避免自指死锁（D9），不能扩展成读写系统设置
 
 拒绝的替代：`start` 时用 `scutil --proxy` 检测系统代理是否指向本机、按三档给提示——检测的是「系统代理」，而用户的主路径本来就不走系统代理，提示对多数人是噪声，且引入对系统命令输出格式的解析依赖。
 
@@ -110,6 +111,6 @@ Mixed 的产品边界是提供回环 HTTP + SOCKS5 端口，不是接管系统�
 
 ## D16 CLI 诊断事件日志（已废弃）
 
-曾在 `logs/diagnostic.jsonl` 独立记录 CLI 操作链（白名单元数据、一次调用共享 operation id）。已移除：它与 `doctor`、`logs`、`status --json` 已覆盖的信息重叠，却带来独立的轮转/清理、写入失败降级与白名单维护成本；而它是 best-effort（强杀、崩溃、并发窗口允许缺事件），无法当审计日志用，缺事件时反而误导排障。
+曾在 `logs/diagnostic.jsonl` 独立记录 CLI 历史操作链（白名单元数据、一次调用共享 operation id）。它提供的是 `doctor` / `status` 当前状态之外的排障维度，并非信息重复；本轮选择移除，是为了不再长期维护独立写入、轮转、退出钩子与字段白名单，而不是因为 best-effort 日志必须承担审计语义。
 
-若将来重提：先说明现有三个入口哪里答不了，再论证为何不能给它们补字段。旧安装留下的 `diagnostic*.jsonl` 不再被管理，可经 `mihomo-cli dir open logs` 手动删除。
+当前排障以实时状态、配置检查和内核日志为主。若将来重提历史操作链，先给出这些入口无法回答的具体问题，再评估独立设施的收益。旧安装留下的 `diagnostic*.jsonl` 不再轮转，可经 `mihomo-cli dir open logs` 手动删除。
