@@ -61,9 +61,18 @@ function scenarioEnv(fixture: { dataDir: string; fakeHome: string; fakeBin: stri
   };
 }
 
-/** 写桩 launchctl（PATH 前置后，子进程里所有 spawnSync('launchctl') 都落到这里） */
+/**
+ * 写桩 launchctl（PATH 前置后，子进程里所有 spawnSync('launchctl') 都落到这里）。
+ * 调用动词由包装器统一记录，场景桩只描述响应；断言通过 readLaunchctlCalls 读取
+ */
 function writeFakeLaunchctl(fakeBin: string, body: string): string {
-  return writeStubExecutable(path.join(fakeBin, 'launchctl'), body);
+  const callsFile = JSON.stringify(path.join(fakeBin, 'launchctl.calls'));
+  return writeStubExecutable(path.join(fakeBin, 'launchctl'), `echo "$1" >> ${callsFile}\n${body}`);
+}
+
+function readLaunchctlCalls(fakeBin: string): string[] {
+  const file = path.join(fakeBin, 'launchctl.calls');
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
 }
 
 interface ScriptRun {
@@ -144,11 +153,9 @@ const MODULES = {
 };
 
 /**
- * 桩 launchctl（热重载场景）：print 恒报 running（pid 读自 PID_FILE）、print-disabled 空表（= 启用）。
- * 每次调用把动词记到 `$PID_FILE.calls`，供用例判断「有没有回退到 kickstart」
+ * 桩 launchctl（热重载场景）：print 恒报 running（pid 读自 PID_FILE）、print-disabled 空表（= 启用）
  */
 const FAKE_LAUNCHCTL_HOT_RELOAD = `
-echo "$1" >> "$PID_FILE.calls"
 # 只会被查到状态查询：热重载不碰 launchctl 写动词
 case "$1" in
   print)
@@ -252,7 +259,7 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
     try {
       const run = spawnScript(script, env);
       const result = await run.done;
-      const calls = fs.existsSync(`${pidFile}.calls`) ? fs.readFileSync(`${pidFile}.calls`, 'utf8').split('\n').filter(Boolean) : [];
+      const calls = readLaunchctlCalls(fixture.fakeBin);
       return { ...result, pid: run.child.pid ?? null, calls };
     } finally {
       cleanupFixture(fixture);
@@ -298,12 +305,11 @@ describe('热重载探测查询失败时回退 kickstart（不把 launchctl 瞬�
   // 第 3 次 launchctl 调用退 112，模拟健康观察中的瞬时查询失败；本地无 controller，
   // 热重载在 version 阶段回退 kickstart，失败轮次跳过、其后的健康观察恢复 running
   const FAKE_LAUNCHCTL_QUERY_FAILS = `
-COUNT_FILE="$FAKE_BIN/count"
+COUNT_FILE="$0.count"
 n=0
 [ -f "$COUNT_FILE" ] && n=$(cat "$COUNT_FILE")
 n=$((n+1))
 echo "$n" > "$COUNT_FILE"
-echo "$1" >> "$FAKE_BIN/verbs"
 case "$1" in
   print)
     if [ "$n" -eq 3 ]; then exit 112; fi
@@ -348,14 +354,14 @@ try {
   it('热重载前的状态查询退 112 → 回退 kickstart 并健康确认成功', async () => {
     const fixture = makeFixture('mihomo-hotfail');
     const script = writeScript(fixture.fakeBin, 'hot-fail.mts', fallbackScript());
-    writeFakeLaunchctl(fixture.fakeBin, FAKE_LAUNCHCTL_QUERY_FAILS.replaceAll('$FAKE_BIN', fixture.fakeBin));
+    writeFakeLaunchctl(fixture.fakeBin, FAKE_LAUNCHCTL_QUERY_FAILS);
     const env = scenarioEnv(fixture, { PID_FILE: path.join(fixture.fakeBin, 'server.pid') });
     try {
       const run = spawnScript(script, env);
       const result = await run.done;
       assert.equal(result.status, 0, `查询失败应回退而非报错，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
       assert.match(result.stdout, /RESULT:pid=\d+/, `应走 kickstart 并通过健康确认，stdout: ${result.stdout}`);
-      const verbs = fs.readFileSync(path.join(fixture.fakeBin, 'verbs'), 'utf8').split('\n');
+      const verbs = readLaunchctlCalls(fixture.fakeBin);
       assert.ok(verbs.includes('kickstart'), `热重载探测失败应回退 kickstart，实际动词: ${verbs}`);
     } finally {
       cleanupFixture(fixture);

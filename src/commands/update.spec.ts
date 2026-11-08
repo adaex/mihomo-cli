@@ -6,7 +6,7 @@ import path from 'node:path';
 import { after, describe, it } from 'node:test';
 import { recordClearedProxyEnv } from '../proxy-env.js';
 import { makeFixture, runCli } from '../test-support/cli.js';
-import { writeStubExecutable } from '../test-support/stub-bin.js';
+import { parseEnvDump, writeStubExecutable } from '../test-support/stub-bin.js';
 import { getLatestNpmVersion, isProxyPortListening, resolveUpdateAction, restoreProxyEnvForNpm } from './update.js';
 
 after(() => {
@@ -234,12 +234,7 @@ describe('入口自指代理清除的接线（D9 契约的最后一环，端到�
       assert.equal(r.status, 0, r.stderr || r.stdout);
       assert.match(r.stdout, /领先/, '桩 view 输出 0.0.1 应走「领先跳过」');
       if (!fs.existsSync(dumpFile)) return null;
-      const env: Record<string, string> = {};
-      for (const line of fs.readFileSync(dumpFile, 'utf8').split('\n')) {
-        const eq = line.indexOf('=');
-        if (eq > 0) env[line.slice(0, eq)] = line.slice(eq + 1);
-      }
-      return env;
+      return parseEnvDump(fs.readFileSync(dumpFile, 'utf8'));
     } finally {
       fixture.cleanup();
       fs.rmSync(binDir, { recursive: true, force: true });
