@@ -14,11 +14,12 @@
 ## 平台与 launchd（实测）
 
 - `launchctl print` 退出码：113 = 未装载，112/125 = 查询失败；`bootout` 对未装载目标返回 3（service-exitcode.spec 只读调用真实 launchctl 复验）
+- `pgrep`/`pkill` 退出码：0 命中、1 无匹配；2 正则编译失败、3 fatal error 属探测自身失败，不是「没有进程」——pgrep 只收 0/1、其余抛错（process-probe.ts），pkill 的 2/3 同样不当无进程吞掉（process-stop.ts）
 - launchd 任务的 terminating signal 与 last exit code 两字段互斥，`describeExitCause` 需同时覆盖
 - disabled label 的 `bootstrap` 硬失败，`enable` 必须在前；`bootstrap` 返回 0 不表示内核已健康，TUN 的 `kill -0` 也排除不了僵尸进程
 - `kickstart -k` 可能阻塞超过 5s，使用独立的 60s 超时，远超锁的 10s 强夺阈值，因此必须留在锁外（交错残余见「服务、锁与并发」）
 - `KeepAlive.PathState` 只决定退出后是否重启，删标志文件不会停进程，不能替代 stop
-- disabled 位独立于 plist 持久化，`enable` 也留记录；手工移除需 sudo plutil（keypath 的点须转义），磁盘修改要重启后才与 launchd 内存一致，不能做进 CLI 自动清理
+- disabled 位独立于 plist 持久化（磁盘表 `/var/db/com.apple.xpc.launchd/disabled.<uid>.plist`），`enable` 也留记录；手工移除需 sudo plutil（keypath 的点须转义），磁盘修改要重启后才与 launchd 内存一致，不能做进 CLI 自动清理
 - BSD `ps` 的 command 列需 `-ww`，stat 用 `-f%z`；`open` 是异步桌面操作，返回后才可能失败，调用方保留手动路径
 - `sudo pkill -f <PATTERN>` 不会匹配 sudo 脚本自身的命令行：`escapeRegExp` 把点转义后，进程命令行里出现的是带反斜杠的正则源码、正则却要匹配字面点，恰好坏掉自匹配（对照实验：把 `\.` 换回 `.` 立即自匹配）。三个 root 脚本同此结论，不加行首锚；未来若改用未转义拼接必须重验
 - 未装内核的开发机是正常环境，不为检查自动安装用户服务或提权；真机结论可能来自其他测试机器
@@ -83,7 +84,7 @@
 
 这些路径要么会留下永久记录、要么依赖真内核或真提权，开发机与 CI 不自动执行；对应的测试方法纪律见 [开发约定](docs/development.md#自动化测试边界)
 
-- 真实 sudo/TUN 与完整服务 start/stop 不进自动化：前者修改路由、需要密码且可能留下 root 属主文件；后者的 enable/disable 会在 disabled 表给每个临时 label 留永久记录，launchctl 无清除动词（disabled 位的持久化细节见「平台与 launchd」）。服务层 launchctl 路径由 PATH 桩覆盖，sudo 包装决策已纯函数化测试
+- 真实 sudo/TUN 与完整服务 start/stop 不进自动化：前者修改路由、需要密码且可能留下 root 属主文件；后者的 enable/disable 会在 disabled 表给每个临时 label 留永久记录，launchctl 无清除动词（disabled 位的持久化细节见「平台与 launchd」）。服务层 launchctl 路径由 PATH 桩覆盖；sudo 侧的测试覆盖见下条
 - install 恢复分支的并发：只能在真装了内核的机器上手工双终端复现；自动化要么真跑 launchctl enable/disable（留永久记录），要么退化成对实现清单的断言。热重载成功与查询失败回退已由 service-concurrency.spec 用 PATH 桩覆盖
 - sudo 三处收口（超时 60s、退出码分工、残留清理 CliError）的完整链路：慢密码场景、bootout 真实失败的 exit 3 渲染、四个命令下的实际终端输出；包装决策已纯函数化测试
 - 入站/控制面锁定清单的内核侧行为：unix socket 创建、TUIC/SS/Vmess server bind、`allow-lan: true` 下内核是否真绑全网卡等，只回上游源码核对了键名与启动前提、用 `buildConfig` 实测了剥除（config.spec 全覆盖），**没用真内核验证额外监听真的开不出来**。不是待办：主力开发机按设计不装内核，要验得换一台装了内核的机器
