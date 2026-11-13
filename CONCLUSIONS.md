@@ -2,19 +2,19 @@
 
 只收**现行有效**、且不属于别处的四类内容：
 
-1. 平台与上游的**实测结论**：外部系统的行为事实，每条自带证据
-2. 有意接受的**残余风险与已知缺口**：写清触发条件、不修的理由，改相关代码时先确认窗口没有变宽
-3. **只能手工验证的范围**：不进自动化的路径与原因；测试方法纪律在 [development.md](docs/development.md)
+1. 平台与上游的**实测结论**：外部系统的行为事实
+2. 有意接受的**残余风险与已知缺口**：写清触发条件与不修的理由
+3. **只能手工验证的范围**：不进自动化的路径与原因；测试方法纪律在 [development.md](docs/development.md#自动化测试边界)
 4. **已评估未采纳的方案**：只限单模块、呈现层或工具链层面的取舍；跨模块架构决策与其拒绝的替代方案归 [decisions.md](docs/decisions.md)，不在此重复
 
 跨模块契约见 [architecture.md](docs/architecture.md)，版本历史见 CHANGELOG 与 git tag
 
-正文按主题分节，条目的内容类型按上面四类判据归属；每条自带证据与取舍，过时即删，当轮验证过程留在提交信息。改到相关代码时同步更新对应节
+正文按主题分节，归属按上面四类判据；每条自带证据与取舍，过时即删，当轮验证过程留在提交信息。改到相关代码时同步更新对应节
 
 ## 平台与 launchd（实测）
 
 - `launchctl print` 退出码：113 = 未装载，112/125 = 查询失败；`bootout` 对未装载目标返回 3（service-exitcode.spec 只读调用真实 launchctl 复验）
-- `pgrep`/`pkill` 退出码：0 命中、1 无匹配；2 正则编译失败、3 fatal error 属探测自身失败，不是「没有进程」——pgrep 只收 0/1、其余抛错（process-probe.ts），pkill 的 2/3 同样不当无进程吞掉（process-stop.ts）
+- `pgrep`/`pkill` 退出码：0 命中、1 无匹配；2 正则编译失败、3 fatal error 是探测自身失败，不是「没有进程」——两者都只收 0/1，其余抛错（pgrep 见 process-probe.ts，pkill 见 process-stop.ts）
 - launchd 任务的 terminating signal 与 last exit code 两字段互斥，`describeExitCause` 需同时覆盖
 - disabled label 的 `bootstrap` 硬失败，`enable` 必须在前；`bootstrap` 返回 0 不表示内核已健康，TUN 的 `kill -0` 也排除不了僵尸进程
 - `kickstart -k` 可能阻塞超过 5s，使用独立的 60s 超时，远超锁的 10s 强夺阈值，因此必须留在锁外（交错残余见「服务、锁与并发」）
@@ -82,16 +82,16 @@
 
 ## 只能手工验证的范围
 
-这些路径要么会留下永久记录、要么依赖真内核或真提权，开发机与 CI 不自动执行；对应的测试方法纪律见 [开发约定](docs/development.md#自动化测试边界)
+这些路径要么会留下永久记录、要么依赖真内核或真提权，开发机与 CI 不自动执行；测试方法纪律见 [开发约定](docs/development.md#自动化测试边界)
 
-- 真实 sudo/TUN 与完整服务 start/stop 不进自动化：前者修改路由、需要密码且可能留下 root 属主文件；后者的 enable/disable 会在 disabled 表给每个临时 label 留永久记录，launchctl 无清除动词（disabled 位的持久化细节见「平台与 launchd」）。服务层 launchctl 路径由 PATH 桩覆盖；sudo 侧的测试覆盖见下条
+- 真实 sudo/TUN 与完整服务 start/stop 不进自动化：前者修改路由、需要密码且可能留下 root 属主文件；后者的 enable/disable 会在 disabled 表给每个临时 label 留永久记录，launchctl 无清除动词（disabled 位的持久化细节见「平台与 launchd」）。服务层 launchctl 路径已有 PATH 桩测试覆盖（桩的用法见 [开发约定](docs/development.md#自动化测试边界)）；sudo 侧的测试覆盖见下条
 - install 恢复分支的并发：只能在真装了内核的机器上手工双终端复现；自动化要么真跑 launchctl enable/disable（留永久记录），要么退化成对实现清单的断言。热重载成功与查询失败回退已由 service-concurrency.spec 用 PATH 桩覆盖
 - sudo 三处收口（超时 60s、退出码分工、残留清理 CliError）的完整链路：慢密码场景、bootout 真实失败的 exit 3 渲染、四个命令下的实际终端输出；包装决策已纯函数化测试
 - 入站/控制面锁定清单的内核侧行为：unix socket 创建、TUIC/SS/Vmess server bind、`allow-lan: true` 下内核是否真绑全网卡等，只回上游源码核对了键名与启动前提、用 `buildConfig` 实测了剥除（config.spec 全覆盖），**没用真内核验证额外监听真的开不出来**。不是待办：主力开发机按设计不装内核，要验得换一台装了内核的机器
 
 ## 已评估未采纳
 
-本节只存单模块、呈现层或工具链层面「不做」的评估；跨模块架构决策与其拒绝的替代方案归 [decisions.md](docs/decisions.md)，不在此重复
+本节条目按文首第 4 类判据归属，跨模块架构决策不在此重复（见 [decisions.md](docs/decisions.md)）
 
 - **全局 `--verbose`**：终端输出散在各模块，全局开关需要横切 argv 与输出层，收益不明；排查已有 `doctor`、`logs`、`status --json`
 - **用 `util.parseArgs` 替换手写 argv**：可选值选项（`--mirror`）、attached 短选项（`-n200`）、`--opt=value`、裸 `-` 拒绝与定制中文报错无法对齐；已收口为带值选项共用 `collectFlagValues`（flags.ts）

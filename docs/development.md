@@ -36,7 +36,7 @@ npm run typecheck && npm test && npm run check && npm run build
 
 ## 自动化测试边界
 
-哪些路径不进自动化及其实测原因见 [CONCLUSIONS「只能手工验证的范围」](../CONCLUSIONS.md#只能手工验证的范围)，本节只留测试方法纪律：
+哪些路径不进自动化及完整实测原因见 [CONCLUSIONS「只能手工验证的范围」](../CONCLUSIONS.md#只能手工验证的范围)；本节以测试方法纪律为主，条目可附一句支撑该纪律的最小理由，平台实测事实的全文归 CONCLUSIONS：
 
 - 要驱动服务层的 launchctl 路径，用 PATH 前置的桩 launchctl，让代码走真实路径而不触碰真实 launchd；只用 bootstrap/bootout 的一次性 label 可临时验证有限行为，覆盖不了 stop 的全部语义
 - doctor 的内核版本项与 npm 查询项取值依赖网络（GitHub 可达性、限流），用例只锁检查项存在，不写死 ok/warn/skip
@@ -52,7 +52,7 @@ npm run typecheck && npm test && npm run check && npm run build
 
 - 一条事实只有一个归属，其余处链接：契约与模块职责 → architecture；跨模块架构决策与其拒绝的替代方案 → decisions；实测结论、已知风险与验证边界 → CONCLUSIONS（单模块、呈现层或工具链层面「不做」的评估也留这里，不进 decisions）；用户语法与示例 → README / overwrite.md；刻意推迟的重构 → todo
 - 代码注释只写判据与契约；修复过程与版本史留在 CHANGELOG / git，不复制进现行文档
-- CHANGELOG 只写用户可见变化，每条 1–3 句，不记内部清理，不按审查轮次组织，不写测试计数；开发与验证的长期边界收进 CONCLUSIONS，发布与归档细则由 [发布流程](release.md) 持有。26.11.116 之前的历史条目含旧口径（内部清理分组、测试计数），归档原样保留，不回头改写
+- CHANGELOG 只写用户可见变化，每条 1–3 句，不记内部清理，不按审查轮次组织，不写测试计数；开发与验证的长期边界收进 CONCLUSIONS，发布与归档细则由 [发布流程](release.md) 持有。26.11.116 之前的历史条目含旧口径（内部清理分组、测试计数），按发布流程的归档规则处理
 
 ## Git 与流程
 

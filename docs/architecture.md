@@ -50,7 +50,7 @@
 
 - 预期错误抛 `CliError` 由 main().catch 统一渲染；再包装前透传已有 CliError；模块顶层不抛 CliError
 - 报告成功要有独立结果依据（写入结果/健康/卸载/大小），不能用「命令没报错」代替
-- 探测失败 ≠ 目标不存在：调用方按退出码分档判定，不把查询失败当成目标消失；码表唯一出处是 `BOOTOUT_NOT_LOADED_CODES` / `isBootoutNotLoaded`（launchctl）与 pgrep/pkill 的 0/1 收口，各码实测含义见 [CONCLUSIONS](../CONCLUSIONS.md)「平台与 launchd（实测）」
+- 探测失败 ≠ 目标不存在：退出码码表的唯一出处是 launchctl 侧 `BOOTOUT_NOT_LOADED_CODES` / `isBootoutNotLoaded` 与 pgrep/pkill 侧的 0/1 收口，各码实测含义见 [CONCLUSIONS](../CONCLUSIONS.md#平台与-launchd实测)「平台与 launchd（实测）」
 
 ### 数据与并发
 
@@ -64,7 +64,7 @@
 
 - 入站与控制面锁定的唯一真相是 constants.ts 的 `LOCKED_CONFIG_KEYS` 与实际执行集 `EFFECTIVELY_LOCKED_KEYS`（快照表 + tls）：告警扫描、剥除循环、脚本探针、快照 spec 全派生自它，不许重抄；判据与上游核对方法见 D5，完整性由 `config-inbound-snapshot.spec.ts` 兜底
 - 合并闸门唯一出口 `selectActiveOverwriteFiles`；加载双路径（合并硬失败/诊断旁路）见 D7
-- 覆写契约（用户语法与示例的唯一详版是 [overwrite.md](overwrite.md)，论证见 D12–D14）：操作符（`key!` / `+key` / `key+`）只在顶层生效，带条件的变换走 JS 脚本；脚本就地修改、必须同步、返回值忽略，在 YAML 之前、剥锁定键之前执行，改不动系统锁定项；status 不调用变换函数，「生效」与 `overwrite.applied` 只表示选中；已移除的旧语法（`~` / `~?` / `<x>`）与 `match` / `enabled` 近失写法一律加载期报错，不给文件意外全局生效的机会
+- 覆写契约（用户语法与示例的唯一详版是 [overwrite.md](overwrite.md)，论证见 D12–D14）：操作符（`key!` / `+key` / `key+`）只在顶层生效，带条件的变换走 JS 脚本；脚本就地修改、必须同步、返回值忽略，在 YAML 之前、剥锁定键之前执行，改不动系统锁定项；status 不调用变换函数，「生效」与 `overwrite.applied` 只表示选中；已移除的旧语法与 `match` / `enabled` 近失写法一律加载期报错，防文件意外全局生效（清单见 D12）
 - match 的 name 只支持尾部 `*`（前缀）与头部 `*`（后缀）两种通配，其余报错，不引入通用匹配器（D12）；JS 脚本无 match 机制，作用域写在脚本里
 - 配置解析只走 YAML（D6）；Mixed 清 tun 字段，TUN 强制 dns.enable=true
 - `prepareConfigForStart` 把已交给内核校验的 `candidateContent` 存进 `PreparedConfig`，`commitPreparedConfig` 原子写入同一份文本，不在提交时重新序列化对象
