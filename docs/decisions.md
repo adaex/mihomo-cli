@@ -36,7 +36,7 @@ start/install/restart 都依赖「命令开始时的 epoch」做并发判定。�
 
 远端订阅是不可信输入。锁定清单（constants.ts 的 LOCKED_CONFIG_KEYS）按「能否开监听」划分，判据是上游 `config.Inbound` 结构体字段全集 + `updateListeners()` 的逐个消费，不是按键名眼熟程度：redir/tproxy、external-controller 全家桶（-tls/-unix/-pipe/-cors/-routing-mark/-doh）、tuic-server 与 ss-config/vmess-config（三个完整入站代理服务端，自带监听与认证，不经过 genAddr，allow-lan 管不到它们）、listeners/tunnels（同判据的通用入站声明）、allow-lan/bind-address/authentication/skip-auth-prefixes/lan-*-ips（allow-lan 为真且 bind-address 为默认时 genAddr 返回全网卡地址，skip-auth-prefixes 又能把鉴权换成空实现——三行 YAML 即全网卡无鉴权开放代理）。顶层 tls 段同锁（-tls 控制器的证书来源）——它不是 `config.Inbound` 的结构体字段、不进快照表，但剥除与告警对它一视同仁：实际剥除执行集是 constants.ts 的 EFFECTIVELY_LOCKED_KEYS（快照表 + tls），YAML 告警扫描（lockedKeysReferencedBy）、剥除循环、脚本快照探针与 config-inbound-snapshot.spec 全部派生自这一份（早期四处各抄一份「表 + tls」，漏改静默）。刻意不锁的：iptables（Linux 专用）、inbound-tfo/inbound-mptcp（传输层 socket 选项，不开监听）、tun（由启动模式整段接管）。
 
-后果：锁定项的恒定值由 buildConfig 的 systemConfig 写入，不放 BASE_CONFIG（后者语义是「用户没写时的默认」，会被剥除循环架空成死配置，两表无交集有测试锁死）；剥除对订阅与覆写一视同仁，但告警只对生效的覆写文件（订阅告警只会刷屏，用户无行动手段）；清单完整性由 config-inbound-snapshot.spec 的上游结构体快照 diff 兜底，内核大版本升级时人工刷新快照。
+后果：锁定项的恒定值由 buildConfig 的 systemConfig 写入，不放 BASE_CONFIG（后者语义是「用户没写时的默认」，会被剥除循环架空成死配置，两表无交集有测试锁死）；剥除对订阅与覆写一视同仁，但告警只对生效的覆写文件（订阅告警只会刷屏，用户无行动手段）；清单完整性由 config-inbound-snapshot.spec 的上游结构体快照 diff 兜底，内核大版本升级时人工刷新快照。也拒绝把入站键改成默认拒绝的白名单：上游常新增字段，白名单会静默丢弃合法的未知 mihomo 键，维持「锁定清单 + 快照 diff」而不是反过来。
 
 ## D6 配置解析只走 YAML 解析器，不设独立 JSON 分支
 
@@ -79,7 +79,7 @@ readSettings() 无进程级缓存：CLI 是短进程，缓存省不了多少，�
 
 复杂变换由 JS 脚本承担（`overwrite.js` / `overwrite.*.{js,mjs,cjs}`，默认导出函数）：**全信任模型**——脚本以用户身份运行、不沙箱不超时（同 `.zshrc`，README 明示别装来路不明的脚本），但**必须同步**（返回 Promise 报错：buildConfig 是同步管线，require(esm)（Node ≥22.12 即支持，本仓下界 24）同步加载、`await import` 会把整条合并链传染性 async 化，而纯转换没有要等网络的场景）。管线位置是安全关键：脚本执行 → YAML 合并 → 剥 LOCKED_CONFIG_KEYS → 系统配置注入（段序论证见 D13）——脚本设置的锁定键被剥除（安全边界对脚本输出一视同仁）但经前后深快照检出并告警（不静默，脚本作者会困惑「设置了怎么没生效」）；systemConfig 最后注入，脚本改不掉端口与控制面。脚本无 match/enabled 机制（作用域写在脚本里，想停用改扩展名），受 `ow` 全局开关与 selectActiveOverwriteFiles 闸门管理；返回值忽略，CLI 不判定脚本是否命中（D14）。加载失败/执行抛错与坏 YAML 同款双路径姿态（D7）。脚本的锁定键告警文案与 YAML 侧共用一份（renderLockedWarning），清单 LOCKED_CONFIG_KEYS 物理上住 constants.ts（overwrite.ts 要读它做快照、config.ts import overwrite.ts，反向会循环依赖）。
 
-订阅名匹配只留尾部 `*`（前缀）与头部 `*`（后缀）两种字面比对（startsWith/endsWith，无回溯结构），其余通配报错。拒绝通用 glob 匹配器：它有灾难性回溯风险（实测 70 秒挂死，见 CONCLUSIONS），而真实使用面只有前缀区分一种；复杂匹配脚本里自己写。
+订阅名匹配只留尾部 `*`（前缀）与头部 `*`（后缀）两种字面比对（startsWith/endsWith，无回溯结构），其余通配报错。拒绝通用 glob 匹配器：它转正则后有灾难性回溯风险（实测 70 秒挂死），输入长度受限不能替代匹配复杂度论证，而真实使用面只有前缀区分一种；复杂匹配脚本里自己写。
 
 ## D13 覆写执行顺序：脚本在前、YAML 在后
 

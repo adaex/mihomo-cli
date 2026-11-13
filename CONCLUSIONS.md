@@ -1,8 +1,15 @@
 # 现行结论与边界
 
-只收**现行有效**、且不属于别处的三类内容：平台与上游的实测结论、已知缺口与有意接受的残余风险、已评估未采纳的方案。决策理由见 [decisions.md](docs/decisions.md)，跨模块契约见 [architecture.md](docs/architecture.md)，测试与验证规则见 [development.md](docs/development.md)，版本历史见 CHANGELOG 与 git tag
+只收**现行有效**、且不属于别处的四类内容：
 
-按主题分节，每条自带证据与取舍；过时即删，当轮验证过程留在提交信息。改到相关代码时同步更新对应节
+1. 平台与上游的**实测结论**：外部系统的行为事实，每条自带证据
+2. 有意接受的**残余风险与已知缺口**：写清触发条件、不修的理由，改相关代码时先确认窗口没有变宽
+3. **只能手工验证的范围**：不进自动化的路径与原因；测试方法纪律在 [development.md](docs/development.md)
+4. **已评估未采纳的方案**：只限单模块、呈现层或工具链层面的取舍；跨模块架构决策与其拒绝的替代方案归 [decisions.md](docs/decisions.md)，不在此重复
+
+跨模块契约见 [architecture.md](docs/architecture.md)，版本历史见 CHANGELOG 与 git tag
+
+正文按主题分节，条目的内容类型按上面四类判据归属；每条自带证据与取舍，过时即删，当轮验证过程留在提交信息。改到相关代码时同步更新对应节
 
 ## 平台与 launchd（实测）
 
@@ -74,26 +81,24 @@
 
 ## 只能手工验证的范围
 
-这些路径要么会留下永久记录、要么依赖真内核或真提权，开发机与 CI 不自动执行；规则见 [开发约定](docs/development.md#自动化测试边界)
+这些路径要么会留下永久记录、要么依赖真内核或真提权，开发机与 CI 不自动执行；对应的测试方法纪律见 [开发约定](docs/development.md#自动化测试边界)
 
+- 真实 sudo/TUN 与完整服务 start/stop 不进自动化：前者修改路由、需要密码且可能留下 root 属主文件；后者的 enable/disable 会在 disabled 表给每个临时 label 留永久记录，launchctl 无清除动词（disabled 位的持久化细节见「平台与 launchd」）。服务层 launchctl 路径由 PATH 桩覆盖，sudo 包装决策已纯函数化测试
 - install 恢复分支的并发：只能在真装了内核的机器上手工双终端复现；自动化要么真跑 launchctl enable/disable（留永久记录），要么退化成对实现清单的断言。热重载成功与查询失败回退已由 service-concurrency.spec 用 PATH 桩覆盖
 - sudo 三处收口（超时 60s、退出码分工、残留清理 CliError）的完整链路：慢密码场景、bootout 真实失败的 exit 3 渲染、四个命令下的实际终端输出；包装决策已纯函数化测试
 - 入站/控制面锁定清单的内核侧行为：unix socket 创建、TUIC/SS/Vmess server bind、`allow-lan: true` 下内核是否真绑全网卡等，只回上游源码核对了键名与启动前提、用 `buildConfig` 实测了剥除（config.spec 全覆盖），**没用真内核验证额外监听真的开不出来**。不是待办：主力开发机按设计不装内核，要验得换一台装了内核的机器
 
 ## 已评估未采纳
 
+本节只存单模块、呈现层或工具链层面「不做」的评估；跨模块架构决策与其拒绝的替代方案归 [decisions.md](docs/decisions.md)，不在此重复
+
 - **全局 `--verbose`**：终端输出散在各模块，全局开关需要横切 argv 与输出层，收益不明；排查已有 `doctor`、`logs`、`status --json`
-- **结构化诊断事件（JSONL）**：曾实现并已移除（D16）。它提供的是实时状态之外的历史操作链，不与 doctor/status 信息重复；本轮选择减少独立白名单、轮转与退出钩子的长期维护，排障先以实时状态、配置检查和内核日志为主
-- **系统代理检测与分档提示**（`scutil`）：已移除。`start` 只打印一条静态提示，不读写系统代理（D15）
-- **订阅名通用 glob 匹配器**：只保留尾部 `*`（前缀）与头部 `*`（后缀）两种字面比对，复杂匹配走 JS 脚本（D12）。通用 glob 转正则曾发生灾难性回溯；输入长度受限不能替代匹配复杂度论证
 - **用 `util.parseArgs` 替换手写 argv**：可选值选项（`--mirror`）、attached 短选项（`-n200`）、`--opt=value`、裸 `-` 拒绝与定制中文报错无法对齐；已收口为带值选项共用 `collectFlagValues`（flags.ts）
-- **入站键改默认拒绝的白名单**：上游常新增字段，白名单会静默丢弃合法的未知 mihomo 键；维持锁定清单 + 快照 spec（D5）
 - **npm `preuninstall` 钩子**：npm 不执行 uninstall 生命周期（npm 11.19.0 三场景实测 + 官方文档注明未实现），卸载提醒只能靠 README 的顺序说明，别指望恢复钩子
 - **去 tsx 换 Node 原生 type stripping**：本仓 import 用 `.js` 扩展指向 `.ts` 文件、原生不重写扩展名，需全仓机械改写 + `allowImportingTsExtensions`，收益仅省一个 devDep；除非哪次大重构顺路，否则不做
 - **轻量 import 结构断言**：用静态 import spec 断言「非 commands 生产模块不得 import commands」与「生产 import 图无环」。只锁依赖边界、不冻结文件清单或职责；当前没有真实循环依赖，下次新增核心模块时再评估
 - **名为 `help` 的订阅 `use` 撞车**：频率极低、`sub use help` 可用、动 argv 拦截的风险大于收益
 - **lsof 多 pid 取第一个**：误判方向是回退 kickstart，保守侧
-- **`stopService` / `uninstallService` 的同形锁体不抽公共函数**：两处临界区各带不可拆的预算与顺序约束，抽取收益低
 - **README 不逐一罗列裸 `-v` / `-h` 与 logs 的 `--follow` / `--open` 长形式**：与各命令帮助行同口径，短形式优先；完整选项以对应帮助为准
 - **curl `-x` 与控制器 base URL 不并入 `loopbackHttpUrl`**：拼接语义不同（curl 代理地址 / 控制器 base URL），共用只会制造耦合
 - **不建 README↔registry 文本同步 spec**：README 命令表与 registry usage 是有意的双份形态（registry 是 CLI 帮助的唯一真相，README 是承诺文档），跨格式模糊匹配比它防的漂移更脆；registry 内部口径一致由 help.spec 锁，复杂行为只在 README 一处详写、其他位置链接
