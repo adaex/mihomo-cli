@@ -149,7 +149,7 @@ mihomo-cli ui yacd     # YACD
 
 `ow on/off` 是全局总开关。只停用某一个 YAML 文件时，在该文件中写 `enabled: false`；单个 JS 脚本通过改扩展名停用，见[覆写配置](#覆写配置)
 
-`config` 不写盘、不重启，也不执行内核原生校验；校验由 `start` / `doctor` 完成。默认脱敏只是降低展示泄漏概率，`--reveal` 会明文输出节点密码、UUID、私钥、控制器密钥及 provider URL，不要在录屏、管道或求助文本中未经检查使用
+`config` 只预览候选配置。`start` 和 `doctor` 会调用内核校验配置，`start` 校验通过后才写入 `runtime/config.yaml` 并应用。默认脱敏只是降低展示泄漏概率，`--reveal` 会明文输出节点密码、UUID、私钥、控制器密钥及 provider URL，不要在录屏、管道或求助文本中未经检查使用
 
 ### 其他命令
 
@@ -457,7 +457,7 @@ mihomo-cli start --update-timeout=30000
 
 ## 覆写配置
 
-覆写在订阅配置基础上做自定义修改，原始订阅文件保持独立。支持 YAML 声明式合并和 JS 同步脚本，默认启用；修改文件后执行 `mihomo-cli start` 应用
+覆写在订阅配置基础上做自定义修改，原始订阅文件保持独立。支持 YAML 声明式合并和 JS 同步脚本，默认启用。修改文件后，使用 Mixed 的用户执行 `mihomo-cli start` 应用，使用 TUN 的用户执行 `mihomo-cli start tun`
 
 - `mihomo-cli ow` 查看文件与加载状态，`ow on/off` 控制全局开关
 - 单个 YAML 文件用 `enabled: false` 停用，单个 JS 脚本通过改扩展名停用
@@ -561,7 +561,7 @@ Mixed 端口和控制器由 CLI 统一管理，订阅与覆写不能修改，默
 }
 ```
 
-修改后执行 `mihomo-cli start` 才会应用。Web UI 控制器地址以及你手动配置的具体应用代理都要使用新值，`status` 会显示实际端口
+修改后按使用的模式执行 `mihomo-cli start`（Mixed）或 `mihomo-cli start tun`（TUN）。Web UI 控制器地址以及你手动配置的具体应用代理都要使用新值，`status` 会显示实际端口
 
 ## 安全特性
 

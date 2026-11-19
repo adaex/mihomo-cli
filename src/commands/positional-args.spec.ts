@@ -15,9 +15,9 @@ import { type CliFixture, makeFixture, runCli } from '../test-support/cli.js';
  * help 现接受一个命令名（`help <命令>`），`help extra` 改走「未知命令」纠错，
  * 也不在「多余参数」之列（见 help.spec.ts）。
  *
- * 每个命令配一对用例：多余参数报「参数错误」；声明个数内的合法形态**不触发**该错误，
- * 而是到达各自的下一道校验或正常输出——后者是防误伤的关键断言（`sub use name -u 5000`
- * 的带值选项值、`logs 3 -f` 的 flag 位置都不能被算成位置参数）。
+ * 多余参数一律报「参数错误」。合法形态则要到达各自的下一道校验或正常输出：
+ * 例如 `sub use name -u 5000` 的选项值不能算成位置参数。stop、uninstall、status 的
+ * 正常调用由对应的 CLI 行为用例覆盖。
  */
 
 let fixture: CliFixture;
@@ -178,27 +178,10 @@ describe('声明个数内的合法形态不触发参数错误', () => {
     }
   });
 
-  it('stop 正常执行（不在运行）', () => {
-    const { status, output } = run(['stop']);
-    assert.equal(status, 0, output);
-    assert.match(output, /不在运行/);
-  });
-
   it('install 到达内核检查', () => {
     const { status, output } = run(['install']);
     assert.notEqual(status, 0);
     assert.match(output, /未找到内核/);
-  });
-
-  it('uninstall 正常执行（服务未安装）', () => {
-    const { status, output } = run(['uninstall']);
-    assert.equal(status, 0, output);
-    assert.match(output, /服务未安装/);
-  });
-
-  it('status --no-probe 正常执行', () => {
-    const { status, output } = run(['status', '--no-probe']);
-    assert.equal(status, 0, output);
   });
 
   it('config 到达订阅检查', () => {

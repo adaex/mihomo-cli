@@ -28,7 +28,7 @@ withFileLock 要求临界区同步（持锁期间 await 等于按住锁等到强
 
 ## D4 并发基线在命令入口捕获为进程状态，消费点读同一份，不做参数透传
 
-start/install/restart 都依赖「命令开始时的 epoch」做并发判定。危害窗口是「产生 wasRunning 的那次状态读取」到锁内判定之间：stop 在自己的锁内先递增、之后才 waitUntilUnloaded，存在「已递增而 launchctl print 仍报 running」的区间，函数内现取的基线必然已含对方的递增，并发隐形。故基线必须取在命令第一步——如今是 `main()` 在分发前调 `captureStopEpochBaseline()` 存入 stop-epoch 模块状态，此后锁内判定、热重载后复读、健康确认后复读都读同一份 `stopEpochBaseline()`，不再跨层透传参数（透传时代的教训：可选默认值让新调用方静默退化，5+ 消费点每次都要记得传）。未捕获时（测试直接调 service 函数）退化为当前值，即不判并发。
+start/install/restart 都依赖「命令开始时的 epoch」做并发判定。危害窗口是「产生 wasRunning 的那次状态读取」到锁内判定之间：stop 在自己的锁内先递增、之后才 waitUntilUnloaded，存在「已递增而 launchctl print 仍报 running」的区间，函数内现取的基线必然已含对方的递增，并发隐形。故基线必须取在命令第一步——如今是 `main()` 在分发前调 `captureStopEpochBaseline()` 存入 stop-epoch 模块状态，此后锁内判定、热重载后复读、健康确认后复读都用 `startAbortedByConcurrentStop()` 将当前计数与这份基线比较。过去跨层传参时，每个调用处都要记得传基线，遗漏就会用上默认值。测试直接调用 service 函数时，若未捕获基线，就跳过并发判定
 
 两个位置语义要记牢：① restartToApply（sub use / ow on|off 触发的重启）带着**原命令**的基线重入 start 链路，订阅下载期间的并发 stop 会被检出并取消重启——这是防线语义（终态与用户最后一条命令一致），基线若挪进 cmdStart 重入时刻即漏检，结构不变量由 service-concurrency.spec 的「并发基线是命令入口的进程状态」用例锁定；② TUN 分支 bump 之后**重捕获基线**（把「本命令造成的世界状态」设为新基线——自己的递增不算并发），启动前经 assertTunStartNotRaced 消费重捕获后的基线：sudo 密码窗内的并发 stop 会被检出并取消（终态与用户最后一条命令一致），TUN 之后若再走 Mixed 启动也用的是重捕获后的基线、不会自我取消。
 

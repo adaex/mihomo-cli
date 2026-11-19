@@ -1,7 +1,7 @@
 import { colors } from './colors.js';
 import { buildConfig, countConfigNodes, dumpYaml, parseConfigContent, validateConfigWithKernel, writeMihomoConfig } from './config.js';
 import { DEFAULT_AUTO_UPDATE_TIMEOUT, DEFAULT_UPDATE_INTERVAL_HOURS } from './constants.js';
-import { CliError, TimeoutError, withTimeout } from './errors.js';
+import { CliError, errorMessage, TimeoutError, withTimeout } from './errors.js';
 import { createHttpClient } from './http.js';
 import { PATHS, withFileLock } from './paths.js';
 import {
@@ -248,14 +248,7 @@ export async function downloadSubscription(url: string, subName: string, signal?
   try {
     response = await HTTP_CLIENT.get(url, { signal });
   } catch (e) {
-    const maskedUrl = maskUrl(url);
-    let errorMsg = `获取订阅失败: ${(e as Error).message}`;
-    const err = e as Error & { response?: { status: number } };
-    if (err.response) {
-      errorMsg += ` (HTTP ${err.response.status})`;
-    }
-    errorMsg += `\n  URL: ${maskedUrl}`;
-    throw new Error(errorMsg);
+    throw new Error(`获取订阅失败: ${errorMessage(e)}\n  URL: ${maskUrl(url)}`);
   }
 
   const content = response.data;

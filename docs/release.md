@@ -49,7 +49,7 @@ for (const c of commands) if (c) console.log([c.name, ...c.aliases].join(', ').p
 1. 更新 `package.json` 中的 `version`；`npm install --package-lock-only` 让 lock 的 version 跟上，避免 package 与 lock 版本漂移
 2. `CHANGELOG.md`：把顶部 `## [Unreleased]` 改成 `## [X.Y.Z] - YYYY-MM-DD`（没有则新增；分组用 新增/变更/修复/移除/安全），按 [文档归属](development.md#文档归属) 写用户可见变化，必要时一句根因。主文件超过 10 个版本小节时，把最旧整节**原样**搬进 `docs/changelog/CHANGELOG-archive.md`，不改写历史。`publish.yml` 按 `## [X.Y.Z]` 标题截取发布说明，标题格式不能改
 3. 检查并更新 README 及其链接的用户文档（新增功能、命令变更、示例）
-4. 执行 `npm run typecheck && npm test && npm run check && npm run build`，再完成下方产物自检。CI 的 `prepublishOnly` 会在 tag 源码上重新验证，不以此替代本地检查
+4. 执行 `npm run prepublishOnly`，依次完成类型检查、测试、Biome 检查和构建，再完成下方产物自检
 5. 逐文件核对 `git status --short`，只显式暂存已确认的发布相关文件（禁止 `git add .` / `git add -A`）；用 `git diff --cached --stat` 复核后提交：`git commit -m "chore: 发布 vX.Y.Z"`
 6. 推送 main：`git push`
 7. 打 tag 并推送：`git tag -a vX.Y.Z -m "…"`，然后 `git push origin vX.Y.Z`。tag 触发 Publish workflow，**不要在本地执行 `npm publish`**
@@ -72,20 +72,20 @@ curl -s -o /dev/null -w "%{http_code}\n" https://registry.npmjs.org/mihomo-cli/X
 
 200 即已落地。重跑发布得到 `403 You cannot publish over the previously published versions` 同样是已落地的证据
 
-## 产物自检：别把「publish 没报错」当成「发出去的东西能用」
+## 产物自检
 
-`prepublishOnly` 只保证验证与 build 跑过，不保证 tarball 里的东西对——`dist/` 被 gitignore，版本号来自 `package.json`，`files` 字段决定装进去什么。本地与 CI 都要核对 tag、`package.json`、`dist` 版本一致，并检查 tarball 内容
+CI 先核对 tag 与 `package.json` 版本，再显式执行一次 `npm run prepublishOnly`。`npm pack --ignore-scripts` 生成 `.tgz` 后，CI 在临时目录解包，检查发布文件并运行包内 CLI 核对版本。通过后用 `npm publish <同一个 .tgz>` 发布。从源码目录直接执行 `npm publish` 时，npm 仍会自动运行 `prepublishOnly`
 
-**build 之后、推送 tag 之前**，至少执行：
+本地构建后、推送 tag 前，先核对 CLI 版本，再把待打包文件与发布工作流中 `Pack and verify release tarball` 步骤的清单逐项对照。[发布工作流](../.github/workflows/publish.yml)
 
 ```bash
 MIHOMO_CLI_DIR="/tmp/mihomo-cli-pack-smoke-$$" \
 MIHOMO_CLI_DAEMON_LABEL="com.mihomo-cli.pack-smoke-$$" \
 node dist/index.js version    # 必须是本次要发的版本，不读取真实数据目录或服务
-npm pack --dry-run            # 确认 dist、README、LICENSE、CHANGELOG、SECURITY、docs/overwrite.md、package.json 齐全
+npm pack --dry-run --ignore-scripts
 ```
 
-若本轮改动有用户可见的行为变化，值得在发布之后从 registry 把产物拉回来实跑一遍（CDN 落地后）——这是唯一能覆盖「打包漏文件」的检查：
+若本轮有用户可见的行为变化，可在 CDN 同步后从 registry 下载已发布的包，再验证对应行为：
 
 ```bash
 cd /tmp && mkdir vp && cd vp

@@ -7,10 +7,6 @@ describe('flags 单一登记表派生', () => {
   it('VALUE_FLAGS 恰好包含全部带值（含可选值）选项的各形式', () => {
     assert.deepEqual([...VALUE_FLAGS].sort(), ['--lines', '--mirror', '--proxy', '--update-timeout', '-n', '-p', '-u']);
   });
-
-  it('可选值选项 --mirror 也在 VALUE_FLAGS：位置参数计数靠它跳值，裸写不吞后续 flag 由消费点的「下一 token 非 flag」条件兜住', () => {
-    assert.ok(VALUE_FLAGS.has('--mirror'));
-  });
 });
 
 describe('matchValueFlagToken：带值选项形式的唯一判定入口', () => {

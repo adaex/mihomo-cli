@@ -21,20 +21,13 @@ export function readStopEpoch(): number {
 }
 
 /**
- * 本进程的并发判定基线：main() 在命令入口捕获一次，所有消费点读同一份（D4）。
- * 未捕获时（测试直调 service 函数）退化为当前值，即不判并发。
+ * 本进程的并发判定基线：main() 在命令入口捕获，TUN 在自身递增计数后更新基线（D4）。
+ * 未捕获时（测试直调 service 函数）跳过并发判定
  */
-let stopEpochBaselineCaptured: number | null = null;
+let stopEpochBaseline: number | null = null;
 
-/** 捕获当前停止计数为本进程的并发判定基线（命令入口调一次）。返回捕获值。 */
-export function captureStopEpochBaseline(): number {
-  stopEpochBaselineCaptured = readStopEpoch();
-  return stopEpochBaselineCaptured;
-}
-
-/** 并发判定基线：命令入口捕获的值；未捕获时退化为当前值（不判并发）。 */
-export function stopEpochBaseline(): number {
-  return stopEpochBaselineCaptured ?? readStopEpoch();
+export function captureStopEpochBaseline(): void {
+  stopEpochBaseline = readStopEpoch();
 }
 
 /**
@@ -63,5 +56,5 @@ export function epochChanged(before: number, now: number): boolean {
 
 /** 启动路径各消费点的唯一读法：进程基线（命令入口捕获）对现值（D4） */
 export function startAbortedByConcurrentStop(): boolean {
-  return epochChanged(stopEpochBaseline(), readStopEpoch());
+  return stopEpochBaseline !== null && epochChanged(stopEpochBaseline, readStopEpoch());
 }

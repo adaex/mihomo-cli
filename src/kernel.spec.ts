@@ -14,7 +14,6 @@ import {
   checkUpdate,
   describeCurlDownloadError,
   findMatchingAsset,
-  ghProbeNeeded,
   parseCurlStatusOutput,
   pickLatestRelease,
   resolveDownloadChannels,
@@ -169,20 +168,6 @@ describe('resolveDownloadChannels（下载通道优先级）', () => {
       channels.map(c => c.kind),
       ['proxy'],
     );
-  });
-});
-
-describe('ghProbeNeeded（gh 探测只在参与决策时做）', () => {
-  it('默认与显式镜像形态要探测（gh 回退候选 / 无代理时的版本查询认证通道）', () => {
-    assert.equal(ghProbeNeeded({ forceDirect: false, proxyOverride: null }), true);
-  });
-
-  it('--mirror direct 不探测（查询与下载都不经 gh）', () => {
-    assert.equal(ghProbeNeeded({ forceDirect: true, proxyOverride: null }), false);
-  });
-
-  it('显式 --proxy 不探测（单候选、查询直接经该代理）', () => {
-    assert.equal(ghProbeNeeded({ forceDirect: false, proxyOverride: 'http://127.0.0.1:7897' }), false);
   });
 });
 

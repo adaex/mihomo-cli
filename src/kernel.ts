@@ -140,8 +140,7 @@ export function resolveDownloadChannels(input: ChannelResolutionInput): Download
  * - 无代理可用且非 direct：gh 认证（配额 5000/时 vs 未认证 60/时），失败由
  *   getLatestRelease 静默回退直连
  * - --mirror direct：连 API 一起直连绕过（「强制直连」含 API）
- * - 显式镜像（非 direct）不改变出网决策：代理在跑仍经代理、无代理仍走 gh——镜像
- *   绝不作用于 API，但本机代理与 gh 与镜像无关，照常参与
+ * - 显式镜像（非 direct）只指定下载地址；版本查询有代理就经代理，无代理才尝试 gh
  */
 export function resolveReleaseQuery(input: ChannelResolutionInput): { proxy: string | null; useGh: boolean } {
   // forceDirect 仅指 --mirror direct；显式镜像（有 mirror 值）不在此列
@@ -150,17 +149,7 @@ export function resolveReleaseQuery(input: ChannelResolutionInput): { proxy: str
   return { proxy, useGh: proxy === null && !forceDirect && input.ghAvailable };
 }
 
-/**
- * gh 探测（hasGh，一次同步子进程）是否值得做：只有结果会参与决策时才探测——
- * 显式 --mirror direct 与显式 --proxy 下候选唯一且版本查询 useGh 恒 false
- * （direct 连 API 一起绕过；显式 --proxy 的查询直接经该代理），探测即纯浪费。
- * 显式镜像（非 direct）仍要探测：无代理可用时版本查询会走 gh 认证通道
- */
-export function ghProbeNeeded(input: { forceDirect: boolean; proxyOverride: string | null }): boolean {
-  return !input.forceDirect && input.proxyOverride === null;
-}
-
-/** 检测 gh（GitHub CLI）是否可用，用作回退候选。超时防 wrapper/挂钩把入口探测挂死 */
+/** 检测 gh（GitHub CLI）是否可用于版本查询或内核下载。超时防 wrapper/挂钩把入口探测挂死 */
 export function hasGh(): boolean {
   const result = spawnSync('gh', ['--version'], { stdio: 'ignore', timeout: 3_000 });
   return !result.error && result.status === 0;

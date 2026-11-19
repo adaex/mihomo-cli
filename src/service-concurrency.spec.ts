@@ -153,7 +153,7 @@ const MODULES = {
 };
 
 /**
- * 桩 launchctl（热重载场景）：print 恒报 running（pid 读自 PID_FILE）、print-disabled 空表（= 启用）
+ * 桩 launchctl 从 PID_FILE 读取服务 PID。服务换成 PID_AFTER_RELOAD 后，查询自启状态会失败
  */
 const FAKE_LAUNCHCTL_HOT_RELOAD = `
 # 只会被查到状态查询：热重载不碰 launchctl 写动词
@@ -163,6 +163,7 @@ case "$1" in
     exit 0
     ;;
   print-disabled)
+    if [ -n "$PID_AFTER_RELOAD" ] && [ "$(cat "$PID_FILE")" = "$PID_AFTER_RELOAD" ]; then exit 112; fi
     exit 0
     ;;
 esac
@@ -189,6 +190,7 @@ const server = http.createServer((req, res) => {
     res.end('{"version":"stub-kernel"}');
   } else if (req.method === 'PUT' && req.url !== undefined && req.url.startsWith('/configs')) {
     if (process.env.BUMP === '1') bumpStopEpoch();
+    if (process.env.PID_AFTER_RELOAD) fs.writeFileSync(process.env.PID_FILE as string, process.env.PID_AFTER_RELOAD);
     res.writeHead(Number(process.env.PUT_STATUS ?? '204'));
     res.end();
   } else {
@@ -244,7 +246,7 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
   /** 跑一次热重载场景。返回子进程退出码、完整 stdout、spawn 拿到的 pid 与桩 launchctl 收到的动词序列 */
   async function runHotReloadScenario(
     bump: boolean,
-    options: { putStatus?: number; reportedPid?: number } = {},
+    options: { putStatus?: number; reportedPid?: number; pidAfterReload?: number } = {},
   ): Promise<{ status: number | null; stdout: string; stderr: string; pid: number | null; calls: string[] }> {
     const fixture = makeFixture('mihomo-hotreload');
     const script = writeScript(fixture.fakeBin, 'hot-reload.mts', hotReloadScript());
@@ -254,6 +256,7 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
       PID_FILE: pidFile,
       BUMP: bump ? '1' : '0',
       PUT_STATUS: String(options.putStatus ?? 204),
+      PID_AFTER_RELOAD: options.pidAfterReload?.toString() ?? '',
       ...(options.reportedPid !== undefined ? { REPORTED_PID: String(options.reportedPid) } : {}),
     });
     try {
@@ -285,6 +288,14 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
 
     assert.equal(result.status, 0, `应正常退出，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
     assert.match(result.stdout, new RegExp(`RESULT:pid=${result.pid}\\b`), `应返回监听进程的 pid，stdout: ${result.stdout}`);
+    assert.ok(!result.calls.includes('kickstart'), '热重载成功不重启内核');
+  });
+
+  it('热重载后自启状态不可查，仍返回服务的新 PID', async () => {
+    const result = await runHotReloadScenario(false, { pidAfterReload: 1 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /RESULT:pid=1\b/);
+    assert.equal(result.calls.filter(verb => verb === 'print-disabled').length, 1, '只在决定是否热重载时查自启状态');
     assert.ok(!result.calls.includes('kickstart'), '热重载成功不重启内核');
   });
 

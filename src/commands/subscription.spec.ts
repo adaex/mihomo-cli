@@ -238,7 +238,7 @@ describe('sub update 批量结果', () => {
 
       assert.notEqual(status, 0, '部分失败必须非零退出');
       assert.match(stdout, /✓ alpha: 已更新/);
-      assert.match(stdout, /✗ beta: 失败/);
+      assert.match(stdout, /^✗ beta: 失败 \(获取订阅失败: HTTP 500\)$/m);
       assert.match(stdout, /更新完成: 1 个成功，1 个失败/);
       assert.match(stderr, /1 个订阅更新失败: beta/);
       assert.match(stderr, /重试: mihomo-cli sub update beta/);

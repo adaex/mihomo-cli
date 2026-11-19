@@ -5,7 +5,7 @@ import { describe, it } from 'node:test';
 import { withTimeout } from './errors.js';
 import { runInheritedChild } from './kernel.js';
 import { type CliFixture, makeFixture, spawnCli } from './test-support/cli.js';
-import { isDead } from './test-support/fake-kernel.js';
+import { fakeKernelRelease, isDead } from './test-support/fake-kernel.js';
 import { pollUntil } from './test-support/poll.js';
 import { writeStubExecutable } from './test-support/stub-bin.js';
 
@@ -111,21 +111,7 @@ describe('kernel 下载的异步子进程信号语义', () => {
   it('慢 curl 下载中只 SIGTERM CLI PID：及时退 143 且 curl 被终止', async () => {
     const { fixture, fakeBin, readyFile, env } = makeSignalFixture('mihomo-kernel-signal');
     writeStubExecutable(path.join(fakeBin, 'launchctl'), 'exit 113');
-    const arch = process.arch === 'x64' ? 'amd64' : process.arch;
-    const assetName = `mihomo-${process.platform}-${arch}-v1.19.30.gz`;
-    const releases = JSON.stringify([
-      {
-        tag_name: 'v1.19.30',
-        prerelease: false,
-        assets: [
-          {
-            name: assetName,
-            browser_download_url: `https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/${assetName}`,
-            size: 3,
-          },
-        ],
-      },
-    ]);
+    const releases = JSON.stringify([fakeKernelRelease('v1.19.30', 3)]);
     writeStubExecutable(
       path.join(fakeBin, 'curl'),
       `

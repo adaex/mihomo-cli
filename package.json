@@ -46,10 +46,6 @@
   "os": [
     "darwin"
   ],
-  "dependencies": {
-    "compare-versions": "^6.1.0",
-    "js-yaml": "^5.2.1"
-  },
   "lint-staged": {
     "*.{ts,json,md}": "biome check --fix --no-errors-on-unmatched"
   },
@@ -59,7 +55,9 @@
   "devDependencies": {
     "@biomejs/biome": "^2.5.4",
     "@types/node": "24.19.2",
+    "compare-versions": "^6.1.0",
     "husky": "^9.1.7",
+    "js-yaml": "^5.2.1",
     "lint-staged": "^17.0.8",
     "tsup": "^8.5.1",
     "tsx": "^4.23.1",

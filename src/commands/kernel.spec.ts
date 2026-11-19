@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
 import type { SpawnSyncReturns } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it } from 'node:test';
+import { gzipSync } from 'node:zlib';
 import type { DownloadChannel } from '../kernel.js';
 import { makeFixture, runCli as runCliFixture } from '../test-support/cli.js';
+import { fakeKernelRelease } from '../test-support/fake-kernel.js';
+import { writeStubExecutable } from '../test-support/stub-bin.js';
 import { buildDownloadFailureError, channelLabel, formatChannelSwitchLine, kernelRestartCommand, printChannelLine } from './kernel.js';
 
 function runCli(args: string[]): SpawnSyncReturns<string> {
@@ -28,6 +33,79 @@ describe('kernel 命令：版本查询失败的提示分档', () => {
     assert.match(r.stderr, /Failed to connect|Connection refused/, `-sS 必须保留 curl 的具体连接错误，stderr: ${r.stderr}`);
     assert.match(r.stderr, /镜像只作用于内核下载，与查询无关/);
   });
+});
+
+describe('kernel 选择通道与更新后的运行状态', () => {
+  const localProxy = '-x http://127.0.0.1:17890';
+  for (const { args, localRunning = true, probesBeforeQuery, queryRoute, downloads = ['curl download'] } of [
+    { args: ['--mirror', 'direct'], probesBeforeQuery: [], queryRoute: '--noproxy *' },
+    { args: ['--proxy', '17777'], probesBeforeQuery: [], queryRoute: '-x http://127.0.0.1:17777' },
+    { args: ['--mirror', 'cdn'], probesBeforeQuery: ['print'], queryRoute: localProxy },
+    { args: ['--mirror', 'cdn'], localRunning: false, probesBeforeQuery: ['gh --version', 'print'], queryRoute: 'gh api' },
+    { args: [], probesBeforeQuery: ['gh --version', 'print'], queryRoute: localProxy, downloads: ['curl download', 'gh release'] },
+    { args: [], localRunning: false, probesBeforeQuery: ['gh --version', 'print'], queryRoute: 'gh api', downloads: ['gh release'] },
+  ]) {
+    it(`kernel ${args.join(' ') || '默认'}，本机代理${localRunning ? '在跑' : '未运行'}：按所选通道查询，更新后提示重启`, () => {
+      const fixture = makeFixture('mihomo-kernel-channel');
+      const dir = fixture.dataDir;
+      try {
+        const archive = gzipSync('#!/bin/sh\necho v1.0.0\n');
+        const release = fakeKernelRelease('v1.0.0', archive.length);
+        fs.writeFileSync(path.join(dir, 'asset.gz'), archive);
+        fs.writeFileSync(path.join(dir, 'releases.json'), JSON.stringify([release]));
+        fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ ports: { mixed: 17890, controller: 19090 } }));
+        writeStubExecutable(
+          path.join(dir, 'launchctl'),
+          `if [ -f "$HOME/kernel/mihomo" ]; then
+  echo "installed:$1" >> "$HOME/probes"
+else
+  echo "$1" >> "$HOME/probes"
+  ${localRunning ? ':' : 'exit 113'}
+fi
+printf '\\tstate = running\\n\\tpid = 1234\\n'`,
+        );
+        writeStubExecutable(
+          path.join(dir, 'gh'),
+          `echo "gh $1" >> "$HOME/probes"
+case "$1" in
+  --version) exit 0 ;;
+  api) cat "$HOME/releases.json" ;;
+  release)
+    while [ "$#" -gt 1 ]; do
+      if [ "$1" = --dir ]; then exec cp "$HOME/asset.gz" "$2/${release.assets[0].name}"; fi
+      shift
+    done
+    exit 1 ;;
+  *) exit 1 ;;
+esac`,
+        );
+        writeStubExecutable(
+          path.join(dir, 'curl'),
+          `while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o)
+      echo 'curl download' >> "$HOME/probes"
+      ${downloads.length > 1 ? 'exit 28' : 'exec cp "$HOME/asset.gz" "$2"'} ;;
+    -x|--noproxy) route="$1 $2"; shift ;;
+  esac
+  shift
+done
+echo "$route" >> "$HOME/probes"
+cat "$HOME/releases.json"
+printf '\\n200'`,
+        );
+        const result = runCliFixture(['kernel', ...args], fixture, { env: { HOME: dir, PATH: `${dir}:${process.env.PATH}` } });
+        assert.equal(result.status, 0, result.stderr);
+        assert.match(result.stdout, /运行中的内核仍是旧版本，执行 mihomo-cli stop && mihomo-cli start 后生效/);
+        const probes = fs.readFileSync(path.join(dir, 'probes'), 'utf8').trim().split('\n');
+        const query = probesBeforeQuery.length;
+        assert.deepEqual(probes.slice(0, query).sort(), probesBeforeQuery);
+        assert.deepEqual(probes.slice(query), [queryRoute, ...downloads, 'installed:print']);
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
 });
 
 describe('kernel 更新后的进程重启提示', () => {

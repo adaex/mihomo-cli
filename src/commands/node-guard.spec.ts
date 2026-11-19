@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, it } from 'node:test';
+import { beforeEach, describe, it } from 'node:test';
 
 import { NODE_ENGINES } from '../constants.js';
 import { setupGuardFixture } from '../test-support/guard.js';
+import { writeStubExecutable } from '../test-support/stub-bin.js';
 
 /**
  * Node 版本守卫的端到端回归。
@@ -19,7 +20,11 @@ import { setupGuardFixture } from '../test-support/guard.js';
 
 const guard = setupGuardFixture('mihomo-nodeguard');
 
-/** 以伪造的 Node 版本跑 CLI。label 一并隔离——status 会查服务状态 */
+beforeEach(() => {
+  writeStubExecutable(path.join(guard.tmpDir, 'launchctl'), 'exit 113'); // 服务未装载
+});
+
+/** 以伪造的 Node 版本跑 CLI，服务查询只访问临时 HOME 与桩 launchctl。 */
 function runAsNodeVersion(version: string, args: string[]) {
   return guard.run(args, {
     preload: {
@@ -29,6 +34,8 @@ function runAsNodeVersion(version: string, args: string[]) {
     },
     env: {
       ...process.env,
+      HOME: guard.tmpDir,
+      PATH: `${guard.tmpDir}${path.delimiter}${process.env.PATH}`,
       MIHOMO_CLI_DIR: path.join(guard.tmpDir, 'data'),
       MIHOMO_CLI_DAEMON_LABEL: `com.mihomo-cli.test.${path.basename(guard.tmpDir)}`,
       NO_COLOR: '1',
@@ -47,6 +54,7 @@ describe('Node 版本守卫', () => {
       assert.notEqual(status, 0, `旧 Node 下 ${cmd} 必须失败，不能带着未定义行为往下跑`);
       assert.match(output, /Node 版本过低/);
       assert.match(output, /24\.20\.0/, '错误里要给出所需版本，否则用户不知道该升到哪');
+      assert.equal(fs.existsSync(path.join(guard.tmpDir, 'data')), false, '拒绝旧 Node 时不得创建数据目录');
     });
   }
 
@@ -60,13 +68,9 @@ describe('Node 版本守卫', () => {
     assert.equal(fs.existsSync(path.join(guard.tmpDir, 'data')), false, '豁免命令不得创建数据目录');
   });
 
-  it('守卫先于 ensureDirs：被拒时不留下数据目录', () => {
-    runAsNodeVersion('20.0.0', ['status']);
-    assert.equal(fs.existsSync(path.join(guard.tmpDir, 'data')), false, '守卫晚于 ensureDirs 会在旧 Node 上先建出一套数据目录再报错');
-  });
-
   it('满足下限时放行（不误伤当前支持的版本）', () => {
-    const { status, output } = runAsNodeVersion('24.20.0', ['version']);
+    const { status, output } = runAsNodeVersion('24.20.0', ['dir']);
     assert.equal(status, 0, output);
+    assert.ok(output.includes(`数据目录: ${path.join(guard.tmpDir, 'data')}`), output);
   });
 });

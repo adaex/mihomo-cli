@@ -44,15 +44,8 @@ export async function cmdStart(args: string[]): Promise<void> {
 
   assertKernelInstalled();
 
-  // 并发判定的基线由 main() 在命令入口捕获（stop-epoch.ts captureStopEpochBaseline），
-  // 不在这里取：它必须早于订阅自动更新等慢速阶段、且不晚于本命令第一次状态观察，
-  // main() 的入口位置天然满足。restartToApply（sub use / ow on|off 触发的重启）
-  // 会带着原命令的基线重入这里——下载订阅期间发生的并发 stop 因此会被检出并取消
-  // 重启，这正是防线的语义（结构不变量锁在 service-concurrency.spec 的
-  //「并发基线是命令入口的进程状态」用例，基线挪进本函数即转红）。
-  // 注意 TUN 分支的 disableServiceAutoStart() 会 bump，且 bump 之后 TUN 分支不消费
-  // 基线（走 startTun()，两个分支互斥）。**若将来 TUN 分支之后还要走
-  // launchOrRestart('mixed')，就会检出这个 bump 并自我取消。**
+  // 沿用命令入口捕获的停止计数，才能识别订阅更新期间的并发 stop；
+  // sub use 与 ow on/off 触发的重启也使用原命令的基线。
   const serviceBefore = getServiceStatus();
 
   if (targetMode === 'tun') {

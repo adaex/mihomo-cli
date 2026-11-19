@@ -157,7 +157,7 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
   // 不让已完成的重载被一次只读查询报成失败
   if (hotReloaded) {
     try {
-      return getServiceStatus().pid;
+      return getServiceStatus({ withDisabled: false }).pid;
     } catch {
       return null;
     }

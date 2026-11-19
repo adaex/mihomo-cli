@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { escapeRegExp } from '../text.js';
+import type { GitHubRelease } from '../types.js';
 import { pollUntil } from './poll.js';
 
 /**
@@ -32,6 +33,16 @@ const FAKE_KERNEL_SCRIPT = '#!/bin/bash\nsleep 300\n';
 /** 桩配置：一行 mixed-port 即可，刻意不含 tun 字段——runtime.spec 依赖 getRuntimeMode
  * 由此答 mixed（TUN 在跑时仍必须答 tun）；其余消费方只需要文件存在 */
 const FAKE_KERNEL_CONFIG = 'mixed-port: 7890\n';
+
+export function fakeKernelRelease(tag: string, size: number): GitHubRelease {
+  const arch = process.arch === 'x64' ? 'amd64' : process.arch;
+  const name = `mihomo-${process.platform}-${arch}-${tag}.gz`;
+  return {
+    tag_name: tag,
+    prerelease: false,
+    assets: [{ name, size, browser_download_url: `https://github.com/MetaCubeX/mihomo/releases/download/${tag}/${name}` }],
+  };
+}
 
 export interface FakeKernelLayout {
   /** 桩二进制位置（默认形态 kernel/mihomo；服务符号链形态经 spawnFakeKernel 的 binary 参数另传） */

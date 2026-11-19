@@ -54,11 +54,9 @@ export async function cmdDirectory(args: string[]): Promise<void> {
   // CliError 会变成未处理的 Promise 拒绝，绕过 main().catch 的统一渲染（丢 label/hint）
   await dispatchSubcommand(args, SUBCOMMANDS, {
     fallback: printDirectoryInfo,
-    // 裸 dir 只展示目录信息（选项由分发前的白名单统一拦）；守卫收口在 shared
     onUnknown: action =>
       unknownSubcommandError(action, SUBCOMMANDS, {
         what: '目录子命令',
-        optionHint: ['裸 dir 只展示目录信息，不接受选项', '', '用法: mihomo-cli dir open [root|subs|logs|data|runtime|kernel]'],
         unknownHint: ['', '可用子命令: open', '打开指定目录: mihomo-cli dir open <target>'],
       }),
   });

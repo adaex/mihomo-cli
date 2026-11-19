@@ -21,30 +21,33 @@ jobs:
           node-version: '24.20.0'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Verify tag
+        run: test "$GITHUB_REF_NAME" = "v$(node -p "require('./package.json').version")"
+
       - name: Install dependencies
         run: npm ci
 
-      - name: Build
-        run: npm run build
+      - name: Validate and build
+        run: npm run prepublishOnly
 
-      - name: Verify tag and package contents
+      - name: Pack and verify release tarball
         env:
           MIHOMO_CLI_DIR: /tmp/mihomo-cli-release-${{ github.run_id }}
           MIHOMO_CLI_DAEMON_LABEL: com.mihomo-cli.release-${{ github.run_id }}
+          NO_COLOR: '1'
         run: |
-          version="$(node -p "require('./package.json').version")"
-          test "${GITHUB_REF_NAME}" = "v${version}"
+          tarball="$RUNNER_TEMP/$(npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP")"
+          unpacked="$(mktemp -d "$RUNNER_TEMP/mihomo-cli.XXXXXX")"
+          tar -xzf "$tarball" -C "$unpacked"
+          cd "$unpacked/package"
+          ls dist/index.js README.md LICENSE CHANGELOG.md SECURITY.md docs/overwrite.md package.json
           output="$(node dist/index.js version)"
-          printf '%s\n' "${output}"
-          case "${output}" in
-            *"mihomo-cli v${version}"*) ;;
-            *) printf 'dist version mismatch\n' >&2; exit 1 ;;
-          esac
-          npm pack --dry-run
+          printf '%s\n' "$output"
+          grep -Fxq "mihomo-cli $GITHUB_REF_NAME" <<< "$output"
+          printf 'RELEASE_TARBALL=%s\n' "$tarball" >> "$GITHUB_ENV"
 
-      # prepublishOnly 执行完整验证；OIDC 自动鉴权并生成 provenance，不需要 NPM_TOKEN 或 --provenance
       - name: Publish with npm Trusted Publishing
-        run: npm publish
+        run: npm publish "$RELEASE_TARBALL"
 
   release:
     name: GitHub Release

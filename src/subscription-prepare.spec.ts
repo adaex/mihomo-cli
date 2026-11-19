@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { after, before, beforeEach, describe, it } from 'node:test';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-prepare-'));
 process.env.MIHOMO_CLI_DIR = tmpDir;
@@ -25,7 +25,8 @@ before(() => {
   fs.writeFileSync(
     PATHS.mihomoBinary,
     `#!/bin/sh
-[ "$1" = '-t' ] && [ "$2" = '-d' ] && [ "$4" = '-f' ] && [ -s "$5" ] || exit 7
+[ "$1" = '-t' ] && [ "$2" = '-d' ] && [ "$3" = "$MIHOMO_CLI_DIR/data" ] && [ "$4" = '-f' ] && [ -s "$5" ] || exit 7
+printf '%s\\0' "$5" >> "$0.paths"
 if [ -f "$0.reject" ]; then echo 'native rejected candidate' >&2; exit 1; fi
 cat "$5" > "$0.validated"
 `,
@@ -33,18 +34,28 @@ cat "$5" > "$0.validated"
   );
   fs.writeFileSync(path.join(DIRS.subscriptions, 'x.yaml'), SUB_YAML);
 });
+beforeEach(() => fs.writeFileSync(`${PATHS.mihomoBinary}.paths`, ''));
 after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
-describe('配置经内核校验后再提交', () => {
-  it('prepare 不写运行配置，临时校验文件及时清理', async () => {
-    const prepared = await prepareConfigForStart('mixed', 'x');
-    assert.equal(fs.existsSync(PATHS.configFile), false);
-    assert.deepEqual(prepared.info, { proxies: 1, proxyGroups: 1 });
-    assert.deepEqual(fs.readdirSync(DIRS.runtime), []);
-  });
+function assertValidationDirsCleaned(calls: number): void {
+  const files = fs.readFileSync(`${PATHS.mihomoBinary}.paths`, 'utf8').split('\0').filter(Boolean);
+  assert.equal(files.length, calls, '每次校验都要把候选文件交给内核');
+  const dirs = new Set(files.map(file => path.dirname(file)));
+  assert.equal(dirs.size, calls, '每次校验都应独占一个临时目录');
+  for (const dir of dirs) {
+    assert.equal(path.dirname(dir), tmpDir, `内核收到的候选文件应在数据根目录的临时子目录中：${dir}`);
+    assert.ok(!fs.existsSync(dir), `校验结束后应删除整个临时目录：${dir}`);
+  }
+}
 
-  it('commit 只写最终配置，不生成三份调试 YAML', async () => {
-    const info = commitPreparedConfig(await prepareConfigForStart('mixed', 'x'));
+describe('配置经内核校验后再提交', () => {
+  it('prepare 只校验并清理临时目录，commit 才写最终配置', async () => {
+    const prepared = await prepareConfigForStart('mixed', 'x');
+    assert.deepEqual(prepared.info, { proxies: 1, proxyGroups: 1 });
+    assertValidationDirsCleaned(1);
+    assert.deepEqual(fs.readdirSync(DIRS.runtime), [], 'prepare 不应写入运行配置或其他文件');
+
+    const info = commitPreparedConfig(prepared);
     assert.deepEqual(info, { proxies: 1, proxyGroups: 1 });
     assert.deepEqual(fs.readdirSync(DIRS.runtime), ['config.yaml']);
   });
@@ -63,8 +74,9 @@ describe('配置经内核校验后再提交', () => {
     }
   });
 
-  it('内核拒绝配置时保留现有配置并清理临时文件', async () => {
-    const previous = fs.readFileSync(PATHS.configFile, 'utf8');
+  it('内核拒绝配置时保留现有配置并清理临时目录', async () => {
+    const previous = 'mode: direct\n';
+    fs.writeFileSync(PATHS.configFile, previous);
     fs.writeFileSync(`${PATHS.mihomoBinary}.reject`, '');
     try {
       await assert.rejects(prepareConfigForStart('mixed', 'x'), e => {
@@ -76,6 +88,7 @@ describe('配置经内核校验后再提交', () => {
         assert.ok(!hint.includes('本次参与构建的覆写文件'), '无覆写生效时不应出现覆写清单');
         return true;
       });
+      assertValidationDirsCleaned(1);
       assert.equal(fs.readFileSync(PATHS.configFile, 'utf8'), previous);
       assert.deepEqual(fs.readdirSync(DIRS.runtime), ['config.yaml']);
     } finally {
@@ -106,15 +119,16 @@ describe('配置经内核校验后再提交', () => {
     }
   });
 
-  it('并发校验使用各自的临时文件，结束后均清理', async () => {
+  it('并发校验使用各自的临时目录，结束后均清理', async () => {
     await Promise.all([prepareConfigForStart('mixed', 'x'), prepareConfigForStart('mixed', 'x')]);
-    assert.deepEqual(fs.readdirSync(DIRS.runtime), ['config.yaml']);
+    assertValidationDirsCleaned(2);
   });
 
   it('YAML 损坏时不改已有配置', async () => {
-    const previous = fs.readFileSync(PATHS.configFile, 'utf8');
-    fs.writeFileSync(path.join(DIRS.subscriptions, 'x.yaml'), 'proxies: [bad\n');
-    await assert.rejects(prepareConfigForStart('mixed', 'x'));
+    const previous = 'mode: direct\n';
+    fs.writeFileSync(PATHS.configFile, previous);
+    fs.writeFileSync(path.join(DIRS.subscriptions, 'broken.yaml'), 'proxies: [bad\n');
+    await assert.rejects(prepareConfigForStart('mixed', 'broken'));
     assert.equal(fs.readFileSync(PATHS.configFile, 'utf8'), previous);
   });
 

@@ -7,7 +7,7 @@ import { requireSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription, noSubscriptionsError } from '../subscription.js';
 
 /**
- * 展示按当前订阅缓存、覆写与设置重新推导的配置预览。不写盘、不校验、不重启。
+ * 展示按当前订阅缓存、覆写与设置推导的候选配置；运行配置的校验、写入与应用由 start 负责。
  *
  * 不直接读 runtime/config.yaml：stop/reset runtime 会删除它，停止时也需要预览；
  * 修改订阅或覆写后，预览展示的是候选配置，不代表运行中的内核已经应用。

@@ -65,9 +65,7 @@ export async function dispatchSubcommand(
 }
 
 /**
- * 未知 token 出现在子命令位置时的统一报错（sub / ow / dir 的 onUnknown 共用，
- * ）：选项形态（`-x`）按「裸命令不接受选项」报错，其余走
- * did-you-mean + 场景提示。守卫与拼装收口在此，文案由调用方传入（含空行排版）。
+ * sub / ow / dir 共用的未知子命令提示。选项单独报错，拼错的子命令给出相近名称。
  */
 export function unknownSubcommandError(
   action: string,
@@ -76,7 +74,7 @@ export function unknownSubcommandError(
     /** 未知子命令报错的名词（「订阅命令」「覆写子命令」「目录子命令」） */
     what: string;
     /** 选项形态报错的 hint 行（首行「裸 X 只…，不接受选项」+ 用法） */
-    optionHint: string[];
+    optionHint?: string[];
     /** 未知子命令报错的 hint 行（接在 did-you-mean 之后，排版自带的空行一并传入） */
     unknownHint: string[];
   },

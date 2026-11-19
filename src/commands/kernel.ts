@@ -97,7 +97,8 @@ export async function cmdKernel(args: string[]): Promise<void> {
   assertPositionalCount(args, 0, 1, 'mihomo-cli kernel [--mirror [镜像]] [--proxy <端口|地址>]');
 
   // --mirror direct 的语义是「绕过一切代理直连」，与 --proxy 正交冲突，同时给出必是误解
-  if (proxyInfo.proxy && mirrorInfo.isOverride && !mirrorInfo.mirror) {
+  const forceDirect = mirrorInfo.isOverride && !mirrorInfo.mirror;
+  if (proxyInfo.proxy && forceDirect) {
     throw new CliError('--mirror direct 与 --proxy 不能同时使用', {
       label: '参数错误',
       hint: ['--mirror direct 强制不经代理直连，需走代理时去掉它:', '  mihomo-cli kernel --proxy <端口|地址>'],
@@ -113,15 +114,17 @@ export async function cmdKernel(args: string[]): Promise<void> {
   // 端口只用于选通道，settings.ports 损坏时降级为「不探测本机代理」走 gh/直连
   // （getPortsOrNull，与 doctor/status 对同一调用的降级姿态一致），
   // 不该在做任何下载前就中止；非法值由 doctor 的「端口配置」检查项单独报出
-  const proxyPort = getRunningState().running ? (getPortsOrNull()?.mixed ?? null) : null;
-  const forceDirect = mirrorInfo.isOverride && !mirrorInfo.mirror;
-  // gh 探测只在做决策的形态下花这一次子进程（判据见 ghProbeNeeded）；
-  // 不需要时传 false——resolveDownloadChannels 对显式覆盖形态本就不看这个输入
-  const ghAvailable = kernel.ghProbeNeeded({ forceDirect, proxyOverride: proxyInfo.proxy }) && kernel.hasGh();
+  const probeLocalChannels = !forceDirect && proxyInfo.proxy === null;
+  const proxyPort = probeLocalChannels && getRunningState().running ? (getPortsOrNull()?.mixed ?? null) : null;
+  // 查询和下载共用一次探测，只有通道需要 gh 时才执行外部命令
+  let ghAvailable: boolean | undefined;
   const channelInput = {
     mirror: mirrorInfo.mirror,
     isOverride: mirrorInfo.isOverride,
-    ghAvailable,
+    get ghAvailable() {
+      ghAvailable ??= kernel.hasGh();
+      return ghAvailable;
+    },
     proxyPort,
     proxyOverride: proxyInfo.proxy,
   };

@@ -20,7 +20,6 @@ function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSync
   try {
     assert.ok(dataDir.startsWith(os.tmpdir()));
     assert.equal(fs.existsSync(path.join(os.homedir(), 'Library/LaunchAgents', `${label}.plist`)), false);
-    fs.mkdirSync(path.join(dataDir, 'subscriptions'));
     fs.writeFileSync(
       path.join(dataDir, 'settings.json'),
       JSON.stringify({
@@ -28,7 +27,6 @@ function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSync
         active_subscription: 'edu1',
       }),
     );
-    fs.writeFileSync(path.join(dataDir, 'subscriptions', 'edu1.yaml'), 'proxies: []\n');
     const run = (args: string[]) => runCli(args, fixture);
     check(dataDir, run);
   } finally {

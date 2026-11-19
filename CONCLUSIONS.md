@@ -40,8 +40,8 @@
 - `downloadSubscription` 的缓存写失败回滚以写前内容为准：原有 YAML 逐字恢复，仅原本不存在文件时删除本次产物；回滚异常进入提示，不得假报已恢复或已删除。YAML 写入、缓存提交与失败回滚同在 `subscriptionCommitLock` 内串行，较慢下载的回滚不能覆盖另一进程已提交的新配置
 - 覆写文件级校验（已移除操作符、空键、互斥修饰、残留 `!` `+`、数组操作符命中 BASE_CONFIG 非数组键）在 `readOverwriteFiles` 加载阶段执行：诊断旁路（ow/status）与合并闸门（start/config/doctor）看到同一份 broken 列表（D7）；依赖订阅当前值的冲突仍只在合并期报错，因为 ow 不绑定订阅
 - 订阅侧 own `__proto__` 刻意不拦（探针实测）：js-yaml 解析订阅顶层 `__proto__:` 得 own 键，经展示 walk（`defineProperty` 绕原型 setter）与 dump 均不炸，内核按未知键忽略；只有覆写**合并层**在操作符解析后拦截，订阅侧透传是承诺行为
-- `config` 是按当前缓存与设置重新推导的**配置预览**，不写盘、不重启、不做内核校验，因此可能展示内核会拒绝的配置；校验归 `doctor` 与 `start`，预览也不保证与会先自动更新订阅的下一次 `start` 完全相同
-- `status --json` / `config --json` 的 stdout 在空环境、设置损坏告警期、有 warnings 三种场景下始终可整体解析，告警一律走 stderr
+- `config` 按当前缓存与设置生成预览，运行配置 `runtime/config.yaml` 由 `start` 在内核校验通过后写入。`start` 可能先更新订阅，实际应用的配置也可能随之改变
+- `status --json` 在空数据目录也能输出状态。`config --json` 需要活跃订阅及其本地配置，成功时将配置和合并提示（`warnings`）放在同一个 JSON 对象中；缺少订阅时以非零状态退出，错误写入 stderr。两条命令读取损坏设置时的告警也写入 stderr，stdout 可单独交给 JSON 解析器处理成功结果
 - `matchesScope` 有两个 fail-open 边界（fuzz 差分定性，不加防御）：`match.name: ''`（空串 falsy 被跳过 → 无条件应用）与单独 `'*'`（头部 `*` 分支 slice 出空串 → `endsWith` 恒真）。README 承诺的「空值报错、单独 `*` 报错」在文件加载期（`normalizeMatch`）拦截，真实文件路径到不了 `matchesScope`，仅手工构造 Entry 才可达
 - 入站/控制面锁定清单（D5）只有半自动兜底：config-inbound-snapshot.spec 冻结带上游版本号的 `config.Inbound` 字段集，差集必须逐项写明放行理由。**快照发现不了上游新增字段**，内核大版本升级时仍须人工刷新并对照上游源码——核对证据是实际执行集与上游消费点，不是注释或测试名里曾出现过某个键
 - 锁定 `authentication` 的代价：剥除来源盲，用户也不能再用覆写给 Mixed 端口设代理鉴权。缓解是 `allow-lan` 已强制 false、Mixed 只监听回环，主要威胁面（局域网）已消失；残余是同机其他进程（含浏览器网页），与控制器默认无鉴权同一量级。控制器侧有 `controller_secret` 逃生口，Mixed 侧暂无——真有人需要再加 settings 键，不提前造开口
