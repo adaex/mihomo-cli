@@ -85,6 +85,22 @@ describe('createHttpClient：4xx 诊断与降级守卫行为', () => {
     }
   };
 
+  it('分块解码保留 BOM、跨块字符和尾部残缺字符', async () => {
+    const bytes = Buffer.concat([Buffer.from('\uFEFF订阅🌐'), Buffer.from([0xe4, 0xb8])]);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+        controller.close();
+      },
+    });
+    await withFetchStub(
+      async () => new Response(stream),
+      async () => {
+        assert.equal((await createHttpClient().get('https://example.test')).data, '\uFEFF订阅🌐�');
+      },
+    );
+  });
+
   it('4xx 抛 HTTP <status> 并带 response.data——代理 curl 路径对齐的目标形态', async () => {
     const base = await startServer((_req, res) => {
       res.writeHead(403, { 'content-type': 'application/json' });

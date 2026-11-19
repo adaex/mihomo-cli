@@ -88,8 +88,7 @@ export interface ChannelResolutionInput {
   /** 是否显式传了 --mirror（含 bare/direct） */
   isOverride: boolean;
   ghAvailable: boolean;
-  proxyRunning: boolean;
-  /** 仅 proxyRunning 时有意义 */
+  /** 可用的本机代理端口；未运行或端口设置无效时为 null */
   proxyPort: number | null;
   /** parseProxyArg 解析出的显式代理地址（--proxy）；null = 未指定 */
   proxyOverride: string | null;
@@ -122,7 +121,7 @@ export function resolveDownloadChannels(input: ChannelResolutionInput): Download
   }
   if (input.proxyOverride) return [{ kind: 'proxy', proxy: input.proxyOverride }];
 
-  if (input.proxyRunning && input.proxyPort !== null) {
+  if (input.proxyPort !== null) {
     const proxyUrl = loopbackHttpUrl(input.proxyPort);
     const channels: DownloadChannel[] = [{ kind: 'proxy', proxy: proxyUrl }];
     // gh 候选带同一个本机代理：入口 clearProxyEnv 会清掉自指 env，不带地址 gh 就直连了
@@ -147,7 +146,7 @@ export function resolveDownloadChannels(input: ChannelResolutionInput): Download
 export function resolveReleaseQuery(input: ChannelResolutionInput): { proxy: string | null; useGh: boolean } {
   // forceDirect 仅指 --mirror direct；显式镜像（有 mirror 值）不在此列
   const forceDirect = input.isOverride && !input.mirror;
-  const proxy = input.proxyOverride ?? (!forceDirect && input.proxyRunning && input.proxyPort !== null ? loopbackHttpUrl(input.proxyPort) : null);
+  const proxy = input.proxyOverride ?? (!forceDirect && input.proxyPort !== null ? loopbackHttpUrl(input.proxyPort) : null);
   return { proxy, useGh: proxy === null && !forceDirect && input.ghAvailable };
 }
 
@@ -304,8 +303,6 @@ export interface ReleaseQueryOptions {
    * 才退。abort 经 execFile 的 signal 把子进程一并杀掉，管道即刻释放
    */
   signal?: AbortSignal;
-  /** gh 首选查询失败、改走 curl 回退时回调一次 */
-  onGhFallback?: () => void;
   /**
    * 调用方已探测过的当前版本（doctor 一次体检内同一份 probe 结果复用，免二次 spawn）；
    * 不传则在此自行探测。null 语义与 getKernelVersion 一致（未安装）
@@ -342,15 +339,14 @@ async function getLatestReleaseViaGh(repo: string, signal?: AbortSignal): Promis
  * 置 useGh 先走 gh 认证（5000 次/时 vs 未认证 60 次/时），失败回退 curl；curl 按 proxy
  * 经代理或直连。curl 只替代原 Node fetch 的直连分支，gh 认证子进程仍保留。
  */
-async function getLatestRelease(repo: string, opts: ReleaseQueryOptions): Promise<GitHubRelease> {
+async function getLatestRelease(repo: string, opts: ReleaseQueryOptions): Promise<{ release: GitHubRelease; ghFallbackToDirect: boolean }> {
   if (opts.useGh) {
     try {
-      return await getLatestReleaseViaGh(repo, opts.signal);
+      return { release: await getLatestReleaseViaGh(repo, opts.signal), ghFallbackToDirect: false };
     } catch (e) {
       // 调用方主动中止不是「gh 不可用」：直接上抛，不带着已 abort 的信号去回退
       if (opts.signal?.aborted) throw e;
-      // gh 没走通（未登录/被墙/超时），回退 curl；通知调用方实际响应来源
-      opts.onGhFallback?.();
+      // gh 查询失败时继续尝试 curl
     }
   }
 
@@ -384,19 +380,14 @@ async function getLatestRelease(repo: string, opts: ReleaseQueryOptions): Promis
   } catch {
     throw new Error('版本查询失败: 响应不是合法 JSON（代理可能返回了错误页面）');
   }
-  return pickLatestRelease(releases);
+  return { release: pickLatestRelease(releases), ghFallbackToDirect: opts.useGh && !opts.proxy };
 }
 
 export async function checkUpdate(opts: ReleaseQueryOptions): Promise<KernelUpdateInfo> {
   const currentVersion = opts.currentVersion !== undefined ? opts.currentVersion : getKernelVersion();
   // gh 首选但失败回退直连时（无代理可用才会首选 gh；回退目标即 curl 直连），
   // 让命令层知道实际响应没走 gh，补一行说明
-  let ghFallbackToDirect = false;
-  const optsWithFallbackNote: ReleaseQueryOptions = {
-    ...opts,
-    onGhFallback: opts.useGh && !opts.proxy ? () => (ghFallbackToDirect = true) : undefined,
-  };
-  const latest = await getLatestRelease(GITHUB_REPO, optsWithFallbackNote);
+  const { release: latest, ghFallbackToDirect } = await getLatestRelease(GITHUB_REPO, opts);
   const latestVersion = latest.tag_name;
 
   let needsUpdate = false;

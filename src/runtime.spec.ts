@@ -32,20 +32,31 @@ function stateOf(kind: RunningState['kind']): RunningState {
 }
 
 describe('restartModeFor：重启模式取决于实际在跑的东西', () => {
-  it('TUN 在跑 → tun，即使 fallback 是 mixed（服务已装时 getRuntimeMode 的答案）', () => {
+  it('TUN 在跑 → tun，不读取备用模式', () => {
     // 缺陷回归锁：`stop` 服务再 `start tun` 后服务仍装着，getRuntimeMode 恒答 mixed，
     // sub use / ow on 照它重启会把 TUN 静默切回 Mixed，还为清 root 内核弹 sudo
-    assert.equal(restartModeFor(stateOf('tun'), 'mixed'), 'tun');
-    assert.equal(restartModeFor(stateOf('tun'), 'tun'), 'tun');
+    assert.equal(
+      restartModeFor(stateOf('tun'), () => assert.fail('TUN 已在跑，不应读取备用模式')),
+      'tun',
+    );
   });
 
   it('服务在跑 → 回落 fallback（服务在跑必已装，getRuntimeMode 恒答 mixed）', () => {
-    assert.equal(restartModeFor(stateOf('service'), 'mixed'), 'mixed');
+    assert.equal(
+      restartModeFor(stateOf('service'), () => 'mixed'),
+      'mixed',
+    );
   });
 
   it('没在跑 → 原样回落 fallback（本函数只对 TUN 例外，其余全信调用方）', () => {
-    assert.equal(restartModeFor(stateOf(null), 'mixed'), 'mixed');
-    assert.equal(restartModeFor(stateOf(null), 'tun'), 'tun');
+    assert.equal(
+      restartModeFor(stateOf(null), () => 'mixed'),
+      'mixed',
+    );
+    assert.equal(
+      restartModeFor(stateOf(null), () => 'tun'),
+      'tun',
+    );
   });
 });
 

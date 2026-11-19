@@ -6,7 +6,7 @@
 
 | 模块 | 职责 |
 | --- | --- |
-| `index.ts` | 入口：Node 版本、平台与 root 守卫，argv 路由与未知命令提示，非豁免命令入口捕获停止计数基线（D4），`main().catch` 统一渲染错误 |
+| `index.ts` | 入口：Node 版本、平台与 root 守卫，argv 路由与未知命令提示，显式非豁免命令在入口捕获停止计数基线（D4），`main().catch` 统一渲染错误 |
 | `commands/registry.ts` | 命令、别名、帮助与 argv 改写的唯一登记表 |
 | `commands/*.ts` | 命令处理器；shared 提供子命令分发、确认与重启入口 |
 | `types.ts` / `constants.ts` / `flags.ts` | 共享类型、默认值与带值选项登记表 |
@@ -34,7 +34,7 @@
 
 开发判据以此为准，用户承诺见 [README](../README.md)
 
-- Mixed 只由用户级 LaunchAgent 托管；TUN 是按需 sudo 的临时进程，CLI 本身不以 root 运行
+- Mixed 只由用户级 LaunchAgent 托管；TUN 是按需 sudo 的临时进程。入口的权限检查范围见[安全说明](../SECURITY.md#提权与代理设置范围)
 - 不自动设置系统代理、不提供 proxy on/off，也不读取系统代理；用户主路径是在具体浏览器或需要代理的应用中按需配置 Mixed 端口，快速开始与启动提示不推荐全局 Mac 代理或 `networksetup`（D15）
 - 单活跃订阅；多机场节点用 mihomo 原生 proxy-providers；SSH 出口由用户自行 `ssh -D`
 - 注册表只登记当前支持的命令与别名；未知命令/子命令/选项统一报错，不维护旧版本迁移分支

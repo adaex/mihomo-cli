@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -49,11 +50,17 @@ describe('配置经内核校验后再提交', () => {
   });
 
   it('commit 写入内核实际校验的文本，不对可能变化的对象再 dump 一次', async () => {
-    const prepared = await prepareConfigForStart('mixed', 'x');
-    const validated = fs.readFileSync(`${PATHS.mihomoBinary}.validated`, 'utf8');
-    prepared.buildResult.config['log-level'] = 'debug';
-    commitPreparedConfig(prepared);
-    assert.equal(fs.readFileSync(PATHS.configFile, 'utf8'), validated);
+    const script = path.join(tmpDir, 'overwrite.capture.cjs');
+    fs.writeFileSync(script, 'module.exports = config => { module.exports.change = () => { config.proxies[0].name = "after-prepare"; }; };');
+    try {
+      const prepared = await prepareConfigForStart('mixed', 'x');
+      const validated = fs.readFileSync(`${PATHS.mihomoBinary}.validated`, 'utf8');
+      createRequire(import.meta.url)(script).change();
+      commitPreparedConfig(prepared);
+      assert.equal(fs.readFileSync(PATHS.configFile, 'utf8'), validated);
+    } finally {
+      fs.unlinkSync(script);
+    }
   });
 
   it('内核拒绝配置时保留现有配置并清理临时文件', async () => {

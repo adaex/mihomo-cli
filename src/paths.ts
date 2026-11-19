@@ -87,7 +87,7 @@ export const PATHS = {
 } as const;
 
 export const DIRECTORY_TARGETS: Record<string, DirectoryTarget> = {
-  root: { path: null, label: '根目录' },
+  root: { path: USER_DATA_DIR, label: '根目录' },
   subs: { path: DIRS.subscriptions, label: '订阅目录' },
   logs: { path: DIRS.logs, label: '日志目录' },
   data: { path: DIRS.data, label: '运行数据目录' },

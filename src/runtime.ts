@@ -84,11 +84,11 @@ export function getRunningState(serviceStatus?: ServiceStatus): RunningState {
  * kind='tun' → 'tun'——**即便服务已装**：`stop` 服务再 `start tun` 的正常形态是
  * 服务 installed+disabled+unloaded、TUN 内核以 root 在跑，此刻 getRuntimeMode 按
  * 「装了服务恒 Mixed」答 mixed，照它重启会把 TUN 静默切回 Mixed、还为清 root 内核弹 sudo。
- * 其余（服务在跑或没在跑）回落 fallbackMode，调用方传 getRuntimeMode()：
+ * 其余分支才调用 getRuntimeMode，避免在 TUN 已确定时读取备用配置：
  * 服务在跑必已装、它恒答 mixed；「装了服务恒 Mixed」的判据仍只有一份，本函数不重写。
  */
-export function restartModeFor(state: RunningState, fallbackMode: RuntimeMode): RuntimeMode {
-  return state.kind === 'tun' ? 'tun' : fallbackMode;
+export function restartModeFor(state: RunningState, fallbackMode: () => RuntimeMode): RuntimeMode {
+  return state.kind === 'tun' ? 'tun' : fallbackMode();
 }
 
 /**
@@ -101,7 +101,7 @@ export function restartModeFor(state: RunningState, fallbackMode: RuntimeMode): 
  */
 export function restartModeOnChange(): RuntimeMode | null {
   const state = getRunningState();
-  return state.running ? restartModeFor(state, getRuntimeMode()) : null;
+  return state.running ? restartModeFor(state, getRuntimeMode) : null;
 }
 
 /**

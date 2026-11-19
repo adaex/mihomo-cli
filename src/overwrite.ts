@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 import * as yaml from 'js-yaml';
 import { assertConfigGraphSafe } from './config-graph.js';
-import { BASE_CONFIG, EFFECTIVELY_LOCKED_KEYS, YAML_MAX_ALIASES } from './constants.js';
+import { BASE_CONFIG, EFFECTIVELY_LOCKED_KEYS, isPlainObject, YAML_MAX_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
 import { USER_DATA_DIR } from './paths.js';
 import { readSettings, writeSettings } from './settings.js';
@@ -135,27 +135,10 @@ function protoKeyInOverwriteError(): CliError {
  * 操作符解析，mihomo 原生通配键（如 nameserver-policy 的 `+.corp.example.com`）
  * 会被剥成 `.corp.example.com`，通配匹配静默失效。嵌套数组要改就写全量值（整组覆盖）。
  */
-function mergeConfigLevel(target: unknown, override: unknown, parseOperators: boolean): Record<string, unknown> {
-  let t = target as Record<string, unknown>;
-  if (t === null || t === undefined) {
-    t = Array.isArray(override) ? ([] as unknown as Record<string, unknown>) : {};
-  }
+function mergeConfigLevel(target: Record<string, unknown>, override: Record<string, unknown>, parseOperators: boolean): Record<string, unknown> {
+  const result = { ...target };
 
-  if (override === null || override === undefined) {
-    return t;
-  }
-
-  if (typeof override !== 'object') {
-    return override as Record<string, unknown>;
-  }
-
-  if (Array.isArray(override)) {
-    return override as unknown as Record<string, unknown>;
-  }
-
-  const result = { ...t };
-
-  for (const [rawKey, value] of Object.entries(override as Record<string, unknown>)) {
+  for (const [rawKey, value] of Object.entries(override)) {
     let key = rawKey;
     let forceOverwrite = false;
     let arrayPrepend = false;
@@ -206,16 +189,9 @@ function mergeConfigLevel(target: unknown, override: unknown, parseOperators: bo
       continue;
     }
 
-    if (
-      value !== null &&
-      typeof value === 'object' &&
-      !Array.isArray(value) &&
-      existingValue !== null &&
-      typeof existingValue === 'object' &&
-      !Array.isArray(existingValue)
-    ) {
-      // 目标已有同名映射 → 逐键深度合并（deep merge 语义不变），进入字面层
-      result[key] = mergeConfigLevel(existingValue as Record<string, unknown>, value, false);
+    if (isPlainObject(value) && isPlainObject(existingValue)) {
+      // 两侧都是映射时按字面键递归合并
+      result[key] = mergeConfigLevel(existingValue, value, false);
       continue;
     }
 
@@ -225,8 +201,7 @@ function mergeConfigLevel(target: unknown, override: unknown, parseOperators: bo
   return result;
 }
 
-export function isOverwriteEnabled(): boolean {
-  const settings = readSettings();
+export function isOverwriteEnabled(settings = readSettings()): boolean {
   return settings.overwrite_enabled !== false;
 }
 
@@ -336,15 +311,13 @@ export function normalizeMatch(raw: unknown, fileName: string): OverwriteMatch |
       hint: ['match: 后面要跟条件块（检查缩进），如:', '  match:', '    name: edu*'],
     });
   }
-  if (typeof raw !== 'object' || Array.isArray(raw)) {
+  if (!isPlainObject(raw)) {
     throw new CliError(`覆写文件 "${fileName}" 的 match 必须是对象（name / url-domain）`, { label: '覆写配置错误' });
   }
 
-  const rawEntries = raw as Record<string, unknown>;
-
   const result: OverwriteMatch = {};
   const problems: string[] = [];
-  for (const [key, value] of Object.entries(rawEntries)) {
+  for (const [key, value] of Object.entries(raw)) {
     if (!MATCH_KEYS.has(key)) {
       problems.push(`未知键 "${key}"`);
       continue;
@@ -696,10 +669,10 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
       // 落入 catch 会让 start/config/doctor 硬失败——先建空骨架文件再编辑是自然操作顺序
       if (isBlankYamlDocument(content)) continue;
       // 别名上限防 YAML 炸弹 DoS（同 config.ts loadYamlSafe，此处内联避免与 config 循环依赖）
-      const parsed = yaml.load(content, { maxAliases: YAML_MAX_ALIASES }) as Record<string, unknown> | null;
+      const parsed: unknown = yaml.load(content, { maxAliases: YAML_MAX_ALIASES });
       assertConfigGraphSafe(parsed, `覆写文件 "${file}"`);
       // 顶层数组/标量不是合法覆写文件，与语法错同族的静默失效，统一收进 broken
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      if (isPlainObject(parsed)) {
         // match / enabled 是元数据键：抽成结构化字段并从 config 剥离，确保它们永不进入
         // 最终 mihomo-cli 配置（内核对未知顶层键宽松，剥离是本 CLI 的责任）。
         // 被停用的文件同样完整加载并校验 match：`ow` 列表要显示它的作用域，且避免
@@ -731,10 +704,14 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
  * 内容行都不以 # 开头，不会误伤。
  */
 function isBlankYamlDocument(content: string): boolean {
-  return content.split('\n').every(line => {
-    const t = line.trim();
-    return t === '' || t.startsWith('#');
-  });
+  for (let start = 0; start < content.length; ) {
+    const end = content.indexOf('\n', start);
+    const line = content.slice(start, end === -1 ? undefined : end).trimStart();
+    if (line && !line.startsWith('#')) return false;
+    if (end === -1) break;
+    start = end + 1;
+  }
+  return true;
 }
 
 /**

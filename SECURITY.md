@@ -52,11 +52,11 @@ CLI 下载 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 的 release �
 
 ### 提权与代理设置范围
 
-- CLI 本身**拒绝以 root 运行**（`sudo mihomo-cli …` 会直接报错）
+- 除顶层 `help` 和 `version`（含别名）外，CLI 拒绝以 root 运行。`version` 会执行数据目录中已安装的内核来读取版本，请用普通用户身份查询，不要加 `sudo`
 - Mixed 由用户级 LaunchAgent（`gui/<uid>`）托管，正常服务操作免密；清理 root 属主的 TUN 残留时可能按需请求管理员密码
 - TUN 按需 `sudo` 启动临时进程，用 `mihomo-cli stop` 清理
 - CLI **从不读取或修改 macOS 系统代理**，也不提供全局 `proxy on/off`；需要代理的具体浏览器或应用自行配置 Mixed 地址
 
 ### 平台
 
-仅支持 macOS。非 macOS 上直接报错退出，不提供部分可用的降级路径
+仅支持 macOS。默认情况下，非 macOS 平台只放行顶层 `help` 和 `version`（含别名）；开发用的平台检查开关不代表支持其他系统

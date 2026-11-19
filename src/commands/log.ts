@@ -1,6 +1,5 @@
 import { assertKnownFlags, assertPositionalCount, getNonFlagArg, hasFlag, parseIntArg } from '../argv.js';
 import { CliError } from '../errors.js';
-import { matchValueFlagToken } from '../flags.js';
 import { formatBytes, formatDate } from '../format.js';
 import { listLogs } from '../log-files.js';
 import { openUrl, viewLogWithTail } from '../open.js';
@@ -16,18 +15,14 @@ export function cmdLogs(args: string[]): void {
   const lines = parseIntArg(args, '-n', '--lines', 100);
   const openInViewer = hasFlag(args, '-o', '--open');
   const follow = hasFlag(args, '-f', '--follow');
-  // 编号省略但给了查看类选项时默认看当前日志：`logs -f` / `logs -n 200` / `logs -o`
-  // 的意图明确是「看日志」，落到列表分支等于选项静默失效——
-  // `logs -f` 是跟随当前日志的自然写法，不能无声无息地只打印列表
-  // -n 的三种形式判定与白名单/解析共用 matchValueFlagToken，不再本地手写
-  const hasLinesFlag = args.some(a => matchValueFlagToken(a)?.spec.forms.includes('-n') === true);
+  // 除裸 logs 外，合法选项都用于查看日志，未给编号时看当前日志
   const positional = getNonFlagArg(args, 1);
   // 空串按显式提供处理（与 ui ""/sub update "" 同口径）：getNonFlagArg 对空串返回 '' 而非
   // null，下方 if (targetName) 会把它当缺省静默落列表——变量展开为空的笔误要有反馈
   if (positional === '') {
     throw new CliError('无效的日志编号 ""', { hint: INVALID_INDEX_HINT });
   }
-  const targetName = positional ?? (follow || openInViewer || hasLinesFlag ? '0' : null);
+  const targetName = positional ?? (args.length > 1 ? '0' : null);
 
   if (targetName) {
     // 只认「当前」与列表序号：归档名是 mihomo.<时间戳>.log，没人会去敲它，
@@ -65,13 +60,8 @@ export function cmdLogs(args: string[]): void {
     return;
   }
 
-  const logs = listLogs();
-  const all: LogEntry[] = [];
-
-  if (logs.current) all.push(logs.current);
-  all.push(...logs.archives);
-
-  if (all.length === 0) {
+  const { current, archives } = listLogs();
+  if (!current && archives.length === 0) {
     console.log('暂无内核日志');
     return;
   }
@@ -80,23 +70,13 @@ export function cmdLogs(args: string[]): void {
   console.log('日志列表:');
   console.log('');
 
-  let archiveCounter = 0;
-  for (const log of all) {
-    let num: string;
-    if (log.isCurrent) {
-      num = ' 0';
-    } else {
-      archiveCounter++;
-      num = String(archiveCounter).padStart(2);
-    }
-    const time = formatDate(log.mtime);
-    const size = formatBytes(log.size);
-    const name = log.isCurrent ? 'mihomo.log (当前运行中)' : log.name;
-
-    console.log(` ${num}. ${name}`);
-    console.log(`    时间: ${time}  大小: ${size}`);
+  const printEntry = (log: LogEntry, index: number) => {
+    console.log(` ${String(index).padStart(2)}. ${log.name}${index === 0 ? ' (当前运行中)' : ''}`);
+    console.log(`    时间: ${formatDate(log.mtime)}  大小: ${formatBytes(log.size)}`);
     console.log('');
-  }
+  };
+  if (current) printEntry(current, 0);
+  for (const [i, log] of archives.entries()) printEntry(log, i + 1);
 
   console.log('用法:');
   console.log('  mihomo-cli logs 0          # 查看当前日志 (最后 100 行)');

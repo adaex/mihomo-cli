@@ -7,6 +7,7 @@ import { describe, it } from 'node:test';
 
 import { CliError } from '../errors.js';
 import { makeFixture, runCli } from '../test-support/cli.js';
+import { writeStubExecutable } from '../test-support/stub-bin.js';
 import { resolveUiName } from './ui.js';
 
 describe('resolveUiName', () => {
@@ -47,8 +48,8 @@ describe('resolveUiName', () => {
 function runUi(args: string[], settings: Record<string, unknown>): SpawnSyncReturns<string> & { binDir: string } {
   const fixture = makeFixture('mihomo-ui-cli');
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-ui-bin-'));
-  fs.writeFileSync(path.join(binDir, 'open'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  fs.writeFileSync(path.join(binDir, 'pbcopy'), '#!/bin/sh\ncat >/dev/null\nexit 0\n', { mode: 0o755 });
+  writeStubExecutable(path.join(binDir, 'open'), 'exit 0', '/bin/sh');
+  writeStubExecutable(path.join(binDir, 'pbcopy'), 'cat >/dev/null\nexit 0', '/bin/sh');
   fs.writeFileSync(path.join(fixture.dataDir, 'settings.json'), JSON.stringify(settings));
   try {
     const r = runCli(args, fixture, { env: { PATH: `${binDir}:${process.env.PATH}` } });
@@ -79,8 +80,8 @@ describe('ui CLI：控制器地址与 secret 剪贴板策略', () => {
     const fixture = makeFixture('mihomo-ui-cli');
     const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-ui-bin-'));
     const called = path.join(binDir, 'pbcopy.called');
-    fs.writeFileSync(path.join(binDir, 'open'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    fs.writeFileSync(path.join(binDir, 'pbcopy'), `#!/bin/sh\ncat >/dev/null\ntouch '${called}'\nexit 0\n`, { mode: 0o755 });
+    writeStubExecutable(path.join(binDir, 'open'), 'exit 0', '/bin/sh');
+    writeStubExecutable(path.join(binDir, 'pbcopy'), `cat >/dev/null\ntouch '${called}'\nexit 0`, '/bin/sh');
     fs.writeFileSync(path.join(fixture.dataDir, 'settings.json'), JSON.stringify({ controller_secret: 'topsecret' }));
     try {
       const r = runCli(['ui', '-c'], fixture, { env: { PATH: `${binDir}:${process.env.PATH}` } });

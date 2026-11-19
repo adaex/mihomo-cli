@@ -1,26 +1,20 @@
 import assert from 'node:assert/strict';
-import { type SpawnSyncReturns, spawn } from 'node:child_process';
+import type { SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { ENTRY, makeFixture, runCli } from '../test-support/cli.js';
+import { makeFixture, runCli, spawnCli } from '../test-support/cli.js';
 import { killFakeKernel, startRunningTun } from '../test-support/fake-kernel.js';
 
-/**
- * sub 的选项白名单按子命令校验（此前分发前对全组放行同一份白名单）：
- * `sub add <url> <name> -y` 被接受但 add 不读 -y，非 TTY 下静默取消。
- * 选项一律用空格形式（`-u 30000`）：紧贴值形式的解析由另一分支统一处理。
- */
 function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSyncReturns<string>) => void): void {
   const fixture = makeFixture('mihomo-sub');
   const { dataDir, label } = fixture;
   try {
     assert.ok(dataDir.startsWith(os.tmpdir()));
-    // sub use 会经 isRestartNeededOnChange 查服务状态：label 必须隔离，
-    // 测试只能查询不存在的服务（不触碰真实 launchd 注册）
+    // 切换订阅会查询服务状态，测试标签不能指向已安装的服务
     assert.equal(fs.existsSync(path.join(os.homedir(), 'Library/LaunchAgents', `${label}.plist`)), false);
     fs.writeFileSync(
       path.join(dataDir, 'settings.json'),
@@ -210,8 +204,8 @@ describe('sub 的选项白名单按子命令校验', () => {
  */
 describe('sub update 批量结果', () => {
   it('部分失败时给汇总、非零退出、逐条重试命令；成功的订阅照常落盘', async () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-sub-batch-'));
-    const label = `com.mihomo-cli.test.${path.basename(dataDir)}`;
+    const fixture = makeFixture('mihomo-sub-batch');
+    const { dataDir } = fixture;
     fs.mkdirSync(path.join(dataDir, 'subscriptions'));
 
     const server = http.createServer((req, res) => {
@@ -238,22 +232,9 @@ describe('sub update 批量结果', () => {
         }),
       );
 
-      const env: NodeJS.ProcessEnv = { ...process.env, MIHOMO_CLI_DIR: dataDir, MIHOMO_CLI_DAEMON_LABEL: label, NO_COLOR: '1' };
-      // 子进程不得继承任何外部代理设置（经外部代理访问 127.0.0.1 会失败）
-      for (const k of ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']) delete env[k];
-
-      // 必须用**异步** spawn：桩 server 与测试同进程，spawnSync 会阻塞事件循环，
-      // server 无法 accept，子进程的 fetch 挂到超时——父子死锁
-      const child = spawn(process.execPath, ['--import', 'tsx', ENTRY, 'sub', 'update'], { env });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', d => {
-        stdout += d;
-      });
-      child.stderr.on('data', d => {
-        stderr += d;
-      });
-      const status = await new Promise<number | null>(resolve => child.on('close', resolve));
+      // 异步运行 CLI，让本地 HTTP 桩能应答；不继承外部代理
+      const env = { http_proxy: undefined, https_proxy: undefined, all_proxy: undefined, HTTP_PROXY: undefined, HTTPS_PROXY: undefined, ALL_PROXY: undefined };
+      const { stdout, stderr, status } = await spawnCli(['sub', 'update'], fixture, { env }).done;
 
       assert.notEqual(status, 0, '部分失败必须非零退出');
       assert.match(stdout, /✓ alpha: 已更新/);
@@ -265,7 +246,7 @@ describe('sub update 批量结果', () => {
       assert.ok(!fs.existsSync(path.join(dataDir, 'subscriptions', 'beta.yaml')), '失败不得留下半成品');
     } finally {
       server.close();
-      fs.rmSync(dataDir, { recursive: true, force: true });
+      fixture.cleanup();
     }
   });
 });

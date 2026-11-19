@@ -53,30 +53,10 @@ async function collectChecks(): Promise<Check[]> {
     checks.push({ name, status, detail, fix, notes });
   };
 
-  // npm registry 查询**先发起、最后 await**：它是纯网络往返（实测约 780ms），而 doctor
-  // 其余全部本地检查加起来才约 75ms（无内核）到约 300ms（装了内核，含 `-t` 原生校验）——
-  // 串在末尾就是让这段网络等待白占墙钟时间。它不依赖任何前面的结果（只与 VERSION 常量
-  // 比对），故可与本地检查重叠。实测装了内核时 1070ms → 837ms（省 22%）；没装内核时
-  // 本地部分太短，只省约 47ms，此时耗时下界就是 npm 查询本身。
-  //
-  // 尾随的 `.catch` 是**纵深防御，当前不承载行为**：promise 提前创建、await 推迟到函数
-  // 末尾，中间任一 push 路径若抛错（如订阅名非法时 requireSubscriptionRawConfig 抛 CliError），
-  // 这个 promise 就没人 await 了——真 reject 的话会被 index.ts 的 unhandledRejection
-  // 处理器捕获、以退出码 1 终止，体检在报出真正的问题之前先崩掉。实测目前不会发生：
-  // getLatestNpmVersion 自身 try/catch 吞掉一切并返回 null，摘掉这个 catch 行为不变
-  // （已反向验证）。留着是因为一旦它的契约改成抛错，缺这层就会退化成「doctor 偶发崩溃」，
-  // 而那种失败只在「另有检查项先抛错」时出现，极难复现。
+  // npm 查询与本地检查并行。先接住查询错误，即使体检提前退出也不会留下未处理的 Promise 拒绝
   const latestVersionPromise = getLatestNpmVersion(4_000).catch(() => null);
 
-  // 内核版本同样在开头并行发起：查询出网与 mihomo-cli kernel 同口径——代理在跑直接经代理，
-  // 没跑才走 gh 认证（免未认证限流）。gh 不能优先于在跑的代理：gh 直连被墙时会挂到自身
-  // 超时，4s 的体检预算被耗干，「内核版本 ok」退化成 skip，还拖住进程退出（子进程句柄）。
-  // 4s 超时/失败一律降级 skip——体检不该被 registry 之外再多一个网络故障拖红。
-  // 与 npm 项并列后，「CLI 与内核各有一条更新线、该更新哪个」不再需要用户自己记
-  //
-  // 服务状态与内核 -v 各只探测一次：earlyService/earlyState/kernelProbe 贯穿全函数
-  // （服务/端口/内核各检查段之间没有任何 await，重复探测结论必然一致）；checkUpdate
-  // 复用同一份 probe 结果，不再自行 spawn
+  // 服务状态与内核版本各探测一次，版本查询和本地检查使用同一份结果
   const earlyService = getServiceStatus();
   const earlyState = getRunningState(earlyService);
   // 端口只用于选通道：settings.ports 损坏时降级为「不探测本机代理」（getPortsOrNull），
@@ -85,12 +65,11 @@ async function collectChecks(): Promise<Check[]> {
   const kernelProbe = hasKernel() ? probeKernelVersion() : null;
   // 版本查询出网与 mihomo-cli kernel 同口径（代理在跑直接经代理、无代理才 gh 认证），
   // 决策走 kernel.resolveReleaseQuery 唯一出口——doctor 无 --mirror/--proxy，按无覆盖传入。
-  // gh 只在无代理时探测（同 kernel.ghProbeNeeded 的省探测守卫：代理在跑时查询必不经 gh）
+  // 只有安装了内核且无代理可用时，版本查询才可能用到 gh
   const releaseQuery = resolveReleaseQuery({
     mirror: null,
     isOverride: false,
-    ghAvailable: kernelProxyPort === null && hasGh(),
-    proxyRunning: earlyState.running,
+    ghAvailable: kernelProbe !== null && kernelProxyPort === null && hasGh(),
     proxyPort: kernelProxyPort,
     proxyOverride: null,
   });
@@ -244,8 +223,7 @@ async function collectChecks(): Promise<Check[]> {
   if (active && hasKernel()) {
     try {
       const mode = deriveRuntimeMode(info);
-      const prepared = await prepareConfigForStart(mode, active.name);
-      const warnings = prepared.buildResult.warnings;
+      const { warnings } = await prepareConfigForStart(mode, active.name);
       if (warnings.length > 0) {
         // 内核校验是通过的，不升为 fail；但 warnings 是「配置没按用户预期生效」的信号
         // （脚本 ctx.warn、锁定键被剥除、TUN 强制开 DNS），丢掉的话体检反而成了盲区。逐条挂

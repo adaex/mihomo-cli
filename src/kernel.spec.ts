@@ -79,7 +79,7 @@ describe('findMatchingAsset（标准版形态精确匹配）', () => {
 });
 
 describe('resolveDownloadChannels（下载通道优先级）', () => {
-  const base = { mirror: null, isOverride: false, ghAvailable: false, proxyRunning: false, proxyPort: null, proxyOverride: null };
+  const base = { mirror: null, isOverride: false, ghAvailable: false, proxyPort: null, proxyOverride: null };
 
   it('显式 --mirror 优先于 gh 与代理（手动覆盖最高）', () => {
     const ch = resolveDownloadChannels({
@@ -87,7 +87,6 @@ describe('resolveDownloadChannels（下载通道优先级）', () => {
       mirror: 'https://v6.gh-proxy.org/',
       isOverride: true,
       ghAvailable: true,
-      proxyRunning: true,
       proxyPort: 7890,
     })[0];
     assert.equal(ch?.kind, 'mirror');
@@ -99,7 +98,6 @@ describe('resolveDownloadChannels（下载通道优先级）', () => {
       ...base,
       isOverride: true,
       ghAvailable: true,
-      proxyRunning: true,
       proxyPort: 7890,
     })[0];
     assert.equal(ch?.kind, 'direct');
@@ -124,19 +122,19 @@ describe('resolveDownloadChannels（下载通道优先级）', () => {
   });
 
   it('显式 --proxy 优先于本机自动代理（不与自动通道混用）', () => {
-    const ch = resolveDownloadChannels({ ...base, proxyRunning: true, proxyPort: 7890, proxyOverride: 'http://192.168.1.2:7897' })[0];
+    const ch = resolveDownloadChannels({ ...base, proxyPort: 7890, proxyOverride: 'http://192.168.1.2:7897' })[0];
     assert.equal(ch?.kind, 'proxy');
     assert.equal(ch?.kind === 'proxy' && ch.proxy, 'http://192.168.1.2:7897');
   });
 
   it('无显式选项、代理在跑时 proxy 首选（gh 退为回退候选）', () => {
-    const ch = resolveDownloadChannels({ ...base, ghAvailable: true, proxyRunning: true, proxyPort: 7890 })[0];
+    const ch = resolveDownloadChannels({ ...base, ghAvailable: true, proxyPort: 7890 })[0];
     assert.equal(ch?.kind, 'proxy');
     assert.equal(ch?.kind === 'proxy' && ch.proxy, 'http://127.0.0.1:7890');
   });
 
   it('代理在跑且有 gh 时候选为 [proxy, gh]——gh 带同一个本机代理，只换客户端不换路径（不保证重新选节点，局限见 resolveDownloadChannels 注释）', () => {
-    const channels = resolveDownloadChannels({ ...base, ghAvailable: true, proxyRunning: true, proxyPort: 7890 });
+    const channels = resolveDownloadChannels({ ...base, ghAvailable: true, proxyPort: 7890 });
     assert.deepEqual(
       channels.map(c => c.kind),
       ['proxy', 'gh'],
@@ -145,7 +143,7 @@ describe('resolveDownloadChannels（下载通道优先级）', () => {
   });
 
   it('代理在跑但无 gh 时候选只有 proxy', () => {
-    const channels = resolveDownloadChannels({ ...base, proxyRunning: true, proxyPort: 7890 });
+    const channels = resolveDownloadChannels({ ...base, proxyPort: 7890 });
     assert.deepEqual(
       channels.map(c => c.kind),
       ['proxy'],
@@ -189,27 +187,20 @@ describe('ghProbeNeeded（gh 探测只在参与决策时做）', () => {
 });
 
 describe('resolveReleaseQuery（版本查询出网的正推唯一出口，cmdKernel/doctor 共用）', () => {
-  const base = { mirror: null, isOverride: false, ghAvailable: false, proxyRunning: false, proxyPort: null, proxyOverride: null };
+  const base = { mirror: null, isOverride: false, ghAvailable: false, proxyPort: null, proxyOverride: null };
 
   it('全无条件：直连、不经 gh', () => {
     assert.deepEqual(resolveReleaseQuery(base), { proxy: null, useGh: false });
   });
 
-  it('无代理、有 gh：gh 认证查询', () => {
+  it('无可用代理端口（未运行或端口无效）、有 gh：gh 认证查询', () => {
     assert.deepEqual(resolveReleaseQuery({ ...base, ghAvailable: true }), { proxy: null, useGh: true });
   });
 
   it('本机代理在跑：直接经代理，即使 gh 可用也不试 gh', () => {
-    assert.deepEqual(resolveReleaseQuery({ ...base, ghAvailable: true, proxyRunning: true, proxyPort: 7890 }), {
+    assert.deepEqual(resolveReleaseQuery({ ...base, ghAvailable: true, proxyPort: 7890 }), {
       proxy: 'http://127.0.0.1:7890',
       useGh: false,
-    });
-  });
-
-  it('代理在跑但端口读损坏（proxyPort=null）：降级为 gh 通道（与 doctor 的损坏降级一致）', () => {
-    assert.deepEqual(resolveReleaseQuery({ ...base, ghAvailable: true, proxyRunning: true, proxyPort: null }), {
-      proxy: null,
-      useGh: true,
     });
   });
 
@@ -221,17 +212,17 @@ describe('resolveReleaseQuery（版本查询出网的正推唯一出口，cmdKer
   });
 
   it('--mirror direct：API 也直连绕过，gh 不介入', () => {
-    assert.deepEqual(resolveReleaseQuery({ ...base, mirror: null, isOverride: true, ghAvailable: true, proxyRunning: true, proxyPort: 7890 }), {
+    assert.deepEqual(resolveReleaseQuery({ ...base, mirror: null, isOverride: true, ghAvailable: true, proxyPort: 7890 }), {
       proxy: null,
       useGh: false,
     });
   });
 
   it('显式镜像（非 direct）+ 本机代理在跑：API 仍经本机代理（镜像只管下载 URL）', () => {
-    assert.deepEqual(
-      resolveReleaseQuery({ ...base, mirror: 'https://cdn.gh-proxy.org/', isOverride: true, ghAvailable: true, proxyRunning: true, proxyPort: 7890 }),
-      { proxy: 'http://127.0.0.1:7890', useGh: false },
-    );
+    assert.deepEqual(resolveReleaseQuery({ ...base, mirror: 'https://cdn.gh-proxy.org/', isOverride: true, ghAvailable: true, proxyPort: 7890 }), {
+      proxy: 'http://127.0.0.1:7890',
+      useGh: false,
+    });
   });
 
   it('显式镜像（非 direct）+ 显式 --proxy：经该代理', () => {

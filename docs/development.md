@@ -39,7 +39,7 @@ npm run typecheck && npm test && npm run check && npm run build
 哪些路径不进自动化及完整实测原因见 [CONCLUSIONS「只能手工验证的范围」](../CONCLUSIONS.md#只能手工验证的范围)；本节以测试方法纪律为主，条目可附一句支撑该纪律的最小理由，平台实测事实的全文归 CONCLUSIONS：
 
 - 要驱动服务层的 launchctl 路径，用 PATH 前置的桩 launchctl，让代码走真实路径而不触碰真实 launchd；只用 bootstrap/bootout 的一次性 label 可临时验证有限行为，覆盖不了 stop 的全部语义
-- doctor 的内核版本项与 npm 查询项取值依赖网络（GitHub 可达性、限流），用例只锁检查项存在，不写死 ok/warn/skip
+- `doctor` 的常规用例用临时 `PATH` 中的 npm、gh 和 curl 桩隔离版本查询，不依赖公网。并行与超时用例单独控制桩的响应时机
 - 子进程 + 本地桩 server 的用例必须**异步 spawn**：spawnSync 会阻塞父进程事件循环，桩 server 无法 accept、子进程 fetch 挂死（父子死锁，实测 30s 超时零请求到达桩）
 - 测试只依赖 macOS 自带命令（bash/launchctl/pgrep/pkill/lsof/gh）与 node 本身，bash 仅作桩的 shebang；桩里要计时或计算用 `process.execPath -e "Date.now()"`，不用 python3，不引入第二套运行时
 

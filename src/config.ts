@@ -7,7 +7,14 @@ import * as yaml from 'js-yaml';
 import { assertConfigGraphSafe } from './config-graph.js';
 import { BASE_CONFIG, EFFECTIVELY_LOCKED_KEYS, isPlainObject, TUN_CONFIG, YAML_MAX_ALIASES } from './constants.js';
 import { CliError } from './errors.js';
-import { applyOverwrite, describeOverwriteScope, loadOverwriteFile, lockedKeysReferencedBy, selectActiveOverwriteFiles } from './overwrite.js';
+import {
+  applyOverwrite,
+  describeOverwriteScope,
+  isOverwriteEnabled,
+  loadOverwriteFile,
+  lockedKeysReferencedBy,
+  selectActiveOverwriteFiles,
+} from './overwrite.js';
 import { atomicWriteFileSync, DIRS, ensureDirs, PATHS, USER_DATA_DIR } from './paths.js';
 import { getPorts, readSettings } from './settings.js';
 import { firstLine, sanitizeTerminal } from './text.js';
@@ -139,7 +146,7 @@ export function buildConfig(subRawContent: string, mode: RuntimeMode, scope?: Ov
   const subscriptionConfig = parseConfigContent(subRawContent, '订阅内容');
 
   const settings = readSettings();
-  const allFiles = settings.overwrite_enabled !== false ? loadOverwriteFile() : [];
+  const allFiles = isOverwriteEnabled(settings) ? loadOverwriteFile() : [];
   const overwriteFiles = selectActiveOverwriteFiles(allFiles, scope);
   // 脚本执行需要 mode/scope 构造 ctx（订阅信息与运行模式），YAML 合并不用。
   // warnings 只收真异常（脚本 ctx.warn、锁定键剥除、TUN 强制 DNS）
@@ -440,13 +447,7 @@ export function probeKernelVersion(binary: string = PATHS.mihomoBinary): KernelP
   return { spawnError: r.error ?? null, status: r.status ?? null, output, version: match ? match[0] : null };
 }
 
-/**
- * 内核版本探测。CLI 是短进程、调用点全在展示路径（status/doctor/help/kernel），
- * 每次直接 spawn 一次 `mihomo-cli -v`（本地毫秒级）——不做进程内缓存：
- * 缓存需要失效协议（下载/reset 换掉内核后要记得清），省一次重复探测的收益不抵这层状态。
- *
- * 已持有 probe 结果的调用方（doctor 一次体检内复用同一份）经参数传入，免二次 spawn。
- */
+/** 从 `mihomo -v` 的输出读取内核版本，不跨调用缓存；已探测过的调用方可以传入结果 */
 export function getKernelVersion(probe?: KernelProbe): string | null {
   if (!hasKernel()) return null;
   try {

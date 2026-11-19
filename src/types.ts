@@ -79,8 +79,8 @@ export interface ConfigSummary {
 
 /** 已构建校验、尚未写盘的配置。见 subscription.prepareConfigForStart */
 export interface PreparedConfig {
-  buildResult: BuildConfigResult;
-  /** 已交给内核校验的文本；提交必须写同一份，不能再次 dump buildResult.config */
+  warnings: string[];
+  /** 已交给内核校验的文本，提交时原样写入 */
   candidateContent: string;
   info: ConfigSummary;
 }
@@ -274,7 +274,6 @@ export interface LogEntry {
   path: string;
   size: number;
   mtime: Date;
-  isCurrent: boolean;
 }
 
 export interface LogList {
@@ -386,7 +385,7 @@ export interface ResetTarget {
 // === Directory ===
 
 export interface DirectoryTarget {
-  path: string | null;
+  path: string;
   label: string;
 }
 

@@ -13,6 +13,7 @@ export const YAML_MAX_ALIASES = 200;
 /** CLI 自身版本与包名（package.json 单一来源；http UA、version/update 命令共用） */
 export const VERSION: string = pkg.version;
 export const PKG_NAME: string = pkg.name;
+export const CLI_ALIASES = Object.keys(pkg.bin).filter(name => name !== PKG_NAME);
 
 /** package.json 的 `engines.node` 原文（入口守卫与 pretest 共用同一来源，均用 satisfies 判定） */
 export const NODE_ENGINES: string | null = typeof pkg.engines?.node === 'string' ? pkg.engines.node : null;

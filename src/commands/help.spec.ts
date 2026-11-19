@@ -7,11 +7,6 @@ import { describe, it } from 'node:test';
 import { makeFixture, runCli } from '../test-support/cli.js';
 import { RESET_TARGETS } from './reset.js';
 
-/**
- * 命令级帮助：`help <命令>` 与 `<命令> -h|--help|help`。
- * 此前三路全是错误（未知选项 / 未知子命令 / 多余位置参数），用户自然试法全是死路。
- * 顺带锁 status 对自定义控制器端口的展示（README 承诺「status 会显示实际端口」）。
- */
 function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSyncReturns<string>) => void): void {
   const fixture = makeFixture('mihomo-help-cli');
   const { dataDir } = fixture;
@@ -27,12 +22,16 @@ function withFixture(check: (dataDir: string, run: (args: string[]) => SpawnSync
 }
 
 describe('整页 help 的入口信息与快捷命令节', () => {
-  it('命令别名行列出全部入口（mihomo-cli 与 mh），与 package.json bin 一致', () => {
+  it('命令别名行列出 package.json bin 中主命令以外的所有入口', () => {
     withFixture((_d, run) => {
       const r = run(['help']);
       assert.equal(r.status, 0, r.stderr);
-      assert.match(r.stdout, /命令别名: mh\n/);
-      assert.doesNotMatch(r.stdout, /命令别名:.*mhm/);
+      const pkg = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+      const aliases = Object.keys(pkg.bin).filter(name => name !== pkg.name);
+      assert.equal(
+        r.stdout.split('\n').find(line => line.startsWith('命令别名:')),
+        `命令别名: ${aliases.join(', ')}`,
+      );
     });
   });
 

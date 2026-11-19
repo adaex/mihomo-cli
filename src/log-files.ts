@@ -179,11 +179,10 @@ export function listLogs(): LogList {
   if (fs.existsSync(PATHS.logFile)) {
     const stat = fs.statSync(PATHS.logFile);
     result.current = {
-      name: 'mihomo.log (当前)',
+      name: path.basename(PATHS.logFile),
       path: PATHS.logFile,
       size: stat.size,
       mtime: stat.mtime,
-      isCurrent: true,
     };
   }
 
@@ -201,7 +200,6 @@ export function listLogs(): LogList {
         path: filePath,
         size: stat.size,
         mtime: stat.mtime,
-        isCurrent: false,
       });
     } catch {
       // ignore

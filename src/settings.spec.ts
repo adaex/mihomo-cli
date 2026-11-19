@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { subscriptionUrgency } from './settings.js';
+import { getPorts, subscriptionUrgency } from './settings.js';
 import { moduleUrl, runModule } from './test-support/cli.js';
 import { spawnEval } from './test-support/spawn-eval.js';
 
@@ -181,76 +181,23 @@ describe('updateSettings 跨进程并发', () => {
 });
 
 describe('getPorts：端口覆盖（settings.ports）', () => {
-  it('缺省回默认、合法覆盖生效、非法值 fail-closed 抛错', async () => {
-    // USER_DATA_DIR 在模块求值时读 MIHOMO_CLI_DIR（顶层常量），测试进程已定死——
-    // 与并发测试同法：spawn 子进程带 env 跑全部场景，退出码 0 即全部断言通过
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-ports-'));
-    const settingsPath = path.resolve('src/settings.ts');
-    const script = [
-      `import fs from 'node:fs';`,
-      `import assert from 'node:assert/strict';`,
-      `import { getPorts } from ${JSON.stringify(settingsPath)};`,
-      `const file = process.env.MIHOMO_CLI_DIR + '/settings.json';`,
-      `const write = o => { fs.writeFileSync(file, JSON.stringify(o)); };`,
-      `write({});`,
-      `assert.deepEqual(getPorts(), { mixed: 7890, controller: 9090 });`,
-      `write({ ports: { mixed: 17890, controller: 19090 } });`,
-      `assert.deepEqual(getPorts(), { mixed: 17890, controller: 19090 });`,
-      `write({ ports: { controller: 19090 } });`,
-      `assert.deepEqual(getPorts(), { mixed: 7890, controller: 19090 });`,
-      // 非法值必须抛错而非静默回退默认：端口突降会让热重载/UI 连错地址且无任何线索
-      `for (const bad of [0, 65536, 1.5, '17890', null]) {`,
-      `  write({ ports: { mixed: bad } });`,
-      `  assert.throws(() => getPorts(), /1-65535/);`,
-      `}`,
-      `write({ ports: { mixed: 17890, controller: 17890 } });`,
-      `assert.throws(() => getPorts(), /不能相同/);`,
-      `write({ ports: [17890] });`,
-      `assert.throws(() => getPorts(), /需为对象/);`,
-    ].join('\n');
-
-    const { child, done } = spawnEval(script, { env: { MIHOMO_CLI_DIR: tmpDir } });
-    try {
-      const code = await done;
-      assert.equal(code, 0, 'getPorts 场景断言应全部通过（子进程退出码非 0）');
-    } finally {
-      child.kill('SIGKILL');
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+  it('缺省回默认、合法覆盖生效、非法值 fail-closed 抛错', () => {
+    assert.deepEqual(getPorts({}), { mixed: 7890, controller: 9090 });
+    assert.deepEqual(getPorts({ ports: { mixed: 17890, controller: 19090 } }), { mixed: 17890, controller: 19090 });
+    assert.deepEqual(getPorts({ ports: { controller: 19090 } }), { mixed: 7890, controller: 19090 });
+    for (const mixed of [0, 65536, 1.5, '17890', null]) {
+      assert.throws(() => getPorts({ ports: { mixed: mixed as number } }), /1-65535/);
     }
+    assert.throws(() => getPorts({ ports: { mixed: 17890, controller: 17890 } }), /不能相同/);
+    assert.throws(() => getPorts({ ports: JSON.parse('[17890]') }), /需为对象/);
   });
 });
 
 describe('getPorts：单侧配置撞另一侧默认端口', () => {
-  it('mixed=9090 / controller=7890 报错，不撞默认的单侧覆盖仍可用', async () => {
-    // 回归：相等校验曾在两侧都显式配置时才执行，{"ports":{"mixed":9090}} 解析成
-    // {mixed:9090, controller:9090} 不报错——mixed-port 与 external-controller 同端口，
-    // 内核 -t 只做解析照样通过，真正启动时第二个监听 bind 失败，doctor 还误报「9090 空闲」
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-ports-default-'));
-    const settingsPath = path.resolve('src/settings.ts');
-    const script = [
-      `import fs from 'node:fs';`,
-      `import assert from 'node:assert/strict';`,
-      `import { getPorts } from ${JSON.stringify(settingsPath)};`,
-      `const file = process.env.MIHOMO_CLI_DIR + '/settings.json';`,
-      `const write = o => { fs.writeFileSync(file, JSON.stringify(o)); };`,
-      `write({ ports: { mixed: 9090 } });`,
-      `assert.throws(() => getPorts(), /不能相同/);`,
-      `assert.throws(() => getPorts(), /ports.controller 未配置，取默认 9090/);`,
-      `write({ ports: { controller: 7890 } });`,
-      `assert.throws(() => getPorts(), /不能相同/);`,
-      `assert.throws(() => getPorts(), /ports.mixed 未配置，取默认 7890/);`,
-      `write({ ports: { mixed: 17890 } });`,
-      `assert.deepEqual(getPorts(), { mixed: 17890, controller: 9090 });`,
-    ].join('\n');
-
-    const { child, done } = spawnEval(script, { env: { MIHOMO_CLI_DIR: tmpDir } });
-    try {
-      const code = await done;
-      assert.equal(code, 0, '单侧撞默认端口场景断言应全部通过（子进程退出码非 0）');
-    } finally {
-      child.kill('SIGKILL');
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+  it('mixed=9090 / controller=7890 报错，不撞默认的单侧覆盖仍可用', () => {
+    assert.throws(() => getPorts({ ports: { mixed: 9090 } }), /不能相同.*ports\.controller 未配置，取默认 9090/);
+    assert.throws(() => getPorts({ ports: { controller: 7890 } }), /不能相同.*ports\.mixed 未配置，取默认 7890/);
+    assert.deepEqual(getPorts({ ports: { mixed: 17890 } }), { mixed: 17890, controller: 9090 });
   });
 });
 

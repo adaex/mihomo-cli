@@ -1,6 +1,6 @@
 import { colors } from '../colors.js';
 import { getKernelVersion, hasKernel } from '../config.js';
-import { VERSION } from '../constants.js';
+import { CLI_ALIASES, VERSION } from '../constants.js';
 import { CliError } from '../errors.js';
 import { displayWidth, padEndDisplay } from '../format.js';
 import { isServiceInstalled } from '../launchctl.js';
@@ -62,7 +62,14 @@ const GROUP_TITLES: [CommandGroup, string][] = [
  * 签名含中文占位符（`[编号]`、`[镜像]`、`[目标...]`），按码点数算会让这几行少缩进。
  */
 function printHelp(commands: Command[]): void {
-  const lines: string[] = [`\n${colors.cyan(colors.bold(`mihomo-cli v${VERSION}`))}`, '', '命令别名: mh', '', '用法:', '  mihomo-cli <命令> [选项]'];
+  const lines: string[] = [
+    `\n${colors.cyan(colors.bold(`mihomo-cli v${VERSION}`))}`,
+    '',
+    `命令别名: ${CLI_ALIASES.join(', ')}`,
+    '',
+    '用法:',
+    '  mihomo-cli <命令> [选项]',
+  ];
 
   const allUsage = commands.flatMap(c => c.usage);
   const signatureWidth = Math.max(...allUsage.map(u => displayWidth(u.signature)));

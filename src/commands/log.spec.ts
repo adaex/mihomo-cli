@@ -5,11 +5,7 @@ import { describe, it } from 'node:test';
 
 import { makeFixture, runCli } from '../test-support/cli.js';
 
-/**
- * logs 命令此前无专属 spec：「省略编号但给查看类选项时默认当前日志」是最容易
- * 改坏的分支（帮助文案专门为它写了说明，却只有文案断言）。查看走真实 tail
- * （-n 非跟随、跑完即退），归档序号映射用预摆归档锁定。隔离：MIHOMO_CLI_DIR。
- */
+/** 用真实的 tail 读取临时目录下的日志，不启用跟随模式 */
 describe('logs：编号省略与归档序号映射', () => {
   function withLogs(check: (run: (args: string[]) => { status: number | null; stdout: string; stderr: string }, dataDir: string) => void): void {
     const fixture = makeFixture('mihomo-logs');
@@ -45,13 +41,27 @@ describe('logs：编号省略与归档序号映射', () => {
       assert.doesNotMatch(r.stdout, /archive-/);
     }));
 
-  it('logs -o 的等号形式（--open）同样触发默认当前日志的判定', () =>
+  it('logs --lines=2 省略编号时读取当前日志的最后两行', () =>
     withLogs(run => {
-      // -o 会 spawn 系统打开动作，这里只锁「编号缺省 + 查看类 flag」的解析分支：
-      // 用 --lines 的等号形式同样默认当前日志（tail 非跟随，跑完即退）
       const r = run(['logs', '--lines=2']);
       assert.equal(r.status, 0, r.stderr);
-      assert.match(r.stdout, /current-line-2/);
+      assert.deepEqual(r.stdout.match(/^current-line-\d+$/gm), ['current-line-2', 'current-line-3']);
+    }));
+
+  it('列表中 0 只表示当前日志；没有当前日志时归档仍从 1 编号', () =>
+    withLogs((run, dataDir) => {
+      const entries = () => {
+        const result = run(['logs']);
+        assert.equal(result.status, 0, result.stderr);
+        return result.stdout
+          .split('\n')
+          .map(line => line.trim())
+          .filter(line => /^\d+\. /.test(line));
+      };
+      const archives = ['1. mihomo.2026-01-02_03-04-05.log', '2. mihomo.2026-01-01_03-04-05.log'];
+      assert.deepEqual(entries(), ['0. mihomo.log (当前运行中)', ...archives]);
+      fs.unlinkSync(path.join(dataDir, 'logs', 'mihomo.log'));
+      assert.deepEqual(entries(), archives);
     }));
 
   it('logs 1 映射到最新的归档（列表序号 1 起）', () =>

@@ -1,3 +1,5 @@
+import { StringDecoder } from 'node:string_decoder';
+
 import { VERSION } from './constants.js';
 import { formatBytes } from './format.js';
 import { maskUrl } from './text.js';
@@ -130,7 +132,8 @@ export function createHttpClient(options: HttpClientOptions = {}): HttpClient {
 async function readBodyWithLimit(response: Response, controller: AbortController, limit: number): Promise<string> {
   if (!response.body) return response.text();
   const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
+  const decoder = new StringDecoder('utf8');
+  let text = '';
   let total = 0;
   try {
     while (true) {
@@ -142,11 +145,11 @@ async function readBodyWithLimit(response: Response, controller: AbortController
           controller.abort();
           throw new Error(`响应体超过大小上限（${formatBytes(limit)}）`);
         }
-        chunks.push(value);
+        text += decoder.write(value);
       }
     }
   } finally {
     reader.releaseLock();
   }
-  return Buffer.concat(chunks).toString('utf8');
+  return text + decoder.end();
 }

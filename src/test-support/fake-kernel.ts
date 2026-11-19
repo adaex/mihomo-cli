@@ -156,12 +156,5 @@ export function killLeftovers(
   // 必须先于任何 pkill：测试体里的隔离断言可能排在 beforeEach 之后，不能作为唯一防线
   assertIsolatedCleanupPattern(pattern, isolatedDir);
   killPattern(pattern);
-  for (const pgid of spawnedPgids) {
-    try {
-      process.kill(-pgid, 'SIGKILL');
-    } catch {
-      // 组内已无成员（ESRCH）：wrapper 已被 pkill 收走的正常形态
-    }
-  }
-  spawnedPgids.clear();
+  for (const pgid of spawnedPgids) killFakeKernel(pgid);
 }

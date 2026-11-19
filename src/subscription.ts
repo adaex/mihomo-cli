@@ -325,20 +325,18 @@ export async function prepareConfigForStart(mode: RuntimeMode, subName: string):
   }
 
   const subUrl = getSubscriptions().find(s => s.name === subName)?.url;
-  const buildResult = buildConfig(rawContent, mode, { subName, subUrl });
-  const candidateContent = dumpYaml(buildResult.config);
+  const { config, warnings, overwriteSummaries } = buildConfig(rawContent, mode, { subName, subUrl });
+  const candidateContent = dumpYaml(config);
 
   // 透传生效的覆写清单：内核只说「哪个键坏了」，说不出「它是覆写追加进来的」
-  await validateConfigWithKernel(candidateContent, buildResult.overwriteSummaries);
-  return { buildResult, candidateContent, info: countConfigNodes(buildResult.config) };
+  await validateConfigWithKernel(candidateContent, overwriteSummaries);
+  return { warnings, candidateContent, info: countConfigNodes(config) };
 }
 
 /** 校验成功后才原子替换配置；仅保留内核实际使用的配置文件 */
 export function commitPreparedConfig(prepared: PreparedConfig): ConfigSummary {
-  const { buildResult } = prepared;
-
-  if (buildResult.warnings.length > 0) {
-    for (const warning of buildResult.warnings) {
+  if (prepared.warnings.length > 0) {
+    for (const warning of prepared.warnings) {
       console.log(`${colors.yellow('配置提示:')} ${warning}`);
     }
     console.log('');

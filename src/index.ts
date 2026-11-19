@@ -4,7 +4,6 @@ import { assertKnownFlags, assertPositionalCount } from './argv.js';
 import { stderrColors } from './colors.js';
 import { printCommandHelp, printShortHelp } from './commands/help.js';
 import { allCommandTokens, findCommand } from './commands/registry.js';
-import { printStatus } from './commands/status.js';
 import { DEFAULT_MIXED_PORT, isValidPortNumber, NODE_ENGINES } from './constants.js';
 import { CliError, errorMessage } from './errors.js';
 import { isSilentSigint, terminateActiveChildren } from './lifecycle.js';
@@ -60,27 +59,12 @@ function clearProxyEnv(): void {
   if (Object.keys(cleared).length > 0) recordClearedProxyEnv(cleared);
 }
 
-/**
- * root 守卫：以 `sudo mihomo-cli …` 运行会让所有服务操作静默失效，必须挡在最前面。
- *
- * 服务是用户级 LaunchAgent（域 `gui/<uid>`）；sudo 下域变成不存在的 `gui/0`，launchctl 一律
- * 返回 125，查询/停止/安装全线静默失效。不做读 SUDO_UID 的自动降级（HOME 是否保留取决于
- * sudoers，静默改域只会制造更难查的错位，D1）。TUN 所需 root 由 CLI 内部按需 sudo。
- */
-/**
- * 守卫豁免命令：纯信息命令不碰服务、目录与提权，root 与非 macOS 下都安全。
- * （root 守卫与平台守卫共用同一份豁免名单——两者的豁免语义完全一致，没必要维护两张表）
- *
- * 名单同时决定 main() 是否跳过 ensureDirs：豁免免掉的是**副作用面**而不只是「拒绝」，
- * 否则 sudo mihomo-cli version 会在 /var/root、非 macOS 上的 mihomo-cli help 会在用户家目录
- * 建出一套用户永远看不到的数据目录。
- */
+/** 这两个顶层命令跳过入口检查、目录初始化和临时文件清扫；version 仍会探测已安装的内核 */
 const GUARD_EXEMPT_COMMANDS = new Set(['help', 'version']);
 
 function assertNotRoot(commandName: string): void {
   const uid = process.getuid?.();
   if (uid !== 0) return;
-  if (GUARD_EXEMPT_COMMANDS.has(commandName)) return;
 
   throw new CliError('请不要用 sudo 运行 mihomo-cli', {
     label: '身份错误',
@@ -100,9 +84,8 @@ function assertNotRoot(commandName: string): void {
  * Node 版本守卫：`engines` 只让 npm 打一行 warn，之后炸在语法/API 上、报错与真实原因无关。
  * 判定与 pretest（scripts/check-node.mjs）同一写法：satisfies(当前, engines.node)。
  */
-function assertSupportedNodeVersion(commandName: string): void {
+function assertSupportedNodeVersion(): void {
   if (!NODE_ENGINES) return;
-  if (GUARD_EXEMPT_COMMANDS.has(commandName)) return;
   const current = process.versions.node;
   if (satisfies(current, NODE_ENGINES)) return;
   throw new CliError(`Node 版本过低（当前 ${current}，需要 ${NODE_ENGINES}）`, {
@@ -119,9 +102,8 @@ function assertSupportedNodeVersion(commandName: string): void {
  * 快速失败优于这种静默误行为。help/version 为纯信息命令，不受限。
  * MIHOMO_CLI_ALLOW_ANY_PLATFORM=1 可绕过，仅供在非 macOS 上开发调试。
  */
-function assertSupportedPlatform(commandName: string): void {
+function assertSupportedPlatform(): void {
   if (process.platform === 'darwin') return;
-  if (GUARD_EXEMPT_COMMANDS.has(commandName)) return;
   if (process.env.MIHOMO_CLI_ALLOW_ANY_PLATFORM === '1') return;
   throw new CliError(`mihomo-cli 目前仅支持 macOS（当前平台: ${process.platform}）`, {
     label: '平台不支持',
@@ -138,18 +120,7 @@ async function main(): Promise<void> {
 
   const args = process.argv.slice(2);
 
-  if (args.length === 0) {
-    assertSupportedNodeVersion('status');
-    assertSupportedPlatform('status');
-    assertNotRoot('status');
-    ensureDirs();
-    cleanupStaleTmpFiles();
-    await printStatus();
-    printShortHelp();
-    return;
-  }
-
-  const token = args[0].toLowerCase();
+  const token = (args[0] ?? 'status').toLowerCase();
   const command = findCommand(token);
 
   if (!command) {
@@ -162,22 +133,15 @@ async function main(): Promise<void> {
   // 守卫先于 ensureDirs：不支持的平台上不应在用户家目录留下数据目录，
   // root 下更不能——sudo 的 HOME 可能是 /var/root，会在那里建一套用户永远看不到的数据目录。
   // Node 版本排在最前：版本太旧时后面两个守卫自己都可能因语法/API 报出无关的错
-  assertSupportedNodeVersion(command.name);
-  assertSupportedPlatform(command.name);
-  assertNotRoot(command.name);
-
-  // 豁免命令连 ensureDirs 一起跳过：help/version 的读写都不经过数据目录
-  //（printHelp 只读注册表与路径字符串，printVersion 只探测内核二进制），按名匹配
-  // 已覆盖别名 token 与改写命令（改写只动 argv，不动豁免判定）
   if (!GUARD_EXEMPT_COMMANDS.has(command.name)) {
+    assertSupportedNodeVersion();
+    assertSupportedPlatform();
+    assertNotRoot(command.name);
     ensureDirs();
-    // 崩溃遗留的原子写临时文件（*.tmp）顺带清扫：幂等容错，只动超过 1 小时的旧残留。
-    // 放守卫与豁免判定之后——豁免免掉的是副作用面（不建目录、不碰数据目录），
-    // 清扫是删除动作，同样不该在守卫拒绝（旧平台/root）或 help/version 时执行
     cleanupStaleTmpFiles();
     // 捕获并发判定基线（stopEpochBaseline）：必须早于命令的一切慢速阶段与状态观察，
     // 命令入口是满足该约束的最早且唯一的公共点（D4）。纯读 epoch 文件，无副作用
-    captureStopEpochBaseline();
+    if (args.length > 0) captureStopEpochBaseline();
   }
 
   // meta 不接受选项；help 可带一个命令名（help <命令>），version 不带任何位置参数
@@ -195,6 +159,7 @@ async function main(): Promise<void> {
 
   // rewrite 把顶层快捷命令(tun/use)映射为子命令形式;其余命令原样透传。
   await command.handler(command.rewrite ? command.rewrite(args) : args);
+  if (args.length === 0) printShortHelp();
 }
 
 main().catch(e => {

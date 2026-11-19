@@ -1,23 +1,16 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { type CliFixture, makeFixture, runCli } from '../test-support/cli.js';
+import { writeStubExecutable } from '../test-support/stub-bin.js';
 
-/**
- * `mihomo-cli doctor`：端到端跑完整体检，锁「配置构建的 warnings 透传进体检输出」。
- *
- * 桩内核沿用 subscription-prepare.spec 的手法，只模拟 `-v`（取版本）与
- * `-t -d <dir> -f <file>`（原生校验协议），不调真实内核。MIHOMO_CLI_DIR 与
- * MIHOMO_CLI_DAEMON_LABEL 全部隔离：launchd 查询落在临时标签上自然「未安装」，
- * 端口与版本检查是环境相关的，不纳入断言。断言只看 stdout 内容与体检走完
- * （「体检完成」在抛错之前打印，它在场即证明全部检查项都跑到了）。
- */
+/** 每例使用独立的数据目录、服务标签和命令桩，内核校验及版本查询均不访问真实内核或公网 */
 
 let fixture: CliFixture;
 let dataDir: string;
+let binDir: string;
 
 beforeEach(() => {
   fixture = makeFixture('mihomo-doctor');
@@ -43,55 +36,67 @@ beforeEach(() => {
       '',
     ].join('\n'),
   );
-  fs.writeFileSync(
+  writeStubExecutable(
     path.join(dataDir, 'kernel', 'mihomo'),
     [
-      '#!/bin/sh',
       '[ "$1" = "-v" ] && { echo "Mihomo Meta v1.19.13 darwin arm64"; exit 0; }',
       '[ "$1" = "-t" ] && [ "$2" = "-d" ] && [ "$4" = "-f" ] && [ -s "$5" ] || exit 7',
-      '',
     ].join('\n'),
-    { mode: 0o755 },
+    '/bin/sh',
   );
+  binDir = path.join(dataDir, 'bin');
+  fs.mkdirSync(binDir);
+  writeStubExecutable(path.join(binDir, 'npm'), '[ "$1" = view ] || exit 9\necho 0.0.1', '/bin/sh');
+  writeStubExecutable(
+    path.join(binDir, 'gh'),
+    ['[ "$1" = --version ] && exit 0', '[ "$1" = api ] || exit 9', `echo '[{"tag_name":"v1.19.13","assets":[]}]'`].join('\n'),
+    '/bin/sh',
+  );
+  writeStubExecutable(path.join(binDir, 'curl'), 'exit 9', '/bin/sh');
 });
 
 afterEach(() => {
   fixture.cleanup();
 });
 
-function run(args: string[]): { status: number | null; stdout: string; output: string } {
-  const r = runCli(args, fixture, { timeout: 60_000 });
-  return { status: r.status, stdout: r.stdout || '', output: `${r.stdout || ''}${r.stderr || ''}` };
+function runDoctor() {
+  const { status, stdout, stderr } = runCli(['doctor'], fixture, { timeout: 60_000, env: { PATH: `${binDir}:${process.env.PATH}` } });
+  return { status, stdout, stderr, output: `${stdout || ''}${stderr || ''}` };
 }
 
 describe('doctor：体检透传配置构建的 warnings', () => {
   it('校验通过但有合并提示时，warnings 逐条挂到配置构建项下', () => {
-    // 覆写脚本 ctx.warn 的提示正是 buildResult.warnings 要暴露、而 doctor 此前丢弃的信号
     fs.writeFileSync(
       path.join(dataDir, 'overwrite.js'),
       'export default function (config, ctx) { ctx.warn("分组 TYPO-GROUP 未匹配到当前订阅中的同名元素，已跳过"); }\n',
     );
 
-    const { stdout, output } = run(['doctor']);
+    const { stdout, output } = runDoctor();
     assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
     // 检查项本身仍算通过（措辞带「通过内核校验」），提示不升级成失败
     assert.match(stdout, /配置构建: 当前订阅通过内核校验（mixed），另有 1 条配置提示/);
-    // 多条 warnings 逐条进 notes：跳过详情带着补丁名与分组键，用户才能定位拼错的分组
     assert.match(stdout, /TYPO-GROUP/);
     assert.match(stdout, /未匹配到当前订阅中的同名元素/);
   });
 
   it('无提示时配置构建仍是一项干净的正常项', () => {
-    const { stdout, output } = run(['doctor']);
+    const { stdout, output } = runDoctor();
     assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
     assert.match(stdout, /✓ 配置构建: 当前订阅通过内核校验（mixed）/);
     assert.ok(!stdout.includes('未匹配到当前订阅中的同名元素'), '无警告时不应出现跳过提示');
   });
 
-  it('内核版本检查始终执行并渲染（ok/warn/skip 取决于 GitHub 可达性）', () => {
-    // 桩内核报 v1.19.13：有网且上游更新时为 warn（当前 x，最新 y），不可达/超时为 skip，
-    // 最新时为 ok——三态都合法，只锁「该项存在且在体检完成前跑到」，具体取值不写死
-    const { stdout, output } = run(['doctor']);
+  it('未安装内核时不为版本检查启动 gh', () => {
+    fs.unlinkSync(path.join(dataDir, 'kernel', 'mihomo'));
+    const called = path.join(dataDir, 'gh.called');
+    writeStubExecutable(path.join(binDir, 'gh'), 'touch "$MIHOMO_CLI_DIR/gh.called"; exit 9', '/bin/sh');
+    assert.match(runDoctor().stdout, /体检完成/);
+    assert.equal(fs.existsSync(called), false);
+  });
+
+  it('内核版本检查始终执行并渲染', () => {
+    // 这里只检查报告包含版本项，不固定体检对各查询结果的措辞
+    const { stdout, output } = runDoctor();
     assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
     assert.match(stdout, /内核版本/);
   });
@@ -101,7 +106,7 @@ describe('doctor：内核面板自升级残留', () => {
   it('meta-update 存在时 warn 真残留，修复命令只删暂存目录', () => {
     fs.mkdirSync(path.join(dataDir, 'kernel', 'meta-update'));
 
-    const { stdout, output } = run(['doctor']);
+    const { stdout, output } = runDoctor();
     assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
     assert.match(stdout, /内核自升级残留/);
     assert.match(stdout, /rm -rf .*meta-update/);
@@ -113,7 +118,7 @@ describe('doctor：内核面板自升级残留', () => {
     // 成功路径从不清理 meta-backup，已核对）
     fs.mkdirSync(path.join(dataDir, 'kernel', 'meta-backup'));
 
-    const { stdout, output } = run(['doctor']);
+    const { stdout, output } = runDoctor();
     assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
     assert.ok(!stdout.includes('内核自升级残留'), '备份不应按残留告警');
     assert.match(stdout, /内核自升级备份/);
@@ -125,7 +130,7 @@ describe('doctor：内核面板自升级残留', () => {
     fs.mkdirSync(path.join(dataDir, 'kernel', 'meta-backup'));
     fs.mkdirSync(path.join(dataDir, 'kernel', 'meta-update'));
 
-    const { stdout, output } = run(['doctor']);
+    const { stdout, output } = runDoctor();
     assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
     assert.match(stdout, /内核自升级残留/);
     // 其他检查项（如服务未安装）也有「修复:」行，只认残留项之后紧跟的那条
@@ -138,87 +143,59 @@ describe('doctor：内核面板自升级残留', () => {
   });
 
   it('无自升级目录时不出现这两项', () => {
-    const { stdout } = run(['doctor']);
+    const { stdout } = runDoctor();
     assert.ok(!stdout.includes('内核自升级残留'));
     assert.ok(!stdout.includes('内核自升级备份'));
   });
 });
 
-/**
- * npm registry 查询与本地检查重叠执行。
- *
- * 该查询是纯网络往返（真机实测约 780ms），而 doctor 其余全部检查加起来约 75ms——
- * 串在末尾就是让用户白等近一秒。
- *
- * **判据是两段区间真的交叠，不是总耗时低于某个阈值。** 先写的是墙钟版
- * （桩各睡 N 秒、断言总耗时 < 1.75N），连调两次阈值仍在整套并行跑时误红：
- * 实测单独跑 2.44s、与其他 suite 并行 2.93s、套件变大后又涨到 3.27–3.94s——
- * 墙钟同时受机器负载、`node --test` 的 suite 并发和 tsx 转译影响，阈值再怎么放宽
- * 都只是把误红概率往后推，而误红的表现是「并发结构坏了」这种指向完全错误的失败。
- *
- * 现在让两个桩各自把进入/退出时刻写进日志，直接断言 `npm` 的区间与内核 `-t` 的区间
- * 有交集。这与被测性质（两件事同时在跑）一一对应，且对机器快慢完全免疫：
- * 串行实现下两段必然首尾相接、交集为空，无论机器多慢都红。
- */
+/** 用两个桩各自的执行区间判断是否并行，不用整条命令的耗时代替 */
 describe('doctor：npm 查询与本地检查并行', () => {
   /** 桩的睡眠时长：只需长到让两段区间的交叠可辨，不参与任何阈值判断 */
   const SLEEP_MS = 1_000;
 
   it('npm 查询与内核校验的执行区间真的交叠', () => {
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-doctor-bin-'));
-    const timeline = path.join(binDir, 'timeline.log');
-    try {
-      // 两个桩用同一份记录格式：`<who> <start|end> <epoch 毫秒>`。
-      // 取毫秒用 **node 自己**（`process.execPath`，跑测试的那个解释器）：
-      // macOS 的 `date` 不支持 `%3N`（只到秒），而引入 python3 就是给测试加一个
-      // 本仓其余用例都不需要的外部依赖——它们只用 macOS 自带的
-      // bash/launchctl/pgrep 等。node 一定在，且路径确定
-      const stamp = (who: string, phase: string) =>
-        `${JSON.stringify(process.execPath)} -e "console.log('${who} ${phase} ' + Date.now())" >> ${JSON.stringify(timeline)}`;
+    const timeline = path.join(dataDir, 'timeline.log');
+    const stamp = (who: string, phase: string) =>
+      `${JSON.stringify(process.execPath)} -e "console.log('${who} ${phase} ' + Date.now())" >> ${JSON.stringify(timeline)}`;
 
-      fs.writeFileSync(
-        path.join(binDir, 'npm'),
-        ['#!/bin/sh', '[ "$1" = "view" ] || exit 9', stamp('npm', 'start'), `sleep ${SLEEP_MS / 1000}`, stamp('npm', 'end'), 'echo 0.0.1', ''].join('\n'),
-        { mode: 0o755 },
-      );
-      fs.writeFileSync(
-        path.join(dataDir, 'kernel', 'mihomo'),
-        [
-          '#!/bin/sh',
-          '[ "$1" = "-v" ] && { echo "Mihomo Meta v1.19.13 darwin arm64"; exit 0; }',
-          `[ "$1" = "-t" ] && { ${stamp('kernel', 'start')}; sleep ${SLEEP_MS / 1000}; ${stamp('kernel', 'end')}; [ -s "$5" ] && exit 0; exit 7; }`,
-          'exit 7',
-          '',
-        ].join('\n'),
-        { mode: 0o755 },
-      );
+    writeStubExecutable(
+      path.join(binDir, 'npm'),
+      ['[ "$1" = "view" ] || exit 9', stamp('npm', 'start'), `sleep ${SLEEP_MS / 1000}`, stamp('npm', 'end'), 'echo 0.0.1'].join('\n'),
+      '/bin/sh',
+    );
+    writeStubExecutable(
+      path.join(dataDir, 'kernel', 'mihomo'),
+      [
+        '[ "$1" = "-v" ] && { echo "Mihomo Meta v1.19.13 darwin arm64"; exit 0; }',
+        `[ "$1" = "-t" ] && { ${stamp('kernel', 'start')}; sleep ${SLEEP_MS / 1000}; ${stamp('kernel', 'end')}; [ -s "$5" ] && exit 0; exit 7; }`,
+        'exit 7',
+      ].join('\n'),
+      '/bin/sh',
+    );
 
-      const r = runCli(['doctor'], fixture, { timeout: 60_000, env: { PATH: `${binDir}:${process.env.PATH}` } });
-      const output = `${r.stdout || ''}${r.stderr || ''}`;
+    const { stdout, output } = runDoctor();
 
-      // 先确认两个桩都真的被调用了——否则「区间为空」也可能只是因为压根没执行，是假阳性
-      assert.match(r.stdout || '', /配置构建: 当前订阅通过内核校验/, `内核校验未执行: ${output}`);
-      assert.match(r.stdout || '', /CLI 版本/, `版本检查未执行: ${output}`);
-      assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
+    // 先确认两个桩都真的被调用了——否则「区间为空」也可能只是因为压根没执行，是假阳性
+    assert.match(stdout, /配置构建: 当前订阅通过内核校验/, `内核校验未执行: ${output}`);
+    assert.match(stdout, /CLI 版本/, `版本检查未执行: ${output}`);
+    assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
 
-      const marks = new Map<string, number>();
-      for (const line of fs.readFileSync(timeline, 'utf8').split('\n').filter(Boolean)) {
-        const [who, phase, ms] = line.trim().split(/\s+/);
-        marks.set(`${who}.${phase}`, Number(ms));
-      }
-      // 取值兼校验：缺任何一个都说明桩没被调到，此时报「时间线缺失」比报交集为 0 准确
-      const at = (key: string): number => {
-        const v = marks.get(key);
-        assert.ok(typeof v === 'number' && Number.isFinite(v), `时间线缺少 ${key}：${fs.readFileSync(timeline, 'utf8')}`);
-        return v;
-      };
-
-      // 交集 = min(两个 end) - max(两个 start)，> 0 即两段同时在跑
-      const overlapMs = Math.min(at('npm.end'), at('kernel.end')) - Math.max(at('npm.start'), at('kernel.start'));
-      assert.ok(overlapMs > 0, `npm 查询与内核校验未同时运行（交集 ${overlapMs}ms）：串行实现下两段首尾相接，交集必然 <= 0`);
-    } finally {
-      fs.rmSync(binDir, { recursive: true, force: true });
+    const marks = new Map<string, number>();
+    for (const line of fs.readFileSync(timeline, 'utf8').split('\n').filter(Boolean)) {
+      const [who, phase, ms] = line.trim().split(/\s+/);
+      marks.set(`${who}.${phase}`, Number(ms));
     }
+    // 取值兼校验：缺任何一个都说明桩没被调到，此时报「时间线缺失」比报交集为 0 准确
+    const at = (key: string): number => {
+      const v = marks.get(key);
+      assert.ok(typeof v === 'number' && Number.isFinite(v), `时间线缺少 ${key}：${fs.readFileSync(timeline, 'utf8')}`);
+      return v;
+    };
+
+    // 交集 = min(两个 end) - max(两个 start)，> 0 即两段同时在跑
+    const overlapMs = Math.min(at('npm.end'), at('kernel.end')) - Math.max(at('npm.start'), at('kernel.start'));
+    assert.ok(overlapMs > 0, `npm 查询与内核校验未同时运行（交集 ${overlapMs}ms）：串行实现下两段首尾相接，交集必然 <= 0`);
   });
 });
 
@@ -227,46 +204,35 @@ describe('doctor：内核版本查询超时不拖住进程退出', () => {
   // gh 挂住时 doctor 报告打完后还要等满子进程自身超时（GH_API_TIMEOUT 10s）才退，
   // CI 里表现为「体检结论已打印却拿不到退出码」。修复后 abort 信号把子进程一并杀掉
   it('gh 查询挂住 → 4s 预算内中止子进程，体检照常完成且进程及时退出', () => {
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-doctor-ghbin-'));
-    const timeline = path.join(binDir, 'timeline.log');
-    try {
-      // 桩 gh：--version 正常应答（hasGh 探测要过），api 查询挂 30s 不响应
-      fs.writeFileSync(
-        path.join(binDir, 'gh'),
-        [
-          '#!/bin/sh',
-          '[ "$1" = "--version" ] && { echo "gh version 2.0.0"; exit 0; }',
-          `echo "gh start $(date +%s)" > ${JSON.stringify(timeline)}`,
-          'sleep 30',
-          `echo "gh end $(date +%s)" >> ${JSON.stringify(timeline)}`,
-          'exit 0',
-          '',
-        ].join('\n'),
-        { mode: 0o755 },
-      );
-      // 桩 npm：CLI 更新检查的 npm view 也走真实网络（自身超时 15s），registry 慢时
-      // 会与 9s 上界无关地拖长总时长——桩成即时应答，时长断言只反映 gh 查询路径
-      fs.writeFileSync(path.join(binDir, 'npm'), ['#!/bin/sh', '[ "$1" = "view" ] && { echo "26.9.90"; exit 0; }', 'exit 9', ''].join('\n'), { mode: 0o755 });
+    const timeline = path.join(dataDir, 'timeline.log');
+    // 桩 gh：--version 正常应答（hasGh 探测要过），api 查询挂 30s 不响应
+    writeStubExecutable(
+      path.join(binDir, 'gh'),
+      [
+        '[ "$1" = "--version" ] && { echo "gh version 2.0.0"; exit 0; }',
+        `echo "gh start $(date +%s)" > ${JSON.stringify(timeline)}`,
+        'sleep 30',
+        `echo "gh end $(date +%s)" >> ${JSON.stringify(timeline)}`,
+        'exit 0',
+      ].join('\n'),
+      '/bin/sh',
+    );
 
-      const started = Date.now();
-      const r = runCli(['doctor'], fixture, { timeout: 60_000, env: { PATH: `${binDir}:${process.env.PATH}` } });
-      const elapsed = Date.now() - started;
-      const output = `${r.stdout || ''}${r.stderr || ''}`;
+    const started = Date.now();
+    const { output } = runDoctor();
+    const elapsed = Date.now() - started;
 
-      // doctor 本身必须跑完（abort 只影响版本查询这一项，降级为 skip）
-      assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
-      assert.match(output, /内核版本|可更新/, `内核版本检查应在场: ${output}`);
+    // doctor 本身必须跑完（abort 只影响版本查询这一项，降级为 skip）
+    assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
+    assert.match(output, /内核版本|可更新/, `内核版本检查应在场: ${output}`);
 
-      // 子进程被中途杀掉：桩的 end 时间戳不该出现（sleep 未跑完）
-      const marks = fs.existsSync(timeline) ? fs.readFileSync(timeline, 'utf8') : '';
-      assert.ok(marks.includes('gh start'), `桩 gh 应被调用: ${marks}`);
-      assert.ok(!marks.includes('gh end'), `挂住的 gh 子进程应被 abort 杀掉而非跑满 sleep: ${marks}`);
+    // 子进程被中途杀掉：桩的 end 时间戳不该出现（sleep 未跑完）
+    const marks = fs.existsSync(timeline) ? fs.readFileSync(timeline, 'utf8') : '';
+    assert.ok(marks.includes('gh start'), `桩 gh 应被调用: ${marks}`);
+    assert.ok(!marks.includes('gh end'), `挂住的 gh 子进程应被 abort 杀掉而非跑满 sleep: ${marks}`);
 
-      // 进程及时退出：修复前要等满弃置子进程的 10s 自身超时；4s abort + 检查余量给 9s
-      assert.ok(elapsed < 9_000, `doctor 应在 abort 后及时退出（实际 ${elapsed}ms）`);
-    } finally {
-      fs.rmSync(binDir, { recursive: true, force: true });
-    }
+    // 进程及时退出：修复前要等满弃置子进程的 10s 自身超时；4s abort + 检查余量给 9s
+    assert.ok(elapsed < 9_000, `doctor 应在 abort 后及时退出（实际 ${elapsed}ms）`);
   });
 });
 
@@ -277,17 +243,11 @@ describe('doctor：CLI 版本比较的脏数据守卫', () => {
    * 两侧口径应对齐。桩 npm 固定返回非法版本串。
    */
   it('latest 非 semver：按 skip 渲染，体检跑完不被击穿', () => {
-    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-doctor-dirtyver-bin-'));
-    try {
-      fs.writeFileSync(path.join(binDir, 'npm'), ['#!/bin/sh', '[ "$1" = "view" ] || exit 9', 'echo "26.10.99.!!not-semver"', ''].join('\n'), { mode: 0o755 });
-      const r = runCli(['doctor'], fixture, { timeout: 60_000, env: { PATH: `${binDir}:${process.env.PATH}` } });
-      const output = `${r.stdout || ''}${r.stderr || ''}`;
-      assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
-      assert.match(r.stdout || '', /无法比较/, `应有 skip 提示: ${output}`);
-      assert.equal(r.status, 0, r.stderr);
-    } finally {
-      fs.rmSync(binDir, { recursive: true, force: true });
-    }
+    writeStubExecutable(path.join(binDir, 'npm'), '[ "$1" = "view" ] || exit 9\necho "26.10.99.!!not-semver"', '/bin/sh');
+    const { stdout, stderr, status, output } = runDoctor();
+    assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
+    assert.match(stdout, /无法比较/, `应有 skip 提示: ${output}`);
+    assert.equal(status, 0, stderr);
   });
 });
 
@@ -298,22 +258,14 @@ describe('doctor：坏订阅名不击穿体检', () => {
    * 不能在「订阅配置」项整体退出、后面的端口/连通性检查全不跑。
    */
   it('非法订阅名：订阅配置项报 fail，体检完成', () => {
-    const badNameFixture = makeFixture('mihomo-doctor-badname');
-    const dirty = badNameFixture.dataDir;
-    try {
-      fs.mkdirSync(path.join(dirty, 'subscriptions'), { recursive: true });
-      fs.mkdirSync(path.join(dirty, 'kernel'), { recursive: true });
-      fs.writeFileSync(
-        path.join(dirty, 'settings.json'),
-        JSON.stringify({ subscriptions: [{ name: '../evil', url: 'https://example.com' }], active_subscription: '../evil' }),
-      );
-      const r = runCli(['doctor'], badNameFixture, { timeout: 60_000 });
-      const output = `${r.stdout || ''}${r.stderr || ''}`;
-      assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
-      assert.match(r.stdout || '', /订阅名称无效|订阅配置/, output);
-      assert.notEqual(r.status, null);
-    } finally {
-      badNameFixture.cleanup();
-    }
+    fs.unlinkSync(path.join(dataDir, 'kernel', 'mihomo'));
+    fs.writeFileSync(
+      path.join(dataDir, 'settings.json'),
+      JSON.stringify({ subscriptions: [{ name: '../evil', url: 'https://example.com' }], active_subscription: '../evil' }),
+    );
+    const { stdout, output, status } = runDoctor();
+    assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
+    assert.match(stdout, /订阅名称无效|订阅配置/, output);
+    assert.notEqual(status, null);
   });
 });

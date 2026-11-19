@@ -586,25 +586,23 @@ FIXTURE
           "const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)', PATHS.mihomoBinary, '-f', PATHS.configFile], { detached: true, stdio: 'ignore' });",
           'child.unref();',
           'kernelPid = child.pid;',
-          'for (let i = 0; i < 50; i++) {',
-          "  const r = spawnSync('pgrep', ['-f', String(kernelPid)], { encoding: 'utf8' });",
-          "  if (r.status === 0 && r.stdout.split('\\n').includes(String(kernelPid))) break;",
-          "  spawnSync(process.execPath, ['-e', 'setTimeout(() => {}, 50)']);",
-          '}',
+          `const { getMihomoPids } = await import(${JSON.stringify(moduleUrl('src/process-probe.ts'))});`,
+          `const { pollUntil } = await import(${JSON.stringify(moduleUrl('src/test-support/poll.ts'))});`,
+          "if (!pollUntil(() => getMihomoPids().includes(kernelPid), 2500)) throw new Error('桩内核未就绪');",
         ].join('\n')
       : '';
     const script = [
-      "import { spawn, spawnSync } from 'node:child_process';",
+      "import { spawn } from 'node:child_process';",
       "import fs from 'node:fs';",
       `const { PATHS } = await import(${JSON.stringify(moduleUrl('src/paths.ts'))});`,
       `const { waitServiceHealthy } = await import(${JSON.stringify(moduleUrl('src/service.ts'))});`,
       "console.log('ISOLATION:' + (PATHS.mihomoBinary.startsWith(process.env.MIHOMO_CLI_DIR) ? 'ok' : PATHS.mihomoBinary));",
       'let kernelPid = null;',
+      'try {',
       fakeKernelSetup,
       scenario.switchTo
         ? `setTimeout(() => fs.writeFileSync(process.env.MODE_FILE, ${JSON.stringify(scenario.switchTo.mode)}), ${scenario.switchTo.afterMs});`
         : '',
-      'try {',
       '  const health = await waitServiceHealthy();',
       "  console.log('HEALTH:' + JSON.stringify({ healthy: health.healthy, crashed: health.crashed, pid: health.pid, kernelPid }));",
       '} catch (e) {',
