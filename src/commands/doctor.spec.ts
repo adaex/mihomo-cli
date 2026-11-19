@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { type CliFixture, makeFixture, runCli } from '../test-support/cli.js';
 import { writeStubExecutable } from '../test-support/stub-bin.js';
+import { shellQuote } from '../text.js';
 
 /** 每例使用独立的数据目录、服务标签和命令桩，内核校验及版本查询均不访问真实内核或公网 */
 
@@ -13,9 +14,10 @@ let dataDir: string;
 let binDir: string;
 
 beforeEach(() => {
-  fixture = makeFixture('mihomo-doctor');
-  dataDir = fixture.dataDir;
-  fs.mkdirSync(path.join(dataDir, 'subscriptions'));
+  const root = makeFixture('mihomo-doctor');
+  dataDir = path.join(root.dataDir, "doctor's data");
+  fixture = { ...root, dataDir };
+  fs.mkdirSync(path.join(dataDir, 'subscriptions'), { recursive: true });
   fs.mkdirSync(path.join(dataDir, 'kernel'));
   fs.writeFileSync(
     path.join(dataDir, 'settings.json'),
@@ -109,7 +111,7 @@ describe('doctor：内核面板自升级残留', () => {
     const { stdout, output } = runDoctor();
     assert.ok(output.includes('体检完成'), `体检未跑完: ${output}`);
     assert.match(stdout, /内核自升级残留/);
-    assert.match(stdout, /rm -rf .*meta-update/);
+    assert.ok(stdout.split('\n').includes(`  修复: rm -rf -- ${shellQuote(path.join(dataDir, 'kernel', 'meta-update'))}`), stdout);
   });
 
   it('meta-backup 是上游设计保留的旧内核副本：不告警，按信息项给出独立删除口径', () => {
@@ -123,7 +125,7 @@ describe('doctor：内核面板自升级残留', () => {
     assert.ok(!stdout.includes('内核自升级残留'), '备份不应按残留告警');
     assert.match(stdout, /内核自升级备份/);
     assert.match(stdout, /回滚/);
-    assert.match(stdout, /rm -rf .*meta-backup/);
+    assert.ok(stdout.includes(`rm -rf -- ${shellQuote(path.join(dataDir, 'kernel', 'meta-backup'))}）`), stdout);
   });
 
   it('两者并存时各自成项，修复命令不含 meta-backup', () => {

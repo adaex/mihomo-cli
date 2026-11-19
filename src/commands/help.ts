@@ -6,6 +6,7 @@ import { displayWidth, padEndDisplay } from '../format.js';
 import { isServiceInstalled } from '../launchctl.js';
 import { USER_DATA_DIR } from '../paths.js';
 import { getSubscriptions } from '../settings.js';
+import { isRoot } from '../sudo.js';
 import { suggestSimilar } from '../suggest.js';
 import type { Command, CommandGroup, UsageLine } from './registry.js';
 
@@ -166,8 +167,8 @@ export function printHelpEntry(args: string[], commands: Command[], finder: (tok
 }
 
 export function printVersion(): void {
-  const kv = getKernelVersion() || '未安装';
   console.log(colors.cyan(colors.bold(`mihomo-cli v${VERSION}`)));
-  console.log(`${colors.gray('内核: ')}${kv}`);
+  if (isRoot()) return;
+  console.log(`${colors.gray('内核: ')}${getKernelVersion() || '未安装'}`);
   console.log(`${colors.gray('数据目录: ')}${USER_DATA_DIR}`);
 }

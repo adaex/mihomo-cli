@@ -15,7 +15,7 @@ import { getRunningState } from '../runtime.js';
 import { describeAbnormalExit } from '../service.js';
 import { getPorts, getPortsOrNull, getSubscriptionsWithCache, isValidSettingsContent, requireSubscriptionRawConfig } from '../settings.js';
 import { getActiveSubscription, isSubscriptionStale, prepareConfigForStart, resolveUpdateInterval } from '../subscription.js';
-import { firstLine } from '../text.js';
+import { firstLine, shellQuote } from '../text.js';
 import type { KernelUpdateInfo } from '../types.js';
 import { getLatestNpmVersion } from './update.js';
 
@@ -108,10 +108,10 @@ async function collectChecks(): Promise<Check[]> {
   //   面板升级成功一次它就常在——按残留 warn 等于永久误报，会训练用户无视 doctor 告警；
   //   归为信息项，删除口径写进 detail（ok 项不渲染 fix/notes），且绝不与暂存共用一条 rm -rf
   if (fs.existsSync(KERNEL_SELF_UPDATE_DIR)) {
-    push('内核自升级残留', 'warn', `中断的下载暂存: ${KERNEL_SELF_UPDATE_DIR}`, `rm -rf ${KERNEL_SELF_UPDATE_DIR}`);
+    push('内核自升级残留', 'warn', `中断的下载暂存: ${KERNEL_SELF_UPDATE_DIR}`, `rm -rf -- ${shellQuote(KERNEL_SELF_UPDATE_DIR)}`);
   }
   if (fs.existsSync(KERNEL_SELF_BACKUP_DIR)) {
-    push('内核自升级备份', 'ok', `旧内核副本（面板升级自动保留，供回滚；确认新版稳定后可删: rm -rf ${KERNEL_SELF_BACKUP_DIR}）`);
+    push('内核自升级备份', 'ok', `旧内核副本（面板升级自动保留，供回滚；确认新版稳定后可删: rm -rf -- ${shellQuote(KERNEL_SELF_BACKUP_DIR)}）`);
   }
 
   // === 数据目录 ===

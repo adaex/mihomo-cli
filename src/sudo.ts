@@ -10,6 +10,10 @@ import { ensureDirs, USER_DATA_DIR } from './paths.js';
  */
 export const SUDO_TIMEOUT_MS = 60_000;
 
+export function isRoot(): boolean {
+  return process.getuid?.() === 0 || process.geteuid?.() === 0;
+}
+
 /**
  * sudo 鉴权取消/密码错误（退出码 1）。独立类型而非裸 Error：调用方的包装层要区分
  * 「用户主动取消」（常规操作，label 用「已取消」）与「脚本内部失败」（≥2，真错误）。

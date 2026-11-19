@@ -10,6 +10,7 @@ import { isSilentSigint, terminateActiveChildren } from './lifecycle.js';
 import { cleanupStaleTmpFiles, ensureDirs, PATHS } from './paths.js';
 import { clearSelfProxyEnv, recordClearedProxyEnv } from './proxy-env.js';
 import { captureStopEpochBaseline } from './stop-epoch.js';
+import { isRoot } from './sudo.js';
 import { suggestSimilar } from './suggest.js';
 
 process.on('SIGINT', () => {
@@ -59,12 +60,11 @@ function clearProxyEnv(): void {
   if (Object.keys(cleared).length > 0) recordClearedProxyEnv(cleared);
 }
 
-/** 这两个顶层命令跳过入口检查、目录初始化和临时文件清扫；version 仍会探测已安装的内核 */
+/** 这两个顶层命令跳过入口检查、目录初始化和临时文件清扫 */
 const GUARD_EXEMPT_COMMANDS = new Set(['help', 'version']);
 
 function assertNotRoot(commandName: string): void {
-  const uid = process.getuid?.();
-  if (uid !== 0) return;
+  if (!isRoot()) return;
 
   throw new CliError('请不要用 sudo 运行 mihomo-cli', {
     label: '身份错误',

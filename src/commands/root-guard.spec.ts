@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
+import { VERSION } from '../constants.js';
 import { setupGuardFixture } from '../test-support/guard.js';
+import { writeStubExecutable } from '../test-support/stub-bin.js';
 
 /**
  * root 守卫的端到端回归（v4.2.2）。
@@ -43,6 +45,34 @@ describe('root 守卫：sudo 下拒绝执行', () => {
       assert.equal(status, 0, `${cmd} 不应被 root 守卫拦下`);
     }
   });
+
+  for (const [command, uid, euid] of [
+    ['version', 0, 0],
+    ['--version', 501, 0],
+    ['-v', 0, 501],
+    ['version', 501, 501],
+  ] as const) {
+    it(`${command} 在 uid=${uid}、euid=${euid} 时只以普通用户身份查询内核`, () => {
+      const dataDir = path.join(guard.tmpDir, 'data');
+      const kernelDir = path.join(dataDir, 'kernel');
+      const marker = path.join(dataDir, 'kernel.args');
+      fs.mkdirSync(kernelDir, { recursive: true });
+      writeStubExecutable(path.join(kernelDir, 'mihomo'), 'printf "%s\\n" "$@" > "$MIHOMO_CLI_DIR/kernel.args"\necho v1.2.3', '/bin/sh');
+      const { status, output } = guard.run([command], {
+        preload: { name: 'identity.mjs', body: `process.getuid = () => ${uid}; process.geteuid = () => ${euid};` },
+        env: { ...process.env, HOME: guard.tmpDir, MIHOMO_CLI_DIR: dataDir, NO_COLOR: '1' },
+      });
+      assert.equal(status, 0, output);
+      const cliVersion = `mihomo-cli v${VERSION}`;
+      if (uid === 0 || euid === 0) {
+        assert.ok(!fs.existsSync(marker), 'root 查询版本时执行了数据目录里的内核');
+        assert.equal(output.trim(), cliVersion);
+      } else {
+        assert.equal(fs.readFileSync(marker, 'utf8'), '-v\n');
+        assert.equal(output.trim(), `${cliVersion}\n内核: v1.2.3\n数据目录: ${dataDir}`);
+      }
+    });
+  }
 
   it('豁免连副作用一起免：help/version 及别名不创建数据目录', () => {
     // 豁免若只免「拒绝」不免副作用，sudo mihomo-cli version 会在 /var/root（sudo 的 HOME）
