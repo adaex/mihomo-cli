@@ -700,8 +700,8 @@ function readOverwriteFiles(): { ok: OverwriteFileEntry[]; broken: BrokenOverwri
 /**
  * 空白或纯注释的覆写文档：无内容可合并，按「不计入任何一边」跳过。
  * 必须在 yaml.load 之前判断——js-yaml 5 对空文档抛异常（js-yaml 4 返回 null），
- * 落入 catch 会把空骨架文件当坏文件硬失败。判据只认行首注释：任何非注释
- * 内容行都不以 # 开头，不会误伤。
+ * 落入 catch 会把空骨架文件当坏文件硬失败。判据只看每行首个非空白字符：
+ * 空行与 # 注释没有内容，其他内容行一律返回 false，不会误伤。
  */
 function isBlankYamlDocument(content: string): boolean {
   for (let start = 0; start < content.length; ) {

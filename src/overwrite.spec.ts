@@ -586,6 +586,7 @@ describe('空文档：无内容可合并，不计入任何一边', () => {
       ['overwrite.yaml', ''],
       ['overwrite.blank.yaml', '\n\n'],
       ['overwrite.comment.yaml', '# 骨架，待填\n# 第二行注释\n'],
+      ['overwrite.indented.yaml', ' \t# 缩进注释\n\t# 第二行注释\n'],
     ] as const) {
       const filePath = path.join(tmpDir, fileName);
       fs.writeFileSync(filePath, content);

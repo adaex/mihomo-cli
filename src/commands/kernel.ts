@@ -116,15 +116,13 @@ export async function cmdKernel(args: string[]): Promise<void> {
   // 不该在做任何下载前就中止；非法值由 doctor 的「端口配置」检查项单独报出
   const probeLocalChannels = !forceDirect && proxyInfo.proxy === null;
   const proxyPort = probeLocalChannels && getRunningState().running ? (getPortsOrNull()?.mixed ?? null) : null;
-  // 查询和下载共用一次探测，只有通道需要 gh 时才执行外部命令
-  let ghAvailable: boolean | undefined;
+  // 默认形态需要 gh 作下载候选；显式镜像只在本机代理不可用时为版本查询探测 gh。
+  // direct 与显式 --proxy 已由 probeLocalChannels 排除，查询和下载共用这一份普通布尔值
+  const ghAvailable = probeLocalChannels && (!mirrorInfo.isOverride || proxyPort === null) && kernel.hasGh();
   const channelInput = {
     mirror: mirrorInfo.mirror,
     isOverride: mirrorInfo.isOverride,
-    get ghAvailable() {
-      ghAvailable ??= kernel.hasGh();
-      return ghAvailable;
-    },
+    ghAvailable,
     proxyPort,
     proxyOverride: proxyInfo.proxy,
   };
