@@ -104,10 +104,10 @@ MIHOMO_CLI_DIR=/tmp/vp/data MIHOMO_CLI_DAEMON_LABEL="com.mihomo-cli.pack-smoke-$
 2. 对可连接的 edge 先只读核对 `node --version`、`npm --version` 与 `mihomo-cli version`；版本满足要求且不是本次版本时执行：
 
    ```bash
-   ssh <edge别名> 'npm install -g mihomo-cli@X.Y.Z && mihomo-cli version'
+   ssh <edge别名> 'npm install -g mihomo-cli@X.Y.Z --prefer-online && mihomo-cli version'
    ```
 
    已是本次版本的只核实，不重复安装；输出必须确认实际运行的就是本次版本
-3. 可连接的 edge 遇到 registry 尚未落地或 npm 版本清单缓存过期时，不能跳过收尾：继续等待并重试，直到指定版本安装且实际运行版本核实成功，不退回 `@latest`。独立版本 URL 已返回 200、npm 仍报 `ETARGET` 时，给安装命令加 `--prefer-online` 强制重新获取版本清单，不清空整个 npm 缓存
+3. 可连接的 edge 遇到 registry 尚未落地时，不能跳过收尾：继续等待并重试，直到指定版本安装且实际运行版本核实成功，不退回 `@latest`。安装固定使用 `--prefer-online`，避免独立版本 URL 已返回 200、npm 却仍因本地旧版本清单缓存报 `ETARGET`；不清空整个 npm 缓存
 4. 无法解析地址、连接失败、已离线或地址过期的 edge 直接忽略，不尝试唤醒、不守候，也不给用户布置恢复步骤
 5. 收尾按「已更新 <清单>；已跳过 <清单及原因>」汇报，跳过不等于已更新，不必把离线机器当阻塞事项
