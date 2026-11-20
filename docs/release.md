@@ -62,7 +62,7 @@ tag 与 GitHub Release 让每个 npm 版本对应到确定源码；发布时立�
 
 **CI 的 `npm publish` 成功即视为发布成功，不等 CDN 落地。**
 
-registry 的 CDN 同步可滞后数分钟：期间版本文档与产物 URL 都是 404、`npm view` 的 `latest` 仍是旧版本、重跑发布会得到 `409 Cannot publish over previously staged version`（staged ≠ published，说明还在处理队列）。这些都不是失败信号，不必守着等它变 200，也不要盲目重跑整个 workflow
+registry 的 CDN 同步可滞后数分钟：期间版本文档与产物 URL 都是 404、`npm view` 的 `latest` 仍是旧版本、重跑发布会得到 `409 Cannot publish over previously staged version`（staged ≠ published，说明还在处理队列）。这些都不是发布失败信号，不要盲目重跑整个 workflow；在线 edge 的更新仍需按后文等到指定版本可安装，不能据此跳过
 
 若确实需要确认某个版本已对外可见（比如要通知别人升级），再查：
 
@@ -108,5 +108,6 @@ MIHOMO_CLI_DIR=/tmp/vp/data MIHOMO_CLI_DAEMON_LABEL="com.mihomo-cli.pack-smoke-$
    ```
 
    已是本次版本的只核实，不重复安装；输出必须确认实际运行的就是本次版本
-3. 无法解析地址、连接失败、已离线或地址过期的 edge 直接忽略，不尝试唤醒、不守候，也不给用户布置恢复步骤。registry 尚未落地导致明确版本装不上时同样如实记下，不退回 `@latest`
-4. 收尾按「已更新 <清单>；已跳过 <清单及原因>」汇报，跳过不等于已更新，不必把离线机器当阻塞事项
+3. 可连接的 edge 遇到 registry 尚未落地或 npm 版本清单缓存过期时，不能跳过收尾：继续等待并重试，直到指定版本安装且实际运行版本核实成功，不退回 `@latest`。独立版本 URL 已返回 200、npm 仍报 `ETARGET` 时，给安装命令加 `--prefer-online` 强制重新获取版本清单，不清空整个 npm 缓存
+4. 无法解析地址、连接失败、已离线或地址过期的 edge 直接忽略，不尝试唤醒、不守候，也不给用户布置恢复步骤
+5. 收尾按「已更新 <清单>；已跳过 <清单及原因>」汇报，跳过不等于已更新，不必把离线机器当阻塞事项
