@@ -9,7 +9,7 @@ import { after, describe, it } from 'node:test';
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mihomo-dns-'));
 process.env.MIHOMO_CLI_DIR = tmpDir;
 
-const { buildConfig, assertConfigShape } = await import('./config.js');
+const { buildConfig, assertConfigShape, dumpYaml } = await import('./config.js');
 const { CliError } = await import('./errors.js');
 
 after(() => {
@@ -206,5 +206,116 @@ describe('fake-ip 模式注入默认 sniffer', () => {
     const { config } = buildConfig(sub, 'tun');
     assert.equal('sniffer' in config, true);
     assert.equal(config.sniffer, null);
+  });
+});
+
+describe('内置 DNS 与独立域名规则集优化', () => {
+  const DOMESTIC_DNS = ['https://223.5.5.5/dns-query', 'https://1.12.12.12/dns-query'];
+  const REDUNDANT_DOMESTIC_DNS = [
+    'https://223.5.5.5/dns-query',
+    'https://doh.pub/dns-query',
+    'https://1.12.12.12/dns-query',
+    'tls://223.5.5.5#skip-cert-verify=true',
+    'tls://dot.pub#skip-cert-verify=true',
+    'tls://dns.alidns.com#skip-cert-verify=true',
+  ];
+  const CN_PROVIDER = 'mihomo-cli-cn';
+  const PRIVATE_PROVIDER = 'mihomo-cli-private';
+  const RULE_SET_POLICY = 'rule-set:mihomo-cli-cn,mihomo-cli-private';
+
+  it('常见 geosite CN/private 策略改用独立 MRS，国内 DNS 去重且下载不依赖代理', () => {
+    const corporateDns = ['https://dns.corp.example/dns-query'];
+    const { config } = buildConfig(
+      withDns(
+        dumpYaml({
+          dns: {
+            'proxy-server-nameserver': REDUNDANT_DOMESTIC_DNS,
+            'direct-nameserver': REDUNDANT_DOMESTIC_DNS.slice(0, 5),
+            'nameserver-policy': {
+              'geosite:private,cn': REDUNDANT_DOMESTIC_DNS.slice(0, 5),
+              '+.corp.example': corporateDns,
+            },
+          },
+        }),
+      ),
+      'mixed',
+    );
+    const dns = config.dns as Record<string, unknown>;
+    const policy = dns['nameserver-policy'] as Record<string, unknown>;
+    const providers = config['rule-providers'] as Record<string, Record<string, unknown>>;
+
+    assert.equal('geosite:private,cn' in policy, false);
+    assert.deepEqual(policy[RULE_SET_POLICY], DOMESTIC_DNS);
+    assert.deepEqual(policy['+.jsdelivr.net'], DOMESTIC_DNS);
+    assert.deepEqual(policy['+.corp.example'], corporateDns, '自定义 DNS 策略原样保留');
+    assert.deepEqual(dns['proxy-server-nameserver'], DOMESTIC_DNS);
+    assert.deepEqual(dns['direct-nameserver'], DOMESTIC_DNS);
+    assert.deepEqual(providers[CN_PROVIDER], {
+      type: 'http',
+      behavior: 'domain',
+      format: 'mrs',
+      proxy: 'DIRECT',
+      interval: 86400,
+      path: './provider/rule-set/mihomo-cli-cn.mrs',
+      url: 'https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geosite/cn.mrs',
+    });
+    assert.deepEqual(providers[PRIVATE_PROVIDER], {
+      type: 'http',
+      behavior: 'domain',
+      format: 'mrs',
+      proxy: 'DIRECT',
+      interval: 86400,
+      path: './provider/rule-set/mihomo-cli-private.mrs',
+      url: 'https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geosite/private.mrs',
+    });
+    assert.deepEqual(config.rules, ['MATCH,PROXY'], '只优化 DNS，不把整个 CN 规则集改成强制直连');
+  });
+
+  it('geosite:cn,private 的顺序变体同样识别', () => {
+    const { config } = buildConfig(withDns('dns:\n  nameserver-policy:\n    "geosite:cn,private": [https://doh.pub/dns-query]\n'), 'mixed');
+    const dns = config.dns as Record<string, unknown>;
+    const policy = dns['nameserver-policy'] as Record<string, unknown>;
+    assert.deepEqual(policy[RULE_SET_POLICY], ['https://doh.pub/dns-query']);
+    assert.equal('geosite:cn,private' in policy, false);
+  });
+
+  it('自定义 DNS 或混合其他 GeoSite 分类时不强行改写', () => {
+    const customDns = [...REDUNDANT_DOMESTIC_DNS, 'https://dns.example.com/dns-query'];
+    const { config } = buildConfig(
+      withDns(
+        dumpYaml({
+          dns: {
+            'direct-nameserver': customDns,
+            'nameserver-policy': { 'geosite:cn,private,apple': REDUNDANT_DOMESTIC_DNS },
+          },
+        }),
+      ),
+      'mixed',
+    );
+    const dns = config.dns as Record<string, unknown>;
+    assert.deepEqual(dns['direct-nameserver'], customDns, '含自定义服务器的列表整组保留');
+    assert.deepEqual((dns['nameserver-policy'] as Record<string, unknown>)['geosite:cn,private,apple'], DOMESTIC_DNS, '只做 DNS 去重');
+    assert.equal('rule-providers' in config, false, '混合 apple 时不接管整段 GeoSite 策略');
+  });
+
+  it('内置 provider 名已存在时不覆盖订阅，也不改写原 GeoSite 策略', () => {
+    const input = `${withDns('dns:\n  nameserver-policy:\n    "geosite:private,cn": [https://doh.pub/dns-query]\n')}rule-providers:\n  mihomo-cli-cn: {type: file, behavior: domain, path: ./custom.yaml}\n`;
+    const { config } = buildConfig(input, 'mixed');
+    const dns = config.dns as Record<string, unknown>;
+    const policy = dns['nameserver-policy'] as Record<string, unknown>;
+    assert.deepEqual(policy['geosite:private,cn'], ['https://doh.pub/dns-query']);
+    assert.deepEqual((config['rule-providers'] as Record<string, unknown>)[CN_PROVIDER], { type: 'file', behavior: 'domain', path: './custom.yaml' });
+    assert.equal(PRIVATE_PROVIDER in (config['rule-providers'] as Record<string, unknown>), false);
+  });
+
+  it('用户覆写在默认优化之后执行，可恢复自己的 DNS 列表', () => {
+    const overwritePath = path.join(tmpDir, 'overwrite.yaml');
+    fs.writeFileSync(overwritePath, 'dns:\n  direct-nameserver: [https://dns.example.com/dns-query]\n');
+    try {
+      const { config } = buildConfig(withDns(dumpYaml({ dns: { 'direct-nameserver': REDUNDANT_DOMESTIC_DNS } })), 'mixed');
+      assert.deepEqual((config.dns as Record<string, unknown>)['direct-nameserver'], ['https://dns.example.com/dns-query']);
+    } finally {
+      fs.rmSync(overwritePath, { force: true });
+    }
   });
 });

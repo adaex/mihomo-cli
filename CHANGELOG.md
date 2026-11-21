@@ -1,5 +1,12 @@
 # Changelog
 
+## [未发布]
+
+### 变更
+
+- 常见的 CN/private GeoSite DNS 策略默认改用独立、完整的 CN/private MRS，避免精简 GeoSite 漏判国内域名，同时不下载用不到的海外分类；自定义 DNS、混合 GeoSite 分类和同名 provider 保持原配置
+- 仅由阿里、腾讯重复 DoH/DoT 写法组成的国内 DNS 列表默认收敛为两路 DoH，减少重复并发查询；未显式设置 `tolerance` 的 `url-test` 组默认使用 `50`，降低小幅延迟波动造成的节点切换
+
 ## [26.11.118] - 2026-11-21
 
 ### 变更

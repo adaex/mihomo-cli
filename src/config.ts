@@ -65,6 +65,89 @@ export function dumpYaml(obj: unknown): string {
   return yaml.dump(obj, { indent: 2, lineWidth: -1 });
 }
 
+const DEFAULT_URL_TEST_TOLERANCE = 50;
+const DOMESTIC_DNS_SERVERS = ['https://223.5.5.5/dns-query', 'https://1.12.12.12/dns-query'];
+const REDUNDANT_DOMESTIC_DNS_SERVERS = new Set([
+  ...DOMESTIC_DNS_SERVERS,
+  'https://doh.pub/dns-query',
+  'https://dns.alidns.com/dns-query',
+  'tls://223.5.5.5#skip-cert-verify=true',
+  'tls://dot.pub#skip-cert-verify=true',
+  'tls://dns.alidns.com#skip-cert-verify=true',
+]);
+const CN_PROVIDER_NAME = 'mihomo-cli-cn';
+const PRIVATE_PROVIDER_NAME = 'mihomo-cli-private';
+const CN_PRIVATE_RULE_SET_POLICY = `rule-set:${CN_PROVIDER_NAME},${PRIVATE_PROVIDER_NAME}`;
+const CN_PRIVATE_GEOSITE_POLICIES = ['geosite:private,cn', 'geosite:cn,private'];
+const RULE_PROVIDER_URL_BASE = 'https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geosite';
+
+/**
+ * 只有两个已知国内服务商的 DoH/DoT 重复写法才收敛；混入任何自定义地址时整组保留，
+ * 避免把用户刻意配置的协议、企业 DNS 或额外出口误判成冗余。
+ */
+function compactDomesticNameservers(value: unknown): unknown {
+  if (!Array.isArray(value) || value.length <= DOMESTIC_DNS_SERVERS.length) return value;
+  if (!value.every(item => typeof item === 'string' && REDUNDANT_DOMESTIC_DNS_SERVERS.has(item))) return value;
+  return [...DOMESTIC_DNS_SERVERS];
+}
+
+function createDomainRuleProvider(category: 'cn' | 'private'): Record<string, unknown> {
+  return {
+    type: 'http',
+    behavior: 'domain',
+    format: 'mrs',
+    proxy: 'DIRECT',
+    interval: 86400,
+    path: `./provider/rule-set/mihomo-cli-${category}.mrs`,
+    url: `${RULE_PROVIDER_URL_BASE}/${category}.mrs`,
+  };
+}
+
+/**
+ * 内置优化在用户覆写之前执行：默认补 50ms 测速容差，给只含已知重复项的国内 DNS 去重，
+ * 并把常见的 CN/private GeoSite DNS 策略换成独立 MRS。只接管完全匹配的形态；
+ * 混合其他 GeoSite 分类、自定义 DNS 或同名 provider 时保留订阅原语义。
+ */
+function applySubscriptionDefaults(config: Record<string, unknown>): void {
+  const groups = config['proxy-groups'];
+  if (Array.isArray(groups)) {
+    for (const group of groups) {
+      if (isPlainObject(group) && group.type === 'url-test' && !Object.hasOwn(group, 'tolerance')) {
+        group.tolerance = DEFAULT_URL_TEST_TOLERANCE;
+      }
+    }
+  }
+
+  if (!isPlainObject(config.dns)) return;
+  const dns = config.dns;
+  for (const key of ['proxy-server-nameserver', 'direct-nameserver']) {
+    if (key in dns) dns[key] = compactDomesticNameservers(dns[key]);
+  }
+  const policy = dns['nameserver-policy'];
+  if (!isPlainObject(policy)) return;
+  for (const [key, value] of Object.entries(policy)) {
+    const compacted = compactDomesticNameservers(value);
+    if (compacted !== value) policy[key] = compacted;
+  }
+
+  const geoPolicyKey = CN_PRIVATE_GEOSITE_POLICIES.find(key => Object.hasOwn(policy, key));
+  if (!geoPolicyKey || Object.hasOwn(policy, CN_PRIVATE_RULE_SET_POLICY)) return;
+  const rawProviders = config['rule-providers'];
+  if (rawProviders !== undefined && rawProviders !== null && !isPlainObject(rawProviders)) return;
+  const providers = isPlainObject(rawProviders) ? rawProviders : {};
+  if (Object.hasOwn(providers, CN_PROVIDER_NAME) || Object.hasOwn(providers, PRIVATE_PROVIDER_NAME)) return;
+
+  const nameservers = policy[geoPolicyKey];
+  delete policy[geoPolicyKey];
+  policy[CN_PRIVATE_RULE_SET_POLICY] = nameservers;
+  providers[CN_PROVIDER_NAME] = createDomainRuleProvider('cn');
+  providers[PRIVATE_PROVIDER_NAME] = createDomainRuleProvider('private');
+  config['rule-providers'] = providers;
+
+  // 首次下载规则集时不能反过来依赖尚未加载的 CN 数据或可用代理来解析下载域名
+  if (!Object.hasOwn(policy, '+.jsdelivr.net')) policy['+.jsdelivr.net'] = [...DOMESTIC_DNS_SERVERS];
+}
+
 /**
  * 校验 dns 段是映射。非映射（`dns: true`、`dns: [...]`）会让下游的
  * `'enable' in subDns` / 展开运算符抛裸 TypeError 或静默产出垃圾配置。
@@ -144,6 +227,7 @@ export function assertConfigShape(config: Record<string, unknown>): void {
 
 export function buildConfig(subRawContent: string, mode: RuntimeMode, scope?: OverwriteScope): BuildConfigResult {
   const subscriptionConfig = parseConfigContent(subRawContent, '订阅内容');
+  applySubscriptionDefaults(subscriptionConfig);
 
   const settings = readSettings();
   const allFiles = isOverwriteEnabled(settings) ? loadOverwriteFile() : [];

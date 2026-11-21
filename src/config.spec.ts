@@ -190,6 +190,32 @@ describe('配置构建保留用户的节点和分流语义', () => {
   });
 });
 
+describe('url-test 默认测速容差', () => {
+  it('未设置时使用 50ms，显式设置和其他分组类型保持原样', () => {
+    const groups = [
+      { name: 'AUTO', type: 'url-test', proxies: ['a'] },
+      { name: 'STABLE', type: 'url-test', tolerance: 120, proxies: ['a'] },
+      { name: 'FALLBACK', type: 'fallback', proxies: ['a'] },
+    ];
+    const { config } = buildConfig(dumpYaml({ proxies: [{ name: 'a' }], 'proxy-groups': groups }), 'mixed');
+    const actual = config['proxy-groups'] as Record<string, unknown>[];
+    assert.equal(actual[0].tolerance, 50);
+    assert.equal(actual[1].tolerance, 120);
+    assert.equal('tolerance' in actual[2], false);
+  });
+
+  it('YAML 覆写可以覆盖内置容差', () => {
+    const overwritePath = path.join(tmpDir, 'overwrite.yaml');
+    fs.writeFileSync(overwritePath, "'proxy-groups!':\n  - {name: AUTO, type: url-test, tolerance: 150, proxies: [a]}\n");
+    try {
+      const { config } = buildConfig(dumpYaml({ proxies: [{ name: 'a' }], 'proxy-groups': [{ name: 'AUTO', type: 'url-test', proxies: ['a'] }] }), 'mixed');
+      assert.equal((config['proxy-groups'] as Record<string, unknown>[])[0].tolerance, 150);
+    } finally {
+      fs.rmSync(overwritePath, { force: true });
+    }
+  });
+});
+
 describe('parseConfigContent：预期错误是 CliError 而非裸 Error', () => {
   // fuzz 抓到的渲染缺陷：坏订阅（重复键/空内容/顶层数组）经 config 命令直接消费本
   // 函数时，裸 Error 被 main().catch 按「未预期错误 = 程序 bug」渲染完整堆栈——

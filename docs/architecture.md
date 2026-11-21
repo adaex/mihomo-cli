@@ -67,6 +67,7 @@
 - 覆写契约（用户语法与示例的唯一详版是 [overwrite.md](overwrite.md)，论证见 D12–D14）：操作符（`key!` / `+key` / `key+`）只在顶层生效，带条件的变换走 JS 脚本；脚本就地修改、必须同步、返回值忽略，在 YAML 之前、剥锁定键之前执行，改不动系统锁定项；status 不调用变换函数，「生效」与 `overwrite.applied` 只表示选中；已移除的旧语法与 `match` / `enabled` 近失写法一律加载期报错，防文件意外全局生效（清单见 D12）
 - match 的 name 只支持尾部 `*`（前缀）与头部 `*`（后缀）两种通配，其余报错，不引入通用匹配器（D12）；JS 脚本无 match 机制，作用域写在脚本里
 - 配置解析只走 YAML（D6）；Mixed 清 tun 字段，TUN 强制 dns.enable=true
+- 订阅内置优化在用户覆写之前执行：只给未设置 `tolerance` 的 `url-test` 补默认值，只收敛全部属于已知重复项的国内 DNS 列表，只替换完全匹配 CN/private 的 GeoSite DNS 策略；自定义地址、混合分类和同名 provider 不被接管，覆写可覆盖最终结果（D17）
 - `prepareConfigForStart` 把已交给内核校验的 `candidateContent` 存进 `PreparedConfig`，`commitPreparedConfig` 原子写入同一份文本，不在提交时重新序列化对象
 
 ### launchd 与进程
