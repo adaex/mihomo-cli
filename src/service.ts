@@ -156,7 +156,7 @@ export async function waitServiceHealthy(options: ServiceHealthWaitOptions = {})
  * 观察窗内 launchctl 查询全部失败时的兜底判据：进程在 = 内核活着（命令行匹配
  * MAIN_INSTANCE_PATTERN 即强证据），返回健康并以进程 pid 为结果依据；pgrep 自身失败
  * 不致命——与「无进程」一样落回 healthy:false（assertServiceHealthy 报「未能进入运行
- * 状态」，日志尾部仍是有效线索）。已知边界：观察窗（≤3s、锁外）内并发启动的 TUN 进程
+ * 状态」，日志尾部仍是有效线索）。已知边界：健康确认（锁外）内并发启动的 TUN 进程
  * 同样命中模式，极端交错下可能假阳性——终态（有内核在跑、mixed 未确认）无害，不为
  * 消掉它引入 pgrep 之上的第二重判定。
  */
@@ -307,14 +307,14 @@ function bootoutService(timeoutMs: number = LAUNCHCTL_TIMEOUT_MS): void {
 }
 
 /**
- * 安装/重装服务（幂等）。`wasRunning` 为真时装完恢复运行，首装则显式 disable——install 只装不启。
- * 前置只要求内核存在（plist 指向它），不要求 config.yaml。
+ * 安装/重装服务（幂等）。`restoreAfterInstall` 为真时装完恢复运行，否则显式 disable——
+ * 不恢复就保持不启动。前置只要求内核存在（plist 指向它），不要求 config.yaml。
  *
  * 返回 `restoreSkipped=true`：恢复运行被并发 stop 取消（安装本身已成功），调用方必须跳过健康确认。
  * 并发判据读命令入口捕获的进程基线（D4）；注意基线只被恢复分支消费——若在恢复分支之前新增
  * 任何 bumpStopEpoch，install 会检出自己的递增而取消自己的恢复。
  */
-export async function installService(wasRunning: boolean): Promise<{ restoreSkipped: boolean }> {
+export async function installService(restoreAfterInstall: boolean): Promise<{ restoreSkipped: boolean }> {
   assertServiceLabelSafe();
   ensureDirs();
   ensureServiceSymlink();
@@ -348,7 +348,7 @@ export async function installService(wasRunning: boolean): Promise<{ restoreSkip
     // atomicWriteFileSync 的 fchmod 落定（不受 umask 掩蔽，见其注释）
     atomicWriteFileSync(PATHS.userAgentPlist, fs.readFileSync(stagePath, 'utf8'), { mode: 0o644 });
 
-    if (wasRunning) {
+    if (restoreAfterInstall) {
       // 并发的 stop 若在重装期间跑完（重装含 bootout + 等待，有真实窗口），这里的
       // enable+bootstrap 会把它的成果覆盖掉。判据共用 epochChanged——
       // **别在这里散写别的判据**；基线是命令入口捕获的进程基线，不在此处现取
@@ -373,7 +373,7 @@ export async function installService(wasRunning: boolean): Promise<{ restoreSkip
     }
   }
 
-  if (!wasRunning) {
+  if (!restoreAfterInstall) {
     // 首装关自启走 disableServiceAutoStart 自带事后确认，失败可见——首装若关自启失败，
     // 用户不该拿到一个 RunAtLoad 会在下次登录自启的「已安装」
     disableServiceAutoStart();

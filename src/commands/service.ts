@@ -9,7 +9,7 @@ import { PATHS } from '../paths.js';
 import { getMihomoPids } from '../process-probe.js';
 import { printResidueWarning } from '../process-stop.js';
 import * as runtime from '../runtime.js';
-import { installService, uninstallService } from '../service.js';
+import { installService, isServiceLaunchPending, uninstallService } from '../service.js';
 import { startAbortedByConcurrentStop } from '../stop-epoch.js';
 
 /**
@@ -42,10 +42,12 @@ export async function cmdInstall(args: string[]): Promise<void> {
   // 必须早于任何慢速阶段：installService 内部有 bootout + 等待卸载（最多 5s）；
   // 基线取晚了，这些窗口里发生的 stop 就被算进基线，重装的恢复运行会把它覆盖掉
 
-  // 重装保持原运行状态：不这么做的话，「代理开着时更新内核后重装」会静默把代理关掉
-  const wasRunning = getServiceStatus().running;
+  // 重装保持原运行状态：正在运行，或已启用且仍在等待 launchd 启动，都应在装完后恢复。
+  // 后者若只看 running 会被当成未运行，重装随即关闭自启，改变用户原有的开机启动状态
+  const serviceBefore = getServiceStatus();
+  const restoreAfterInstall = serviceBefore.running || isServiceLaunchPending(serviceBefore);
 
-  const { restoreSkipped } = await installService(wasRunning);
+  const { restoreSkipped } = await installService(restoreAfterInstall);
 
   console.log(`${colors.green('已安装服务')}`);
   console.log(colors.gray(`  plist: ${PATHS.userAgentPlist}`));
@@ -59,7 +61,7 @@ export async function cmdInstall(args: string[]): Promise<void> {
     return;
   }
 
-  if (wasRunning) {
+  if (restoreAfterInstall) {
     // bootstrap 返回 0 ≠ 内核活着（崩溃循环形态）：重装恢复运行与 start 走同一套
     // 健康确认，缺了它就是「已按原状态重新启动」的静默谎报
     try {

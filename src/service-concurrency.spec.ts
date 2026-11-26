@@ -161,10 +161,21 @@ case "$1" in
   print)
     state=running
     if [ -n "$MODE_FILE" ] && [ -f "$MODE_FILE" ] && [ "$(cat "$MODE_FILE")" = 'pending' ]; then state=xpcproxy; fi
+    if [ "$START_PENDING" = '1' ] && [ "$state" = 'running' ]; then
+      if [ -f "$RUNNING_SEEN_FILE" ]; then
+        if [ "$PENDING_AFTER_HEALTH" = '1' ]; then state=xpcproxy; fi
+      else
+        : > "$RUNNING_SEEN_FILE"
+      fi
+    fi
     printf '\\tstate = %s\\n\\tpid = %s\\n' "$state" "$(cat "$PID_FILE")"
     exit 0
     ;;
   print-disabled)
+    if [ "$FAIL_DISABLED_AFTER_HEALTH" = '1' ] && [ -f "$RUNNING_SEEN_FILE" ] && [ ! -f "$DISABLED_FAILED_FILE" ]; then
+      : > "$DISABLED_FAILED_FILE"
+      exit 112
+    fi
     if [ -n "$PID_AFTER_RELOAD" ] && [ "$(cat "$PID_FILE")" = "$PID_AFTER_RELOAD" ]; then exit 112; fi
     exit 0
     ;;
@@ -186,11 +197,13 @@ import { PATHS } from ${MODULES.paths};
 import { captureStopEpochBaseline, bumpStopEpoch } from ${MODULES.stopEpoch};
 import { launchOrRestart } from ${MODULES.runtime};
 
+let reloads = 0;
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/version') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end('{"version":"stub-kernel"}');
   } else if (req.method === 'PUT' && req.url !== undefined && req.url.startsWith('/configs')) {
+    reloads += 1;
     if (process.env.BUMP === '1') bumpStopEpoch();
     if (process.env.PID_AFTER_RELOAD) fs.writeFileSync(process.env.PID_FILE as string, process.env.PID_AFTER_RELOAD);
     res.writeHead(Number(process.env.PUT_STATUS ?? '204'));
@@ -226,6 +239,7 @@ captureStopEpochBaseline();
 try {
   const pid = await launchOrRestart('mixed');
   console.log('RESULT:pid=' + pid);
+  console.log('RESULT:reloads=' + reloads);
 } catch (e) {
   console.log('RESULT:error=' + (e instanceof Error ? e.message : String(e)));
   process.exitCode = 1;
@@ -259,7 +273,14 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
   /** 跑一次热重载场景。返回子进程退出码、完整 stdout、spawn 拿到的 pid 与桩 launchctl 收到的动词序列 */
   async function runHotReloadScenario(
     bump: boolean,
-    options: { putStatus?: number; reportedPid?: number; pidAfterReload?: number; startPending?: boolean } = {},
+    options: {
+      putStatus?: number;
+      reportedPid?: number;
+      pidAfterReload?: number;
+      startPending?: boolean;
+      pendingAfterHealth?: boolean;
+      failDisabledAfterHealth?: boolean;
+    } = {},
   ): Promise<{ status: number | null; stdout: string; stderr: string; pid: number | null; calls: string[] }> {
     const fixture = makeFixture('mihomo-hotreload');
     const script = writeScript(fixture.fakeBin, 'hot-reload.mts', hotReloadScript());
@@ -271,6 +292,10 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
       PUT_STATUS: String(options.putStatus ?? 204),
       PID_AFTER_RELOAD: options.pidAfterReload?.toString() ?? '',
       START_PENDING: options.startPending ? '1' : '0',
+      PENDING_AFTER_HEALTH: options.pendingAfterHealth ? '1' : '0',
+      FAIL_DISABLED_AFTER_HEALTH: options.failDisabledAfterHealth ? '1' : '0',
+      RUNNING_SEEN_FILE: path.join(fixture.fakeBin, 'running-seen'),
+      DISABLED_FAILED_FILE: path.join(fixture.fakeBin, 'disabled-failed'),
       MODE_FILE: path.join(fixture.fakeBin, 'launchd.mode'),
       START_AFTER_MS: '3500',
       ...(options.reportedPid !== undefined ? { REPORTED_PID: String(options.reportedPid) } : {}),
@@ -312,9 +337,28 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
 
     assert.equal(result.status, 0, `超过旧健康窗口后仍应成功，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
     assert.match(result.stdout, new RegExp(`RESULT:pid=${result.pid}\\b`), `等待后应完成热重载，stdout: ${result.stdout}`);
+    assert.match(result.stdout, /RESULT:reloads=1\b/, '附着等待后必须真正提交热重载，不能只返回 PID');
     assert.ok(!result.calls.includes('bootout'), `启动中的实例不得被卸载: ${result.calls.join(' → ')}`);
     assert.ok(!result.calls.includes('bootstrap'), `已装载任务不得重复装载: ${result.calls.join(' → ')}`);
     assert.ok(!result.calls.includes('kickstart'), `热重载成功不应再重启内核: ${result.calls.join(' → ')}`);
+  });
+
+  it('健康后 launchctl 又呈中间态：仍用热重载应用配置，不提前返回', async () => {
+    const result = await runHotReloadScenario(false, { startPending: true, pendingAfterHealth: true });
+
+    assert.equal(result.status, 0, `健康结果应足以完成热重载，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.match(result.stdout, /RESULT:reloads=1\b/, 'launchctl 中间态不得让本次配置未经重载就报成功');
+    assert.ok(!result.calls.includes('bootout'), `不得把已健康的实例交还给卸载重启: ${result.calls.join(' → ')}`);
+    assert.ok(!result.calls.includes('kickstart'), `身份可确认时应直接热重载: ${result.calls.join(' → ')}`);
+  });
+
+  it('健康后状态刷新瞬时失败：沿用健康 PID 完成热重载', async () => {
+    const result = await runHotReloadScenario(false, { startPending: true, failDisabledAfterHealth: true });
+
+    assert.equal(result.status, 0, `附加状态查询失败不该推翻已确认的健康，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.match(result.stdout, /RESULT:reloads=1\b/, '状态刷新失败后仍应走热重载探测');
+    assert.ok(!result.calls.includes('bootout'), `瞬时查询失败不得触发卸载: ${result.calls.join(' → ')}`);
+    assert.ok(!result.calls.includes('kickstart'), `身份可确认时应直接热重载: ${result.calls.join(' → ')}`);
   });
 
   it('热重载后自启状态不可查，仍返回服务的新 PID', async () => {
@@ -335,6 +379,74 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
     const result = await runHotReloadScenario(false, { reportedPid: 1 });
     assert.equal(result.status, 0, result.stderr);
     assert.ok(result.calls.includes('kickstart'), `身份不匹配应回退 kickstart: ${result.calls}`);
+  });
+});
+
+describe('install 恢复慢启动中的原有服务', () => {
+  it('已装载且未禁用但尚未 running：重装后仍恢复运行，不误关自启', async () => {
+    const fixture = makeFixture('mihomo-install-pending');
+    const loadedFile = path.join(fixture.fakeBin, 'install-loaded');
+    const runningFile = path.join(fixture.fakeBin, 'install-running');
+    const disabledFile = path.join(fixture.fakeBin, 'install-disabled');
+    fs.writeFileSync(loadedFile, '');
+    writeFakeLaunchctl(
+      fixture.fakeBin,
+      `
+case "$1" in
+  print)
+    if [ -f "${runningFile}" ]; then
+      printf '\\tstate = running\\n\\tpid = 4242\\n'
+      exit 0
+    fi
+    if [ -f "${loadedFile}" ]; then
+      printf '\\tstate = xpcproxy\\n'
+      exit 0
+    fi
+    exit 113
+    ;;
+  print-disabled)
+    if [ -f "${disabledFile}" ]; then printf '\\t\\t"%s" => disabled\\n' "$MIHOMO_CLI_DAEMON_LABEL"; fi
+    exit 0
+    ;;
+  bootout) rm -f "${loadedFile}" "${runningFile}"; exit 0 ;;
+  bootstrap) : > "${runningFile}"; exit 0 ;;
+  enable) exit 0 ;;
+  disable) : > "${disabledFile}"; exit 0 ;;
+esac
+exit 0
+`,
+    );
+    const script = writeScript(
+      fixture.fakeBin,
+      'install-pending.mts',
+      `import fs from 'node:fs';
+import path from 'node:path';
+import { PATHS } from ${MODULES.paths};
+import { cmdInstall } from ${JSON.stringify(path.resolve('src/commands/service.ts'))};
+
+fs.mkdirSync(path.dirname(PATHS.mihomoBinary), { recursive: true });
+fs.writeFileSync(PATHS.mihomoBinary, 'stub-kernel');
+fs.mkdirSync(path.dirname(PATHS.userAgentPlist), { recursive: true });
+fs.writeFileSync(PATHS.userAgentPlist, 'stub');
+try {
+  await cmdInstall(['install']);
+  console.log('RESULT:ok');
+} catch (e) {
+  console.log('RESULT:error=' + (e instanceof Error ? e.message : String(e)));
+  process.exitCode = 1;
+}
+`,
+    );
+    try {
+      const result = await spawnScript(script, scenarioEnv(fixture)).done;
+      assert.equal(result.status, 0, `重装本身应成功，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      assert.match(result.stdout, /已按原状态重新启动/, `待启动也属于重装前应恢复的状态: ${result.stdout}`);
+      const calls = readLaunchctlCalls(fixture.fakeBin);
+      assert.ok(calls.includes('enable') && calls.includes('bootstrap'), `恢复分支必须重新装载: ${calls.join(' → ')}`);
+      assert.ok(!calls.includes('disable'), `不得把慢启动误判为未运行而关闭自启: ${calls.join(' → ')}`);
+    } finally {
+      cleanupFixture(fixture);
+    }
   });
 });
 

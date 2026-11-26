@@ -144,10 +144,16 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
   // 确认 running 后仍走热重载，保证本命令刚提交的配置确实生效。
   if (isServiceLaunchPending(status)) {
     const pendingPid = await confirmServiceHealth();
-    status = getServiceStatus();
-    // 健康判定可能由进程探测兜底；launchctl 仍只给启动中间态时沿用该结果，
-    // 不再把同一次启动交还给 startService 重启
-    if (isServiceLaunchPending(status)) return pendingPid;
+    try {
+      status = getServiceStatus();
+    } catch {
+      // 健康已确认，这次刷新只负责选择后续路径；瞬时失败不能把启动翻成失败。
+      // 沿用健康结果的 PID，restartService 会复核身份并在需要时走 kickstart 自愈。
+      status = { ...status, running: true, pid: pendingPid };
+    }
+    // 健康判定可能由进程探测兜底，launchctl 仍只给启动中间态。把已确认的运行事实与
+    // PID 交给 restartService：仍需完成本次配置的热重载，但不得交还给 startService bootout。
+    if (isServiceLaunchPending(status)) status = { ...status, running: true, pid: pendingPid };
   }
 
   // running && !disabled 才走热重载：`stop` 后被手动 bootstrap 的服务处于「在跑但 disabled」，
