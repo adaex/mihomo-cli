@@ -560,7 +560,13 @@ describe('waitServiceHealthy：轮询期间 launchctl 查询失败的容错', ()
    * 「隔离与反向验证」：进程匹配类测试必须断言隔离前提）。真实用到的系统工具只有 pgrep
    * （pattern 锚定隔离目录，匹配不到任何真实进程）。
    */
-  function runHealthScenario(scenario: { initialMode: 'fail' | 'notrunning' | 'ok'; switchTo?: { mode: string; afterMs: number }; fakeKernel?: boolean }): {
+  function runHealthScenario(scenario: {
+    initialMode: 'fail' | 'notrunning' | 'ok' | 'crashed';
+    switchTo?: { mode: string; afterMs: number };
+    fakeKernel?: boolean;
+    startupTimeoutMs?: number;
+    assertStartup?: boolean;
+  }): {
     stdout: string;
   } {
     // 桩按 $MODE_FILE 读当前档位：mode 路径随数据目录生成，经 env 传给桩与子脚本
@@ -568,6 +574,13 @@ describe('waitServiceHealthy：轮询期间 launchctl 查询失败的容错', ()
   mode="$(cat "$MODE_FILE" 2>/dev/null)"
   if [ "$mode" = "fail" ]; then
     exit 112
+  fi
+  if [ "$mode" = "crashed" ]; then
+    cat <<'FIXTURE'
+	state = not running
+	last exit code = 1
+FIXTURE
+    exit 0
   fi
   if [ "$mode" = "notrunning" ]; then
     cat <<'FIXTURE'
@@ -596,6 +609,7 @@ FIXTURE
       "import fs from 'node:fs';",
       `const { PATHS } = await import(${JSON.stringify(moduleUrl('src/paths.ts'))});`,
       `const { waitServiceHealthy } = await import(${JSON.stringify(moduleUrl('src/service.ts'))});`,
+      scenario.assertStartup ? `const { assertServiceHealthy } = await import(${JSON.stringify(moduleUrl('src/runtime.ts'))});` : '',
       "console.log('ISOLATION:' + (PATHS.mihomoBinary.startsWith(process.env.MIHOMO_CLI_DIR) ? 'ok' : PATHS.mihomoBinary));",
       'let kernelPid = null;',
       'try {',
@@ -603,8 +617,15 @@ FIXTURE
       scenario.switchTo
         ? `setTimeout(() => fs.writeFileSync(process.env.MODE_FILE, ${JSON.stringify(scenario.switchTo.mode)}), ${scenario.switchTo.afterMs});`
         : '',
-      '  const health = await waitServiceHealthy();',
-      "  console.log('HEALTH:' + JSON.stringify({ healthy: health.healthy, crashed: health.crashed, pid: health.pid, kernelPid }));",
+      scenario.assertStartup
+        ? [
+            `try { await assertServiceHealthy('启动失败', ${JSON.stringify({ startupTimeoutMs: scenario.startupTimeoutMs })}); console.log('ASSERT:OK'); }`,
+            "catch (e) { console.log('ASSERT:ERROR:' + e.label + ':' + e.message); console.log('ASSERT:HINT:' + e.hint.join('|')); }",
+          ].join('\n')
+        : [
+            `const health = await waitServiceHealthy(${JSON.stringify({ startupTimeoutMs: scenario.startupTimeoutMs })});`,
+            "console.log('HEALTH:' + JSON.stringify({ healthy: health.healthy, crashed: health.crashed, pending: health.pending, pid: health.pid, kernelPid }));",
+          ].join('\n'),
       '} catch (e) {',
       "  console.log('HEALTH:THREW:' + e.message);",
       '} finally {',
@@ -627,7 +648,7 @@ FIXTURE
   const isolationOk = (stdout: string) => {
     assert.match(stdout.split('\n').find(l => l.startsWith('ISOLATION:')) ?? '', /ISOLATION:ok/, '隔离前提：pgrep pattern 必须锚定临时数据目录');
   };
-  const healthOf = (stdout: string): { healthy: boolean; crashed: boolean; pid: number | null; kernelPid: number | null } => {
+  const healthOf = (stdout: string): { healthy: boolean; crashed: boolean; pending: boolean; pid: number | null; kernelPid: number | null } => {
     const line = stdout.split('\n').find(l => l.startsWith('HEALTH:'));
     assert.ok(line && !line.startsWith('HEALTH:THREW'), `应正常返回: ${line}`);
     return JSON.parse(line.slice('HEALTH:'.length));
@@ -663,6 +684,33 @@ FIXTURE
     const health = healthOf(stdout);
     assert.equal(health.healthy, true, '进程活着是强证据，不得报成启动失败');
     assert.equal(health.pid, health.kernelPid);
+  });
+
+  it('已装载超过旧 3 秒窗口后才 running：持续等待并判健康', () => {
+    const { stdout } = runHealthScenario({ initialMode: 'notrunning', switchTo: { mode: 'ok', afterMs: 3500 } });
+    isolationOk(stdout);
+    const health = healthOf(stdout);
+    assert.equal(health.healthy, true, `冷启动超过 3 秒不得报失败: ${stdout}`);
+    assert.equal(health.crashed, false);
+    assert.equal(health.pid, 5474);
+  });
+
+  it('启动窗口内出现真实异常退出：立即报崩溃，不等待启动预算耗尽', () => {
+    const { stdout } = runHealthScenario({ initialMode: 'crashed' });
+    isolationOk(stdout);
+    const health = healthOf(stdout);
+    assert.equal(health.healthy, false);
+    assert.equal(health.crashed, true);
+    assert.equal(health.pending, false);
+  });
+
+  it('等待耗尽但任务仍在启动：报「启动待确认」，不引导重复 start', () => {
+    const { stdout } = runHealthScenario({ initialMode: 'notrunning', startupTimeoutMs: 1400, assertStartup: true });
+    isolationOk(stdout);
+    assert.match(stdout, /ASSERT:ERROR:启动待确认:服务仍在启动，暂未确认可用/, stdout);
+    assert.match(stdout, /服务未被停止或重启/, stdout);
+    assert.match(stdout, /无需重复执行 mihomo-cli start，稍后确认: mihomo-cli status/, stdout);
+    assert.ok(!stdout.includes('日志尾部'), `启动中不得附旧实例日志充当失败证据: ${stdout}`);
   });
 });
 

@@ -50,13 +50,23 @@ const SERVICE_HEALTH_INTERVAL_MS = 100;
 
 const SERVICE_OBSERVE_MS = 1200;
 
-/** 观察窗结束后仍处于 spawn 中间态时的额外宽限（慢机器上内核起得慢） */
-const SERVICE_HEALTH_GRACE_MS = 1800;
+/** 已装载但未 running 的总等待上限；开机时 launchd 的首次启动可能远超普通热启动 */
+const SERVICE_STARTUP_TIMEOUT_MS = 90_000;
+
+/** 启动等待期间查询持续失败多久后改用进程探测，避免拿陈旧快照盲等整个启动窗口 */
+const SERVICE_QUERY_STALE_MS = 3_000;
+
+export interface ServiceHealthWaitOptions {
+  /** 测试用有限预算覆盖超时分支；正常启动始终使用 SERVICE_STARTUP_TIMEOUT_MS */
+  startupTimeoutMs?: number;
+}
 
 /** 服务启动后的健康判定结果。`crashed` 为真时内核已被 launchd 反复拉起，不是可用状态。 */
 export interface ServiceHealth {
   healthy: boolean;
   crashed: boolean;
+  /** 等待耗尽但任务仍装载、无异常死因：启动尚未完成，不能当作内核崩溃 */
+  pending: boolean;
   pid: number | null;
   exitCode: number | null;
   /** 信号死亡时的信号描述（如 `Killed: 9`）；退出码死亡为 null。与 exitCode 互斥 */
@@ -72,9 +82,11 @@ export interface ServiceHealth {
  * 起来的服务该字段仍非 0，故「当前在跑」优先于历史退出码——只在观察窗内始终未能
  * 进入 running 时才判定崩溃。
  */
-export async function waitServiceHealthy(): Promise<ServiceHealth> {
-  const deadline = Date.now() + SERVICE_OBSERVE_MS;
-  const graceDeadline = deadline + SERVICE_HEALTH_GRACE_MS;
+export async function waitServiceHealthy(options: ServiceHealthWaitOptions = {}): Promise<ServiceHealth> {
+  const startedAt = Date.now();
+  const deadline = startedAt + SERVICE_OBSERVE_MS;
+  const startupDeadline = startedAt + (options.startupTimeoutMs ?? SERVICE_STARTUP_TIMEOUT_MS);
+  let lastSuccessfulQueryAt = startedAt;
   // 健康判定只消费 state/pid/死因，不读 disabled——轮询里关掉 print-disabled，
   // 每轮少一个阻塞事件循环的 spawnSync（见 getServiceStatus 的 withDisabled）。
   // do/while 先 sleep 再查：循环外不取首次快照——它在第一轮 sleep 后必被覆盖，
@@ -84,18 +96,21 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
   // 瞬时失败（超时/112/125）按「本轮未知」跳过，不升级为「启动失败」的假结论。
   // last 可空：整个观察窗查询全部失败时为 null，由 healthViaProcessProbe 兜底
   let last: ServiceStatus | null = null;
-  // 四个不健康返回点的字段集合同一份（死因取观察窗最后一次快照），新增死因字段只改这里
+  // 不健康返回点的字段集合同一份（死因取最后一次快照），新增死因字段只改这里
   const unhealthy = (state: ServiceStatus, crashed: boolean, pid: number | null = null): ServiceHealth => ({
     healthy: false,
     crashed,
+    pending: !crashed && state.loaded,
     pid,
     exitCode: state.lastExitCode,
     terminatingSignal: state.lastTerminatingSignal,
   });
+  const healthy = (pid: number | null): ServiceHealth => ({ healthy: true, crashed: false, pending: false, pid, exitCode: null, terminatingSignal: null });
   do {
     await sleep(SERVICE_HEALTH_INTERVAL_MS);
     try {
       last = getServiceStatus({ withDisabled: false });
+      lastSuccessfulQueryAt = Date.now();
     } catch {
       continue;
     }
@@ -113,29 +128,26 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
   // 的假阴性；连进程也探测不到才落回诚实的「未能确认」结论
   if (last === null) return healthViaProcessProbe();
 
-  if (last.running) return { healthy: true, crashed: false, pid: last.pid, exitCode: null, terminatingSignal: null };
+  if (last.running) return healthy(last.pid);
 
-  // 第二阶段：窗口结束仍未 running（慢机器上内核起得慢，或正在 spawn 重试），再宽限一会儿
-  let graceQueried = false;
-  while (Date.now() < graceDeadline) {
+  // 第二阶段：已装载但尚未 running 不是失败证据。冷启动可耗时数十秒，持续等待；
+  // 崩溃仍立即返回，查询持续失败则在快照陈旧后走进程探测，不盲等整个启动窗口
+  while (Date.now() < startupDeadline) {
     await sleep(SERVICE_HEALTH_INTERVAL_MS);
     try {
       last = getServiceStatus({ withDisabled: false });
+      lastSuccessfulQueryAt = Date.now();
     } catch {
+      if (Date.now() - lastSuccessfulQueryAt >= SERVICE_QUERY_STALE_MS) return healthViaProcessProbe();
       continue;
     }
-    graceQueried = true;
 
     if (isCrashed(last)) {
       return unhealthy(last, true);
     }
-    if (!last.loaded) break;
-    if (last.running) return { healthy: true, crashed: false, pid: last.pid, exitCode: null, terminatingSignal: null };
+    if (!last.loaded) return unhealthy(last, false);
+    if (last.running) return healthy(last.pid);
   }
-
-  // 宽限期查询也无一成功：last 是第一阶段末尾的陈旧快照（not running），此刻服务
-  // 可能已 running 而观察不到——与第一阶段全失败同族，同一兜底判据
-  if (!graceQueried) return healthViaProcessProbe();
 
   return unhealthy(last, false, last.pid);
 }
@@ -151,11 +163,11 @@ export async function waitServiceHealthy(): Promise<ServiceHealth> {
 function healthViaProcessProbe(): ServiceHealth {
   try {
     const pids = getMihomoPids();
-    if (pids.length > 0) return { healthy: true, crashed: false, pid: pids[0], exitCode: null, terminatingSignal: null };
+    if (pids.length > 0) return { healthy: true, crashed: false, pending: false, pid: pids[0], exitCode: null, terminatingSignal: null };
   } catch {
     /* pgrep 探测失败：无独立依据，落回未能确认的诚实结论 */
   }
-  return { healthy: false, crashed: false, pid: null, exitCode: null, terminatingSignal: null };
+  return { healthy: false, crashed: false, pending: false, pid: null, exitCode: null, terminatingSignal: null };
 }
 
 /**
@@ -177,6 +189,14 @@ export function describeExitCause(exitCode: number | null, terminatingSignal: st
 function isCrashed(status: ServiceStatus): boolean {
   if (status.running) return false;
   return describeExitCause(status.lastExitCode, status.lastTerminatingSignal) !== null;
+}
+
+/**
+ * launchd 已接受任务但尚未进入 running，且没有异常死因。start 遇到这一态只能附着等待：
+ * bootout 会杀掉仍在启动的实例，让下次执行重新排队，正是开机反复启动失败的放大器。
+ */
+export function isServiceLaunchPending(status: ServiceStatus): boolean {
+  return status.loaded && !status.running && !status.disabled && !isCrashed(status);
 }
 
 /** 「上次异常退出」的人类可读描述，无异常时返回 null。供 status / doctor 共用。 */

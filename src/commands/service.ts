@@ -66,7 +66,7 @@ export async function cmdInstall(args: string[]): Promise<void> {
       await runtime.assertServiceHealthy('恢复运行失败');
     } catch (e) {
       if (!(e instanceof CliError)) throw e;
-      // 与 launchOrRestart 同族：bootstrap 之后的健康观察窗（1.2–3s）完全在锁外，
+      // 与 launchOrRestart 同族：bootstrap 之后的健康确认完全在锁外，冷启动可等待 90s，
       // 期间的并发 stop 会把任务 bootout，健康确认于是失败。此时报「恢复运行失败」
       // 是把用户自己的 stop 说成故障，必须复读计数区分——判据仍是那唯一一份
       if (startAbortedByConcurrentStop()) {
@@ -74,7 +74,10 @@ export async function cmdInstall(args: string[]): Promise<void> {
         return;
       }
       throw relabelCliError(e, {
-        hint: [...e.hint, '', '服务已安装成功，仅恢复运行失败；修正配置后可执行 mihomo-cli start 重试。'],
+        hint:
+          e.label === '启动待确认'
+            ? [...e.hint, '', '服务已安装成功；恢复运行尚未确认，不影响 launchd 继续启动。']
+            : [...e.hint, '', '服务已安装成功，仅恢复运行失败；修正配置后可执行 mihomo-cli start 重试。'],
       });
     }
     console.log(colors.green('已按原状态重新启动'));

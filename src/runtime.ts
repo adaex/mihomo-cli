@@ -8,7 +8,8 @@ import { readLogTail, rotateAndCleanupLogs } from './log-files.js';
 import { DIRS, ensureDirs, PATHS } from './paths.js';
 import { getMihomoPids, getPid, getStatus, isPidFileOwnedByRoot, isRunning, MAIN_INSTANCE_PATTERN } from './process-probe.js';
 import { MANUAL_PKILL_HINT, stop as stopProcesses } from './process-stop.js';
-import { describeExitCause, restartService, startService, tunBlockedByConcurrentStart, waitServiceHealthy } from './service.js';
+import type { ServiceHealthWaitOptions } from './service.js';
+import { describeExitCause, isServiceLaunchPending, restartService, startService, tunBlockedByConcurrentStart, waitServiceHealthy } from './service.js';
 import { startAbortedByConcurrentStop } from './stop-epoch.js';
 import { runSudoScript } from './sudo.js';
 import { shellQuote } from './text.js';
@@ -136,7 +137,18 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
     return pid;
   }
 
-  const status = getServiceStatus();
+  let status = getServiceStatus();
+
+  // 开机自启或另一终端已经 bootstrap、但 launchd 尚未跑到 running 时，重复 start
+  // 不得进入 startService 的 bootout：那会杀掉正在启动的实例并重新排队。先附着等待，
+  // 确认 running 后仍走热重载，保证本命令刚提交的配置确实生效。
+  if (isServiceLaunchPending(status)) {
+    const pendingPid = await confirmServiceHealth();
+    status = getServiceStatus();
+    // 健康判定可能由进程探测兜底；launchctl 仍只给启动中间态时沿用该结果，
+    // 不再把同一次启动交还给 startService 重启
+    if (isServiceLaunchPending(status)) return pendingPid;
+  }
 
   // running && !disabled 才走热重载：`stop` 后被手动 bootstrap 的服务处于「在跑但 disabled」，
   // 只看 running 会走热重载、不清 disable 位，用户以为开了自启其实没有
@@ -163,15 +175,17 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
     }
   }
 
+  return await confirmServiceHealth();
+}
+
+/** 健康确认失败仍要区分内核故障与并发停止；附着等待和本次 bootstrap 共用同一判据。 */
+async function confirmServiceHealth(): Promise<number | null> {
   try {
     return await assertServiceHealthy();
   } catch (e) {
-    // 健康确认失败有两种成因，报错必须区分：内核真崩了，还是「期间有人 stop 把它 bootout 了」。
-    // 后者报「内核未能进入运行状态」+ 日志尾部会把用户指向完全错误的方向——而 bootstrap
-    // 之后到健康确认结束有 1.2–3s（SERVICE_OBSERVE_MS + GRACE）**完全在锁外**，锁内判据
-    // 覆盖不到这段。
-    // 判据仍是唯一那份 startAbortedByConcurrentStop，只是多一个消费点：只在**失败之后**复读，
-    // 绝不改写健康的结果，也绝不在计数未变时吞掉真实死因
+    // 健康确认在锁外，慢启动会把这个窗口拉长到数十秒。判据仍是唯一那份
+    // startAbortedByConcurrentStop，只在失败之后复读，绝不改写健康的结果，
+    // 也绝不在计数未变时吞掉真实死因
     if (startAbortedByConcurrentStop()) throw cancelledByConcurrentStop();
     throw e;
   }
@@ -254,19 +268,23 @@ export function startCommandForCurrentMode(state: RunningState): string {
  * `退出码 ${exitCode}`**：信号死亡时 launchd 不写 last exit code，exitCode 为 null，
  * 被 OOM killer / `kill -9` 杀掉的内核会显示成「退出码 null」。
  */
-export async function assertServiceHealthy(label = '启动失败'): Promise<number | null> {
-  const health = await waitServiceHealthy();
+export async function assertServiceHealthy(label = '启动失败', options: ServiceHealthWaitOptions = {}): Promise<number | null> {
+  const health = await waitServiceHealthy(options);
   if (health.healthy) return health.pid;
 
-  const tail = readLogTail();
+  // 启动待确认时旧日志可能是上一次实例留下的，不作为本次失败证据附出
+  const tail = health.pending ? [] : readLogTail();
   const cause = describeExitCause(health.exitCode, health.terminatingSignal);
-  const reason = health.crashed ? `内核启动后立即退出（${cause ?? '死因未记录'}）` : '内核未能进入运行状态';
+  const reason = health.crashed ? `内核启动后立即退出（${cause ?? '死因未记录'}）` : health.pending ? '服务仍在启动，暂未确认可用' : '内核未能进入运行状态';
 
   throw new CliError(reason, {
-    label,
+    label: health.pending ? '启动待确认' : label,
     hint: [
       ...(health.crashed ? ['launchd 会每隔约 10 秒反复拉起它，请先修正配置或执行 mihomo-cli stop。'] : []),
-      ...(tail.length > 0 ? ['', '--- 日志尾部 ---', ...tail] : ['', `日志: ${PATHS.logFile}`]),
+      ...(health.pending
+        ? ['launchd 仍在启动该服务；本次等待已结束，但服务未被停止或重启。', '无需重复执行 mihomo-cli start，稍后确认: mihomo-cli status']
+        : []),
+      ...(tail.length > 0 ? ['', '--- 日志尾部 ---', ...tail] : health.pending ? [] : ['', `日志: ${PATHS.logFile}`]),
       '',
       '完整日志: mihomo-cli logs 0',
     ],

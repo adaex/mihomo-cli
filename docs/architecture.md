@@ -73,6 +73,7 @@
 ### launchd 与进程
 
 - 改服务代码前读对应函数注释；锁内 launchctl 预算关系由 service-concurrency.spec 断言，新增锁内调用前先改测试（D3）
+- `start` 遇到已装载、未 running、未 disabled 且无异常死因的任务时附着等待，最长 90 秒，不得 bootout 重排；进入 running 后仍热重载本次配置。等待耗尽报「启动待确认」，真实异常退出立即失败
 - 热重载成功不验、kickstart 回退必须健康确认（restartService 返回值语义）
 - kill 前逐 pid 复核命令行，复核不匹配按「无事可做」计成功
 - TUN 与服务共享 config.yaml，起 TUN 前必须关服务自启，两条方向都有并发防线

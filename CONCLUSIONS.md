@@ -16,7 +16,8 @@
 - `launchctl print` 退出码：113 = 未装载，112/125 = 查询失败；`bootout` 对未装载目标返回 3（service-exitcode.spec 只读调用真实 launchctl 复验）
 - `pgrep`/`pkill` 退出码：0 命中、1 无匹配；2 正则编译失败、3 fatal error 是探测自身失败，不是「没有进程」——两者都只收 0/1，其余抛错（pgrep 见 process-probe.ts，pkill 见 process-stop.ts）
 - launchd 任务的 terminating signal 与 last exit code 两字段互斥，`describeExitCause` 需同时覆盖
-- disabled label 的 `bootstrap` 硬失败，`enable` 必须在前；`bootstrap` 返回 0 不表示内核已健康，TUN 的 `kill -0` 也排除不了僵尸进程
+- `bootstrap` 返回 0 不表示内核已健康；MB1（macOS 27.2.1）两次冷启动从 `WILL_SPAWN` 到 running 实测约 49 秒与 40 秒。同期虽有 first run LWCR update、AMFI ad-hoc 与 syspolicyd/TCC 日志，但未做因果归因，不能据此认定签名或 `ProcessType=Background` 是根因
+- disabled label 的 `bootstrap` 硬失败，`enable` 必须在前；TUN 的 `kill -0` 也排除不了僵尸进程
 - `kickstart -k` 可能阻塞超过 5s，使用独立的 60s 超时，远超锁的 10s 强夺阈值，因此必须留在锁外（交错残余见「服务、锁与并发」）
 - `KeepAlive.PathState` 只决定退出后是否重启，删标志文件不会停进程，不能替代 stop
 - disabled 位独立于 plist 持久化（磁盘表 `/var/db/com.apple.xpc.launchd/disabled.<uid>.plist`），`enable` 也留记录；手工移除需 sudo plutil（keypath 的点须转义），磁盘修改要重启后才与 launchd 内存一致，不能做进 CLI 自动清理
@@ -54,13 +55,12 @@
 - `kickstart` 失败后的回退只在本次 `bootstrap` 确实成功时进入健康确认；`bootstrap` 的「已装载」幂等吸收只属于启动与安装恢复路径，不能充当本次重启证据（service-restart-fallback.spec 桩 launchctl 正反两路）
 - `kickstart -k` 留锁外，故它与并发 bootout 的交错无法用锁串行化；现在只保证「不再 re-enable / re-bootstrap」与「不再把用户的 stop 报成内核故障」，不是把这个交错消掉了
 - `uninstallService` 只在锁内 disable 一次，不做锁外重复 disable（冗余且会多 bump epoch）
-- **start‖start 互替的观察窗误报**：A 已通过锁内 bootstrap、处于健康观察窗（1.2–3s、锁外）时，B（连敲的第二次 start / sub use / ow 重启）完成 bootout + bootstrap 把 A 的任务换成自己的——A 的轮询读到 unloaded，报「内核未能进入运行状态」附日志尾部，而终态正确。触发要求 B 的全程落进 A 的观察窗；B 是 start 不 bump epoch，失败复读判据抓不到它。修复方向（备查）：健康轮询最终 `healthy:false` 分支复用 `healthViaProcessProbe` 兜底；代价是健康判据再增一个消费语义，损害仅错误文案的排查方向
 - **stop 游离路径批量 pkill 与并发 start 的交错**：B 读 status（未装载）→ 并发 A bootstrap 并拉起服务内核 → B 读 pids 命中 A 的内核 → `stop()` 的 `cleanupAll` pkill 杀掉它，KeepAlive 约 10s 拉回（游离路径不 bootout）。B 报「已停止」与终态相反。与已接受的「探测与动作之间隔一次查询」同族，方向相反（stop 伤 start）
 - **reset 确认后重读仍有残余窗口**：危险分支（重读时 serviceActive=false）里，重读之后到删除 kernel/config 之间还隔着 `cleanupAll` 的 root 残留提权（sudo 密码窗最长 60s）；serviceActive=true 分支还隔 stop/uninstall 自身的锁等待（≤10s）与 bootout + waitUntilUnloaded（≤5s）。并发 install+start 整体落进这些窗口时其锁内判定放行（epoch 基线取自最近 bump 之后），删除后 KeepAlive 崩溃循环。不修：删除前再读再 stop 会引入第二层窗口（无穷回归），且触发需「root 残留内核存在 + 并发 install+start 恰在窗口完成 bootstrap」双重前置；若将来 reset 支持并发场景，优先把删除段并入 serviceLock 临界区
 - **文件锁 stat→unlink 两步、不复核 inode**：①等待者被冻结（合盖/换出）且系统时钟前跳，新鲜锁被当陈旧锁删；②持锁者已崩溃、锁确已陈旧时有两个等待者同走强夺，C 在自己的 stat 与 rm 之间被挂起，恢复后 `rmSync` 删掉 B 刚夺到的新鲜锁并自己 wx 成功，B/C 同时进临界区。token 所有权校验只防 finally 误删，防不住这个。两者都要求相邻两个同步 syscall 之间被调度挂起，属微秒级窗口；macOS 无用户态原子比较-删除原语，读后复核只能缩小窗口并制造虚假安全感，彻底关闭需更换锁原语（架构级），与「陈旧锁退回无锁竞态」同级接受
 - **remove 并发在途 sub update/add 的孤儿 yaml 与 cache 条目**：下载刻意不持 settings 锁（60s 下载不能压进临界区），写盘只认命令开头快照的订阅名、不复核 settings。remove 走完全程后在途下载照写：add 路径 B 的 yaml 在 postCommit rm 之后才写出；update 路径把刚删的旧 yaml 原地复活，cache 条目同样被写回。add 路径另有文案失真：`setDefaultSubscription` 返回 false 被忽略，照打「已添加并切换」。无行为消费方——yaml 与 cache 都只按 settings 里的名字读，仅 `dir open subs` 与手翻 cache.json 可见；同名 `sub add` 覆盖自愈或 reset 清理。封死需下载完成后二次确认归属（写盘段进 settings 锁、锁内复核条目仍在），但会打破 `downloadSubscription`「与 settings 解耦的下载原语」契约（缓存写失败回滚与写盘闸门两套 spec 都拿未入库的 probe 名直接调它）
 - `ui` 的 `getRunningState` 查询无容错：launchctl 瞬时失败会把 `ui` 挡死报「无法查询服务状态」。ui 是纯打开操作，失败重跑成本低且打开后不再依赖该查询；若将来 ui 增加依赖运行态的分支，先补容错
-- 健康观察窗只覆盖启动初期，之后的 OOM/panic 由 status/doctor 展示异常退出；延长 start 到无限观察不在目标内
+- 健康确认对已装载、未 running 且无异常死因的任务最长等待 90 秒，耗尽后报「启动待确认」而非内核崩溃，不做无限观察；running 之后的 OOM/panic 由 status/doctor 展示异常退出
 - settings/cache 写入有锁，但 reset 的跨文件删除不是事务；未承诺与下载、另一次 reset 并行时整个目录原子切换
 
 ## TUN 与 sudo

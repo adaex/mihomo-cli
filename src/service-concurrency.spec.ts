@@ -159,7 +159,9 @@ const FAKE_LAUNCHCTL_HOT_RELOAD = `
 # 只会被查到状态查询：热重载不碰 launchctl 写动词
 case "$1" in
   print)
-    printf '\\tstate = running\\n\\tpid = %s\\n' "$(cat "$PID_FILE")"
+    state=running
+    if [ -n "$MODE_FILE" ] && [ -f "$MODE_FILE" ] && [ "$(cat "$MODE_FILE")" = 'pending' ]; then state=xpcproxy; fi
+    printf '\\tstate = %s\\n\\tpid = %s\\n' "$state" "$(cat "$PID_FILE")"
     exit 0
     ;;
   print-disabled)
@@ -207,6 +209,17 @@ fs.mkdirSync(path.dirname(PATHS.userAgentPlist), { recursive: true });
 fs.writeFileSync(PATHS.userAgentPlist, 'stub');
 fs.writeFileSync(PATHS.settingsFile, JSON.stringify({ ports: { mixed: 17890, controller: port } }));
 fs.writeFileSync(PATHS.serviceStopEpoch, '5');
+
+// 模拟开机时 launchd 已装载任务、内核尚未 running；越过旧 3 秒健康窗口后才就绪。
+// 旧路径会进入 startService 并 bootout，这个实例最终因「旧 PID 未卸载」超时而失败。
+if (process.env.START_PENDING === '1') {
+  fs.mkdirSync(path.dirname(PATHS.mihomoBinary), { recursive: true });
+  fs.writeFileSync(PATHS.mihomoBinary, 'stub-kernel');
+  fs.mkdirSync(path.dirname(PATHS.configFile), { recursive: true });
+  fs.writeFileSync(PATHS.configFile, 'mixed-port: 17890\\n');
+  fs.writeFileSync(process.env.MODE_FILE as string, 'pending');
+  setTimeout(() => fs.writeFileSync(process.env.MODE_FILE as string, 'running'), Number(process.env.START_AFTER_MS));
+}
 // 基线在此捕获（命令入口的等价位置）：BUMP 发生在捕获之后，计数变化才会被判定为并发
 captureStopEpochBaseline();
 
@@ -246,7 +259,7 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
   /** 跑一次热重载场景。返回子进程退出码、完整 stdout、spawn 拿到的 pid 与桩 launchctl 收到的动词序列 */
   async function runHotReloadScenario(
     bump: boolean,
-    options: { putStatus?: number; reportedPid?: number; pidAfterReload?: number } = {},
+    options: { putStatus?: number; reportedPid?: number; pidAfterReload?: number; startPending?: boolean } = {},
   ): Promise<{ status: number | null; stdout: string; stderr: string; pid: number | null; calls: string[] }> {
     const fixture = makeFixture('mihomo-hotreload');
     const script = writeScript(fixture.fakeBin, 'hot-reload.mts', hotReloadScript());
@@ -257,6 +270,9 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
       BUMP: bump ? '1' : '0',
       PUT_STATUS: String(options.putStatus ?? 204),
       PID_AFTER_RELOAD: options.pidAfterReload?.toString() ?? '',
+      START_PENDING: options.startPending ? '1' : '0',
+      MODE_FILE: path.join(fixture.fakeBin, 'launchd.mode'),
+      START_AFTER_MS: '3500',
       ...(options.reportedPid !== undefined ? { REPORTED_PID: String(options.reportedPid) } : {}),
     });
     try {
@@ -289,6 +305,16 @@ describe('热重载成功路径的并发停止防线（launchOrRestart 消费点
     assert.equal(result.status, 0, `应正常退出，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
     assert.match(result.stdout, new RegExp(`RESULT:pid=${result.pid}\\b`), `应返回监听进程的 pid，stdout: ${result.stdout}`);
     assert.ok(!result.calls.includes('kickstart'), '热重载成功不重启内核');
+  });
+
+  it('launchd 已装载但 3.5 秒后才 running：附着等待并热重载，不 bootout 重排', async () => {
+    const result = await runHotReloadScenario(false, { startPending: true });
+
+    assert.equal(result.status, 0, `超过旧健康窗口后仍应成功，stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.match(result.stdout, new RegExp(`RESULT:pid=${result.pid}\\b`), `等待后应完成热重载，stdout: ${result.stdout}`);
+    assert.ok(!result.calls.includes('bootout'), `启动中的实例不得被卸载: ${result.calls.join(' → ')}`);
+    assert.ok(!result.calls.includes('bootstrap'), `已装载任务不得重复装载: ${result.calls.join(' → ')}`);
+    assert.ok(!result.calls.includes('kickstart'), `热重载成功不应再重启内核: ${result.calls.join(' → ')}`);
   });
 
   it('热重载后自启状态不可查，仍返回服务的新 PID', async () => {
