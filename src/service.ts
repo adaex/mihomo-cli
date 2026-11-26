@@ -53,6 +53,9 @@ const SERVICE_OBSERVE_MS = 1200;
 /** 已装载但未 running 的总等待上限；开机时 launchd 的首次启动可能远超普通热启动 */
 const SERVICE_STARTUP_TIMEOUT_MS = 90_000;
 
+/** 长启动等待的查询间隔指数退避上限 */
+const SERVICE_STARTUP_MAX_INTERVAL_MS = 1000;
+
 /** 启动等待期间查询持续失败多久后改用进程探测，避免拿陈旧快照盲等整个启动窗口 */
 const SERVICE_QUERY_STALE_MS = 3_000;
 
@@ -71,6 +74,10 @@ export interface ServiceHealth {
   exitCode: number | null;
   /** 信号死亡时的信号描述（如 `Killed: 9`）；退出码死亡为 null。与 exitCode 互斥 */
   terminatingSignal: string | null;
+}
+
+function healthyResult(pid: number | null): ServiceHealth {
+  return { healthy: true, crashed: false, pending: false, pid, exitCode: null, terminatingSignal: null };
 }
 
 /**
@@ -105,7 +112,6 @@ export async function waitServiceHealthy(options: ServiceHealthWaitOptions = {})
     exitCode: state.lastExitCode,
     terminatingSignal: state.lastTerminatingSignal,
   });
-  const healthy = (pid: number | null): ServiceHealth => ({ healthy: true, crashed: false, pending: false, pid, exitCode: null, terminatingSignal: null });
   do {
     await sleep(SERVICE_HEALTH_INTERVAL_MS);
     try {
@@ -128,12 +134,15 @@ export async function waitServiceHealthy(options: ServiceHealthWaitOptions = {})
   // 的假阴性；连进程也探测不到才落回诚实的「未能确认」结论
   if (last === null) return healthViaProcessProbe();
 
-  if (last.running) return healthy(last.pid);
+  if (last.running) return healthyResult(last.pid);
 
   // 第二阶段：已装载但尚未 running 不是失败证据。冷启动可耗时数十秒，持续等待；
-  // 崩溃仍立即返回，查询持续失败则在快照陈旧后走进程探测，不盲等整个启动窗口
+  // 崩溃仍立即返回，查询持续失败则在快照陈旧后走进程探测，不盲等整个启动窗口。
+  // 查询间隔指数退避到 1 秒，避免 90 秒等待放大成近 900 次同步 launchctl 调用
+  let startupIntervalMs = SERVICE_HEALTH_INTERVAL_MS;
   while (Date.now() < startupDeadline) {
-    await sleep(SERVICE_HEALTH_INTERVAL_MS);
+    await sleep(startupIntervalMs);
+    startupIntervalMs = Math.min(startupIntervalMs * 2, SERVICE_STARTUP_MAX_INTERVAL_MS);
     try {
       last = getServiceStatus({ withDisabled: false });
       lastSuccessfulQueryAt = Date.now();
@@ -146,7 +155,7 @@ export async function waitServiceHealthy(options: ServiceHealthWaitOptions = {})
       return unhealthy(last, true);
     }
     if (!last.loaded) return unhealthy(last, false);
-    if (last.running) return healthy(last.pid);
+    if (last.running) return healthyResult(last.pid);
   }
 
   return unhealthy(last, false, last.pid);
@@ -163,7 +172,7 @@ export async function waitServiceHealthy(options: ServiceHealthWaitOptions = {})
 function healthViaProcessProbe(): ServiceHealth {
   try {
     const pids = getMihomoPids();
-    if (pids.length > 0) return { healthy: true, crashed: false, pending: false, pid: pids[0], exitCode: null, terminatingSignal: null };
+    if (pids.length > 0) return healthyResult(pids[0]);
   } catch {
     /* pgrep 探测失败：无独立依据，落回未能确认的诚实结论 */
   }

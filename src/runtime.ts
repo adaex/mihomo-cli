@@ -148,8 +148,7 @@ export async function launchOrRestart(mode: RuntimeMode): Promise<number | null>
       status = getServiceStatus();
     } catch {
       // 健康已确认，这次刷新只负责选择后续路径；瞬时失败不能把启动翻成失败。
-      // 沿用健康结果的 PID，restartService 会复核身份并在需要时走 kickstart 自愈。
-      status = { ...status, running: true, pid: pendingPid };
+      // 保留原中间态快照，由下面统一合并健康结果。
     }
     // 健康判定可能由进程探测兜底，launchctl 仍只给启动中间态。把已确认的运行事实与
     // PID 交给 restartService：仍需完成本次配置的热重载，但不得交还给 startService bootout。
@@ -261,6 +260,9 @@ export function startCommandForCurrentMode(state: RunningState): string {
   return state.kind === 'tun' ? 'mihomo-cli start tun' : 'mihomo-cli start';
 }
 
+/** 等待耗尽但 launchd 仍在启动；命令层据此区分恢复提示，不依赖展示 label */
+export class ServiceLaunchPendingError extends CliError {}
+
 /**
  * 确认服务真正跑起来了，否则抛出带日志尾部的 CliError。
  *
@@ -278,19 +280,28 @@ export async function assertServiceHealthy(label = '启动失败', options: Serv
   const health = await waitServiceHealthy(options);
   if (health.healthy) return health.pid;
 
-  // 启动待确认时旧日志可能是上一次实例留下的，不作为本次失败证据附出
-  const tail = health.pending ? [] : readLogTail();
+  if (health.pending) {
+    // 启动待确认时旧日志可能是上一次实例留下的，不作为本次失败证据附出
+    throw new ServiceLaunchPendingError('服务仍在启动，暂未确认可用', {
+      label: '启动待确认',
+      hint: [
+        'launchd 仍在启动该服务；本次等待已结束，但服务未被停止或重启。',
+        '无需重复执行 mihomo-cli start，稍后确认: mihomo-cli status',
+        '',
+        '完整日志: mihomo-cli logs 0',
+      ],
+    });
+  }
+
+  const tail = readLogTail();
   const cause = describeExitCause(health.exitCode, health.terminatingSignal);
-  const reason = health.crashed ? `内核启动后立即退出（${cause ?? '死因未记录'}）` : health.pending ? '服务仍在启动，暂未确认可用' : '内核未能进入运行状态';
+  const reason = health.crashed ? `内核启动后立即退出（${cause ?? '死因未记录'}）` : '内核未能进入运行状态';
 
   throw new CliError(reason, {
-    label: health.pending ? '启动待确认' : label,
+    label,
     hint: [
       ...(health.crashed ? ['launchd 会每隔约 10 秒反复拉起它，请先修正配置或执行 mihomo-cli stop。'] : []),
-      ...(health.pending
-        ? ['launchd 仍在启动该服务；本次等待已结束，但服务未被停止或重启。', '无需重复执行 mihomo-cli start，稍后确认: mihomo-cli status']
-        : []),
-      ...(tail.length > 0 ? ['', '--- 日志尾部 ---', ...tail] : health.pending ? [] : ['', `日志: ${PATHS.logFile}`]),
+      ...(tail.length > 0 ? ['', '--- 日志尾部 ---', ...tail] : ['', `日志: ${PATHS.logFile}`]),
       '',
       '完整日志: mihomo-cli logs 0',
     ],

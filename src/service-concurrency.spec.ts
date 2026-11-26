@@ -150,6 +150,7 @@ const MODULES = {
   service: JSON.stringify(path.resolve('src/service.ts')),
   stopEpoch: JSON.stringify(path.resolve('src/stop-epoch.ts')),
   runtime: JSON.stringify(path.resolve('src/runtime.ts')),
+  fakeKernel: JSON.stringify(path.resolve('src/test-support/fake-kernel.ts')),
 };
 
 /**
@@ -194,6 +195,7 @@ function hotReloadScript(): string {
 import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from ${MODULES.paths};
+import { writeFakeKernelFiles } from ${MODULES.fakeKernel};
 import { captureStopEpochBaseline, bumpStopEpoch } from ${MODULES.stopEpoch};
 import { launchOrRestart } from ${MODULES.runtime};
 
@@ -226,10 +228,7 @@ fs.writeFileSync(PATHS.serviceStopEpoch, '5');
 // 模拟开机时 launchd 已装载任务、内核尚未 running；越过旧 3 秒健康窗口后才就绪。
 // 旧路径会进入 startService 并 bootout，这个实例最终因「旧 PID 未卸载」超时而失败。
 if (process.env.START_PENDING === '1') {
-  fs.mkdirSync(path.dirname(PATHS.mihomoBinary), { recursive: true });
-  fs.writeFileSync(PATHS.mihomoBinary, 'stub-kernel');
-  fs.mkdirSync(path.dirname(PATHS.configFile), { recursive: true });
-  fs.writeFileSync(PATHS.configFile, 'mixed-port: 17890\\n');
+  writeFakeKernelFiles({ binaries: [PATHS.mihomoBinary], configFile: PATHS.configFile });
   fs.writeFileSync(process.env.MODE_FILE as string, 'pending');
   setTimeout(() => fs.writeFileSync(process.env.MODE_FILE as string, 'running'), Number(process.env.START_AFTER_MS));
 }
@@ -422,10 +421,10 @@ exit 0
       `import fs from 'node:fs';
 import path from 'node:path';
 import { PATHS } from ${MODULES.paths};
+import { writeFakeKernelFiles } from ${MODULES.fakeKernel};
 import { cmdInstall } from ${JSON.stringify(path.resolve('src/commands/service.ts'))};
 
-fs.mkdirSync(path.dirname(PATHS.mihomoBinary), { recursive: true });
-fs.writeFileSync(PATHS.mihomoBinary, 'stub-kernel');
+writeFakeKernelFiles({ binaries: [PATHS.mihomoBinary], configFile: PATHS.configFile });
 fs.mkdirSync(path.dirname(PATHS.userAgentPlist), { recursive: true });
 fs.writeFileSync(PATHS.userAgentPlist, 'stub');
 try {

@@ -77,7 +77,7 @@ export async function cmdInstall(args: string[]): Promise<void> {
       }
       throw relabelCliError(e, {
         hint:
-          e.label === '启动待确认'
+          e instanceof runtime.ServiceLaunchPendingError
             ? [...e.hint, '', '服务已安装成功；恢复运行尚未确认，不影响 launchd 继续启动。']
             : [...e.hint, '', '服务已安装成功，仅恢复运行失败；修正配置后可执行 mihomo-cli start 重试。'],
       });
